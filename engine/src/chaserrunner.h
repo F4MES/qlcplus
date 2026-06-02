@@ -48,6 +48,7 @@ typedef struct
     qreal m_stepIntensity;              //! Current step intensity applied to this step
     quint32 m_elapsed;                  //! Elapsed milliseconds
     quint32 m_elapsedBeats;             //! Elapsed beats
+    quint32 m_elapsedAtLastBeat;        //! Value of m_elapsed (ms) at the last counted beat, used for sub-beat interpolation
     uint m_fadeIn;                      //! Step fade in in ms
     uint m_fadeOut;                     //! Step fade out in ms
     uint m_duration;                    //! Step hold in ms

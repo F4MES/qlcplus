@@ -564,6 +564,7 @@ void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity,
     else
         newStep->m_elapsed = MasterTimer::tick() + elapsed;
     newStep->m_elapsedBeats = 0; //(newStep->m_elapsed / timer->beatTimeDuration()) * 1000;
+    newStep->m_elapsedAtLastBeat = newStep->m_elapsed;
 
     m_startOffset = 0;
 
@@ -786,15 +787,41 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
 
     foreach (ChaserRunnerStep *step, m_runnerSteps)
     {
-        if (m_chaser->tempoType() == Function::Beats && timer->isBeat())
+        // Progress through the current step. In Beats mode this is measured in beat
+        // units where 1000 == one full beat (so 500 == 1/2 beat, 250 == 1/4, 125 == 1/8).
+        quint32 stepProgress = step->m_elapsedBeats;
+
+        if (m_chaser->tempoType() == Function::Beats)
         {
-            step->m_elapsedBeats += 1000;
-            qDebug() << "[ChaserRunner] Function" << step->m_function->name() << "duration:" << step->m_duration << "beats:" << step->m_elapsedBeats;
+            // Whole beats are driven by the (internal or external/MIDI) beat clock,
+            // so step changes stay phase-locked to the incoming beats.
+            if (timer->isBeat())
+            {
+                step->m_elapsedBeats += 1000;
+                step->m_elapsedAtLastBeat = step->m_elapsed;
+            }
+
+            // Interpolate the position *within* the current beat from the elapsed time
+            // and the current beat duration. This is what makes sub-beat (fractional)
+            // step durations possible while remaining locked to the beat clock.
+            quint32 beatFraction = 0;
+            int beatDuration = timer->beatTimeDuration();
+            if (beatDuration > 0)
+            {
+                quint64 frac = (quint64(step->m_elapsed - step->m_elapsedAtLastBeat) * 1000)
+                               / quint32(beatDuration);
+                // The whole-beat boundary is owned by isBeat() above, so never let the
+                // interpolated fraction reach (or overtake) the next beat on its own.
+                beatFraction = frac > 999 ? 999 : quint32(frac);
+            }
+            stepProgress = step->m_elapsedBeats + beatFraction;
+
+            qDebug() << "[ChaserRunner] Function" << step->m_function->name() << "duration:" << step->m_duration << "beats:" << stepProgress;
         }
 
         if (step->m_duration != Function::infiniteSpeed() &&
             ((m_chaser->tempoType() == Function::Time && step->m_elapsed >= step->m_duration) ||
-             (m_chaser->tempoType() == Function::Beats && step->m_elapsedBeats >= step->m_duration)))
+             (m_chaser->tempoType() == Function::Beats && stepProgress >= step->m_duration)))
         {
             if (step->m_duration != 0)
                 prevStepRoundElapsed = step->m_elapsed % step->m_duration;
