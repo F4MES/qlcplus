@@ -158,7 +158,7 @@ protected:
      * Slider Mode
      *********************************************************************/
 public:
-    enum SliderMode { Level, Adjust, Submaster, GrandMaster };
+    enum SliderMode { Level, Adjust, Submaster, GrandMaster, Speed };
     Q_ENUM(SliderMode)
 
 public:
@@ -363,6 +363,10 @@ public:
 
     void adjustFunctionAttribute(Function *f, qreal value);
 
+    /** Speed mode: apply a temporary tempo nudge to the controlled Function,
+     *  where the slider center means "no change". Up = faster, down = slower. */
+    void applySpeedNudge();
+
     /** Get/Set the status of the flash button enablement */
     bool adjustFlashEnabled() const;
     void setAdjustFlashEnabled(bool enable);
@@ -405,6 +409,10 @@ protected:
 
     bool m_adjustFlashEnabled;
     qreal m_adjustFlashPreviousValue;
+
+    /* Speed mode: temporary, non-destructive tempo nudge state */
+    bool m_speedNudging;
+    uint m_speedOriginalDuration;
 
     /*********************************************************************
      * Submaster
