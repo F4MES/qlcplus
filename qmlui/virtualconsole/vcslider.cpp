@@ -32,6 +32,7 @@
 #include "qlcmacros.h"
 #include "vcslider.h"
 #include "function.h"
+#include "efx.h"
 #include "tardis.h"
 #include "doc.h"
 #include "app.h"
@@ -239,6 +240,9 @@ QString VCSlider::sliderModeToString(SliderMode mode)
         case Adjust: return QString("Adjust");
         case Speed: return QString("Speed");
         case FunctionSpeed: return QString("FunctionSpeed");
+        case FunctionSize: return QString("FunctionSize");
+        case FunctionRotation: return QString("FunctionRotation");
+        case FunctionMovement: return QString("FunctionMovement");
         default: return QString("Unknown");
     }
 }
@@ -255,6 +259,12 @@ VCSlider::SliderMode VCSlider::stringToSliderMode(const QString& mode)
         return Speed;
     else if (mode == QString("FunctionSpeed"))
         return FunctionSpeed;
+    else if (mode == QString("FunctionSize"))
+        return FunctionSize;
+    else if (mode == QString("FunctionRotation"))
+        return FunctionRotation;
+    else if (mode == QString("FunctionMovement"))
+        return FunctionMovement;
     else
         return Adjust;
 }
@@ -266,7 +276,7 @@ VCSlider::SliderMode VCSlider::sliderMode() const
 
 void VCSlider::setSliderMode(SliderMode mode)
 {
-    Q_ASSERT(mode >= Level && mode <= FunctionSpeed);
+    Q_ASSERT(mode >= Level && mode <= FunctionMovement);
 
     if (mode != m_sliderMode)
         Tardis::instance()->enqueueAction(Tardis::VCSliderSetMode, id(), m_sliderMode, mode);
@@ -324,6 +334,42 @@ void VCSlider::setSliderMode(SliderMode mode)
             setRangeLowLimit(0);
             setRangeHighLimit(255);
             setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
+        break;
+        case FunctionSize:
+            // Uniform movement-size control: the slider scales the EFX pattern
+            // Width and Height (0..255) together, live. No DMX, no spring-back.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
+            setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
+        break;
+        case FunctionRotation:
+            // Pattern-rotation control: the slider sets the EFX rotation
+            // (0..359 degrees), live. No DMX, no spring-back.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
+            setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
+        break;
+        case FunctionMovement:
+            // Combined movement control: bottom = still + collapsed, up grows
+            // and speeds up together. No DMX, no spring-back.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
+            setValue(rangeLowLimit());
         break;
     }
 }
@@ -510,6 +556,15 @@ void VCSlider::setValue(int value, bool setDMX, bool updateFeedback)
         break;
         case FunctionSpeed:
             applyFunctionSpeed();
+        break;
+        case FunctionSize:
+            applyFunctionSize();
+        break;
+        case FunctionRotation:
+            applyFunctionRotation();
+        break;
+        case FunctionMovement:
+            applyFunctionMovement();
         break;
     }
 
@@ -1159,25 +1214,114 @@ void VCSlider::adjustFunctionAttribute(Function *f, qreal value)
         f->adjustAttribute(value, m_controlledAttributeId);
 }
 
-void VCSlider::applyFunctionSpeed()
+void VCSlider::applyFunctionMovement()
 {
     if (m_speedFunctions.isEmpty())
         return;
 
-    // Map the slider position (rangeLowLimit..rangeHighLimit) to an absolute
-    // movement duration in milliseconds. Top of the slider = fastest (short
-    // duration), bottom = slowest. An exponential curve gives a natural feel.
+    // One fader for the amount of movement: bottom = still and collapsed,
+    // moving up grows the EFX pattern AND speeds it up together, top = full
+    // size at maximum speed.
     qreal low = rangeLowLimit();
     qreal high = rangeHighLimit();
     qreal span = high - low;
     qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
     pos = CLAMP(pos, qreal(0.0), qreal(1.0));
 
-    const qreal minMs = 50.0;       // fastest, at the top of the slider
-    const qreal maxMs = 10000.0;    // slowest, at the bottom of the slider
-    uint duration = uint(qRound(minMs * qPow(maxMs / minMs, 1.0 - pos)));
-    if (duration == 0)
-        duration = 1;
+    int size = int(qRound(pos * 255.0));
+    const qreal minMs = 100.0;
+    uint duration;
+    if (pos <= qreal(0.0))
+        duration = Function::infiniteSpeed();
+    else
+        duration = uint(qRound(minMs / pos));
+
+    foreach (quint32 fid, m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        if (function == NULL)
+            continue;
+        function->setDuration(duration);
+        EFX *efx = qobject_cast<EFX*>(function);
+        if (efx != NULL)
+        {
+            efx->setWidth(size);
+            efx->setHeight(size);
+        }
+    }
+}
+
+void VCSlider::applyFunctionRotation()
+{
+    if (m_speedFunctions.isEmpty())
+        return;
+
+    // Map the slider position (rangeLowLimit..rangeHighLimit) to the EFX
+    // pattern rotation (0..359 degrees). Non-EFX functions are ignored.
+    qreal low = rangeLowLimit();
+    qreal high = rangeHighLimit();
+    qreal span = high - low;
+    qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
+    pos = CLAMP(pos, qreal(0.0), qreal(1.0));
+    int rot = int(qRound(pos * 359.0));
+
+    foreach (quint32 fid, m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        EFX *efx = qobject_cast<EFX*>(function);
+        if (efx != NULL)
+            efx->setRotation(rot);
+    }
+}
+
+void VCSlider::applyFunctionSize()
+{
+    if (m_speedFunctions.isEmpty())
+        return;
+
+    // Map the slider position (rangeLowLimit..rangeHighLimit) to the EFX
+    // pattern size (Width and Height together, 0..255). Top = full size,
+    // bottom = collapsed. Non-EFX functions are ignored.
+    qreal low = rangeLowLimit();
+    qreal high = rangeHighLimit();
+    qreal span = high - low;
+    qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
+    pos = CLAMP(pos, qreal(0.0), qreal(1.0));
+    int size = int(qRound(pos * 255.0));
+
+    foreach (quint32 fid, m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        EFX *efx = qobject_cast<EFX*>(function);
+        if (efx != NULL)
+        {
+            efx->setWidth(size);
+            efx->setHeight(size);
+        }
+    }
+}
+
+void VCSlider::applyFunctionSpeed()
+{
+    if (m_speedFunctions.isEmpty())
+        return;
+
+    // Bottom of the slider = stand still (no movement). Moving up makes the
+    // movement progressively faster, up to maximum speed at the top. Speed
+    // scales with the slider position, so the duration is its inverse; at the
+    // very bottom the duration is "infinite", which holds the fixtures still.
+    qreal low = rangeLowLimit();
+    qreal high = rangeHighLimit();
+    qreal span = high - low;
+    qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
+    pos = CLAMP(pos, qreal(0.0), qreal(1.0));
+
+    const qreal minMs = 100.0;      // shortest duration = fastest, at the top
+    uint duration;
+    if (pos <= qreal(0.0))
+        duration = Function::infiniteSpeed();   // stand still at the bottom
+    else
+        duration = uint(qRound(minMs / pos));
 
     foreach (quint32 fid, m_speedFunctions)
     {

@@ -238,6 +238,57 @@ Rectangle
                     Layout.fillWidth: true
                     label: qsTr("Movement speed")
                 }
+
+                // row 5
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.FunctionSize : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.FunctionSize
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Movement size")
+                }
+
+                // row 6
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.FunctionRotation : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.FunctionRotation
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Movement rotation")
+                }
+
+                // row 7
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.FunctionMovement : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.FunctionMovement
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Movement (all)")
+                }
               }
         } // end of SectionBox
 
@@ -315,8 +366,8 @@ Rectangle
 
         SectionBox
         {
-            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Speed || widgetRef.sliderMode === VCSlider.FunctionSpeed) : false
-            sectionLabel: widgetRef && widgetRef.sliderMode === VCSlider.FunctionSpeed ? qsTr("Speed-controlled functions") : qsTr("Tempo nudge functions")
+            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Speed || widgetRef.sliderMode === VCSlider.FunctionSpeed || widgetRef.sliderMode === VCSlider.FunctionSize || widgetRef.sliderMode === VCSlider.FunctionRotation || widgetRef.sliderMode === VCSlider.FunctionMovement) : false
+            sectionLabel: widgetRef && widgetRef.sliderMode === VCSlider.Speed ? qsTr("Tempo nudge functions") : qsTr("Controlled functions")
 
             sectionContents:
               Column
