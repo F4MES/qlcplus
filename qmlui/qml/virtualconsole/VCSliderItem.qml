@@ -125,13 +125,20 @@ VCWidgetItem
             from: sliderObj ? sliderObj.rangeLowLimit : 0
             to: sliderObj ? sliderObj.rangeHighLimit : 255
             value: sliderValue
-            handleGradient: sliderMode === VCSlider.Submaster ? submasterHandleGradient :
+            handleGradient: (sliderMode === VCSlider.Submaster || sliderMode === VCSlider.Speed) ? submasterHandleGradient :
                             (sliderMode === VCSlider.GrandMaster ? grandMasterHandleGradient : defaultGradient)
-            handleGradientHover: sliderMode === VCSlider.Submaster ? submasterHandleGradientHover :
+            handleGradientHover: (sliderMode === VCSlider.Submaster || sliderMode === VCSlider.Speed) ? submasterHandleGradientHover :
                                  (sliderMode === VCSlider.GrandMaster ? grandMasterHandleGradientHover : defaultGradientHover)
-            trackColor: sliderMode === VCSlider.Submaster ? "#77DD73" : defaultTrackColor
+            trackColor: (sliderMode === VCSlider.Submaster || sliderMode === VCSlider.Speed) ? "#77DD73" : defaultTrackColor
 
             onMoved: if (sliderObj) sliderObj.value = valueAt(position)
+
+            // Speed (tempo nudge) mode is spring-loaded: snap back to center on release
+            onPressedChanged:
+            {
+                if (!pressed && sliderObj && sliderMode === VCSlider.Speed)
+                    sliderObj.value = Math.round((sliderObj.rangeLowLimit + sliderObj.rangeHighLimit) / 2)
+            }
         }
 
         QLCPlusKnob

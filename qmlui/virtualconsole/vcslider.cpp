@@ -104,6 +104,8 @@ VCSlider::VCSlider(Doc *doc, QObject *parent)
     , m_attributeMinValue(0)
     , m_attributeMaxValue(UCHAR_MAX)
     , m_adjustFlashEnabled(false)
+    , m_speedNudging(false)
+    , m_speedOriginalDuration(0)
 {
     setType(VCWidget::SliderWidget);
     setSliderMode(Adjust);
@@ -235,6 +237,7 @@ QString VCSlider::sliderModeToString(SliderMode mode)
         case Submaster: return QString("Submaster");
         case GrandMaster: return QString("GrandMaster");
         case Adjust: return QString("Adjust");
+        case Speed: return QString("Speed");
         default: return QString("Unknown");
     }
 }
@@ -247,6 +250,8 @@ VCSlider::SliderMode VCSlider::stringToSliderMode(const QString& mode)
         return Submaster;
     else if (mode == QString("GrandMaster"))
         return GrandMaster;
+    else if (mode == QString("Speed"))
+        return Speed;
     else
         return Adjust;
 }
@@ -1014,6 +1019,10 @@ void VCSlider::adjustIntensity(qreal val)
 
 void VCSlider::slotControlledFunctionAttributeChanged(int attrIndex, qreal fraction)
 {
+    // Speed (tempo nudge) mode does not track Function attributes
+    if (sliderMode() == Speed)
+        return;
+
     if (attrIndex != m_controlledAttributeIndex || m_adjustChangeCounter)
         return;
 
@@ -1036,6 +1045,9 @@ void VCSlider::slotControlledFunctionAttributeChanged(int attrIndex, qreal fract
 
 void VCSlider::slotControlledFunctionStopped(quint32 fid)
 {
+    if (sliderMode() == Speed)
+        return;
+
     if (fid == controlledFunction())
     {
         if (m_controlledAttributeIndex == Function::Intensity)
@@ -1127,6 +1139,50 @@ void VCSlider::adjustFunctionAttribute(Function *f, qreal value)
         m_controlledAttributeId = f->requestAttributeOverride(m_controlledAttributeIndex, value);
     else
         f->adjustAttribute(value, m_controlledAttributeId);
+}
+
+void VCSlider::applySpeedNudge()
+{
+    Function *function = m_doc->function(m_controlledFunctionId);
+    if (function == nullptr)
+        return;
+
+    qreal center = (m_rangeLowLimit + m_rangeHighLimit) / 2.0;
+    qreal span = m_rangeHighLimit - center;
+    qreal norm = (span > 0) ? (qreal(m_value) - center) / span : qreal(0.0);
+    norm = CLAMP(norm, qreal(-1.0), qreal(1.0));
+
+    // near the center: restore the original duration and stop nudging
+    if (qAbs(norm) < 0.02)
+    {
+        if (m_speedNudging)
+        {
+            function->setDuration(m_speedOriginalDuration);
+            m_speedNudging = false;
+        }
+        return;
+    }
+
+    // capture the original duration the first time we leave the center
+    if (m_speedNudging == false)
+    {
+        m_speedOriginalDuration = function->duration();
+        m_speedNudging = true;
+    }
+
+    if (m_speedOriginalDuration == 0 ||
+        m_speedOriginalDuration == Function::infiniteSpeed())
+        return;
+
+    // up (norm > 0) => faster => shorter duration; down => slower => longer.
+    // +/- 2 octaves: full up ~= 4x faster, full down ~= 4x slower, center = 1x.
+    const qreal octaves = 2.0;
+    qreal factor = qPow(2.0, -norm * octaves);
+    uint newDuration = uint(qRound(qreal(m_speedOriginalDuration) * factor));
+    if (newDuration == 0)
+        newDuration = 1;
+
+    function->setDuration(newDuration);
 }
 
 bool VCSlider::adjustFlashEnabled() const

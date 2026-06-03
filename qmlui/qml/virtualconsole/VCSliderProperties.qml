@@ -204,12 +204,29 @@ Rectangle
                     Layout.fillWidth: true
                     label: qsTr("Grand Master")
                 }
+
+                // row 3
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.Speed : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.Speed
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Speed (tempo nudge)")
+                }
               }
         } // end of SectionBox
 
         SectionBox
         {
-            visible: widgetRef ? widgetRef.sliderMode === VCSlider.Adjust : false
+            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Adjust || widgetRef.sliderMode === VCSlider.Speed) : false
             sectionLabel: qsTr("Function Control")
 
             sectionContents:
@@ -245,12 +262,14 @@ Rectangle
                 // row 2
                 RobotoText
                 {
+                    visible: widgetRef && widgetRef.sliderMode === VCSlider.Adjust
                     height: gridItemsHeight
                     label: qsTr("Attribute")
                 }
 
                 CustomComboBox
                 {
+                    visible: widgetRef && widgetRef.sliderMode === VCSlider.Adjust
                     Layout.fillWidth: true
                     textRole: ""
                     model: widgetRef ? widgetRef.availableAttributes : null
@@ -260,6 +279,7 @@ Rectangle
 
                 CustomCheckBox
                 {
+                    visible: widgetRef && widgetRef.sliderMode === VCSlider.Adjust
                     implicitWidth: UISettings.iconSizeMedium
                     implicitHeight: implicitWidth
                     checked: widgetRef ? widgetRef.adjustFlashEnabled : false
@@ -268,6 +288,7 @@ Rectangle
 
                 RobotoText
                 {
+                    visible: widgetRef && widgetRef.sliderMode === VCSlider.Adjust
                     height: gridItemsHeight
                     Layout.fillWidth: true
                     label: qsTr("Show flash button")
