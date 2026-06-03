@@ -656,6 +656,46 @@ void VCSlider::setIsOverriding(bool enable)
     emit isOverridingChanged();
 }
 
+QVariantList VCSlider::fixtureGroupsList() const
+{
+    QVariantList list;
+    foreach (FixtureGroup *grp, m_doc->fixtureGroups())
+    {
+        if (grp == nullptr)
+            continue;
+        QVariantMap map;
+        map.insert("mLabel", grp->name());
+        map.insert("mValue", grp->id());
+        list.append(map);
+    }
+    return list;
+}
+
+void VCSlider::addFixtureGroupColors(quint32 groupID)
+{
+    FixtureGroup *grp = m_doc->fixtureGroup(groupID);
+    if (grp == nullptr)
+        return;
+
+    foreach (quint32 fxID, grp->fixtureList())
+    {
+        Fixture *fxi = m_doc->fixture(fxID);
+        if (fxi == nullptr)
+            continue;
+
+        for (int head = 0; head < fxi->heads(); head++)
+        {
+            foreach (quint32 ch, fxi->rgbChannels(head))
+                addLevelChannel(fxID, ch);
+            foreach (quint32 ch, fxi->cmyChannels(head))
+                addLevelChannel(fxID, ch);
+        }
+    }
+
+    std::sort(m_levelChannels.begin(), m_levelChannels.end());
+    emit channelsCountChanged();
+}
+
 void VCSlider::addLevelChannel(quint32 fixture, quint32 channel)
 {
     SceneValue lch(fixture, channel);

@@ -518,6 +518,42 @@ Rectangle
                     height: gridItemsHeight
                     label: qsTr("Monitor channel levels")
                 }
+
+                // one-tap: add a whole fixture group's colour channels
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    label: qsTr("Group colour")
+                }
+                RowLayout
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+
+                    CustomComboBox
+                    {
+                        id: groupColorCombo
+                        Layout.fillWidth: true
+                        model: widgetRef ? widgetRef.fixtureGroupsList() : null
+                    }
+                    IconButton
+                    {
+                        height: UISettings.iconSizeMedium
+                        width: height
+                        faSource: FontAwesome.fa_plus
+                        faColor: "white"
+                        tooltip: qsTr("Add this group's RGB/CMY colour channels")
+                        onClicked:
+                        {
+                            if (widgetRef)
+                            {
+                                var list = widgetRef.fixtureGroupsList()
+                                if (list && groupColorCombo.currentIndex >= 0 && groupColorCombo.currentIndex < list.length)
+                                    widgetRef.addFixtureGroupColors(list[groupColorCombo.currentIndex].mValue)
+                            }
+                        }
+                    }
+                }
               }
         } // SectionBox Level mode
 

@@ -264,6 +264,13 @@ public:
 
     Q_INVOKABLE void applyToSameType(bool enable);
 
+    /** List of the project's fixture groups as [{mLabel, mValue}] for the UI */
+    Q_INVOKABLE QVariantList fixtureGroupsList() const;
+
+    /** Add all RGB/CMY colour channels of every fixture in the given
+     *  fixture group to this slider's level channels (live colour on a group) */
+    Q_INVOKABLE void addFixtureGroupColors(quint32 groupID);
+
 private:
     void removeActiveFaders();
 
