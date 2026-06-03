@@ -245,6 +245,7 @@ QString VCSlider::sliderModeToString(SliderMode mode)
         case FunctionMovement: return QString("FunctionMovement");
         case FunctionXOffset: return QString("FunctionXOffset");
         case FunctionYOffset: return QString("FunctionYOffset");
+        case FunctionFan: return QString("FunctionFan");
         default: return QString("Unknown");
     }
 }
@@ -271,6 +272,8 @@ VCSlider::SliderMode VCSlider::stringToSliderMode(const QString& mode)
         return FunctionXOffset;
     else if (mode == QString("FunctionYOffset"))
         return FunctionYOffset;
+    else if (mode == QString("FunctionFan"))
+        return FunctionFan;
     else
         return Adjust;
 }
@@ -282,7 +285,7 @@ VCSlider::SliderMode VCSlider::sliderMode() const
 
 void VCSlider::setSliderMode(SliderMode mode)
 {
-    Q_ASSERT(mode >= Level && mode <= FunctionYOffset);
+    Q_ASSERT(mode >= Level && mode <= FunctionFan);
 
     if (mode != m_sliderMode)
         Tardis::instance()->enqueueAction(Tardis::VCSliderSetMode, id(), m_sliderMode, mode);
@@ -398,6 +401,18 @@ void VCSlider::setSliderMode(SliderMode mode)
             setRangeLowLimit(0);
             setRangeHighLimit(255);
             setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
+        break;
+        case FunctionFan:
+            // Fan / spread control: bottom = unison, up spreads the EFX
+            // fixtures into a fan. No DMX, no spring-back. Defaults to no fan.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
+            setValue(rangeLowLimit());
         break;
     }
 }
@@ -599,6 +614,9 @@ void VCSlider::setValue(int value, bool setDMX, bool updateFeedback)
         break;
         case FunctionYOffset:
             applyFunctionYOffset();
+        break;
+        case FunctionFan:
+            applyFunctionFan();
         break;
     }
 
@@ -1286,6 +1304,38 @@ void VCSlider::adjustFunctionAttribute(Function *f, qreal value)
         m_controlledAttributeId = f->requestAttributeOverride(m_controlledAttributeIndex, value);
     else
         f->adjustAttribute(value, m_controlledAttributeId);
+}
+
+void VCSlider::applyFunctionFan()
+{
+    if (m_speedFunctions.isEmpty())
+        return;
+
+    // Spread (fan) the fixtures of each EFX by giving each one a per-fixture
+    // phase offset proportional to its index. Bottom = unison (no fan), top =
+    // fixtures spread evenly across the pattern. calculatePoint() reads the
+    // start offset every tick, so this takes effect live.
+    qreal low = rangeLowLimit();
+    qreal high = rangeHighLimit();
+    qreal span = high - low;
+    qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
+    pos = CLAMP(pos, qreal(0.0), qreal(1.0));
+
+    foreach (quint32 fid, m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        EFX *efx = qobject_cast<EFX*>(function);
+        if (efx == NULL)
+            continue;
+
+        QList<EFXFixture*> fixtures = efx->fixtures();
+        int count = fixtures.size();
+        for (int i = 0; i < count; i++)
+        {
+            int offset = (count > 1) ? int(qRound((359.0 * i / count) * pos)) : 0;
+            fixtures.at(i)->setStartOffset(offset);
+        }
+    }
 }
 
 void VCSlider::applyFunctionXOffset()
