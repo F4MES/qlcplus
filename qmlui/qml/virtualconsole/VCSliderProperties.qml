@@ -221,6 +221,23 @@ Rectangle
                     Layout.fillWidth: true
                     label: qsTr("Speed (tempo nudge)")
                 }
+
+                // row 4
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.FunctionSpeed : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.FunctionSpeed
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Movement speed")
+                }
               }
         } // end of SectionBox
 
@@ -298,8 +315,8 @@ Rectangle
 
         SectionBox
         {
-            visible: widgetRef ? widgetRef.sliderMode === VCSlider.Speed : false
-            sectionLabel: qsTr("Tempo nudge functions")
+            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Speed || widgetRef.sliderMode === VCSlider.FunctionSpeed) : false
+            sectionLabel: widgetRef && widgetRef.sliderMode === VCSlider.FunctionSpeed ? qsTr("Speed-controlled functions") : qsTr("Tempo nudge functions")
 
             sectionContents:
               Column

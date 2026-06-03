@@ -238,6 +238,7 @@ QString VCSlider::sliderModeToString(SliderMode mode)
         case GrandMaster: return QString("GrandMaster");
         case Adjust: return QString("Adjust");
         case Speed: return QString("Speed");
+        case FunctionSpeed: return QString("FunctionSpeed");
         default: return QString("Unknown");
     }
 }
@@ -252,6 +253,8 @@ VCSlider::SliderMode VCSlider::stringToSliderMode(const QString& mode)
         return GrandMaster;
     else if (mode == QString("Speed"))
         return Speed;
+    else if (mode == QString("FunctionSpeed"))
+        return FunctionSpeed;
     else
         return Adjust;
 }
@@ -263,7 +266,7 @@ VCSlider::SliderMode VCSlider::sliderMode() const
 
 void VCSlider::setSliderMode(SliderMode mode)
 {
-    Q_ASSERT(mode >= Level && mode <= GrandMaster);
+    Q_ASSERT(mode >= Level && mode <= FunctionSpeed);
 
     if (mode != m_sliderMode)
         Tardis::instance()->enqueueAction(Tardis::VCSliderSetMode, id(), m_sliderMode, mode);
@@ -308,6 +311,18 @@ void VCSlider::setSliderMode(SliderMode mode)
             m_doc->masterTimer()->unregisterDMXSource(this);
             removeActiveFaders();
             m_speedNudging = false;
+            setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
+        break;
+        case FunctionSpeed:
+            // Static movement-speed control: the slider position maps to an
+            // absolute Function duration (movement speed). No DMX, no spring-back.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
             setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
         break;
     }
@@ -492,6 +507,9 @@ void VCSlider::setValue(int value, bool setDMX, bool updateFeedback)
         break;
         case Speed:
             applySpeedNudge();
+        break;
+        case FunctionSpeed:
+            applyFunctionSpeed();
         break;
     }
 
@@ -1139,6 +1157,34 @@ void VCSlider::adjustFunctionAttribute(Function *f, qreal value)
         m_controlledAttributeId = f->requestAttributeOverride(m_controlledAttributeIndex, value);
     else
         f->adjustAttribute(value, m_controlledAttributeId);
+}
+
+void VCSlider::applyFunctionSpeed()
+{
+    if (m_speedFunctions.isEmpty())
+        return;
+
+    // Map the slider position (rangeLowLimit..rangeHighLimit) to an absolute
+    // movement duration in milliseconds. Top of the slider = fastest (short
+    // duration), bottom = slowest. An exponential curve gives a natural feel.
+    qreal low = rangeLowLimit();
+    qreal high = rangeHighLimit();
+    qreal span = high - low;
+    qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
+    pos = CLAMP(pos, qreal(0.0), qreal(1.0));
+
+    const qreal minMs = 50.0;       // fastest, at the top of the slider
+    const qreal maxMs = 10000.0;    // slowest, at the bottom of the slider
+    uint duration = uint(qRound(minMs * qPow(maxMs / minMs, 1.0 - pos)));
+    if (duration == 0)
+        duration = 1;
+
+    foreach (quint32 fid, m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        if (function != NULL)
+            function->setDuration(duration);
+    }
 }
 
 void VCSlider::applySpeedNudge()
