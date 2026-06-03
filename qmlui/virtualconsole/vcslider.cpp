@@ -294,6 +294,17 @@ void VCSlider::setSliderMode(SliderMode mode)
 
             setValue(UCHAR_MAX);
         break;
+        case Speed:
+            // Tempo nudge: spring-loaded around the center value, no DMX output.
+            // The slider directly nudges the controlled Function's duration.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            m_speedNudging = false;
+            setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
+        break;
     }
 }
 
@@ -473,6 +484,9 @@ void VCSlider::setValue(int value, bool setDMX, bool updateFeedback)
         break;
         case Adjust:
             m_adjustChangeCounter++;
+        break;
+        case Speed:
+            applySpeedNudge();
         break;
     }
 
