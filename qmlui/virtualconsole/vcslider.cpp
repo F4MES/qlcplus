@@ -64,6 +64,7 @@
 #define KXMLQLCVCSliderAdjust               QStringLiteral("Adjust")
 #define KXMLQLCVCSliderAdjustAttribute      QStringLiteral("Attribute")
 #define KXMLQLCVCSliderControlledFunction   QStringLiteral("Function")
+#define KXMLQLCVCSliderSpeedFunction        QStringLiteral("SpeedFunction")
 
 /** **************** External Control IDs ***************** */
 
