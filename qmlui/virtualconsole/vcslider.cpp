@@ -246,6 +246,7 @@ QString VCSlider::sliderModeToString(SliderMode mode)
         case FunctionXOffset: return QString("FunctionXOffset");
         case FunctionYOffset: return QString("FunctionYOffset");
         case FunctionFan: return QString("FunctionFan");
+        case Strobe: return QString("Strobe");
         default: return QString("Unknown");
     }
 }
@@ -274,6 +275,8 @@ VCSlider::SliderMode VCSlider::stringToSliderMode(const QString& mode)
         return FunctionYOffset;
     else if (mode == QString("FunctionFan"))
         return FunctionFan;
+    else if (mode == QString("Strobe"))
+        return Strobe;
     else
         return Adjust;
 }
@@ -285,7 +288,7 @@ VCSlider::SliderMode VCSlider::sliderMode() const
 
 void VCSlider::setSliderMode(SliderMode mode)
 {
-    Q_ASSERT(mode >= Level && mode <= FunctionFan);
+    Q_ASSERT(mode >= Level && mode <= Strobe);
 
     if (mode != m_sliderMode)
         Tardis::instance()->enqueueAction(Tardis::VCSliderSetMode, id(), m_sliderMode, mode);
@@ -412,6 +415,19 @@ void VCSlider::setSliderMode(SliderMode mode)
             removeActiveFaders();
             setRangeLowLimit(0);
             setRangeHighLimit(255);
+            setValue(rangeLowLimit());
+        break;
+        case Strobe:
+            // Software strobe: registered as a DMX source so writeDMXStrobe()
+            // gets a per-tick callback. Slider value = strobe rate (bottom = off).
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            removeActiveFaders();
+            m_doc->masterTimer()->registerDMXSource(this);
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
+            m_strobeElapsed = 0;
             setValue(rangeLowLimit());
         break;
     }
@@ -617,6 +633,9 @@ void VCSlider::setValue(int value, bool setDMX, bool updateFeedback)
         break;
         case FunctionFan:
             applyFunctionFan();
+        break;
+        case Strobe:
+            // handled live in writeDMXStrobe()
         break;
     }
 
@@ -1712,6 +1731,34 @@ void VCSlider::writeDMX(MasterTimer* timer, QList<Universe*> universes)
         writeDMXLevel(timer, universes);
     else if (sliderMode() == Adjust)
         writeDMXAdjust(timer, universes);
+    else if (sliderMode() == Strobe)
+        writeDMXStrobe(timer, universes);
+}
+
+void VCSlider::writeDMXStrobe(MasterTimer* timer, QList<Universe *> universes)
+{
+    // Slider value = strobe rate. At the bottom the strobe is off: write
+    // nothing so the channels are not overridden and behave normally.
+    if (m_value <= 2)
+    {
+        m_strobeElapsed = 0;
+        return;
+    }
+
+    // Map the rate to roughly 1..25 Hz and toggle full/blackout.
+    qreal freq = 1.0 + (qreal(m_value) / 255.0) * 24.0;
+    uint periodMs = uint(1000.0 / freq);
+    if (periodMs == 0)
+        periodMs = 1;
+
+    m_strobeElapsed += MasterTimer::tick();
+    if (m_strobeElapsed >= periodMs)
+        m_strobeElapsed = 0;
+
+    m_strobeLevel = (m_strobeElapsed < (periodMs / 2)) ? 255 : 0;
+
+    // Reuse the Level-mode channel writing with the gated level.
+    writeDMXLevel(timer, universes);
 }
 
 void VCSlider::writeDMXLevel(MasterTimer* timer, QList<Universe *> universes)
@@ -1720,7 +1767,7 @@ void VCSlider::writeDMXLevel(MasterTimer* timer, QList<Universe *> universes)
 
     QMutexLocker locker(&m_levelValueMutex);
 
-    uchar modLevel = m_value;
+    uchar modLevel = (sliderMode() == Strobe) ? m_strobeLevel : uchar(m_value);
 
     int r = 0, g = 0, b = 0, c = 0, m = 0, y = 0, w = 0, a = 0, uv = 0;
 

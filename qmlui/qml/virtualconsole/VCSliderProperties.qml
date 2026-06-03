@@ -340,6 +340,23 @@ Rectangle
                     Layout.fillWidth: true
                     label: qsTr("Movement fan (spread)")
                 }
+
+                // row 11
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.Strobe : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.Strobe
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Strobe (software)")
+                }
               }
         } // end of SectionBox
 
@@ -511,7 +528,7 @@ Rectangle
 
         SectionBox
         {
-            visible: widgetRef ? widgetRef.sliderMode === VCSlider.Level : false
+            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Level || widgetRef.sliderMode === VCSlider.Strobe) : false
             sectionLabel: qsTr("Level mode")
 
             sectionContents:

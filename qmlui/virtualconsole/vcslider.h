@@ -159,7 +159,7 @@ protected:
      * Slider Mode
      *********************************************************************/
 public:
-    enum SliderMode { Level, Adjust, Submaster, GrandMaster, Speed, FunctionSpeed, FunctionSize, FunctionRotation, FunctionMovement, FunctionXOffset, FunctionYOffset, FunctionFan };
+    enum SliderMode { Level, Adjust, Submaster, GrandMaster, Speed, FunctionSpeed, FunctionSize, FunctionRotation, FunctionMovement, FunctionXOffset, FunctionYOffset, FunctionFan, Strobe };
     Q_ENUM(SliderMode)
 
 public:
@@ -299,6 +299,10 @@ protected:
     bool m_monitorEnabled;
     uchar m_monitorValue;
     bool m_isOverriding;
+
+    /* Software strobe (Strobe mode) state */
+    uchar m_strobeLevel;
+    uint m_strobeElapsed;
 
     /** Data model used by the QML UI to represent groups/fixtures/channels */
     TreeModel *m_fixtureTree;
@@ -474,6 +478,9 @@ protected:
 
     /** writeDMX for Adjust mode */
     void writeDMXAdjust(MasterTimer* timer, QList<Universe*> universes);
+
+    /** writeDMX for software Strobe mode */
+    void writeDMXStrobe(MasterTimer* timer, QList<Universe*> universes);
 
 private:
     /** Map used to lookup a GenericFader instance for a Universe ID */
