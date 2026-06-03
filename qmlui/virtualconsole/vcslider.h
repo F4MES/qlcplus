@@ -384,6 +384,10 @@ public:
     Q_INVOKABLE void addSpeedFunction(quint32 fid);
     Q_INVOKABLE void removeSpeedFunction(quint32 fid);
 
+    /** Attach every EFX function that controls a fixture in the given
+     *  fixture group to this slider's controlled-functions list */
+    Q_INVOKABLE void addSpeedFunctionsFromGroup(quint32 groupID);
+
     /** Get/Set the status of the flash button enablement */
     bool adjustFlashEnabled() const;
     void setAdjustFlashEnabled(bool enable);

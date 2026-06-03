@@ -1432,6 +1432,31 @@ QVariant VCSlider::speedFunctionsList() const
     return QVariant::fromValue(list);
 }
 
+void VCSlider::addSpeedFunctionsFromGroup(quint32 groupID)
+{
+    FixtureGroup *grp = m_doc->fixtureGroup(groupID);
+    if (grp == nullptr)
+        return;
+
+    QList<quint32> groupFixtures = grp->fixtureList();
+
+    foreach (Function *f, m_doc->functionsByType(Function::EFX))
+    {
+        if (f == nullptr)
+            continue;
+
+        // attach the EFX if any of its fixtures belong to the group
+        foreach (quint32 comp, f->components())
+        {
+            if (groupFixtures.contains(comp))
+            {
+                addSpeedFunction(f->id());
+                break;
+            }
+        }
+    }
+}
+
 void VCSlider::addSpeedFunction(quint32 fid)
 {
     if (fid == Function::invalidId() || m_speedFunctions.contains(fid))

@@ -375,6 +375,37 @@ Rectangle
                 width: parent.width
                 spacing: 2
 
+                // one-tap: attach all EFX movement functions of a fixture group
+                RowLayout
+                {
+                    width: parent.width
+                    height: UISettings.listItemHeight
+
+                    CustomComboBox
+                    {
+                        id: moveGroupCombo
+                        Layout.fillWidth: true
+                        model: widgetRef ? widgetRef.fixtureGroupsList() : null
+                    }
+                    IconButton
+                    {
+                        height: UISettings.iconSizeMedium
+                        width: height
+                        faSource: FontAwesome.fa_plus
+                        faColor: "white"
+                        tooltip: qsTr("Attach this group's movement (EFX) functions")
+                        onClicked:
+                        {
+                            if (widgetRef)
+                            {
+                                var glist = widgetRef.fixtureGroupsList()
+                                if (glist && moveGroupCombo.currentIndex >= 0 && moveGroupCombo.currentIndex < glist.length)
+                                    widgetRef.addSpeedFunctionsFromGroup(glist[moveGroupCombo.currentIndex].mValue)
+                            }
+                        }
+                    }
+                }
+
                 Repeater
                 {
                     model: widgetRef ? widgetRef.speedFunctionsList : null
