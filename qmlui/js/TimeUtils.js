@@ -156,19 +156,34 @@ function qlcStringToTime(str, type)
     }
     else if (type === 1 /* Function.Beats */)
     {
-        var tokens = str.split(" ");
-
-        finalTime = parseInt(tokens[0]) * 1000;
-
-        if (tokens.length > 1)
+        // Beat units: 1 beat == 1000. Accept ANY fraction or decimal so an
+        // arbitrary subdivision can be entered (e.g. "1/5" => 200, "1/3" => 333).
+        // Supported forms (space separated tokens are summed):
+        //   "2"        => 2 beats        (2000)
+        //   "1/5"      => a fifth of a beat (200)
+        //   "1 1/5"    => 1 + 1/5 beat   (1200)
+        //   "0.2"      => decimal beats  (200)
+        var tokens = str.trim().split(" ");
+        for (var t = 0; t < tokens.length; t++)
         {
-            if (tokens[0] === " 1/8") { finalTime += 125; }
-            else if (tokens[0] === " 1/4") { finalTime += 250; }
-            else if (tokens[0] === " 3/8") { finalTime += 375; }
-            else if (tokens[0] === " 1/2") { finalTime += 500; }
-            else if (tokens[0] === " 5/8") { finalTime += 625; }
-            else if (tokens[0] === " 3/4") { finalTime += 750; }
-            else if (tokens[0] === " 7/8") { finalTime += 875; }
+            var tok = tokens[t];
+            if (tok.length === 0)
+                continue;
+
+            if (tok.indexOf("/") >= 0)
+            {
+                var fr = tok.split("/");
+                var num = parseFloat(fr[0]);
+                var den = parseFloat(fr[1]);
+                if (!isNaN(num) && !isNaN(den) && den > 0)
+                    finalTime += Math.round((num / den) * 1000);
+            }
+            else
+            {
+                var dec = parseFloat(tok);
+                if (!isNaN(dec))
+                    finalTime += Math.round(dec * 1000);
+            }
         }
     }
 
@@ -231,25 +246,28 @@ function timeToQlcString(value, type)
     }
     else if (type === 1 /* QLCFunction.Beats */)
     {
-        if (value < 125)
-        {
-            return value;
-        }
+        // 1 beat == 1000 units. Keep the pretty 1/8-grid labels for the common
+        // values, but render any other (arbitrary) subdivision as decimal beats
+        // so values like 200 (1/5) or 333 (1/3) are shown and can be round-tripped.
+        var whole = Math.floor(value / 1000);
+        var rem = value - (whole * 1000);
+        var eighths = { 125: " 1/8", 250: " 1/4", 375: " 3/8", 500: " 1/2",
+                        625: " 5/8", 750: " 3/4", 875: " 7/8" };
 
-        var beats = Math.floor(value / 1000);
-        if (beats > 0)
+        if (rem === 0)
         {
-            timeString = "" + beats;
+            timeString = "" + whole;
         }
-        value -= (beats * 1000);
-
-        if (value === 125) { timeString += " 1/8"; }
-        else if (value === 250) { timeString += " 1/4"; }
-        else if (value === 375) { timeString += " 3/8"; }
-        else if (value === 500) { timeString += " 1/2"; }
-        else if (value === 625) { timeString += " 5/8"; }
-        else if (value === 750) { timeString += " 3/4"; }
-        else if (value === 875) { timeString += " 7/8"; }
+        else if (eighths[rem] !== undefined)
+        {
+            timeString = (whole > 0 ? "" + whole : "") + eighths[rem];
+        }
+        else
+        {
+            // arbitrary fraction -> decimal beats, trimmed (e.g. 200 -> "0.2")
+            timeString = (value / 1000).toFixed(3);
+            timeString = timeString.replace(/0+$/, "").replace(/\.$/, "");
+        }
     }
 
     //console.log("Final time string: " + timeString)
