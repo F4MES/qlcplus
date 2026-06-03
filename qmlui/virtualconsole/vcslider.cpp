@@ -247,6 +247,7 @@ QString VCSlider::sliderModeToString(SliderMode mode)
         case FunctionYOffset: return QString("FunctionYOffset");
         case FunctionFan: return QString("FunctionFan");
         case Strobe: return QString("Strobe");
+        case FunctionShape: return QString("FunctionShape");
         default: return QString("Unknown");
     }
 }
@@ -277,6 +278,8 @@ VCSlider::SliderMode VCSlider::stringToSliderMode(const QString& mode)
         return FunctionFan;
     else if (mode == QString("Strobe"))
         return Strobe;
+    else if (mode == QString("FunctionShape"))
+        return FunctionShape;
     else
         return Adjust;
 }
@@ -288,7 +291,7 @@ VCSlider::SliderMode VCSlider::sliderMode() const
 
 void VCSlider::setSliderMode(SliderMode mode)
 {
-    Q_ASSERT(mode >= Level && mode <= Strobe);
+    Q_ASSERT(mode >= Level && mode <= FunctionShape);
 
     if (mode != m_sliderMode)
         Tardis::instance()->enqueueAction(Tardis::VCSliderSetMode, id(), m_sliderMode, mode);
@@ -428,6 +431,18 @@ void VCSlider::setSliderMode(SliderMode mode)
             setRangeLowLimit(0);
             setRangeHighLimit(255);
             m_strobeElapsed = 0;
+            setValue(rangeLowLimit());
+        break;
+        case FunctionShape:
+            // Pattern shape selector: the slider picks the EFX algorithm,
+            // set live on the attached EFX functions. No DMX, no spring-back.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
             setValue(rangeLowLimit());
         break;
     }
@@ -636,6 +651,9 @@ void VCSlider::setValue(int value, bool setDMX, bool updateFeedback)
         break;
         case Strobe:
             // handled live in writeDMXStrobe()
+        break;
+        case FunctionShape:
+            applyFunctionShape();
         break;
     }
 
@@ -1323,6 +1341,32 @@ void VCSlider::adjustFunctionAttribute(Function *f, qreal value)
         m_controlledAttributeId = f->requestAttributeOverride(m_controlledAttributeIndex, value);
     else
         f->adjustAttribute(value, m_controlledAttributeId);
+}
+
+void VCSlider::applyFunctionShape()
+{
+    if (m_speedFunctions.isEmpty())
+        return;
+
+    // Map the slider position to one of the EFX algorithms (10 shapes),
+    // applied live to every attached EFX. Non-EFX functions are ignored.
+    qreal low = rangeLowLimit();
+    qreal high = rangeHighLimit();
+    qreal span = high - low;
+    qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
+    pos = CLAMP(pos, qreal(0.0), qreal(1.0));
+
+    const int algoCount = 10;   // Circle .. Lissajous
+    int idx = int(pos * (qreal(algoCount) - 0.001));
+    idx = CLAMP(idx, 0, algoCount - 1);
+
+    foreach (quint32 fid, m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        EFX *efx = qobject_cast<EFX*>(function);
+        if (efx != NULL)
+            efx->setAlgorithm(EFX::Algorithm(idx));
+    }
 }
 
 void VCSlider::applyFunctionFan()

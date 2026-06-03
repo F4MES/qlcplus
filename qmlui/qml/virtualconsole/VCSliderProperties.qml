@@ -357,6 +357,23 @@ Rectangle
                     Layout.fillWidth: true
                     label: qsTr("Strobe (software)")
                 }
+
+                // row 12
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.FunctionShape : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.FunctionShape
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Movement shape")
+                }
               }
         } // end of SectionBox
 
@@ -434,7 +451,7 @@ Rectangle
 
         SectionBox
         {
-            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Speed || widgetRef.sliderMode === VCSlider.FunctionSpeed || widgetRef.sliderMode === VCSlider.FunctionSize || widgetRef.sliderMode === VCSlider.FunctionRotation || widgetRef.sliderMode === VCSlider.FunctionMovement || widgetRef.sliderMode === VCSlider.FunctionXOffset || widgetRef.sliderMode === VCSlider.FunctionYOffset || widgetRef.sliderMode === VCSlider.FunctionFan) : false
+            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Speed || widgetRef.sliderMode === VCSlider.FunctionSpeed || widgetRef.sliderMode === VCSlider.FunctionSize || widgetRef.sliderMode === VCSlider.FunctionRotation || widgetRef.sliderMode === VCSlider.FunctionMovement || widgetRef.sliderMode === VCSlider.FunctionXOffset || widgetRef.sliderMode === VCSlider.FunctionYOffset || widgetRef.sliderMode === VCSlider.FunctionFan || widgetRef.sliderMode === VCSlider.FunctionShape) : false
             sectionLabel: widgetRef && widgetRef.sliderMode === VCSlider.Speed ? qsTr("Tempo nudge functions") : qsTr("Controlled functions")
 
             sectionContents:
