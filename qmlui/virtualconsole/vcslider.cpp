@@ -105,7 +105,6 @@ VCSlider::VCSlider(Doc *doc, QObject *parent)
     , m_attributeMaxValue(UCHAR_MAX)
     , m_adjustFlashEnabled(false)
     , m_speedNudging(false)
-    , m_speedOriginalDuration(0)
 {
     setType(VCWidget::SliderWidget);
     setSliderMode(Adjust);
@@ -1143,8 +1142,7 @@ void VCSlider::adjustFunctionAttribute(Function *f, qreal value)
 
 void VCSlider::applySpeedNudge()
 {
-    Function *function = m_doc->function(m_controlledFunctionId);
-    if (function == nullptr)
+    if (m_speedFunctions.isEmpty())
         return;
 
     qreal center = (m_rangeLowLimit + m_rangeHighLimit) / 2.0;
@@ -1152,37 +1150,78 @@ void VCSlider::applySpeedNudge()
     qreal norm = (span > 0) ? (qreal(m_value) - center) / span : qreal(0.0);
     norm = CLAMP(norm, qreal(-1.0), qreal(1.0));
 
-    // near the center: restore the original duration and stop nudging
-    if (qAbs(norm) < 0.02)
-    {
-        if (m_speedNudging)
-        {
-            function->setDuration(m_speedOriginalDuration);
-            m_speedNudging = false;
-        }
-        return;
-    }
-
-    // capture the original duration the first time we leave the center
-    if (m_speedNudging == false)
-    {
-        m_speedOriginalDuration = function->duration();
-        m_speedNudging = true;
-    }
-
-    if (m_speedOriginalDuration == 0 ||
-        m_speedOriginalDuration == Function::infiniteSpeed())
-        return;
+    bool atCenter = (qAbs(norm) < 0.02);
 
     // up (norm > 0) => faster => shorter duration; down => slower => longer.
     // +/- 2 octaves: full up ~= 4x faster, full down ~= 4x slower, center = 1x.
     const qreal octaves = 2.0;
     qreal factor = qPow(2.0, -norm * octaves);
-    uint newDuration = uint(qRound(qreal(m_speedOriginalDuration) * factor));
-    if (newDuration == 0)
-        newDuration = 1;
 
-    function->setDuration(newDuration);
+    for (quint32 fid : m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        if (function == nullptr)
+            continue;
+
+        // at the center: restore each function's captured original duration
+        if (atCenter)
+        {
+            if (m_speedNudging && m_speedOrigDurations.contains(fid))
+                function->setDuration(m_speedOrigDurations.value(fid));
+            continue;
+        }
+
+        // capture the original duration the first time we leave the center
+        if (m_speedNudging == false || !m_speedOrigDurations.contains(fid))
+            m_speedOrigDurations[fid] = function->duration();
+
+        uint orig = m_speedOrigDurations.value(fid);
+        if (orig == 0 || orig == Function::infiniteSpeed())
+            continue;
+
+        uint newDuration = uint(qRound(qreal(orig) * factor));
+        if (newDuration == 0)
+            newDuration = 1;
+
+        function->setDuration(newDuration);
+    }
+
+    m_speedNudging = !atCenter;
+}
+
+QVariant VCSlider::speedFunctionsList() const
+{
+    QVariantList list;
+    for (quint32 fid : m_speedFunctions)
+    {
+        QVariantMap map;
+        map.insert("funcID", fid);
+        list.append(map);
+    }
+    return QVariant::fromValue(list);
+}
+
+void VCSlider::addSpeedFunction(quint32 fid)
+{
+    if (fid == Function::invalidId() || m_speedFunctions.contains(fid))
+        return;
+
+    m_speedFunctions.append(fid);
+    emit speedFunctionsListChanged();
+}
+
+void VCSlider::removeSpeedFunction(quint32 fid)
+{
+    if (m_speedFunctions.removeAll(fid) == 0)
+        return;
+
+    // restore the function's original duration if we were nudging it
+    Function *function = m_doc->function(fid);
+    if (function != nullptr && m_speedOrigDurations.contains(fid))
+        function->setDuration(m_speedOrigDurations.value(fid));
+
+    m_speedOrigDurations.remove(fid);
+    emit speedFunctionsListChanged();
 }
 
 bool VCSlider::adjustFlashEnabled() const
@@ -1628,6 +1667,10 @@ bool VCSlider::loadXML(QXmlStreamReader &root)
         {
             loadXMLAdjust(root);
         }
+        else if (root.name() == KXMLQLCVCSliderSpeedFunction)
+        {
+            addSpeedFunction(root.readElementText().toUInt());
+        }
         else if (root.name() == KXMLQLCVCSliderFunctionFlash)
         {
             setAdjustFlashEnabled(true);
@@ -1872,6 +1915,10 @@ bool VCSlider::saveXML(QXmlStreamWriter *doc) const
             doc->writeEndElement();
         }
     }
+
+    /* Speed mode controlled functions */
+    for (quint32 fid : m_speedFunctions)
+        doc->writeTextElement(KXMLQLCVCSliderSpeedFunction, QString::number(fid));
 
     /* End the <Slider> tag */
     doc->writeEndElement();

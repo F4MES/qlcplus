@@ -366,7 +366,17 @@ VCWidgetItem
         {
             // attach function here
             if (drag.source.hasOwnProperty("fromFunctionManager"))
-                sliderObj.controlledFunction = drag.source.itemsList[0]
+            {
+                if (sliderObj.sliderMode === VCSlider.Speed)
+                {
+                    for (var i = 0; i < drag.source.itemsList.length; i++)
+                        sliderObj.addSpeedFunction(drag.source.itemsList[i])
+                }
+                else
+                {
+                    sliderObj.controlledFunction = drag.source.itemsList[0]
+                }
+            }
         }
 
         states: [

@@ -53,6 +53,7 @@ class VCSlider : public VCWidget, public DMXSource
     Q_PROPERTY(bool adjustFlashEnabled READ adjustFlashEnabled WRITE setAdjustFlashEnabled NOTIFY adjustFlashEnabledChanged)
 
     Q_PROPERTY(quint32 controlledFunction READ controlledFunction WRITE setControlledFunction NOTIFY controlledFunctionChanged)
+    Q_PROPERTY(QVariant speedFunctionsList READ speedFunctionsList NOTIFY speedFunctionsListChanged)
     Q_PROPERTY(int controlledAttribute READ controlledAttribute WRITE setControlledAttribute NOTIFY controlledAttributeChanged)
     Q_PROPERTY(QStringList availableAttributes READ availableAttributes NOTIFY availableAttributesChanged)
     Q_PROPERTY(qreal attributeMinValue READ attributeMinValue NOTIFY attributeMinValueChanged)
@@ -367,6 +368,11 @@ public:
      *  where the slider center means "no change". Up = faster, down = slower. */
     void applySpeedNudge();
 
+    /** Speed mode: list of Functions whose tempo the slider nudges */
+    QVariant speedFunctionsList() const;
+    Q_INVOKABLE void addSpeedFunction(quint32 fid);
+    Q_INVOKABLE void removeSpeedFunction(quint32 fid);
+
     /** Get/Set the status of the flash button enablement */
     bool adjustFlashEnabled() const;
     void setAdjustFlashEnabled(bool enable);
@@ -388,6 +394,7 @@ private:
 
 signals:
     void controlledFunctionChanged(quint32 fid);
+    void speedFunctionsListChanged();
     void controlledAttributeChanged(int attr);
     void adjustFlashEnabledChanged(bool enable);
     void availableAttributesChanged();

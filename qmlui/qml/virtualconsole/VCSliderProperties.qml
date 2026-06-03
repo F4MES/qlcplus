@@ -226,7 +226,7 @@ Rectangle
 
         SectionBox
         {
-            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Adjust || widgetRef.sliderMode === VCSlider.Speed) : false
+            visible: widgetRef ? widgetRef.sliderMode === VCSlider.Adjust : false
             sectionLabel: qsTr("Function Control")
 
             sectionContents:
