@@ -1440,7 +1440,7 @@ void VCSlider::addSpeedFunctionsFromGroup(quint32 groupID)
 
     QList<quint32> groupFixtures = grp->fixtureList();
 
-    foreach (Function *f, m_doc->functionsByType(Function::EFX))
+    foreach (Function *f, m_doc->functionsByType(Function::EFXType))
     {
         if (f == nullptr)
             continue;
