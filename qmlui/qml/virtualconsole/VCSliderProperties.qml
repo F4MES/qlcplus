@@ -289,6 +289,40 @@ Rectangle
                     Layout.fillWidth: true
                     label: qsTr("Movement (all)")
                 }
+
+                // row 8
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.FunctionXOffset : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.FunctionXOffset
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Movement X (pan)")
+                }
+
+                // row 9
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: sliderModeGroup
+                    checked: widgetRef ? widgetRef.sliderMode === VCSlider.FunctionYOffset : false
+                    onClicked: if (checked && widgetRef) widgetRef.sliderMode = VCSlider.FunctionYOffset
+                }
+
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Movement Y (tilt)")
+                }
               }
         } // end of SectionBox
 
@@ -366,7 +400,7 @@ Rectangle
 
         SectionBox
         {
-            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Speed || widgetRef.sliderMode === VCSlider.FunctionSpeed || widgetRef.sliderMode === VCSlider.FunctionSize || widgetRef.sliderMode === VCSlider.FunctionRotation || widgetRef.sliderMode === VCSlider.FunctionMovement) : false
+            visible: widgetRef ? (widgetRef.sliderMode === VCSlider.Speed || widgetRef.sliderMode === VCSlider.FunctionSpeed || widgetRef.sliderMode === VCSlider.FunctionSize || widgetRef.sliderMode === VCSlider.FunctionRotation || widgetRef.sliderMode === VCSlider.FunctionMovement || widgetRef.sliderMode === VCSlider.FunctionXOffset || widgetRef.sliderMode === VCSlider.FunctionYOffset) : false
             sectionLabel: widgetRef && widgetRef.sliderMode === VCSlider.Speed ? qsTr("Tempo nudge functions") : qsTr("Controlled functions")
 
             sectionContents:

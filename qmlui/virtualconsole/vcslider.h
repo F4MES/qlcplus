@@ -159,7 +159,7 @@ protected:
      * Slider Mode
      *********************************************************************/
 public:
-    enum SliderMode { Level, Adjust, Submaster, GrandMaster, Speed, FunctionSpeed, FunctionSize, FunctionRotation, FunctionMovement };
+    enum SliderMode { Level, Adjust, Submaster, GrandMaster, Speed, FunctionSpeed, FunctionSize, FunctionRotation, FunctionMovement, FunctionXOffset, FunctionYOffset };
     Q_ENUM(SliderMode)
 
 public:
@@ -378,6 +378,8 @@ public:
     void applyFunctionSize();
     void applyFunctionRotation();
     void applyFunctionMovement();
+    void applyFunctionXOffset();
+    void applyFunctionYOffset();
 
     /** Speed mode: list of Functions whose tempo the slider nudges */
     QVariant speedFunctionsList() const;

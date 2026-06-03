@@ -243,6 +243,8 @@ QString VCSlider::sliderModeToString(SliderMode mode)
         case FunctionSize: return QString("FunctionSize");
         case FunctionRotation: return QString("FunctionRotation");
         case FunctionMovement: return QString("FunctionMovement");
+        case FunctionXOffset: return QString("FunctionXOffset");
+        case FunctionYOffset: return QString("FunctionYOffset");
         default: return QString("Unknown");
     }
 }
@@ -265,6 +267,10 @@ VCSlider::SliderMode VCSlider::stringToSliderMode(const QString& mode)
         return FunctionRotation;
     else if (mode == QString("FunctionMovement"))
         return FunctionMovement;
+    else if (mode == QString("FunctionXOffset"))
+        return FunctionXOffset;
+    else if (mode == QString("FunctionYOffset"))
+        return FunctionYOffset;
     else
         return Adjust;
 }
@@ -276,7 +282,7 @@ VCSlider::SliderMode VCSlider::sliderMode() const
 
 void VCSlider::setSliderMode(SliderMode mode)
 {
-    Q_ASSERT(mode >= Level && mode <= FunctionMovement);
+    Q_ASSERT(mode >= Level && mode <= FunctionYOffset);
 
     if (mode != m_sliderMode)
         Tardis::instance()->enqueueAction(Tardis::VCSliderSetMode, id(), m_sliderMode, mode);
@@ -370,6 +376,28 @@ void VCSlider::setSliderMode(SliderMode mode)
             setRangeLowLimit(0);
             setRangeHighLimit(255);
             setValue(rangeLowLimit());
+        break;
+        case FunctionXOffset:
+            // Pattern X-offset (pan) aim control. No DMX, no spring-back.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
+            setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
+        break;
+        case FunctionYOffset:
+            // Pattern Y-offset (tilt) aim control. No DMX, no spring-back.
+            setAdjustFlashEnabled(false);
+            setMonitorEnabled(false);
+            setValueDisplayStyle(PercentageValue);
+            m_doc->masterTimer()->unregisterDMXSource(this);
+            removeActiveFaders();
+            setRangeLowLimit(0);
+            setRangeHighLimit(255);
+            setValue(qRound((rangeLowLimit() + rangeHighLimit()) / 2.0));
         break;
     }
 }
@@ -565,6 +593,12 @@ void VCSlider::setValue(int value, bool setDMX, bool updateFeedback)
         break;
         case FunctionMovement:
             applyFunctionMovement();
+        break;
+        case FunctionXOffset:
+            applyFunctionXOffset();
+        break;
+        case FunctionYOffset:
+            applyFunctionYOffset();
         break;
     }
 
@@ -1252,6 +1286,52 @@ void VCSlider::adjustFunctionAttribute(Function *f, qreal value)
         m_controlledAttributeId = f->requestAttributeOverride(m_controlledAttributeIndex, value);
     else
         f->adjustAttribute(value, m_controlledAttributeId);
+}
+
+void VCSlider::applyFunctionXOffset()
+{
+    if (m_speedFunctions.isEmpty())
+        return;
+
+    // Map the slider position to the EFX X (pan) offset (0..255, 127 = centre)
+    // to aim the running movement pattern. Non-EFX functions are ignored.
+    qreal low = rangeLowLimit();
+    qreal high = rangeHighLimit();
+    qreal span = high - low;
+    qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
+    pos = CLAMP(pos, qreal(0.0), qreal(1.0));
+    int off = int(qRound(pos * 255.0));
+
+    foreach (quint32 fid, m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        EFX *efx = qobject_cast<EFX*>(function);
+        if (efx != NULL)
+            efx->setXOffset(off);
+    }
+}
+
+void VCSlider::applyFunctionYOffset()
+{
+    if (m_speedFunctions.isEmpty())
+        return;
+
+    // Map the slider position to the EFX Y (tilt) offset (0..255, 127 = centre)
+    // to aim the running movement pattern. Non-EFX functions are ignored.
+    qreal low = rangeLowLimit();
+    qreal high = rangeHighLimit();
+    qreal span = high - low;
+    qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
+    pos = CLAMP(pos, qreal(0.0), qreal(1.0));
+    int off = int(qRound(pos * 255.0));
+
+    foreach (quint32 fid, m_speedFunctions)
+    {
+        Function *function = m_doc->function(fid);
+        EFX *efx = qobject_cast<EFX*>(function);
+        if (efx != NULL)
+            efx->setYOffset(off);
+    }
 }
 
 void VCSlider::applyFunctionMovement()
