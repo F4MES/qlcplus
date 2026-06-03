@@ -419,7 +419,8 @@ protected:
 
     /* Speed mode: temporary, non-destructive tempo nudge state */
     bool m_speedNudging;
-    uint m_speedOriginalDuration;
+    QList<quint32> m_speedFunctions;
+    QMap<quint32, uint> m_speedOrigDurations;
 
     /*********************************************************************
      * Submaster

@@ -298,6 +298,69 @@ Rectangle
 
         SectionBox
         {
+            visible: widgetRef ? widgetRef.sliderMode === VCSlider.Speed : false
+            sectionLabel: qsTr("Tempo nudge functions")
+
+            sectionContents:
+              Column
+              {
+                width: parent.width
+                spacing: 2
+
+                Repeater
+                {
+                    model: widgetRef ? widgetRef.speedFunctionsList : null
+                    delegate:
+                        Row
+                        {
+                            width: parent.width
+                            height: UISettings.listItemHeight
+
+                            property int functionID: modelData.funcID
+                            property QLCFunction func: functionManager.getFunction(functionID)
+
+                            IconTextEntry
+                            {
+                                width: parent.width - removeBtn.width
+                                height: parent.height
+                                tFontSize: UISettings.textSizeDefault
+                                tLabel: func ? func.name : ""
+                                functionType: func ? func.type : -1
+                            }
+
+                            IconButton
+                            {
+                                id: removeBtn
+                                width: height
+                                height: UISettings.listItemHeight
+                                faSource: FontAwesome.fa_minus
+                                faColor: "crimson"
+                                tooltip: qsTr("Remove this function")
+                                onClicked: if (widgetRef) widgetRef.removeSpeedFunction(functionID)
+                            }
+                        }
+                }
+
+                Rectangle
+                {
+                    width: parent.width
+                    height: UISettings.bigItemHeight * 0.6
+                    color: UISettings.bgMedium
+                    radius: 10
+                    visible: widgetRef ? widgetRef.speedFunctionsList.length === 0 : true
+
+                    RobotoText
+                    {
+                        anchors.centerIn: parent
+                        textHAlign: Text.AlignHCenter
+                        label: qsTr("Drag & Drop Functions over\nthe slider to populate this list")
+                    }
+                }
+              }
+        } // SectionBox Tempo nudge functions
+
+        SectionBox
+        {
             visible: widgetRef ? widgetRef.sliderMode === VCSlider.Level : false
             sectionLabel: qsTr("Level mode")
 
