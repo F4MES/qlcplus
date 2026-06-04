@@ -597,7 +597,8 @@ void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity,
 
     // Start the fire up!
     func->start(timer, functionParent(), 0, newStep->m_fadeIn, newStep->m_fadeOut,
-                func->defaultSpeed(), m_chaser->tempoType());
+                func->defaultSpeed(),
+                m_chaser->overlapMode() ? Function::Original : m_chaser->tempoType());
     m_runnerSteps.append(newStep);
     m_roundTime->restart();
 }
