@@ -37,6 +37,7 @@ class ChaserEditor final : public FunctionEditor
     Q_PROPERTY(int stepsFadeIn READ stepsFadeIn WRITE setStepsFadeIn NOTIFY stepsFadeInChanged)
     Q_PROPERTY(int stepsFadeOut READ stepsFadeOut WRITE setStepsFadeOut NOTIFY stepsFadeOutChanged)
     Q_PROPERTY(int stepsDuration READ stepsDuration WRITE setStepsDuration NOTIFY stepsDurationChanged)
+    Q_PROPERTY(bool overlapMode READ overlapMode WRITE setOverlapMode NOTIFY overlapModeChanged)
     Q_PROPERTY(int playbackIndex READ playbackIndex WRITE setPlaybackIndex NOTIFY playbackIndexChanged)
 
 public:
@@ -169,6 +170,10 @@ public:
     int stepsDuration() const;
     void setStepsDuration(int stepsDuration);
 
+    /** Get/Set the overlap (fire & forget) mode of the Chaser being edited */
+    bool overlapMode() const;
+    void setOverlapMode(bool enable);
+
     /** Auto-set all step durations from their function's total duration.
      *  Forces duration mode to PerStep if not already set. */
     Q_INVOKABLE void autoSetDurations();
@@ -184,6 +189,7 @@ signals:
     void stepsFadeInChanged(int stepsFadeIn);
     void stepsFadeOutChanged(int stepsFadeOut);
     void stepsDurationChanged(int stepsDuration);
+    void overlapModeChanged(bool overlapMode);
 };
 
 #endif // CHASEREDITOR_H

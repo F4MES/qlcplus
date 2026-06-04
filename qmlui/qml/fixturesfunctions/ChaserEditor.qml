@@ -367,6 +367,24 @@ Rectangle
                         label: qsTr("Duration")
                         Layout.fillWidth: true
                     }
+
+                    // Overlap (fire & forget): inner functions are not stopped
+                    // when the chaser advances, so successive runs overlap
+                    IconPopupButton
+                    {
+                        model: [
+                            { mLabel: qsTr("Off"), mTextIcon: "-", mValue: 0 },
+                            { mLabel: qsTr("On"), mTextIcon: "+", mValue: 1 }
+                        ]
+
+                        currValue: chaserEditor.overlapMode ? 1 : 0
+                        onValueChanged: (value) => chaserEditor.overlapMode = (value === 1)
+                    }
+                    RobotoText
+                    {
+                        label: qsTr("Overlap")
+                        Layout.fillWidth: true
+                    }
                 } // end of GridLayout
             } // end of SectionBox
         } // end of Column

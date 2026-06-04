@@ -743,6 +743,23 @@ void ChaserEditor::setStepsDuration(int stepsDuration)
     emit stepsListChanged();
 }
 
+bool ChaserEditor::overlapMode() const
+{
+    if (m_chaser == nullptr)
+        return false;
+
+    return m_chaser->overlapMode();
+}
+
+void ChaserEditor::setOverlapMode(bool enable)
+{
+    if (m_chaser == nullptr || m_chaser->overlapMode() == enable)
+        return;
+
+    m_chaser->setOverlapMode(enable);
+    emit overlapModeChanged(enable);
+}
+
 void ChaserEditor::autoSetDurations()
 {
     if (m_chaser == nullptr || m_chaser->stepsCount() == 0)
