@@ -827,7 +827,10 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
                 prevStepRoundElapsed = step->m_elapsed % step->m_duration;
 
             m_lastFunctionID = step->m_function->type() == Function::SceneType ? step->m_function->id() : Function::invalidId();
-            step->m_function->stop(functionParent(), m_chaser->type() == Function::SequenceType);
+            // Overlap mode: leave the current step's function running (it finishes
+            // on its own) so successive inner functions overlap.
+            if (m_chaser->overlapMode() == false)
+                step->m_function->stop(functionParent(), m_chaser->type() == Function::SequenceType);
             m_runnerSteps.removeOne(step);
             delete step;
         }

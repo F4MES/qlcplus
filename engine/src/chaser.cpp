@@ -36,6 +36,7 @@
 #define KXMLQLCChaserSpeedModeCommon  QStringLiteral("Common")
 #define KXMLQLCChaserSpeedModePerStep QStringLiteral("PerStep")
 #define KXMLQLCChaserSpeedModeDefault QStringLiteral("Default")
+#define KXMLQLCChaserOverlap          QStringLiteral("Overlap")
 
 #define KXMLQLCChaserLegacySequence QStringLiteral("Sequence")
 
@@ -49,6 +50,7 @@ Chaser::Chaser(Doc *doc)
     , m_fadeInMode(Default)
     , m_fadeOutMode(Default)
     , m_holdMode(Common)
+    , m_overlapMode(false)
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
     , m_runnerMutex(QMutex::Recursive)
 #endif
@@ -110,6 +112,7 @@ bool Chaser::copyFrom(const Function* function)
     m_fadeInMode = chaser->m_fadeInMode;
     m_fadeOutMode = chaser->m_fadeOutMode;
     m_holdMode = chaser->m_holdMode;
+    m_overlapMode = chaser->m_overlapMode;
 
     // Copy common function stuff
     return Function::copyFrom(function);
@@ -308,6 +311,18 @@ Chaser::SpeedMode Chaser::durationMode() const
     return m_holdMode;
 }
 
+void Chaser::setOverlapMode(bool enable)
+{
+    m_overlapMode = enable;
+    emit overlapModeChanged();
+    emit changed(this->id());
+}
+
+bool Chaser::overlapMode() const
+{
+    return m_overlapMode;
+}
+
 QString Chaser::speedModeToString(Chaser::SpeedMode mode)
 {
     if (mode == Common)
@@ -360,6 +375,10 @@ bool Chaser::saveXML(QXmlStreamWriter *doc) const
     doc->writeAttribute(KXMLQLCFunctionSpeedFadeOut, speedModeToString(fadeOutMode()));
     doc->writeAttribute(KXMLQLCFunctionSpeedDuration, speedModeToString(durationMode()));
     doc->writeEndElement();
+
+    /* Overlap (fire & forget) - only written when enabled */
+    if (overlapMode())
+        doc->writeTextElement(KXMLQLCChaserOverlap, "1");
 
     /* Steps */
     for (int i = 0; i < m_steps.count(); i++)
@@ -430,6 +449,10 @@ bool Chaser::loadXML(QXmlStreamReader &root)
         else if (root.name() == KXMLQLCChaserSpeedModes)
         {
             loadXMLSpeedModes(root);
+        }
+        else if (root.name() == KXMLQLCChaserOverlap)
+        {
+            setOverlapMode(root.readElementText().toInt() != 0);
         }
         else if (root.name() == KXMLQLCFunctionStep)
         {

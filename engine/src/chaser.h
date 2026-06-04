@@ -55,6 +55,8 @@ class Chaser : public Function
     Q_OBJECT
     Q_DISABLE_COPY(Chaser)
 
+    Q_PROPERTY(bool overlapMode READ overlapMode WRITE setOverlapMode NOTIFY overlapModeChanged)
+
     /*********************************************************************
      * Initialization
      *********************************************************************/
@@ -158,6 +160,7 @@ public slots:
 signals:
     void stepChanged(int index);
     void stepsListChanged(quint32 fid);
+    void overlapModeChanged();
 
 protected:
     QList <ChaserStep> m_steps;
@@ -188,10 +191,17 @@ public:
     static QString speedModeToString(SpeedMode mode);
     static SpeedMode stringToSpeedMode(const QString& str);
 
+    /** Overlap (fire & forget): when true, advancing to the next step does
+     *  not stop the current step's function, so inner (one-shot) functions
+     *  overlap and finish on their own. */
+    void setOverlapMode(bool enable);
+    bool overlapMode() const;
+
 protected:
     SpeedMode m_fadeInMode;
     SpeedMode m_fadeOutMode;
     SpeedMode m_holdMode;
+    bool m_overlapMode;
 
     /*********************************************************************
      * Save & Load
