@@ -21,6 +21,7 @@
 #include <QDebug>
 #include <QSettings>
 #include <QMutexLocker>
+#include <cmath>
 
 #if defined(WIN32) || defined(Q_OS_WIN)
 #   include "mastertimer-win32.h"
@@ -36,6 +37,7 @@
 #include "function.h"
 #include "universe.h"
 #include "doc.h"
+#include "abletonlink.h"
 
 #define MASTERTIMER_FREQUENCY "mastertimer/frequency"
 #define LATE_TO_BEAT_THRESHOLD 25
@@ -66,6 +68,9 @@ MasterTimer::MasterTimer(Doc* doc)
     , m_beatTimeDuration(500)
     , m_beatRequested(false)
     , m_lastBeatOffset(0)
+    , m_link(NULL)
+    , m_lastLinkBeats(0)
+    , m_linkPeers(0)
 {
     Q_ASSERT(doc != NULL);
     Q_ASSERT(d_ptr != NULL);
@@ -83,6 +88,12 @@ MasterTimer::~MasterTimer()
     if (d_ptr->isRunning() == true)
         stop();
 
+    if (m_link != NULL)
+    {
+        delete m_link;
+        m_link = NULL;
+    }
+
     delete d_ptr;
     d_ptr = NULL;
 }
@@ -90,6 +101,17 @@ MasterTimer::~MasterTimer()
 void MasterTimer::start()
 {
     Q_ASSERT(d_ptr != NULL);
+
+    // Allow enabling Ableton Link without UI, via setting or environment.
+    {
+        QSettings settings;
+        bool enableLink = settings.value("link/enabled", false).toBool();
+        if (qEnvironmentVariableIsSet("QLCPLUS_LINK"))
+            enableLink = (qgetenv("QLCPLUS_LINK").toInt() != 0);
+        if (enableLink)
+            setLinkEnabled(true);
+    }
+
     d_ptr->start();
 }
 
@@ -109,6 +131,39 @@ void MasterTimer::timerTick()
     qDebug() << "[MasterTimer] *********** tick:" << ticksCount++ << "**********";
 #endif
 
+    if (m_link != NULL && m_link->isEnabled())
+    {
+        // Ableton Link drives beats and tempo from the shared network timeline.
+        double quantum = 4.0; // one bar
+        double beats = 0, phase = 0, tempo = 0;
+        if (m_link->capture(quantum, beats, phase, tempo))
+        {
+            int bpm = qRound(tempo);
+            if (bpm > 0 && bpm != m_currentBPM)
+            {
+                m_currentBPM = bpm;
+                m_beatTimeDuration = 60000 / m_currentBPM;
+                emit bpmNumberChanged(bpm);
+            }
+
+            // fire a beat whenever we cross an integer beat boundary
+            if (std::floor(beats) > std::floor(m_lastLinkBeats))
+            {
+                m_beatRequested = true;
+                m_beatTimer.restart();
+                emit beat();
+            }
+            m_lastLinkBeats = beats;
+
+            int peers = m_link->numPeers();
+            if (peers != m_linkPeers)
+            {
+                m_linkPeers = peers;
+                emit linkPeersChanged(peers);
+            }
+        }
+    }
+    else
     switch (m_beatSourceType)
     {
         case Internal:
@@ -424,4 +479,36 @@ void MasterTimer::requestBeat()
     // forceful request of a beat, processed at
     // the next timerTick call
     m_beatRequested = true;
+}
+
+void MasterTimer::setLinkEnabled(bool enable)
+{
+    if (enable && m_link == NULL)
+        m_link = new AbletonLink(double(m_currentBPM));
+
+    if (m_link == NULL)
+        return;
+
+    if (enable)
+    {
+        m_link->setEnabled(true);
+        // seed the beat-edge tracker so we don't fire a spurious beat
+        double beats = 0, phase = 0, tempo = 0;
+        if (m_link->capture(4.0, beats, phase, tempo))
+            m_lastLinkBeats = beats;
+    }
+    else
+    {
+        m_link->setEnabled(false);
+    }
+}
+
+bool MasterTimer::linkEnabled() const
+{
+    return m_link != NULL && m_link->isEnabled();
+}
+
+int MasterTimer::linkPeers() const
+{
+    return m_link != NULL ? m_link->numPeers() : 0;
 }

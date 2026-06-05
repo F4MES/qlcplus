@@ -47,7 +47,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: false
+          submodules: recursive
 
       - name: Set General ENV variables
         run: |
@@ -264,7 +264,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: false
+          submodules: recursive
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2.23
@@ -468,7 +468,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: false
+          submodules: recursive
 
       - name: Set ENV variables
         shell: bash

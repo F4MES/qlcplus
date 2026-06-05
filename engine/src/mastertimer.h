@@ -34,6 +34,7 @@ class DMXSource;
 class Function;
 class Universe;
 class Doc;
+class AbletonLink;
 
 /** @addtogroup engine Engine
  * @{
@@ -225,9 +226,25 @@ public:
      *  This is quite safe cause even 300bpm should happen every 200ms. */
     void requestBeat();
 
+    /*************************************************************************
+     * Ableton Link
+     *************************************************************************/
+public:
+    /** Enable/disable Ableton Link network sync. When enabled, beats and
+     *  tempo are driven by the shared Link timeline instead of the internal
+     *  or external (MIDI) beat source. */
+    void setLinkEnabled(bool enable);
+
+    /** Return true if Ableton Link sync is currently enabled. */
+    bool linkEnabled() const;
+
+    /** Return the number of other Link peers currently in the session. */
+    int linkPeers() const;
+
 signals:
     void bpmNumberChanged(int bpm);
     void beat();
+    void linkPeersChanged(int peers);
 
 private:
     /** The current type of beat source */
@@ -242,6 +259,13 @@ private:
     QElapsedTimer m_beatTimer;
     /** Time offset in milliseconds when the last beat occurred */
     int m_lastBeatOffset;
+
+    /** Ableton Link network sync wrapper (NULL until first enabled) */
+    AbletonLink *m_link;
+    /** Absolute Link beat position at the previous tick (beat-edge detection) */
+    double m_lastLinkBeats;
+    /** Cached number of Link peers, to detect changes */
+    int m_linkPeers;
 };
 
 /** @} */

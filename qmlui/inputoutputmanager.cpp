@@ -23,6 +23,7 @@
 
 #include "inputoutputmanager.h"
 #include "inputprofileeditor.h"
+#include "mastertimer.h"
 #include "monitorproperties.h"
 #include "audioplugincache.h"
 #include "qlcioplugin.h"
@@ -752,6 +753,15 @@ QVariant InputOutputManager::beatGeneratorsList()
     internalMap.insert("privateName", "");
     genList.append(internalMap);
 
+    // add an entry to enable Ableton Link network sync
+    QVariantMap linkMap;
+    linkMap.insert("type", "LINK");
+    linkMap.insert("name", tr("Ableton Link"));
+    linkMap.insert("uni", 0);
+    linkMap.insert("line", 0);
+    linkMap.insert("privateName", "");
+    genList.append(linkMap);
+
     // add the currently open input devices that support beats
     foreach (Universe *uni, m_ioMap->universes())
     {
@@ -821,7 +831,14 @@ void InputOutputManager::setBeatType(QString beatType)
 
     qDebug() << "[InputOutputManager] Setting beat type:" << m_beatType;
 
-    if (m_beatType == "INTERNAL")
+    // Ableton Link drives beats independently of the MasterTimer source:
+    // enabling it makes the Link timeline drive beats; disabling falls back.
+    if (m_doc->masterTimer() != nullptr)
+        m_doc->masterTimer()->setLinkEnabled(m_beatType == "LINK");
+
+    if (m_beatType == "LINK")
+        m_ioMap->setBeatGeneratorType(InputOutputMap::Disabled);
+    else if (m_beatType == "INTERNAL")
         m_ioMap->setBeatGeneratorType(InputOutputMap::Internal);
     else if (m_beatType == "PLUGIN")
         m_ioMap->setBeatGeneratorType(InputOutputMap::Plugin);
@@ -837,6 +854,14 @@ void InputOutputManager::setBeatType(QString beatType)
 
 void InputOutputManager::slotBeatTypeChanged()
 {
+    if (m_doc->masterTimer() != nullptr && m_doc->masterTimer()->linkEnabled())
+    {
+        m_beatType = "LINK";
+        emit beatTypeChanged(m_beatType);
+        emit bpmNumberChanged(m_ioMap->bpmNumber());
+        return;
+    }
+
     switch(m_ioMap->beatGeneratorType())
     {
         case InputOutputMap::Internal: m_beatType = "INTERNAL"; break;

@@ -168,3 +168,22 @@ install(TARGETS ${module_name}
     LIBRARY DESTINATION ${INSTALLROOT}/${LIBSDIR}
     RUNTIME DESTINATION ${INSTALLROOT}/${LIBSDIR}
 )
+
+# ---- Ableton Link integration (begin) ----
+target_sources(${module_name} PRIVATE abletonlink.cpp abletonlink.h)
+target_include_directories(${module_name} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../link/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../link/modules/asio-standalone/asio/include
+)
+target_compile_features(${module_name} PRIVATE cxx_std_17)
+if(WIN32)
+    target_compile_definitions(${module_name} PRIVATE LINK_PLATFORM_WINDOWS=1 _WIN32_WINNT=0x0601)
+    target_link_libraries(${module_name} PUBLIC winmm iphlpapi ws2_32)
+elseif(APPLE)
+    target_compile_definitions(${module_name} PRIVATE LINK_PLATFORM_MACOSX=1)
+elseif(UNIX)
+    target_compile_definitions(${module_name} PRIVATE LINK_PLATFORM_LINUX=1)
+    find_package(Threads REQUIRED)
+    target_link_libraries(${module_name} PUBLIC Threads::Threads)
+endif()
+# ---- Ableton Link integration (end) ----
