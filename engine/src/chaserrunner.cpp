@@ -794,7 +794,18 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
         m_beatMs += MasterTimer::tick();
         if (timer->isBeat())
         {
-            m_beatDurationMs = m_beatMs;
+            // Smooth the measured interval over ~4 beats and reject clearly
+            // off intervals (clock start/stop, dropped/extra beats), so the
+            // sub-beat rate stays steady on a jittery (e.g. loopback) clock.
+            int nominalBeat = timer->beatTimeDuration();
+            if (nominalBeat <= 0 ||
+                (m_beatMs > quint32(nominalBeat) / 2 && m_beatMs < quint32(nominalBeat) * 2))
+            {
+                if (m_beatDurationMs == 0)
+                    m_beatDurationMs = m_beatMs;                          // seed
+                else
+                    m_beatDurationMs = (m_beatDurationMs * 3 + m_beatMs) / 4; // moving average
+            }
             m_beatMs = 0;
         }
     }
