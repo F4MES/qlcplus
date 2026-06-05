@@ -43,6 +43,8 @@ ChaserRunner::ChaserRunner(const Doc *doc, const Chaser *chaser, quint32 startTi
     , m_lastFunctionID(Function::invalidId())
     , m_roundTime(new QElapsedTimer())
     , m_order()
+    , m_beatMs(0)
+    , m_beatDurationMs(0)
 {
     Q_ASSERT(chaser != NULL);
 
@@ -784,6 +786,19 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
         break;
     }
 
+    // Measure the actual interval between incoming beats, so the sub-beat
+    // interpolation below tracks the real tempo instead of the nominal BPM
+    // (prevents fractional steps from slowly drifting against the beat).
+    if (m_chaser->tempoType() == Function::Beats)
+    {
+        m_beatMs += MasterTimer::tick();
+        if (timer->isBeat())
+        {
+            m_beatDurationMs = m_beatMs;
+            m_beatMs = 0;
+        }
+    }
+
     quint32 prevStepRoundElapsed = 0;
 
     foreach (ChaserRunnerStep *step, m_runnerSteps)
@@ -807,6 +822,12 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
             // step durations possible while remaining locked to the beat clock.
             quint32 beatFraction = 0;
             int beatDuration = timer->beatTimeDuration();
+            // Prefer the measured beat interval when it is sane (within 2x of
+            // the nominal), so sub-beats stay locked to the real incoming tempo.
+            if (m_beatDurationMs > 0 && beatDuration > 0 &&
+                m_beatDurationMs > quint32(beatDuration) / 2 &&
+                m_beatDurationMs < quint32(beatDuration) * 2)
+                beatDuration = int(m_beatDurationMs);
             if (beatDuration > 0)
             {
                 quint64 frac = (quint64(step->m_elapsed - step->m_elapsedAtLastBeat) * 1000)

@@ -161,6 +161,8 @@ private:
     quint32 m_lastFunctionID;               //! ID of the last Function ran (Scene only)
     QElapsedTimer *m_roundTime;             //! Counts the time between steps
     QVector<int> m_order;                   //! Array of step indices in a randomized order
+    quint32 m_beatMs;                       //! ms accumulated since the last beat (Beats mode)
+    quint32 m_beatDurationMs;               //! measured duration of the last beat in ms
 
     /************************************************************************
      * Intensity
