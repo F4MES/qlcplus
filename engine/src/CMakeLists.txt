@@ -171,10 +171,12 @@ install(TARGETS ${module_name}
 
 # ---- Ableton Link integration (begin) ----
 target_sources(${module_name} PRIVATE abletonlink.cpp abletonlink.h)
-target_include_directories(${module_name} PRIVATE
+target_include_directories(${module_name} SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../link/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../link/modules/asio-standalone/asio/include
 )
+# Ableton Link headers use multi-character constants; keep -Werror from choking
+set_source_files_properties(abletonlink.cpp PROPERTIES COMPILE_OPTIONS "-Wno-error;-Wno-multichar")
 target_compile_features(${module_name} PRIVATE cxx_std_17)
 if(WIN32)
     target_compile_definitions(${module_name} PRIVATE LINK_PLATFORM_WINDOWS=1 _WIN32_WINNT=0x0601)
