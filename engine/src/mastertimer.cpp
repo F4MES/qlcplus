@@ -159,6 +159,7 @@ void MasterTimer::timerTick()
             if (peers != m_linkPeers)
             {
                 m_linkPeers = peers;
+                qWarning() << "[AbletonLink] peers=" << peers << "tempo=" << tempo;
                 emit linkPeersChanged(peers);
             }
         }
@@ -501,6 +502,10 @@ void MasterTimer::setLinkEnabled(bool enable)
     {
         m_link->setEnabled(false);
     }
+
+    qWarning() << "[AbletonLink] setLinkEnabled(" << enable << ") isEnabled="
+               << (m_link != NULL ? m_link->isEnabled() : false)
+               << "peers=" << (m_link != NULL ? m_link->numPeers() : 0);
 }
 
 bool MasterTimer::linkEnabled() const
