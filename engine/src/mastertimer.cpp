@@ -136,7 +136,13 @@ void MasterTimer::timerTick()
         // Ableton Link drives beats and tempo from the shared network timeline.
         double quantum = 4.0; // one bar
         double beats = 0, phase = 0, tempo = 0;
-        if (m_link->capture(quantum, beats, phase, tempo))
+        bool linkOk = m_link->capture(quantum, beats, phase, tempo);
+        static int s_linkDbg = 0;
+        if ((s_linkDbg++ % 50) == 0)
+            qWarning() << "[AbletonLink] poll isEnabled=" << m_link->isEnabled()
+                       << "capture=" << linkOk << "peers=" << m_link->numPeers()
+                       << "tempo=" << tempo << "beats=" << beats;
+        if (linkOk)
         {
             int bpm = qRound(tempo);
             if (bpm > 0 && bpm != m_currentBPM)

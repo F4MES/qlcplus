@@ -837,7 +837,9 @@ void InputOutputManager::setBeatType(QString beatType)
         m_doc->masterTimer()->setLinkEnabled(m_beatType == "LINK");
 
     if (m_beatType == "LINK")
-        m_ioMap->setBeatGeneratorType(InputOutputMap::Disabled);
+        // Link drives beats via the MasterTimer override; keep the source
+        // shown as active so the BPM indicator displays the live tempo.
+        m_ioMap->setBeatGeneratorType(InputOutputMap::Internal);
     else if (m_beatType == "INTERNAL")
         m_ioMap->setBeatGeneratorType(InputOutputMap::Internal);
     else if (m_beatType == "PLUGIN")
