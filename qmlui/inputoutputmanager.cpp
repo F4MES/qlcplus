@@ -64,6 +64,10 @@ InputOutputManager::InputOutputManager(QQuickView *view, Doc *doc, QObject *pare
     connect(m_ioMap, SIGNAL(beat()), this, SIGNAL(beat()), Qt::QueuedConnection);
     connect(m_ioMap, SIGNAL(beatGeneratorTypeChanged()), this, SLOT(slotBeatTypeChanged()));
     connect(m_ioMap, SIGNAL(bpmNumberChanged(int)), this, SIGNAL(bpmNumberChanged(int)));
+    // Ableton Link updates MasterTimer's bpm directly; relay it to the UI.
+    if (m_doc->masterTimer() != nullptr)
+        connect(m_doc->masterTimer(), SIGNAL(bpmNumberChanged(int)),
+                this, SIGNAL(bpmNumberChanged(int)));
 }
 
 void InputOutputManager::slotDocLoaded()
