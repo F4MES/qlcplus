@@ -466,6 +466,16 @@ Rectangle
                     visible: false
                 }
             }
+
+            // Ableton Link connection indicator
+            RobotoText
+            {
+                visible: ioManager.linkActive
+                label: "LINK"
+                color: ioManager.linkPeers > 0 ? "#22DD22" : "#AAAAAA"
+                fontSize: UISettings.textSizeDefault
+                Layout.alignment: Qt.AlignVCenter
+            }
             Rectangle
             {
                 id: beatIndicator

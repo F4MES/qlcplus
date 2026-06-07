@@ -63,11 +63,16 @@ InputOutputManager::InputOutputManager(QQuickView *view, Doc *doc, QObject *pare
     connect(m_ioMap, SIGNAL(universeRemoved(quint32)), this, SIGNAL(universeNamesChanged()));
     connect(m_ioMap, SIGNAL(beat()), this, SIGNAL(beat()), Qt::QueuedConnection);
     connect(m_ioMap, SIGNAL(beatGeneratorTypeChanged()), this, SLOT(slotBeatTypeChanged()));
-    connect(m_ioMap, SIGNAL(bpmNumberChanged(int)), this, SIGNAL(bpmNumberChanged(int)));
-    // Ableton Link updates MasterTimer's bpm directly; relay it to the UI.
     if (m_doc->masterTimer() != nullptr)
-        connect(m_doc->masterTimer(), SIGNAL(bpmNumberChanged(int)),
-                this, SIGNAL(bpmNumberChanged(int)));
+        connect(m_doc->masterTimer(), &MasterTimer::linkPeersChanged,
+                this, [this](int) { emit linkStatusChanged(); }, Qt::QueuedConnection);
+    connect(m_ioMap, SIGNAL(bpmNumberChanged(int)), this, SIGNAL(bpmNumberChanged(int)));
+    // Ableton Link updates MasterTimer's bpm from the timer thread; relay it
+    // to the UI on the GUI thread (queued) so the QML binding refreshes live.
+    if (m_doc->masterTimer() != nullptr)
+        connect(m_doc->masterTimer(), &MasterTimer::bpmNumberChanged,
+                this, [this](int) { emit bpmNumberChanged(m_doc->masterTimer()->bpmNumber()); },
+                Qt::QueuedConnection);
 }
 
 void InputOutputManager::slotDocLoaded()
@@ -839,6 +844,7 @@ void InputOutputManager::setBeatType(QString beatType)
     // enabling it makes the Link timeline drive beats; disabling falls back.
     if (m_doc->masterTimer() != nullptr)
         m_doc->masterTimer()->setLinkEnabled(m_beatType == "LINK");
+    emit linkStatusChanged();
 
     if (m_beatType == "LINK")
         // Link drives beats via the MasterTimer override; keep the source
@@ -894,5 +900,15 @@ void InputOutputManager::setBpmNumber(int bpmNumber)
 
     m_ioMap->setBpmNumber(bpmNumber);
     emit bpmNumberChanged(bpmNumber);
+}
+
+bool InputOutputManager::linkActive() const
+{
+    return m_doc->masterTimer() != nullptr && m_doc->masterTimer()->linkEnabled();
+}
+
+int InputOutputManager::linkPeers() const
+{
+    return m_doc->masterTimer() != nullptr ? m_doc->masterTimer()->linkPeers() : 0;
 }
 
