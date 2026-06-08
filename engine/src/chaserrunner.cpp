@@ -835,7 +835,10 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
             int beatDuration = timer->beatTimeDuration();
             // Prefer the measured beat interval when it is sane (within 2x of
             // the nominal), so sub-beats stay locked to the real incoming tempo.
-            if (m_beatDurationMs > 0 && beatDuration > 0 &&
+            // Ableton Link gives the exact tempo in beatDuration already, so
+            // skip the smoothed measured interval (it would only add lag).
+            if (timer->linkEnabled() == false &&
+                m_beatDurationMs > 0 && beatDuration > 0 &&
                 m_beatDurationMs > quint32(beatDuration) / 2 &&
                 m_beatDurationMs < quint32(beatDuration) * 2)
                 beatDuration = int(m_beatDurationMs);

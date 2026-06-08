@@ -147,6 +147,10 @@ void MasterTimer::timerTick()
         {
             int bpm = qRound(tempo);
             m_linkTempo = tempo;
+            // Exact (fractional) beat duration: precise + updates immediately
+            // on tempo changes, so sub-beats track nudges without smoothing lag.
+            if (tempo > 0)
+                m_beatTimeDuration = qRound(60000.0 / tempo);
             if (bpm > 0 && bpm != m_currentBPM)
             {
                 m_currentBPM = bpm;
