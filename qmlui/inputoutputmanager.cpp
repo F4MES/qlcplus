@@ -77,6 +77,12 @@ InputOutputManager::InputOutputManager(QQuickView *view, Doc *doc, QObject *pare
 
 void InputOutputManager::slotDocLoaded()
 {
+    // Reflect the auto-enabled Ableton Link state in the beat selector.
+    if (m_doc->masterTimer() != nullptr && m_doc->masterTimer()->linkEnabled())
+    {
+        m_beatType = "LINK";
+        emit beatTypeChanged(m_beatType);
+    }
     emit universesListModelChanged();
 }
 
@@ -844,6 +850,10 @@ void InputOutputManager::setBeatType(QString beatType)
     // enabling it makes the Link timeline drive beats; disabling falls back.
     if (m_doc->masterTimer() != nullptr)
         m_doc->masterTimer()->setLinkEnabled(m_beatType == "LINK");
+    {
+        QSettings linkSettings;
+        linkSettings.setValue("link/enabled", m_beatType == "LINK");
+    }
     emit linkStatusChanged();
 
     if (m_beatType == "LINK")

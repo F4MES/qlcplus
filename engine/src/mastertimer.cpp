@@ -106,7 +106,7 @@ void MasterTimer::start()
     // Allow enabling Ableton Link without UI, via setting or environment.
     {
         QSettings settings;
-        bool enableLink = settings.value("link/enabled", false).toBool();
+        bool enableLink = settings.value("link/enabled", true).toBool();
         if (qEnvironmentVariableIsSet("QLCPLUS_LINK"))
             enableLink = (qgetenv("QLCPLUS_LINK").toInt() != 0);
         if (enableLink)
