@@ -145,7 +145,7 @@ Rectangle
         property bool liveLink: false
         Timer
         {
-            interval: 200; running: true; repeat: true
+            interval: 50; running: true; repeat: true
             onTriggered:
             {
                 mainToolbar.liveBpm = ioManager.bpmNumber
