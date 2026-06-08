@@ -71,6 +71,7 @@ MasterTimer::MasterTimer(Doc* doc)
     , m_link(NULL)
     , m_lastLinkBeats(0)
     , m_linkPeers(0)
+    , m_linkTempo(0)
 {
     Q_ASSERT(doc != NULL);
     Q_ASSERT(d_ptr != NULL);
@@ -145,6 +146,7 @@ void MasterTimer::timerTick()
         if (linkOk)
         {
             int bpm = qRound(tempo);
+            m_linkTempo = tempo;
             if (bpm > 0 && bpm != m_currentBPM)
             {
                 m_currentBPM = bpm;
@@ -522,4 +524,9 @@ bool MasterTimer::linkEnabled() const
 int MasterTimer::linkPeers() const
 {
     return m_link != NULL ? m_link->numPeers() : 0;
+}
+
+qreal MasterTimer::linkBpm() const
+{
+    return m_linkTempo;
 }

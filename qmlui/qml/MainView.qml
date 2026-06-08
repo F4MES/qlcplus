@@ -140,6 +140,7 @@ Rectangle
         // Poll the engine so BPM + Link status always refresh, even if
         // the cross-thread NOTIFY signals don't make it through.
         property int liveBpm: 0
+        property real liveBpmF: 0
         property int livePeers: 0
         property bool liveLink: false
         Timer
@@ -148,6 +149,7 @@ Rectangle
             onTriggered:
             {
                 mainToolbar.liveBpm = ioManager.bpmNumber
+                mainToolbar.liveBpmF = ioManager.bpmFloat
                 mainToolbar.livePeers = ioManager.linkPeers
                 mainToolbar.liveLink = ioManager.linkActive
             }
@@ -458,7 +460,7 @@ Rectangle
             // ################## BEATS ##################
             RobotoText
             {
-                label: "BPM: " + (mainToolbar.liveBpm > 0 ? mainToolbar.liveBpm : qsTr("Off"))
+                label: "BPM: " + (mainToolbar.liveBpmF > 0 ? mainToolbar.liveBpmF.toFixed(1) : qsTr("Off"))
                 color: gsMouseArea.containsMouse ? UISettings.bgLight : "transparent"
                 fontSize: UISettings.textSizeDefault
                 Layout.alignment: Qt.AlignTop

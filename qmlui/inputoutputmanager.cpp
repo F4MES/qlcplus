@@ -914,3 +914,10 @@ int InputOutputManager::linkPeers() const
     return m_doc->masterTimer() != nullptr ? m_doc->masterTimer()->linkPeers() : 0;
 }
 
+double InputOutputManager::bpmFloat() const
+{
+    if (m_doc->masterTimer() != nullptr && m_doc->masterTimer()->linkEnabled())
+        return m_doc->masterTimer()->linkBpm();
+    return m_ioMap->bpmNumber();
+}
+

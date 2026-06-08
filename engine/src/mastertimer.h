@@ -241,6 +241,9 @@ public:
     /** Return the number of other Link peers currently in the session. */
     int linkPeers() const;
 
+    /** Return the latest fractional Link tempo (BPM). */
+    qreal linkBpm() const;
+
 signals:
     void bpmNumberChanged(int bpm);
     void beat();
@@ -266,6 +269,8 @@ private:
     double m_lastLinkBeats;
     /** Cached number of Link peers, to detect changes */
     int m_linkPeers;
+    /** Latest fractional Link tempo (BPM), for display only */
+    qreal m_linkTempo;
 };
 
 /** @} */

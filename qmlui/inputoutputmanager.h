@@ -54,6 +54,7 @@ class InputOutputManager final : public PreviewContext
     Q_PROPERTY(int bpmNumber READ bpmNumber WRITE setBpmNumber NOTIFY bpmNumberChanged)
     Q_PROPERTY(bool linkActive READ linkActive NOTIFY linkStatusChanged)
     Q_PROPERTY(int linkPeers READ linkPeers NOTIFY linkStatusChanged)
+    Q_PROPERTY(double bpmFloat READ bpmFloat NOTIFY bpmNumberChanged)
 
     Q_PROPERTY(QString profileUserFolder READ profileUserFolder CONSTANT)
 
@@ -184,6 +185,7 @@ public:
     /** Ableton Link status for the toolbar indicator */
     bool linkActive() const;
     int linkPeers() const;
+    double bpmFloat() const;
 
 signals:
     void beatTypeChanged(QString beatType);
