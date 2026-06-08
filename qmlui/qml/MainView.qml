@@ -136,6 +136,22 @@ Rectangle
         width: parent.width
         height: UISettings.iconSizeDefault
         z: 50
+
+        // Poll the engine so BPM + Link status always refresh, even if
+        // the cross-thread NOTIFY signals don't make it through.
+        property int liveBpm: 0
+        property int livePeers: 0
+        property bool liveLink: false
+        Timer
+        {
+            interval: 200; running: true; repeat: true
+            onTriggered:
+            {
+                mainToolbar.liveBpm = ioManager.bpmNumber
+                mainToolbar.livePeers = ioManager.linkPeers
+                mainToolbar.liveLink = ioManager.linkActive
+            }
+        }
         gradient: Gradient
         {
             GradientStop { position: 0; color: UISettings.toolbarStartMain }
@@ -442,7 +458,7 @@ Rectangle
             // ################## BEATS ##################
             RobotoText
             {
-                label: "BPM: " + (ioManager.bpmNumber > 0 ? ioManager.bpmNumber : qsTr("Off"))
+                label: "BPM: " + (mainToolbar.liveBpm > 0 ? mainToolbar.liveBpm : qsTr("Off"))
                 color: gsMouseArea.containsMouse ? UISettings.bgLight : "transparent"
                 fontSize: UISettings.textSizeDefault
                 Layout.alignment: Qt.AlignTop
@@ -470,9 +486,9 @@ Rectangle
             // Ableton Link connection indicator
             RobotoText
             {
-                visible: ioManager.linkActive
+                visible: mainToolbar.liveLink
                 label: "LINK"
-                color: ioManager.linkPeers > 0 ? "#22DD22" : "#AAAAAA"
+                color: mainToolbar.livePeers > 0 ? "#22DD22" : "#AAAAAA"
                 fontSize: UISettings.textSizeDefault
                 Layout.alignment: Qt.AlignVCenter
             }
