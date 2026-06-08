@@ -890,6 +890,8 @@ void InputOutputManager::slotBeatTypeChanged()
 
 int InputOutputManager::bpmNumber() const
 {
+    if (m_doc->masterTimer() != nullptr && m_doc->masterTimer()->linkEnabled())
+        return m_doc->masterTimer()->bpmNumber();
     return m_ioMap->bpmNumber();
 }
 
