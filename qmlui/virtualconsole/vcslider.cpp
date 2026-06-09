@@ -189,6 +189,21 @@ VCWidget* VCSlider::createCopy(VCWidget* parent) const
     return slider;
 }
 
+void VCSlider::remapChannels(const QMap<SceneValue, SceneValue> &remapMap)
+{
+    QList<SceneValue> newChannels;
+
+    for (const SceneValue &val : m_levelChannels)
+    {
+        SceneValue key(val.fxi, val.channel);
+        if (remapMap.contains(key))
+            newChannels.append(remapMap.value(key));
+    }
+
+    m_levelChannels = newChannels;
+    emit channelsCountChanged();
+}
+
 bool VCSlider::copyFrom(const VCWidget *widget)
 {
     const VCSlider *slider = qobject_cast<const VCSlider*> (widget);
@@ -2018,7 +2033,7 @@ void VCSlider::writeDMXAdjust(MasterTimer* timer, QList<Universe *> ua)
 
 void VCSlider::updateFeedback()
 {
-    int fbv = invertedAppearance() ? rangeHighLimit() - m_value : m_value;
+    int fbv = invertedAppearance() ? rangeHighLimit() - m_value + rangeLowLimit() : m_value;
     fbv = int(SCALE(float(fbv), float(rangeLowLimit()),
                     float(rangeHighLimit()), float(0), float(UCHAR_MAX)));
 
