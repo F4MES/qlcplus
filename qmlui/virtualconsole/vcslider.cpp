@@ -1592,8 +1592,8 @@ void VCSlider::applySpeedNudge()
     bool atCenter = (qAbs(norm) < 0.02);
 
     // up (norm > 0) => faster => shorter duration; down => slower => longer.
-    // +/- 2 octaves: full up ~= 4x faster, full down ~= 4x slower, center = 1x.
-    const qreal octaves = 2.0;
+    // +/- 3 octaves: full up ~= 8x faster, full down ~= 8x slower, center = 1x.
+    const qreal octaves = 3.0;
     qreal factor = qPow(2.0, -norm * octaves);
 
     for (quint32 fid : m_speedFunctions)
