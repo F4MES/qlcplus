@@ -586,10 +586,17 @@ void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity,
         {
             qreal spacing = qreal(newStep->m_duration) / 1000.0;
             qreal now = timer->linkBeat();
-            if (spacing > 0.0 && now > 0.0)
+            if (spacing <= 0.0 || now <= 0.0)
+                newStep->m_linkBeatStart = now;
+            else if (spacing >= 1.0)
+                // Whole-beat (or multi-beat) steps: snap to the step grid so the
+                // first transition lands on a beat (the chase aligns itself).
                 newStep->m_linkBeatStart = qreal(qint64(now / spacing)) * spacing;
             else
-                newStep->m_linkBeatStart = now;
+                // Sub-beat (fractional) steps: begin the pattern on the NEXT whole
+                // beat, so a chase triggered between beats still locks its cycle to
+                // the beat instead of running off-grid. (epsilon absorbs fp jitter)
+                newStep->m_linkBeatStart = qreal(qint64(now - 0.001) + 1);
         }
     }
     else
