@@ -49,6 +49,7 @@ typedef struct
     quint32 m_elapsed;                  //! Elapsed milliseconds
     quint32 m_elapsedBeats;             //! Elapsed beats
     quint32 m_elapsedAtLastBeat;        //! Value of m_elapsed (ms) at the last counted beat, used for sub-beat interpolation
+    qreal m_linkBeatStart;              //! Ableton Link beat position when this step started (Link sub-beat timing)
     uint m_fadeIn;                      //! Step fade in in ms
     uint m_fadeOut;                     //! Step fade out in ms
     uint m_duration;                    //! Step hold in ms
@@ -163,6 +164,7 @@ private:
     QVector<int> m_order;                   //! Array of step indices in a randomized order
     quint32 m_beatMs;                       //! ms accumulated since the last beat (Beats mode)
     quint32 m_beatDurationMs;               //! measured duration of the last beat in ms
+    qreal m_nextLinkBeatStart;              //! carried-forward exact Link beat boundary for the next step (-1 = none/fresh)
 
     /************************************************************************
      * Intensity

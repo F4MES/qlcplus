@@ -244,6 +244,10 @@ public:
     /** Return the latest fractional Link tempo (BPM). */
     qreal linkBpm() const;
 
+    /** Return Ableton Link's current continuous beat position
+        (used for drift-free sub-beat chase timing). */
+    qreal linkBeat() const;
+
 signals:
     void bpmNumberChanged(int bpm);
     void beat();

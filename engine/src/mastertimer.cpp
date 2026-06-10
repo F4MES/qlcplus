@@ -534,3 +534,8 @@ qreal MasterTimer::linkBpm() const
 {
     return m_linkTempo;
 }
+
+qreal MasterTimer::linkBeat() const
+{
+    return m_lastLinkBeats;
+}

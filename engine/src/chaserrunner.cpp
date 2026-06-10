@@ -45,6 +45,7 @@ ChaserRunner::ChaserRunner(const Doc *doc, const Chaser *chaser, quint32 startTi
     , m_order()
     , m_beatMs(0)
     , m_beatDurationMs(0)
+    , m_nextLinkBeatStart(-1)
 {
     Q_ASSERT(chaser != NULL);
 
@@ -492,6 +493,9 @@ void ChaserRunner::clearRunningList()
         delete step;
     }
     m_runnerSteps.clear();
+    // Manual jump (next/prev/goto): drop any carried Link boundary so the
+    // next step re-snaps to Link's grid instead of continuing the old chain.
+    m_nextLinkBeatStart = -1;
 }
 
 void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity, qreal sIntensity,
@@ -567,6 +571,32 @@ void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity,
         newStep->m_elapsed = MasterTimer::tick() + elapsed;
     newStep->m_elapsedBeats = 0; //(newStep->m_elapsed / timer->beatTimeDuration()) * 1000;
     newStep->m_elapsedAtLastBeat = newStep->m_elapsed;
+
+    // Ableton Link sub-beat anchoring. Either continue from the previous
+    // step's exact boundary (carry-forward, set when the last step advanced)
+    // so the chain never drifts, or - on a fresh start - snap to Link's
+    // absolute sub-beat grid so the chase 'ends' land on whole beats.
+    if (timer != NULL && timer->linkEnabled())
+    {
+        if (m_nextLinkBeatStart >= 0)
+        {
+            newStep->m_linkBeatStart = m_nextLinkBeatStart;
+        }
+        else
+        {
+            qreal spacing = qreal(newStep->m_duration) / 1000.0;
+            qreal now = timer->linkBeat();
+            if (spacing > 0.0 && now > 0.0)
+                newStep->m_linkBeatStart = qreal(qint64(now / spacing)) * spacing;
+            else
+                newStep->m_linkBeatStart = now;
+        }
+    }
+    else
+    {
+        newStep->m_linkBeatStart = 0;
+    }
+    m_nextLinkBeatStart = -1;
 
     m_startOffset = 0;
 
@@ -818,7 +848,18 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
         // units where 1000 == one full beat (so 500 == 1/2 beat, 250 == 1/4, 125 == 1/8).
         quint32 stepProgress = step->m_elapsedBeats;
 
-        if (m_chaser->tempoType() == Function::Beats)
+        if (m_chaser->tempoType() == Function::Beats && timer->linkEnabled())
+        {
+            // Ableton Link exposes a continuous, shared beat timeline. Derive the
+            // step progress straight from it so BOTH whole-beat and sub-beat
+            // (fractional) steps stay exactly locked to Link's grid: each step
+            // advances precisely m_duration/1000 beats after its anchored start,
+            // and the per-step boundary is carried forward (below) so the error
+            // never accumulates. (The old interpolation drifted on sub-beats.)
+            qreal delta = timer->linkBeat() - step->m_linkBeatStart;
+            stepProgress = delta > 0 ? quint32(delta * 1000.0) : 0;
+        }
+        else if (m_chaser->tempoType() == Function::Beats)
         {
             // Whole beats are driven by the (internal or external/MIDI) beat clock,
             // so step changes stay phase-locked to the incoming beats.
@@ -861,6 +902,12 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
         {
             if (step->m_duration != 0)
                 prevStepRoundElapsed = step->m_elapsed % step->m_duration;
+
+            // Link: carry the exact next-step boundary forward so successive
+            // sub-beat steps stay locked to Link's grid without accumulating
+            // per-step rounding drift.
+            if (m_chaser->tempoType() == Function::Beats && timer->linkEnabled() && step->m_duration != 0)
+                m_nextLinkBeatStart = step->m_linkBeatStart + qreal(step->m_duration) / 1000.0;
 
             m_lastFunctionID = step->m_function->type() == Function::SceneType ? step->m_function->id() : Function::invalidId();
             // Overlap mode: leave the current step's function running (it finishes
