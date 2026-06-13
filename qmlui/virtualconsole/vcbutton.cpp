@@ -277,7 +277,12 @@ void VCButton::slotFunctionRunning(quint32 fid)
     {
         if (state() == Inactive)
             setState(Monitoring);
-        emit functionStarting(this, m_functionID);
+        // Restored to pre-March (v5/January) behavior: do NOT emit on every
+        // function start. Upstream commit 0786837 ("align solo frame behavior
+        // with v4") re-enabled this, which makes a running function trigger
+        // solo-stop across solo frames (e.g. a colour scene stopping a running
+        // EFX in another frame). We want each solo frame isolated.
+        //emit functionStarting(this, m_functionID);
     }
 }
 
