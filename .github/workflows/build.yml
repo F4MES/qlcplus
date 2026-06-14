@@ -418,9 +418,11 @@ jobs:
           cp *.qm /c/qlcplus
           cd /c/qlcplus
           ${{ env.QTDIR }}/bin/windeployqt qlcplus.exe qlcplusengine.dll qlcplusui.dll qlcpluswebaccess.dll plugins/dmxusb.dll
+          # Keep Qt's own libstdc++/libgcc (deployed by windeployqt) - they
+          # match Qt6Multimedia.dll (emulated-TLS MinGW). Only override
+          # libwinpthread, whose Qt copy is too old for the Ableton Link
+          # library (needs pthread_cond_timedwait64).
           cp -f /mingw64/bin/libwinpthread-1.dll /c/qlcplus/
-          cp -f /mingw64/bin/libgcc_s_seh-1.dll /c/qlcplus/
-          cp -f /mingw64/bin/libstdc++-6.dll /c/qlcplus/
 
       - name: Run windeployqt for v5
         shell: msys2 {0}
@@ -431,9 +433,11 @@ jobs:
           cp *.qm /c/qlcplus
           cd /c/qlcplus
           ${{ env.QTDIR }}/bin/windeployqt --qmldir $SRC_DIR/qmlui/qml qlcplus-qml.exe qlcplusengine.dll plugins/dmxusb.dll
+          # Keep Qt's own libstdc++/libgcc (deployed by windeployqt) - they
+          # match Qt6Multimedia.dll (emulated-TLS MinGW). Only override
+          # libwinpthread, whose Qt copy is too old for the Ableton Link
+          # library (needs pthread_cond_timedwait64).
           cp -f /mingw64/bin/libwinpthread-1.dll /c/qlcplus/
-          cp -f /mingw64/bin/libgcc_s_seh-1.dll /c/qlcplus/
-          cp -f /mingw64/bin/libstdc++-6.dll /c/qlcplus/
 
       - name: Build installation package
         shell: msys2 {0}
