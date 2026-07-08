@@ -603,6 +603,82 @@ Rectangle
         }
     }
 
+    // Kiosk-mode beat/Link header overlay. The main toolbar (with the BPM
+    // and LINK display) is hidden in kiosk mode, so show a compact version
+    // here in the top-right corner. Has its own poll so it does not depend
+    // on the hidden toolbar's timer.
+    Rectangle
+    {
+        id: kioskBeatHeader
+        visible: qlcplus.accessMask & App.AC_VCControl ? true : false
+        z: 60
+        anchors.top: parent.top
+        anchors.right: parent.right
+        height: UISettings.iconSizeMedium
+        width: kioskRow.implicitWidth + UISettings.iconSizeDefault
+        color: UISettings.toolbarEnd
+
+        property real kBpmF: 0
+        property bool kLink: false
+        property int kPeers: 0
+        Timer
+        {
+            interval: 50; running: kioskBeatHeader.visible; repeat: true
+            onTriggered:
+            {
+                kioskBeatHeader.kBpmF = ioManager.bpmFloat
+                kioskBeatHeader.kLink = ioManager.linkActive
+                kioskBeatHeader.kPeers = ioManager.linkPeers
+            }
+        }
+
+        RowLayout
+        {
+            id: kioskRow
+            anchors.centerIn: parent
+            spacing: UISettings.iconSizeDefault / 3
+
+            RobotoText
+            {
+                label: "BPM: " + (kioskBeatHeader.kBpmF > 0 ? kioskBeatHeader.kBpmF.toFixed(1) : qsTr("Off"))
+                fontSize: UISettings.textSizeDefault
+                Layout.alignment: Qt.AlignVCenter
+            }
+            RobotoText
+            {
+                visible: kioskBeatHeader.kLink
+                label: "LINK"
+                color: kioskBeatHeader.kPeers > 0 ? "#22DD22" : "#AAAAAA"
+                fontSize: UISettings.textSizeDefault
+                Layout.alignment: Qt.AlignVCenter
+            }
+            Rectangle
+            {
+                id: kioskBeatDot
+                implicitWidth: height
+                implicitHeight: kioskBeatHeader.height * 0.5
+                Layout.alignment: Qt.AlignVCenter
+                radius: height / 2
+                border.width: 2
+                border.color: UISettings.bgMedium
+                color: UISettings.fgMedium
+                ColorAnimation on color
+                {
+                    id: kioskCAnim
+                    from: "#00FF00"
+                    to: UISettings.fgMedium
+                    duration: ioManager.bpmNumber ? 30000 / ioManager.bpmNumber : 200
+                    running: false
+                }
+                Connections
+                {
+                    target: ioManager
+                    function onBeat() { kioskCAnim.restart() }
+                }
+            }
+        }
+    }
+
     PopupNetworkConnect { id: clientAccessPopup }
 
     /** Menu to open/load/save a project */
