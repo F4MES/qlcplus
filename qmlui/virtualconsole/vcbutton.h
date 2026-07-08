@@ -174,7 +174,7 @@ public:
      * Blackout: Toggle blackout on/off.
      * StopAll: Stop all functions (panic button).
      */
-    enum ButtonAction { Toggle, Flash, Blackout, StopAll };
+    enum ButtonAction { Toggle, Flash, Blackout, StopAll, Freeze, Kill };
     Q_ENUM(ButtonAction)
 
     ButtonAction actionType() const;
@@ -196,6 +196,8 @@ protected:
     /** if button action is StopAll, this indicates the time
      *  in milliseconds of fadeout before stopping */
     int m_stopAllFadeOutTime;
+    /** Functions paused by a Freeze button, to resume on release */
+    QList<quint32> m_frozenFunctions;
 
     /*****************************************************************************
      * Function startup intensity adjustment

@@ -152,6 +152,13 @@ public:
      */
     bool monitor() const;
 
+    /** Enable/disable a full blackout that keeps Pan/Tilt (kill output) */
+    void setKill(bool enable);
+    bool kill() const;
+    /** Mark/clear a channel as protected from kill (e.g. Pan/Tilt) */
+    void setKillProtect(int channel, bool protect);
+    void clearKillProtect();
+
     uchar applyPassthrough(int channel, uchar value);
 
 protected slots:
@@ -189,6 +196,9 @@ protected:
     bool m_passthrough;
     /** Flag to monitor the universe changes */
     bool m_monitor;
+    /** Full-blackout-keep-position flag and its protected-channel mask */
+    bool m_kill;
+    QScopedPointer<QByteArray> m_killProtect;
 
     /************************************************************************
      * Patches

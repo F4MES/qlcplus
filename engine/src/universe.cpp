@@ -52,6 +52,8 @@ Universe::Universe(quint32 id, GrandMaster *gm, QObject *parent)
     , m_grandMaster(gm)
     , m_passthrough(false)
     , m_monitor(false)
+    , m_kill(false)
+    , m_killProtect(new QByteArray(UNIVERSE_SIZE, char(0)))
     , m_inputPatch(NULL)
     , m_fbPatch(NULL)
     , m_channelsMask(new QByteArray(UNIVERSE_SIZE, char(0)))
@@ -182,6 +184,27 @@ void Universe::setMonitor(bool enable)
 bool Universe::monitor() const
 {
     return m_monitor;
+}
+
+void Universe::setKill(bool enable)
+{
+    m_kill = enable;
+}
+
+bool Universe::kill() const
+{
+    return m_kill;
+}
+
+void Universe::setKillProtect(int channel, bool protect)
+{
+    if (channel >= 0 && channel < m_killProtect->size())
+        (*m_killProtect)[channel] = protect ? char(1) : char(0);
+}
+
+void Universe::clearKillProtect()
+{
+    m_killProtect->fill(char(0));
 }
 
 void Universe::slotGMValueChanged()
@@ -348,6 +371,21 @@ void Universe::processFaders(uint elapsedMs)
         fader->write(this, elapsedMs);
 
     bool dataChanged = hasChanged();
+
+    // Kill: full blackout that keeps position - output 0 for every channel
+    // except the protected (Pan/Tilt) ones, so moving heads hold position.
+    if (m_kill)
+    {
+        QByteArray killed(m_postGMValues->constData(), m_usedChannels);
+        char *kd = killed.data();
+        for (int i = 0; i < m_usedChannels; i++)
+            if (i >= m_killProtect->size() || m_killProtect->at(i) == char(0))
+                kd[i] = char(0);
+        dumpOutput(killed, true);
+        emit universeWritten(id(), killed);
+        return;
+    }
+
     const QByteArray postGM = QByteArray::fromRawData(m_postGMValues->constData(), m_usedChannels);
     dumpOutput(postGM, dataChanged);
 

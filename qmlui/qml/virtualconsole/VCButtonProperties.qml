@@ -182,6 +182,40 @@ Rectangle
                     onClicked: if (checked && widgetRef) widgetRef.actionType = VCButton.StopAll
                 }
 
+                // row 5
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Freeze (pause all Functions)")
+                }
+
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: pressBehaviourGroup
+                    checked: widgetRef ? widgetRef.actionType === VCButton.Freeze : false
+                    onClicked: if (checked && widgetRef) widgetRef.actionType = VCButton.Freeze
+                }
+
+                // row 6
+                RobotoText
+                {
+                    height: gridItemsHeight
+                    Layout.fillWidth: true
+                    label: qsTr("Full blackout (keep movement)")
+                }
+
+                CustomCheckBox
+                {
+                    implicitWidth: UISettings.iconSizeMedium
+                    implicitHeight: implicitWidth
+                    ButtonGroup.group: pressBehaviourGroup
+                    checked: widgetRef ? widgetRef.actionType === VCButton.Kill : false
+                    onClicked: if (checked && widgetRef) widgetRef.actionType = VCButton.Kill
+                }
+
               } // GridLayout
         } // SectionBox
 

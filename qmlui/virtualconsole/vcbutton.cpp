@@ -26,6 +26,11 @@
 #include "chaser.h"
 #include "tardis.h"
 #include "doc.h"
+#include "function.h"
+#include "fixture.h"
+#include "qlcchannel.h"
+#include "universe.h"
+#include "inputoutputmap.h"
 
 /** ************** XML Tags and Attributes ************** */
 
@@ -37,6 +42,8 @@
 #define KXMLQLCVCButtonActionToggle     QStringLiteral("Toggle")
 #define KXMLQLCVCButtonActionBlackout   QStringLiteral("Blackout")
 #define KXMLQLCVCButtonActionStopAll    QStringLiteral("StopAll")
+#define KXMLQLCVCButtonActionFreeze     QStringLiteral("Freeze")
+#define KXMLQLCVCButtonActionKill       QStringLiteral("Kill")
 
 #define KXMLQLCVCButtonFlashOverride    QStringLiteral("Override")
 #define KXMLQLCVCButtonFlashForceLTP    QStringLiteral("ForceLTP")
@@ -443,6 +450,68 @@ void VCButton::requestStateChange(bool pressed)
             setState(pressed ? Active : Inactive);
         }
         break;
+        case Freeze:
+        {
+            // Pause all running functions so the look holds and then
+            // continues from where it was when released (no jump).
+            if (pressed)
+            {
+                m_frozenFunctions.clear();
+                foreach (Function *f, m_doc->functions())
+                {
+                    if (f != NULL && f->isRunning())
+                    {
+                        f->setPause(true);
+                        m_frozenFunctions.append(f->id());
+                    }
+                }
+            }
+            else
+            {
+                foreach (quint32 fid, m_frozenFunctions)
+                {
+                    Function *f = m_doc->function(fid);
+                    if (f != NULL)
+                        f->setPause(false);
+                }
+                m_frozenFunctions.clear();
+            }
+            setState(pressed ? Active : Inactive);
+        }
+        break;
+        case Kill:
+        {
+            // Full blackout keeping position: everything to 0 except Pan/Tilt
+            QList<Universe*> unis = m_doc->inputOutputMap()->universes();
+            if (pressed)
+            {
+                for (Universe *u : unis)
+                    u->clearKillProtect();
+                foreach (Fixture *fxi, m_doc->fixtures())
+                {
+                    if (fxi == NULL)
+                        continue;
+                    Universe *u = m_doc->inputOutputMap()->universe(fxi->universe());
+                    if (u == NULL)
+                        continue;
+                    for (quint32 i = 0; i < fxi->channels(); i++)
+                    {
+                        const QLCChannel *ch = fxi->channel(i);
+                        if (ch != NULL && (ch->group() == QLCChannel::Pan || ch->group() == QLCChannel::Tilt))
+                            u->setKillProtect(fxi->address() + i, true);
+                    }
+                }
+                for (Universe *u : unis)
+                    u->setKill(true);
+            }
+            else
+            {
+                for (Universe *u : unis)
+                    u->setKill(false);
+            }
+            setState(pressed ? Active : Inactive);
+        }
+        break;
         case StopAll:
         {
             if (stopAllFadeOutTime() == 0)
@@ -487,6 +556,10 @@ QString VCButton::actionToString(VCButton::ButtonAction action)
         return QString(KXMLQLCVCButtonActionBlackout);
     else if (action == StopAll)
         return QString(KXMLQLCVCButtonActionStopAll);
+    else if (action == Freeze)
+        return QString(KXMLQLCVCButtonActionFreeze);
+    else if (action == Kill)
+        return QString(KXMLQLCVCButtonActionKill);
     else
         return QString(KXMLQLCVCButtonActionToggle);
 }
@@ -499,6 +572,10 @@ VCButton::ButtonAction VCButton::stringToAction(const QString& str)
         return Blackout;
     else if (str == KXMLQLCVCButtonActionStopAll)
         return StopAll;
+    else if (str == KXMLQLCVCButtonActionFreeze)
+        return Freeze;
+    else if (str == KXMLQLCVCButtonActionKill)
+        return Kill;
     else
         return Toggle;
 }
