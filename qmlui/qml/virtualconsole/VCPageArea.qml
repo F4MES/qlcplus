@@ -27,7 +27,11 @@ Rectangle
 
     property int page: -1
 
-    onPageChanged: virtualConsole.renderPage(vcPage, vcPage.contentItem, page)
+    // Auto-stretch the page to fill the available area when NOT editing
+    // (operate/live/kiosk mode). In edit mode the normal behaviour is kept.
+    property bool autoStretch: virtualConsole.editMode === false
+
+    onPageChanged: virtualConsole.renderPage(vcPage, pageWrapper, page)
 
     Flickable
     {
@@ -35,11 +39,32 @@ Rectangle
         objectName: "vcPage" + page
         anchors.fill: parent
         boundsBehavior: Flickable.StopAtBounds
+        // nothing to scroll when the page is stretched to fill the screen
+        interactive: autoStretch === false
 
+        // Declared before the page wrapper so the widgets stay on top and
+        // still receive clicks; empty areas fall through to deselect.
         MouseArea
         {
             anchors.fill: parent
             onClicked: virtualConsole.resetWidgetSelection()
+        }
+
+        // The VC page is rendered into this wrapper. The Scale transform
+        // stretches the whole page (all widgets) to fill the area in operate
+        // mode, non-uniformly so it always fills 100% of width and height.
+        Item
+        {
+            id: pageWrapper
+            width: vcPage.contentWidth
+            height: vcPage.contentHeight
+            transform: Scale
+            {
+                origin.x: 0
+                origin.y: 0
+                xScale: (autoStretch && vcPage.contentWidth > 0) ? vcPage.width / vcPage.contentWidth : 1
+                yScale: (autoStretch && vcPage.contentHeight > 0) ? vcPage.height / vcPage.contentHeight : 1
+            }
         }
 
         ScrollBar.vertical: CustomScrollBar { }
