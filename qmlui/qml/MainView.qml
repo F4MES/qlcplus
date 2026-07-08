@@ -610,12 +610,12 @@ Rectangle
     Rectangle
     {
         id: kioskBeatHeader
-        visible: qlcplus.accessMask & App.AC_VCControl ? true : false
+        visible: qlcplus.accessMask === App.AC_VCControl
         z: 60
         anchors.top: parent.top
         anchors.right: parent.right
         height: UISettings.iconSizeMedium
-        width: kioskRow.implicitWidth + UISettings.iconSizeDefault
+        width: kioskRow.width + UISettings.iconSizeDefault * 2 / 3
         color: UISettings.toolbarEnd
 
         property real kBpmF: 0
@@ -632,32 +632,34 @@ Rectangle
             }
         }
 
-        RowLayout
+        Row
         {
             id: kioskRow
-            anchors.centerIn: parent
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.leftMargin: UISettings.iconSizeDefault / 3
             spacing: UISettings.iconSizeDefault / 3
 
             RobotoText
             {
+                anchors.verticalCenter: parent.verticalCenter
                 label: "BPM: " + (kioskBeatHeader.kBpmF > 0 ? kioskBeatHeader.kBpmF.toFixed(1) : qsTr("Off"))
                 fontSize: UISettings.textSizeDefault
-                Layout.alignment: Qt.AlignVCenter
             }
             RobotoText
             {
+                anchors.verticalCenter: parent.verticalCenter
                 visible: kioskBeatHeader.kLink
                 label: "LINK"
                 color: kioskBeatHeader.kPeers > 0 ? "#22DD22" : "#AAAAAA"
                 fontSize: UISettings.textSizeDefault
-                Layout.alignment: Qt.AlignVCenter
             }
             Rectangle
             {
                 id: kioskBeatDot
-                implicitWidth: height
-                implicitHeight: kioskBeatHeader.height * 0.5
-                Layout.alignment: Qt.AlignVCenter
+                anchors.verticalCenter: parent.verticalCenter
+                width: height
+                height: kioskBeatHeader.height * 0.5
                 radius: height / 2
                 border.width: 2
                 border.color: UISettings.bgMedium
