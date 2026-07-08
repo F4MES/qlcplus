@@ -140,7 +140,7 @@ VCWidgetItem
             if (virtualConsole.editMode)
                 return;
 
-            if (buttonObj.actionType === VCButton.Toggle || buttonObj.actionType === VCButton.Blackout)
+            if (buttonObj.actionType === VCButton.Toggle || buttonObj.actionType === VCButton.Blackout || buttonObj.actionType === VCButton.Freeze || buttonObj.actionType === VCButton.Kill)
             {
                 buttonObj.requestStateChange(btnState === VCButton.Active ? false : true)
             }
@@ -190,7 +190,7 @@ VCWidgetItem
 
             if (buttonObj.actionType === VCButton.Flash)
                 buttonObj.requestStateChange(false)
-            else if (buttonObj.actionType === VCButton.Toggle || buttonObj.actionType === VCButton.Blackout)
+            else if (buttonObj.actionType === VCButton.Toggle || buttonObj.actionType === VCButton.Blackout || buttonObj.actionType === VCButton.Freeze || buttonObj.actionType === VCButton.Kill)
                 buttonObj.requestStateChange(btnState === VCButton.Active ? false : true)
             else
             {
