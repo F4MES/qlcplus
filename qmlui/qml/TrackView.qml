@@ -51,7 +51,7 @@ Rectangle
         anchors.margins: UISettings.iconSizeDefault / 3
         spacing: UISettings.iconSizeDefault / 3
 
-        // ---------------- header ----------------
+        // ------------------------------------------------ header
         Rectangle
         {
             Layout.fillWidth: true
@@ -76,12 +76,17 @@ Rectangle
                 {
                     anchors.verticalCenter: parent.verticalCenter
                     visible: trackViewRoot.beatCount > 0
-                    label: trackManager
-                           ? trackManager.bpm.toFixed(1) + " BPM  |  "
-                             + trackViewRoot.beatCount + " " + qsTr("beats")
-                             + "  |  " + qsTr("bar") + " "
-                             + (Math.floor(trackViewRoot.currentBeat / 4) + 1)
-                           : ""
+                    label: trackViewRoot.beatCount + " " + qsTr("beats")
+                           + "  |  " + qsTr("bar") + " "
+                           + (Math.floor(trackViewRoot.currentBeat / 4) + 1)
+                    fontSize: UISettings.textSizeDefault
+                }
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: trackManager ? trackManager.currentState.toUpperCase() : ""
+                    color: trackManager ? trackViewRoot.markerColor(trackManager.currentState)
+                                        : "transparent"
                     fontSize: UISettings.textSizeDefault
                 }
             }
@@ -110,7 +115,7 @@ Rectangle
             }
         }
 
-        // ---------------- waveform ----------------
+        // ------------------------------------------------ waveform
         Rectangle
         {
             Layout.fillWidth: true
@@ -144,7 +149,7 @@ Rectangle
                     var wf = trackManager.waveform
                     var base = h - 14
 
-                    // --- waveform: one bar per beat (bass energy 0-255) ---
+                    // waveform: one bar per beat (bass energy 0-255)
                     ctx.fillStyle = "#2E6DA4"
                     for (var i = 0; i < n; i++)
                     {
@@ -153,7 +158,7 @@ Rectangle
                         ctx.fillRect(i * px, base - bh, Math.max(1, px - 0.4), bh)
                     }
 
-                    // --- beat / bar / phrase grid ---
+                    // beat / bar / phrase grid
                     for (var b = 0; b < n; b += 4)
                     {
                         var x = b * px
@@ -167,12 +172,11 @@ Rectangle
                         ctx.stroke()
                     }
 
-                    // --- markers ---
+                    // markers
                     var mk = trackManager.markers
                     for (var m = 0; m < mk.length; m++)
                     {
-                        var mb = mk[m].beat
-                        var mx = (mb - 1) * px
+                        var mx = (mk[m].beat - 1) * px
                         var col = trackViewRoot.markerColor(mk[m].type)
 
                         ctx.strokeStyle = col
@@ -182,12 +186,11 @@ Rectangle
                         ctx.lineTo(mx, base)
                         ctx.stroke()
 
-                        // grab handle at the bottom
                         ctx.fillStyle = col
                         ctx.fillRect(mx - 6, base, 12, 14)
                     }
 
-                    // --- playhead ---
+                    // playhead
                     if (trackViewRoot.currentBeat > 0)
                     {
                         var pxh = (trackViewRoot.currentBeat - 1) * px
@@ -231,7 +234,6 @@ Rectangle
                         }
                     }
 
-                    // only grab a marker within ~2% of the track width
                     var tol = Math.max(2, trackViewRoot.beatCount * 0.02)
                     trackViewRoot.dragIndex = (bestDist <= tol) ? best : -1
                 }
@@ -252,6 +254,295 @@ Rectangle
                 visible: trackViewRoot.beatCount === 0
                 label: qsTr("Waiting for track data from Beat Link Trigger...")
                 fontSize: UISettings.textSizeDefault
+            }
+        }
+
+        // ------------------------------------------------ track + live position
+        Rectangle
+        {
+            Layout.fillWidth: true
+            height: UISettings.iconSizeMedium
+            color: UISettings.bgLight
+
+            function fmtTime(ms)
+            {
+                if (ms <= 0)
+                    return "--:--"
+                var total = Math.floor(ms / 1000)
+                var mins = Math.floor(total / 60)
+                var secs = total % 60
+                return mins + ":" + (secs < 10 ? "0" : "") + secs
+            }
+
+            Row
+            {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: UISettings.iconSizeDefault / 3
+                spacing: UISettings.iconSizeDefault / 3
+
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: trackManager && trackManager.title !== ""
+                           ? trackManager.title : qsTr("No track loaded")
+                    fontSize: UISettings.textSizeDefault
+                }
+            }
+
+            Row
+            {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right
+                anchors.rightMargin: UISettings.iconSizeDefault / 3
+                spacing: UISettings.iconSizeDefault / 2
+
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: trackManager && trackManager.playing
+                           ? qsTr("PLAYING") : qsTr("PAUSED")
+                    color: trackManager && trackManager.playing ? "#22DD22" : "#888888"
+                    fontSize: UISettings.textSizeDefault
+                }
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: qsTr("beat") + " " + trackViewRoot.currentBeat
+                           + " / " + trackViewRoot.beatCount
+                    fontSize: UISettings.textSizeDefault
+                }
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: qsTr("bar") + " "
+                           + (trackViewRoot.currentBeat > 0
+                              ? Math.floor((trackViewRoot.currentBeat - 1) / 4) + 1 : 0)
+                           + "." + (trackViewRoot.currentBeat > 0
+                                    ? ((trackViewRoot.currentBeat - 1) % 4) + 1 : 0)
+                    fontSize: UISettings.textSizeDefault
+                }
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: parent.parent.fmtTime(trackManager ? trackManager.positionMs : 0)
+                           + " / "
+                           + parent.parent.fmtTime(trackManager ? trackManager.durationMs : 0)
+                    fontSize: UISettings.textSizeDefault
+                }
+            }
+        }
+
+        // ------------------------------------------------ function assignment
+        Rectangle
+        {
+            Layout.fillWidth: true
+            height: UISettings.iconSizeMedium * 1.4
+            color: UISettings.bgMedium
+
+            property var functions: trackManager ? trackManager.functionList() : []
+
+            Connections
+            {
+                target: trackManager
+                function onFunctionsChanged() { assignRow.reload() }
+            }
+
+            Row
+            {
+                id: assignRow
+                anchors.fill: parent
+                anchors.margins: UISettings.iconSizeDefault / 4
+                spacing: UISettings.iconSizeDefault / 3
+
+                function reload()
+                {
+                    parent.functions = trackManager.functionList()
+                    for (var i = 0; i < stateRepeater.count; i++)
+                        stateRepeater.itemAt(i).syncSelection()
+                }
+
+                Repeater
+                {
+                    id: stateRepeater
+                    model: [ "normal", "break", "build", "drop" ]
+
+                    Column
+                    {
+                        property string stateName: modelData
+                        spacing: 2
+
+                        function syncSelection()
+                        {
+                            var fid = trackManager.stateFunction(stateName)
+                            var list = assignRow.parent.functions
+                            for (var i = 0; i < list.length; i++)
+                            {
+                                if (list[i].id === fid)
+                                {
+                                    funcCombo.currentIndex = i
+                                    return
+                                }
+                            }
+                            funcCombo.currentIndex = 0
+                        }
+
+                        RobotoText
+                        {
+                            height: UISettings.listItemHeight * 0.7
+                            label: stateName.toUpperCase()
+                            color: trackViewRoot.markerColor(stateName)
+                            fontSize: UISettings.textSizeDefault * 0.8
+                        }
+
+                        ComboBox
+                        {
+                            id: funcCombo
+                            width: UISettings.bigItemHeight * 1.6
+                            model: assignRow.parent.functions
+                            textRole: "name"
+
+                            Component.onCompleted: parent.syncSelection()
+
+                            onActivated:
+                            {
+                                var entry = assignRow.parent.functions[currentIndex]
+                                if (entry !== undefined)
+                                    trackManager.setStateFunction(parent.stateName, entry.id)
+                            }
+                        }
+                    }
+                }
+
+                Column
+                {
+                    spacing: 2
+
+                    RobotoText
+                    {
+                        height: UISettings.listItemHeight * 0.7
+                        label: " "
+                        fontSize: UISettings.textSizeDefault * 0.8
+                    }
+
+                    Button
+                    {
+                        text: qsTr("Random")
+                        onClicked: trackManager.randomize()
+                    }
+                }
+
+                Column
+                {
+                    spacing: 2
+
+                    RobotoText
+                    {
+                        height: UISettings.listItemHeight * 0.7
+                        label: qsTr("Auto")
+                        fontSize: UISettings.textSizeDefault * 0.8
+                    }
+
+                    CheckBox
+                    {
+                        checked: trackManager ? trackManager.autoRun : false
+                        onToggled: trackManager.autoRun = checked
+                    }
+                }
+
+                Column
+                {
+                    spacing: 2
+
+                    RobotoText
+                    {
+                        height: UISettings.listItemHeight * 0.7
+                        label: qsTr("Quantize")
+                        fontSize: UISettings.textSizeDefault * 0.8
+                    }
+
+                    ComboBox
+                    {
+                        width: UISettings.bigItemHeight
+                        model: [ 1, 2, 4, 8, 16, 32 ]
+                        currentIndex:
+                        {
+                            var q = trackManager ? trackManager.quantize : 1
+                            var opts = [ 1, 2, 4, 8, 16, 32 ]
+                            var idx = opts.indexOf(q)
+                            return idx < 0 ? 0 : idx
+                        }
+                        onActivated: trackManager.quantize = model[currentIndex]
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------ energy
+        Rectangle
+        {
+            Layout.fillWidth: true
+            height: UISettings.iconSizeMedium * 1.4
+            color: UISettings.bgMedium
+
+            Row
+            {
+                anchors.fill: parent
+                anchors.margins: UISettings.iconSizeDefault / 4
+                spacing: UISettings.iconSizeDefault / 3
+
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: qsTr("Energy") + ": "
+                           + (trackManager ? Math.round(trackManager.energy * 100) : 0) + "%"
+                           + "   (" + (trackManager ? trackManager.liveBpm : 0) + " BPM)"
+                    fontSize: UISettings.textSizeDefault
+                }
+
+                Slider
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: UISettings.bigItemHeight * 3
+                    from: 0
+                    to: 200
+                    stepSize: 1
+                    value: trackManager ? trackManager.energyTrim : 100
+                    onMoved: trackManager.energyTrim = Math.round(value)
+                }
+
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: qsTr("trim") + " "
+                           + (trackManager ? trackManager.energyTrim : 100) + "%"
+                    fontSize: UISettings.textSizeDefault
+                }
+
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: "   " + qsTr("BPM range")
+                    fontSize: UISettings.textSizeDefault
+                }
+
+                SpinBox
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    from: 40
+                    to: 300
+                    value: trackManager ? trackManager.bpmLow : 80
+                    onValueModified: trackManager.bpmLow = value
+                }
+
+                SpinBox
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    from: 40
+                    to: 300
+                    value: trackManager ? trackManager.bpmHigh : 140
+                    onValueModified: trackManager.bpmHigh = value
+                }
             }
         }
     }
