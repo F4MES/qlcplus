@@ -20,7 +20,16 @@ Rectangle
 {
     id: trackViewRoot
     anchors.fill: parent
-    color: UISettings.bgMain
+    color: "#1B1B1B"
+
+    // fixed palette: the stock Controls theme is light and QLC's dark theme
+    // does not reach it, so nothing here relies on UISettings for colour
+    readonly property color cPanel:  "#262626"
+    readonly property color cBtn:    "#3A3A3A"
+    readonly property color cBtnHi:  "#4A4A4A"
+    readonly property color cLine:   "#555555"
+    readonly property color cText:   "#EEEEEE"
+    readonly property color cDim:    "#9A9A9A"
 
     property int beatCount: trackManager ? trackManager.beatCount : 0
     property int currentBeat: trackManager ? trackManager.currentBeat : 0
@@ -31,9 +40,7 @@ Rectangle
     property var divLabels: [ "-", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8" ]
 
     property bool setupOpen: false
-
-    // touch sizing: everything a DJ hits mid-set is at least this tall
-    property real touchH: Math.max(UISettings.iconSizeMedium * 1.5, 54)
+    property real touchH: Math.max(UISettings.iconSizeMedium * 1.4, 50)
 
     property int dragIndex: -1
     property real dragX: 0
@@ -43,10 +50,10 @@ Rectangle
 
     function markerColor(type)
     {
-        if (type === "drop")  return "#FF4444"
-        if (type === "build") return "#FFAA22"
-        if (type === "break") return "#4499FF"
-        return "#BBBBBB"
+        if (type === "drop")  return "#E23B3B"
+        if (type === "build") return "#E0921A"
+        if (type === "break") return "#2F7FD0"
+        return "#9AA0A6"
     }
 
     function fmtTime(ms)
@@ -117,18 +124,17 @@ Rectangle
     ColumnLayout
     {
         anchors.fill: parent
-        anchors.margins: UISettings.iconSizeDefault / 4
-        spacing: UISettings.iconSizeDefault / 4
+        anchors.margins: 6
+        spacing: 6
 
         // =============================================== waveform strip
         Rectangle
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(UISettings.iconSizeMedium * 2.2,
-                                             trackViewRoot.height * 0.14)
-            color: "#141414"
+            Layout.preferredHeight: Math.max(110, trackViewRoot.height * 0.15)
+            color: "#101010"
             border.width: 1
-            border.color: trackViewRoot.zoomActive ? "#FFAA22" : UISettings.bgLight
+            border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cLine
 
             Canvas
             {
@@ -143,7 +149,7 @@ Rectangle
                     var w = width, h = height
 
                     ctx.reset()
-                    ctx.fillStyle = "#141414"
+                    ctx.fillStyle = "#101010"
                     ctx.fillRect(0, 0, w, h)
 
                     var n = trackViewRoot.beatCount
@@ -153,7 +159,7 @@ Rectangle
                     var vc = trackViewRoot.viewCount()
                     var px = w / vc
                     var wf = trackManager.waveform
-                    var lane = Math.round(h * 0.34)
+                    var lane = Math.round(h * 0.32)
                     var base = h - 4
 
                     function xOf(beat) { return (beat - vf) * px }
@@ -169,7 +175,7 @@ Rectangle
                     }
 
                     var gridStep = trackViewRoot.zoomActive ? 4 : 32
-                    ctx.strokeStyle = "rgba(255,255,255,0.14)"
+                    ctx.strokeStyle = "rgba(255,255,255,0.12)"
                     ctx.lineWidth = 1
                     for (var g = Math.ceil(vf / gridStep) * gridStep; g < vf + vc; g += gridStep)
                     {
@@ -197,20 +203,20 @@ Rectangle
                         ctx.lineTo(mx, base)
                         ctx.stroke()
 
-                        ctx.font = "bold 12px sans-serif"
-                        var tw = ctx.measureText(label).width + 12
+                        ctx.font = "bold 11px sans-serif"
+                        var tw = ctx.measureText(label).width + 10
                         var bx = Math.min(Math.max(mx, 0), w - tw)
 
                         ctx.fillStyle = col
                         ctx.fillRect(bx, 0, tw, lane - 3)
                         ctx.fillStyle = "#000000"
-                        ctx.fillText(label, bx + 6, lane - 8)
+                        ctx.fillText(label, bx + 5, lane - 8)
 
                         if (held)
                         {
                             ctx.fillStyle = col
-                            ctx.font = "bold 11px sans-serif"
-                            ctx.fillText("beat " + mb, bx + 6, lane + 13)
+                            ctx.font = "bold 10px sans-serif"
+                            ctx.fillText("beat " + mb, bx + 5, lane + 12)
                         }
                     }
 
@@ -296,61 +302,67 @@ Rectangle
                 onCanceled: release()
             }
 
-            RobotoText
+            Text
             {
                 anchors.centerIn: parent
                 visible: trackViewRoot.beatCount === 0
-                label: qsTr("Waiting for track data from Beat Link Trigger...")
-                fontSize: UISettings.textSizeDefault
+                text: qsTr("Waiting for track data from Beat Link Trigger...")
+                color: trackViewRoot.cDim
+                font.pixelSize: 15
             }
         }
 
-        // =============================================== status bar
+        // =============================================== status
         Rectangle
         {
             Layout.fillWidth: true
-            height: UISettings.iconSizeMedium * 1.9
-            color: UISettings.bgMedium
+            Layout.preferredHeight: 66
+            color: trackViewRoot.cPanel
+            radius: 4
 
-            RowLayout
+            Row
             {
-                anchors.fill: parent
-                anchors.margins: UISettings.iconSizeDefault / 3
-                spacing: UISettings.iconSizeDefault
+                anchors.left: parent.left
+                anchors.leftMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 14
 
                 Rectangle
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 1.7
-                    Layout.fillHeight: true
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 120
+                    height: 48
+                    radius: 5
                     color: trackViewRoot.markerColor(trackViewRoot.liveState)
-                    radius: 6
-                    border.width: trackManager && trackManager.overrideState !== "" ? 4 : 0
+                    border.width: trackManager && trackManager.overrideState !== "" ? 3 : 0
                     border.color: "#FFFFFF"
 
-                    RobotoText
+                    Text
                     {
                         anchors.centerIn: parent
-                        label: trackViewRoot.liveState.toUpperCase()
+                        text: trackViewRoot.liveState.toUpperCase()
                         color: "#000000"
-                        fontSize: UISettings.textSizeDefault * 1.7
+                        font.bold: true
+                        font.pixelSize: 20
                     }
                 }
 
                 Column
                 {
-                    Layout.fillWidth: true
-                    spacing: 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 3
 
-                    RobotoText
+                    Text
                     {
-                        label: trackManager && trackManager.title !== ""
-                               ? trackManager.title : qsTr("No track loaded")
-                        fontSize: UISettings.textSizeDefault * 1.25
+                        text: trackManager && trackManager.title !== ""
+                              ? trackManager.title : qsTr("No track loaded")
+                        color: trackViewRoot.cText
+                        font.pixelSize: 18
                     }
-                    RobotoText
+                    Text
                     {
                         property var nm: trackViewRoot.nextMarker()
-                        label:
+                        text:
                         {
                             if (nm === null) return qsTr("No further points")
                             var d = nm.beat - trackViewRoot.currentBeat
@@ -358,56 +370,81 @@ Rectangle
                                    + " " + qsTr("in") + " " + d + " " + qsTr("beats")
                                    + "  (" + Math.round(d / 4) + " " + qsTr("bars") + ")"
                         }
-                        color: nm === null ? "#BBBBBB" : trackViewRoot.markerColor(nm.type)
-                        fontSize: UISettings.textSizeDefault * 1.15
+                        color: nm === null ? trackViewRoot.cDim
+                                           : trackViewRoot.markerColor(nm.type)
+                        font.pixelSize: 15
                     }
                 }
+            }
+
+            Row
+            {
+                anchors.right: parent.right
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 14
 
                 Column
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 2.4
-                    spacing: 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 3
 
-                    RobotoText
+                    Text
                     {
-                        label: trackViewRoot.fmtTime(trackManager ? trackManager.positionMs : 0)
-                               + " / "
-                               + trackViewRoot.fmtTime(trackManager ? trackManager.durationMs : 0)
-                        fontSize: UISettings.textSizeDefault * 1.2
+                        text: trackViewRoot.fmtTime(trackManager ? trackManager.positionMs : 0)
+                              + " / "
+                              + trackViewRoot.fmtTime(trackManager ? trackManager.durationMs : 0)
+                        color: trackViewRoot.cText
+                        font.pixelSize: 17
                     }
-                    RobotoText
+                    Text
                     {
-                        label: (trackManager && trackManager.playing
-                                ? qsTr("PLAYING") : qsTr("PAUSED"))
-                               + "   " + (trackManager ? trackManager.liveBpm : 0) + " BPM"
-                        color: trackManager && trackManager.playing ? "#22DD22" : "#888888"
-                        fontSize: UISettings.textSizeDefault
-                    }
-                    RobotoText
-                    {
-                        label: trackManager && trackManager.connected
-                               ? qsTr("BLT connected") : qsTr("waiting for BLT")
-                        color: trackManager && trackManager.connected ? "#22DD22" : "#AA6622"
-                        fontSize: UISettings.textSizeDefault * 0.95
+                        text: (trackManager && trackManager.playing
+                               ? qsTr("PLAYING") : qsTr("PAUSED"))
+                              + "   " + (trackManager ? trackManager.liveBpm : 0) + " BPM"
+                              + "   " + (trackManager && trackManager.connected
+                                         ? qsTr("BLT ok") : qsTr("no BLT"))
+                        color: trackManager && trackManager.playing ? "#3FBF3F"
+                                                                    : trackViewRoot.cDim
+                        font.pixelSize: 14
                     }
                 }
 
                 Button
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight
-                    Layout.fillHeight: true
-                    text: trackViewRoot.setupOpen ? qsTr("Close setup") : qsTr("Setup")
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 110
+                    height: 44
+                    text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
                     onClicked: trackViewRoot.setupOpen = !trackViewRoot.setupOpen
+
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: trackViewRoot.cText
+                        font.bold: true
+                        font.pixelSize: 15
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle
+                    {
+                        radius: 5
+                        color: parent.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn
+                        border.width: 1
+                        border.color: trackViewRoot.cLine
+                    }
                 }
             }
         }
 
-        // =============================================== LIVE: force section
+        // =============================================== SECTION
         Rectangle
         {
             Layout.fillWidth: true
-            height: trackViewRoot.touchH + 12
-            color: UISettings.bgMedium
+            Layout.preferredHeight: trackViewRoot.touchH + 12
+            color: trackViewRoot.cPanel
+            radius: 4
 
             RowLayout
             {
@@ -415,11 +452,13 @@ Rectangle
                 anchors.margins: 6
                 spacing: 6
 
-                RobotoText
+                Text
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 0.9
-                    label: qsTr("SECTION")
-                    fontSize: UISettings.textSizeDefault
+                    Layout.preferredWidth: 90
+                    text: qsTr("SECTION")
+                    color: trackViewRoot.cDim
+                    font.bold: true
+                    font.pixelSize: 14
                 }
 
                 Repeater
@@ -438,65 +477,114 @@ Rectangle
                         contentItem: Text
                         {
                             text: modelData.toUpperCase()
-                            color: "#000000"
+                            color: (parent.checked || trackViewRoot.liveState === modelData)
+                                   ? "#000000" : trackViewRoot.cText
                             font.bold: true
-                            font.pixelSize: UISettings.textSizeDefault * 1.3
+                            font.pixelSize: 19
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
                         background: Rectangle
                         {
-                            radius: 6
-                            color: trackViewRoot.markerColor(modelData)
-                            opacity: parent.checked ? 1.0
-                                     : (trackViewRoot.liveState === modelData ? 0.75 : 0.4)
-                            border.width: parent.checked ? 3 : 0
-                            border.color: "#FFFFFF"
+                            radius: 5
+                            color: parent.checked
+                                   ? trackViewRoot.markerColor(modelData)
+                                   : (trackViewRoot.liveState === modelData
+                                      ? Qt.darker(trackViewRoot.markerColor(modelData), 1.15)
+                                      : trackViewRoot.cBtn)
+                            border.width: parent.checked ? 3 : 1
+                            border.color: parent.checked ? "#FFFFFF" : trackViewRoot.cLine
                         }
                     }
                 }
 
                 Button
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 0.9
+                    Layout.preferredWidth: 95
                     Layout.fillHeight: true
                     text: qsTr("AUTO")
                     enabled: trackManager ? trackManager.overrideState !== "" : false
                     onClicked: trackManager.overrideState = ""
+
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: parent.enabled ? trackViewRoot.cText : "#666666"
+                        font.bold: true
+                        font.pixelSize: 15
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle
+                    {
+                        radius: 5
+                        color: parent.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn
+                        border.width: 1
+                        border.color: trackViewRoot.cLine
+                    }
                 }
 
                 Button
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 0.9
+                    Layout.preferredWidth: 105
                     Layout.fillHeight: true
                     text: qsTr("RE-ROLL")
                     onClicked: trackManager.reroll()
+
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: trackViewRoot.cText
+                        font.bold: true
+                        font.pixelSize: 15
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle
+                    {
+                        radius: 5
+                        color: parent.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn
+                        border.width: 1
+                        border.color: trackViewRoot.cLine
+                    }
                 }
 
                 Button
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 0.9
+                    Layout.preferredWidth: 95
                     Layout.fillHeight: true
                     checkable: true
                     checked: trackManager ? trackManager.autoRun : false
                     text: qsTr("RUN")
                     onClicked: trackManager.autoRun = checked
 
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: parent.checked ? "#000000" : trackViewRoot.cText
+                        font.bold: true
+                        font.pixelSize: 16
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                     background: Rectangle
                     {
-                        radius: 6
-                        color: parent.checked ? "#22AA22" : UISettings.bgLight
+                        radius: 5
+                        color: parent.checked ? "#3FBF3F" : trackViewRoot.cBtn
+                        border.width: 1
+                        border.color: trackViewRoot.cLine
                     }
                 }
             }
         }
 
-        // =============================================== LIVE: speed for this section
+        // =============================================== SPEED
         Rectangle
         {
             Layout.fillWidth: true
-            height: trackViewRoot.touchH + 12
-            color: UISettings.bgMedium
+            Layout.preferredHeight: trackViewRoot.touchH + 12
+            color: trackViewRoot.cPanel
+            radius: 4
 
             RowLayout
             {
@@ -504,12 +592,13 @@ Rectangle
                 anchors.margins: 6
                 spacing: 6
 
-                RobotoText
+                Text
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 0.9
-                    label: qsTr("SPEED")
+                    Layout.preferredWidth: 90
+                    text: qsTr("SPEED")
                     color: trackViewRoot.markerColor(trackViewRoot.liveState)
-                    fontSize: UISettings.textSizeDefault
+                    font.bold: true
+                    font.pixelSize: 14
                 }
 
                 Repeater
@@ -530,58 +619,61 @@ Rectangle
                         contentItem: Text
                         {
                             text: trackViewRoot.divLabels[index]
-                            color: parent.checked ? "#000000" : "#DDDDDD"
+                            color: parent.checked ? "#000000" : trackViewRoot.cText
                             font.bold: true
-                            font.pixelSize: UISettings.textSizeDefault * 1.4
+                            font.pixelSize: 20
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
                         background: Rectangle
                         {
-                            radius: 6
+                            radius: 5
                             color: parent.checked
                                    ? trackViewRoot.markerColor(trackViewRoot.liveState)
-                                   : UISettings.bgLight
+                                   : trackViewRoot.cBtn
+                            border.width: 1
+                            border.color: trackViewRoot.cLine
                         }
                     }
                 }
             }
         }
 
-        // =============================================== LIVE: level + energy
+        // =============================================== LEVEL + ENERGY
         Rectangle
         {
             Layout.fillWidth: true
-            height: (trackViewRoot.touchH + 10) * 2
-            color: UISettings.bgMedium
+            Layout.preferredHeight: trackViewRoot.touchH * 2 + 22
+            color: trackViewRoot.cPanel
+            radius: 4
 
             Column
             {
                 anchors.fill: parent
                 anchors.margins: 6
-                spacing: 6
+                spacing: 8
 
-                // ---- level for the current section ----
                 Row
                 {
                     width: parent.width
                     height: trackViewRoot.touchH
-                    spacing: 8
+                    spacing: 10
 
-                    RobotoText
+                    Text
                     {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: UISettings.bigItemHeight * 0.9
-                        label: qsTr("LEVEL")
+                        width: 84
+                        text: qsTr("LEVEL")
                         color: trackViewRoot.markerColor(trackViewRoot.liveState)
-                        fontSize: UISettings.textSizeDefault
+                        font.bold: true
+                        font.pixelSize: 14
                     }
 
                     Slider
                     {
                         id: levelSlider
                         anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - UISettings.bigItemHeight * 3.2
+                        width: parent.width - 84 - 200
                         height: trackViewRoot.touchH
                         from: 0
                         to: 100
@@ -598,13 +690,17 @@ Rectangle
                             width: levelSlider.availableWidth
                             height: 14
                             radius: 7
-                            color: "#333333"
+                            color: "#161616"
+                            border.width: 1
+                            border.color: trackViewRoot.cLine
 
                             Rectangle
                             {
-                                width: levelSlider.visualPosition * parent.width
-                                height: parent.height
-                                radius: 7
+                                width: levelSlider.visualPosition * (parent.width - 2) + 1
+                                height: parent.height - 2
+                                x: 1
+                                y: 1
+                                radius: 6
                                 color: trackViewRoot.markerColor(trackViewRoot.liveState)
                             }
                         }
@@ -614,47 +710,50 @@ Rectangle
                             x: levelSlider.leftPadding
                                + levelSlider.visualPosition * (levelSlider.availableWidth - width)
                             y: levelSlider.topPadding + levelSlider.availableHeight / 2 - height / 2
-                            width: 40
-                            height: 40
-                            radius: 8
-                            color: "#EEEEEE"
+                            width: 38
+                            height: 38
+                            radius: 6
+                            color: "#DDDDDD"
                             border.width: 2
-                            border.color: "#666666"
+                            border.color: "#111111"
                         }
                     }
 
-                    RobotoText
+                    Text
                     {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: UISettings.bigItemHeight * 2
-                        label: (trackManager
-                                ? trackManager.stateIntensity(trackViewRoot.liveState) : 100)
-                               + "%   → " + (trackManager
-                                ? Math.round(trackManager.appliedEnergy * 100) : 0) + "%"
-                        fontSize: UISettings.textSizeDefault * 1.3
+                        width: 190
+                        text: (trackManager
+                               ? trackManager.stateIntensity(trackViewRoot.liveState) : 100)
+                              + "%   →   " + (trackManager
+                               ? Math.round(trackManager.appliedEnergy * 100) : 0) + "%"
+                        color: trackViewRoot.cText
+                        font.bold: true
+                        font.pixelSize: 19
                     }
                 }
 
-                // ---- global energy trim ----
                 Row
                 {
                     width: parent.width
                     height: trackViewRoot.touchH
-                    spacing: 8
+                    spacing: 10
 
-                    RobotoText
+                    Text
                     {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: UISettings.bigItemHeight * 0.9
-                        label: qsTr("ENERGY")
-                        fontSize: UISettings.textSizeDefault
+                        width: 84
+                        text: qsTr("ENERGY")
+                        color: trackViewRoot.cDim
+                        font.bold: true
+                        font.pixelSize: 14
                     }
 
                     Slider
                     {
                         id: energySlider
                         anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - UISettings.bigItemHeight * 3.2
+                        width: parent.width - 84 - 200
                         height: trackViewRoot.touchH
                         from: 0
                         to: 200
@@ -669,23 +768,27 @@ Rectangle
                             width: energySlider.availableWidth
                             height: 14
                             radius: 7
-                            color: "#333333"
+                            color: "#161616"
+                            border.width: 1
+                            border.color: trackViewRoot.cLine
 
-                            // the 100% mark, so you can find neutral by eye
+                            Rectangle
+                            {
+                                width: energySlider.visualPosition * (parent.width - 2) + 1
+                                height: parent.height - 2
+                                x: 1
+                                y: 1
+                                radius: 6
+                                color: "#2E6DA4"
+                            }
+
+                            // the 100% mark, so neutral can be found by eye
                             Rectangle
                             {
                                 x: parent.width * 0.5 - 1
                                 width: 2
                                 height: parent.height
-                                color: "#888888"
-                            }
-
-                            Rectangle
-                            {
-                                width: energySlider.visualPosition * parent.width
-                                height: parent.height
-                                radius: 7
-                                color: "#2E6DA4"
+                                color: "#AAAAAA"
                             }
                         }
 
@@ -694,241 +797,264 @@ Rectangle
                             x: energySlider.leftPadding
                                + energySlider.visualPosition * (energySlider.availableWidth - width)
                             y: energySlider.topPadding + energySlider.availableHeight / 2 - height / 2
-                            width: 40
-                            height: 40
-                            radius: 8
-                            color: "#EEEEEE"
+                            width: 38
+                            height: 38
+                            radius: 6
+                            color: "#DDDDDD"
                             border.width: 2
-                            border.color: "#666666"
+                            border.color: "#111111"
                         }
                     }
 
-                    RobotoText
+                    Text
                     {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: UISettings.bigItemHeight * 2
-                        label: (trackManager ? trackManager.energyTrim : 100) + "%   "
-                               + (trackManager ? Math.round(trackManager.energy * 100) : 0) + "%"
-                        fontSize: UISettings.textSizeDefault * 1.3
+                        width: 190
+                        text: qsTr("trim") + " "
+                              + (trackManager ? trackManager.energyTrim : 100) + "%    "
+                              + (trackManager ? Math.round(trackManager.energy * 100) : 0) + "%"
+                        color: trackViewRoot.cText
+                        font.bold: true
+                        font.pixelSize: 19
                     }
                 }
             }
         }
 
-        // =============================================== SETUP (folded away)
+        // =============================================== SETUP / filler
         Rectangle
         {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: trackViewRoot.setupOpen
-            color: UISettings.bgMedium
+            color: trackViewRoot.cPanel
+            radius: 4
 
-            Column
+            Text
+            {
+                anchors.centerIn: parent
+                visible: !trackViewRoot.setupOpen
+                text: qsTr("Press SETUP to assign functions to each section")
+                color: "#5A5A5A"
+                font.pixelSize: 15
+            }
+
+            Flickable
             {
                 anchors.fill: parent
-                anchors.margins: UISettings.iconSizeDefault / 3
-                spacing: 4
+                anchors.margins: 8
+                visible: trackViewRoot.setupOpen
+                contentHeight: setupCol.height
+                clip: true
 
-                Row
+                Column
                 {
-                    spacing: UISettings.iconSizeDefault / 3
-
-                    Item
-                    {
-                        width: UISettings.bigItemHeight * 1.4
-                        height: UISettings.listItemHeight
-                    }
-
-                    Repeater
-                    {
-                        model: trackViewRoot.states
-                        RobotoText
-                        {
-                            width: UISettings.bigItemHeight * 2.2
-                            label: modelData.toUpperCase()
-                            color: trackViewRoot.markerColor(modelData)
-                            fontSize: UISettings.textSizeDefault
-                        }
-                    }
-
-                    RobotoText
-                    {
-                        width: UISettings.bigItemHeight * 1.5
-                        label: qsTr("Folder")
-                        fontSize: UISettings.textSizeDefault
-                    }
-                    RobotoText
-                    {
-                        width: UISettings.bigItemHeight * 0.7
-                        label: qsTr("spd")
-                        fontSize: UISettings.textSizeDefault * 0.9
-                    }
-                }
-
-                Repeater
-                {
-                    model: trackManager ? trackManager.slotCount : 0
+                    id: setupCol
+                    width: parent.width
+                    spacing: 5
 
                     Row
                     {
-                        property int slotIndex: index
-                        spacing: UISettings.iconSizeDefault / 3
+                        spacing: 8
 
-                        RobotoText
-                        {
-                            width: UISettings.bigItemHeight * 1.4
-                            height: UISettings.listItemHeight
-                            label: trackManager ? trackManager.slotName(slotIndex) : ""
-                            fontSize: UISettings.textSizeDefault
-                        }
+                        Item { width: 130; height: 26 }
 
                         Repeater
                         {
                             model: trackViewRoot.states
-
-                            Row
+                            Text
                             {
-                                property string stateName: modelData
-                                width: UISettings.bigItemHeight * 2.2
-                                spacing: 3
-
-                                CheckBox
-                                {
-                                    id: rndBox
-                                    width: UISettings.iconSizeMedium
-                                    checked: trackManager
-                                             ? trackManager.lookRandom(stateName,
-                                                   parent.parent.slotIndex) : false
-                                    onToggled: trackManager.setLookRandom(
-                                                   stateName, parent.parent.slotIndex, checked)
-                                }
-
-                                ComboBox
-                                {
-                                    width: UISettings.bigItemHeight * 2.2
-                                           - UISettings.iconSizeMedium - 6
-                                    enabled: !rndBox.checked
-                                    model: trackManager
-                                           ? trackManager.slotFunctions(parent.parent.slotIndex)
-                                           : []
-                                    textRole: "name"
-
-                                    Component.onCompleted:
-                                    {
-                                        if (!trackManager) return
-                                        var fid = trackManager.lookFunction(
-                                                      parent.stateName, parent.parent.slotIndex)
-                                        for (var i = 0; i < model.length; i++)
-                                            if (model[i].id === fid) { currentIndex = i; return }
-                                        currentIndex = -1
-                                    }
-
-                                    onActivated:
-                                    {
-                                        var e = model[currentIndex]
-                                        if (e !== undefined)
-                                            trackManager.setLookFunction(
-                                                parent.stateName, parent.parent.slotIndex, e.id)
-                                    }
-                                }
+                                width: 190
+                                text: modelData.toUpperCase()
+                                color: trackViewRoot.markerColor(modelData)
+                                font.bold: true
+                                font.pixelSize: 14
                             }
                         }
 
+                        Text
+                        {
+                            width: 150
+                            text: qsTr("Folder")
+                            color: trackViewRoot.cDim
+                            font.pixelSize: 14
+                        }
+                        Text
+                        {
+                            width: 40
+                            text: qsTr("spd")
+                            color: trackViewRoot.cDim
+                            font.pixelSize: 14
+                        }
+                    }
+
+                    Repeater
+                    {
+                        model: trackManager ? trackManager.slotCount : 0
+
+                        Row
+                        {
+                            property int slotIndex: index
+                            spacing: 8
+
+                            Text
+                            {
+                                width: 130
+                                height: 34
+                                verticalAlignment: Text.AlignVCenter
+                                text: trackManager ? trackManager.slotName(slotIndex) : ""
+                                color: trackViewRoot.cText
+                                font.pixelSize: 15
+                            }
+
+                            Repeater
+                            {
+                                model: trackViewRoot.states
+
+                                Row
+                                {
+                                    property string stateName: modelData
+                                    width: 190
+                                    spacing: 4
+
+                                    CheckBox
+                                    {
+                                        id: rndBox
+                                        width: 32
+                                        height: 34
+                                        checked: trackManager
+                                                 ? trackManager.lookRandom(stateName,
+                                                       parent.parent.slotIndex) : false
+                                        onToggled: trackManager.setLookRandom(
+                                                       stateName, parent.parent.slotIndex, checked)
+                                    }
+
+                                    ComboBox
+                                    {
+                                        width: 150
+                                        height: 34
+                                        enabled: !rndBox.checked
+                                        model: trackManager
+                                               ? trackManager.slotFunctions(parent.parent.slotIndex)
+                                               : []
+                                        textRole: "name"
+
+                                        Component.onCompleted:
+                                        {
+                                            if (!trackManager) return
+                                            var fid = trackManager.lookFunction(
+                                                          parent.stateName, parent.parent.slotIndex)
+                                            for (var i = 0; i < model.length; i++)
+                                                if (model[i].id === fid) { currentIndex = i; return }
+                                            currentIndex = -1
+                                        }
+
+                                        onActivated:
+                                        {
+                                            var e = model[currentIndex]
+                                            if (e !== undefined)
+                                                trackManager.setLookFunction(
+                                                    parent.stateName, parent.parent.slotIndex, e.id)
+                                        }
+                                    }
+                                }
+                            }
+
+                            ComboBox
+                            {
+                                width: 150
+                                height: 34
+                                model: trackManager ? trackManager.folderList() : []
+                                textRole: "name"
+
+                                Component.onCompleted:
+                                {
+                                    if (!trackManager) return
+                                    var f = trackManager.slotFolder(parent.slotIndex)
+                                    for (var i = 0; i < model.length; i++)
+                                        if (model[i].path === f) { currentIndex = i; return }
+                                    currentIndex = 0
+                                }
+
+                                onActivated:
+                                {
+                                    var e = model[currentIndex]
+                                    if (e !== undefined)
+                                        trackManager.setSlotFolder(parent.slotIndex, e.path)
+                                }
+                            }
+
+                            CheckBox
+                            {
+                                width: 40
+                                height: 34
+                                checked: trackManager
+                                         ? trackManager.slotFollowsSpeed(parent.slotIndex) : false
+                                onToggled: trackManager.setSlotFollowsSpeed(parent.slotIndex,
+                                                                            checked)
+                            }
+                        }
+                    }
+
+                    Row
+                    {
+                        spacing: 8
+
+                        Text
+                        {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("BPM range") + ":"
+                            color: trackViewRoot.cDim
+                            font.pixelSize: 14
+                        }
+                        SpinBox
+                        {
+                            height: 34
+                            from: 40
+                            to: 300
+                            value: trackManager ? trackManager.bpmLow : 80
+                            onValueModified: trackManager.bpmLow = value
+                        }
+                        SpinBox
+                        {
+                            height: 34
+                            from: 40
+                            to: 300
+                            value: trackManager ? trackManager.bpmHigh : 140
+                            onValueModified: trackManager.bpmHigh = value
+                        }
+
+                        Text
+                        {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "    " + qsTr("Quantize") + ":"
+                            color: trackViewRoot.cDim
+                            font.pixelSize: 14
+                        }
                         ComboBox
                         {
-                            width: UISettings.bigItemHeight * 1.5
-                            model: trackManager ? trackManager.folderList() : []
-                            textRole: "name"
-
-                            Component.onCompleted:
+                            width: 90
+                            height: 34
+                            model: [ 1, 2, 4, 8, 16, 32 ]
+                            currentIndex:
                             {
-                                if (!trackManager) return
-                                var f = trackManager.slotFolder(parent.slotIndex)
-                                for (var i = 0; i < model.length; i++)
-                                    if (model[i].path === f) { currentIndex = i; return }
-                                currentIndex = 0
+                                var q = trackManager ? trackManager.quantize : 1
+                                var opts = [ 1, 2, 4, 8, 16, 32 ]
+                                var idx = opts.indexOf(q)
+                                return idx < 0 ? 0 : idx
                             }
-
-                            onActivated:
-                            {
-                                var e = model[currentIndex]
-                                if (e !== undefined)
-                                    trackManager.setSlotFolder(parent.slotIndex, e.path)
-                            }
-                        }
-
-                        CheckBox
-                        {
-                            width: UISettings.bigItemHeight * 0.7
-                            checked: trackManager
-                                     ? trackManager.slotFollowsSpeed(parent.slotIndex) : false
-                            onToggled: trackManager.setSlotFollowsSpeed(parent.slotIndex, checked)
+                            onActivated: trackManager.quantize = model[currentIndex]
                         }
                     }
-                }
 
-                Row
-                {
-                    spacing: UISettings.iconSizeDefault / 3
-
-                    RobotoText
+                    Text
                     {
-                        anchors.verticalCenter: parent.verticalCenter
-                        label: qsTr("BPM range for energy") + ":"
-                        fontSize: UISettings.textSizeDefault
-                    }
-                    SpinBox
-                    {
-                        from: 40
-                        to: 300
-                        value: trackManager ? trackManager.bpmLow : 80
-                        onValueModified: trackManager.bpmLow = value
-                    }
-                    SpinBox
-                    {
-                        from: 40
-                        to: 300
-                        value: trackManager ? trackManager.bpmHigh : 140
-                        onValueModified: trackManager.bpmHigh = value
-                    }
-
-                    RobotoText
-                    {
-                        anchors.verticalCenter: parent.verticalCenter
-                        label: "    " + qsTr("Quantize") + ":"
-                        fontSize: UISettings.textSizeDefault
-                    }
-                    ComboBox
-                    {
-                        width: UISettings.bigItemHeight
-                        model: [ 1, 2, 4, 8, 16, 32 ]
-                        currentIndex:
-                        {
-                            var q = trackManager ? trackManager.quantize : 1
-                            var opts = [ 1, 2, 4, 8, 16, 32 ]
-                            var idx = opts.indexOf(q)
-                            return idx < 0 ? 0 : idx
-                        }
-                        onActivated: trackManager.quantize = model[currentIndex]
-                    }
-
-                    RobotoText
-                    {
-                        anchors.verticalCenter: parent.verticalCenter
-                        label: "    " + qsTr("Running") + ": "
-                               + (trackManager ? trackManager.runningLook : "")
-                        fontSize: UISettings.textSizeDefault * 0.95
+                        text: qsTr("Running") + ": "
+                              + (trackManager ? trackManager.runningLook : "")
+                        color: trackViewRoot.cDim
+                        font.pixelSize: 14
                     }
                 }
             }
-        }
-
-        // filler so the live controls stay put when setup is closed
-        Item
-        {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            visible: !trackViewRoot.setupOpen
         }
     }
 }
