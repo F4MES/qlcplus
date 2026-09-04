@@ -821,6 +821,47 @@ Rectangle
             }
         }
 
+        // =============================================== role activity
+        RowLayout
+        {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 36
+            spacing: 6
+            visible: trackManager ? trackManager.roleMode : false
+
+            Repeater
+            {
+                model: trackManager ? trackManager.roleCount : 0
+
+                Rectangle
+                {
+                    id: actTile
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: 3
+
+                    readonly property var palette:
+                        [ "#4FA3E3", "#7ED07E", "#E3B44F", "#E36B6B", "#9A7ED0" ]
+                    property var acts: trackManager ? trackManager.roleActivity : []
+                    property bool lit: acts.length > index ? acts[index] === true : false
+
+                    color: lit ? palette[index] : "#242424"
+                    border.width: 1
+                    border.color: lit ? Qt.lighter(palette[index], 1.3) : "#3A3A3A"
+
+                    Text
+                    {
+                        anchors.centerIn: parent
+                        text: trackManager
+                              ? trackManager.roleName(index).toUpperCase() : ""
+                        color: actTile.lit ? "#101010" : "#6A6A6A"
+                        font.bold: actTile.lit
+                        font.pixelSize: 12
+                    }
+                }
+            }
+        }
+
         // =============================================== SETUP / filler
         Rectangle
         {

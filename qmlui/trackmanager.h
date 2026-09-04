@@ -99,6 +99,7 @@ class TrackManager : public QObject
     Q_PROPERTY(int slotCount READ slotCount CONSTANT)
     Q_PROPERTY(bool roleMode READ roleMode WRITE setRoleMode NOTIFY looksChanged)
     Q_PROPERTY(int roleCount READ roleCount CONSTANT)
+    Q_PROPERTY(QVariantList roleActivity READ roleActivity NOTIFY engineChanged)
 
     Q_PROPERTY(int liveBpm READ liveBpm NOTIFY energyChanged)
     Q_PROPERTY(qreal energy READ energy NOTIFY energyChanged)
@@ -205,6 +206,11 @@ public:
 
     Q_INVOKABLE QString roleReport() const;
 
+    /** One bool per role: is it driving output right now? */
+    QVariantList roleActivity() const;
+    /** Energy of the section containing beat, 0..1, or -1 if unknown. */
+    Q_INVOKABLE qreal sectionEnergy(int beat) const;
+
 signals:
     void listenPortChanged();
     void connectedChanged();
@@ -216,6 +222,7 @@ signals:
     void quantizeChanged();
     void energyChanged();
     void looksChanged();
+    void engineChanged();
 
 protected slots:
     void slotNewConnection();
@@ -240,7 +247,10 @@ protected:
     void runEngine(bool sectionChanged);
     void sectionBounds(int beat, int &start, int &end) const;
     quint32 pickRole(QString state, int role, int cursor) const;
-    void driveRole(int role, quint32 fid, qreal level, int division);
+    void driveRole(int role, quint32 fid, qreal level, int division,
+                   bool hard = false);
+    void beginFade(int role);
+    void tickFades();
     void stopRole(int role);
     void stopAllRoles();
     int classifyFunction(Function *func) const;
@@ -306,6 +316,11 @@ private:
 
     QMap<int, quint32> m_roleActive;
     QMap<int, int> m_roleAttr;
+    QMap<int, qreal> m_roleLevel;
+
+    /* functions on their way out: fid -> attribute id / current level */
+    QMap<quint32, int> m_fadeAttr;
+    QMap<quint32, qreal> m_fadeLevel;
 
     int m_colorCursor;
     int m_lastColorBar;

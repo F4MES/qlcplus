@@ -236,6 +236,8 @@ void TrackManager::handleTrack(const QJsonObject &obj)
         QVariantMap marker;
         marker.insert(QStringLiteral("beat"), mo.value(QStringLiteral("beat")).toInt());
         marker.insert(QStringLiteral("type"), mo.value(QStringLiteral("type")).toString());
+        marker.insert(QStringLiteral("energy"),
+                      mo.value(QStringLiteral("energy")).toDouble(-1.0));
         m_markers.append(marker);
     }
 
@@ -739,7 +741,16 @@ qreal TrackManager::energy() const
 
 qreal TrackManager::appliedEnergy() const
 {
-    return qBound(0.0, energy() * (qreal(stateIntensity(currentState())) / 100.0), 1.0);
+    qreal e = energy() * (qreal(stateIntensity(currentState())) / 100.0);
+
+    // The analysis knows how loud THIS section is relative to the rest of
+    // the track. Fold that in gently: BPM sets the ceiling, the section
+    // decides how much of it we use.
+    qreal se = sectionEnergy(m_currentBeat);
+    if (se >= 0.0)
+        e *= 0.65 + 0.35 * se;
+
+    return qBound(0.0, e, 1.0);
 }
 
 void TrackManager::applyEnergy()
@@ -1287,6 +1298,8 @@ void TrackManager::runEngine(bool sectionChanged)
 
     QString state = currentState();
 
+    tickFades();
+
     int secStart = 1, secEnd = 1;
     sectionBounds(beat, secStart, secEnd);
 
@@ -1301,6 +1314,9 @@ void TrackManager::runEngine(bool sectionChanged)
     bool isBreak = (state == QStringLiteral("break"));
     bool isBuild = (state == QStringLiteral("build"));
     bool isDrop  = (state == QStringLiteral("drop"));
+
+    // A drop must hit, not blend. Everything else may crossfade.
+    bool hard = sectionChanged && isDrop;
 
     /* ---- colour: the base look. Rotates on bar lines, and a build tightens
      *      the rotation as it climbs. ---- */
@@ -1330,7 +1346,7 @@ void TrackManager::runEngine(bool sectionChanged)
 
     driveRole(TRACK_ROLE_COLOR,
               pickRole(state, TRACK_ROLE_COLOR, m_colorCursor),
-              colLevel, division);
+              colLevel, division, hard);
 
     /* ---- movement: everything but a break ---- */
     if (isBreak)
@@ -1339,13 +1355,13 @@ void TrackManager::runEngine(bool sectionChanged)
         driveRole(TRACK_ROLE_MOVEMENT,
                   pickRole(state, TRACK_ROLE_MOVEMENT, m_colorCursor),
                   isBuild ? (0.35 + 0.65 * prog) : (0.55 + 0.45 * en),
-                  division);
+                  division, hard);
 
     /* ---- beams: the drop, and the half of a build that is already climbing ---- */
     if (isDrop || (isBuild && prog > 0.5))
         driveRole(TRACK_ROLE_BEAM,
                   pickRole(state, TRACK_ROLE_BEAM, m_colorCursor),
-                  isDrop ? 1.0 : prog, division);
+                  isDrop ? 1.0 : prog, division, hard);
     else
         stopRole(TRACK_ROLE_BEAM);
 
@@ -1354,7 +1370,7 @@ void TrackManager::runEngine(bool sectionChanged)
                || (isDrop && bar == 0 && beatInBar < 2);
     if (strobe)
         driveRole(TRACK_ROLE_STROBE,
-                  pickRole(state, TRACK_ROLE_STROBE, 0), 1.0, division);
+                  pickRole(state, TRACK_ROLE_STROBE, 0), 1.0, division, true);
     else
         stopRole(TRACK_ROLE_STROBE);
 
@@ -1368,9 +1384,11 @@ void TrackManager::runEngine(bool sectionChanged)
 
     if (sectionChanged)
         emit stateChanged();
+    emit engineChanged();
 }
 
-void TrackManager::driveRole(int role, quint32 fid, qreal level, int division)
+void TrackManager::driveRole(int role, quint32 fid, qreal level, int division,
+                             bool hard)
 {
     if (fid == Function::invalidId())
     {
@@ -1387,14 +1405,31 @@ void TrackManager::driveRole(int role, quint32 fid, qreal level, int division)
         int attr = m_roleAttr.value(role, -1);
         if (func != nullptr && attr >= 0)
             func->adjustAttribute(level, attr);
+        m_roleLevel.insert(role, level);
         return;
     }
 
-    stopRole(role);
+    if (hard)
+        stopRole(role);
+    else
+        beginFade(role);
 
     Function *func = m_doc->function(fid);
     if (func == nullptr)
         return;
+
+    // Coming straight back to a function that is still fading out: keep
+    // it running and just take it over again.
+    if (m_fadeAttr.contains(fid))
+    {
+        func->releaseAttributeOverride(m_fadeAttr.take(fid));
+        m_fadeLevel.remove(fid);
+        m_roleActive.insert(role, fid);
+        m_roleLevel.insert(role, level);
+        m_roleAttr.insert(role,
+            func->requestAttributeOverride(TRACK_INTENSITY_ATTR, level));
+        return;
+    }
 
     // The division goes in as an overrideDuration with tempo type Beats, so
     // Ableton Link stays the only clock: we change how long a step lasts,
@@ -1407,6 +1442,7 @@ void TrackManager::driveRole(int role, quint32 fid, qreal level, int division)
         func->start(m_doc->masterTimer(), FunctionParent::master());
 
     m_roleActive.insert(role, fid);
+    m_roleLevel.insert(role, level);
     m_roleAttr.insert(role,
         func->requestAttributeOverride(TRACK_INTENSITY_ATTR, level));
 }
@@ -1428,12 +1464,26 @@ void TrackManager::stopRole(int role)
 
     m_roleActive.remove(role);
     m_roleAttr.remove(role);
+    m_roleLevel.remove(role);
 }
 
 void TrackManager::stopAllRoles()
 {
     foreach (int role, m_roleActive.keys())
         stopRole(role);
+
+    foreach (quint32 fid, m_fadeAttr.keys())
+    {
+        Function *func = m_doc ? m_doc->function(fid) : nullptr;
+        if (func != nullptr)
+        {
+            func->releaseAttributeOverride(m_fadeAttr.value(fid));
+            func->stop(FunctionParent::master());
+        }
+    }
+    m_fadeAttr.clear();
+    m_fadeLevel.clear();
+    emit engineChanged();
 }
 
 QString TrackManager::roleReport() const
@@ -1515,4 +1565,89 @@ void TrackManager::loadRoles()
              settings.value(SETTINGS_TRACK_ROLEOFF, QString()).toString()
                      .split(';', Qt::SkipEmptyParts))
         m_roleOff.insert(key, true);
+}
+
+/*********************************************************************
+ * Crossfade and activity
+ *********************************************************************/
+
+void TrackManager::beginFade(int role)
+{
+    quint32 fid = m_roleActive.value(role, Function::invalidId());
+    if (fid == Function::invalidId())
+        return;
+
+    int attr = m_roleAttr.value(role, -1);
+    if (attr < 0 || m_doc == nullptr || m_doc->function(fid) == nullptr)
+    {
+        stopRole(role);
+        return;
+    }
+
+    // hand the running function over to the fade list; it keeps its
+    // attribute override and gets stepped down beat by beat
+    m_fadeAttr.insert(fid, attr);
+    m_fadeLevel.insert(fid, m_roleLevel.value(role, 1.0));
+
+    m_roleActive.remove(role);
+    m_roleAttr.remove(role);
+    m_roleLevel.remove(role);
+}
+
+void TrackManager::tickFades()
+{
+    if (m_fadeAttr.isEmpty() || m_doc == nullptr)
+        return;
+
+    const qreal step = 1.0 / 4.0;          // one bar from full to silent
+
+    foreach (quint32 fid, m_fadeAttr.keys())
+    {
+        Function *func = m_doc->function(fid);
+        int attr = m_fadeAttr.value(fid);
+        qreal level = m_fadeLevel.value(fid, 0.0) - step;
+
+        if (func == nullptr || level <= 0.0)
+        {
+            if (func != nullptr)
+            {
+                func->releaseAttributeOverride(attr);
+                func->stop(FunctionParent::master());
+            }
+            m_fadeAttr.remove(fid);
+            m_fadeLevel.remove(fid);
+        }
+        else
+        {
+            func->adjustAttribute(level, attr);
+            m_fadeLevel.insert(fid, level);
+        }
+    }
+}
+
+QVariantList TrackManager::roleActivity() const
+{
+    QVariantList list;
+    for (int role = 0; role < TRACK_ROLE_COUNT; role++)
+        list.append(m_roleActive.contains(role));
+    return list;
+}
+
+qreal TrackManager::sectionEnergy(int beat) const
+{
+    qreal best = -1.0;
+    int bestBeat = -1;
+
+    for (int i = 0; i < m_markers.count(); i++)
+    {
+        QVariantMap marker = m_markers.at(i).toMap();
+        int mb = marker.value(QStringLiteral("beat")).toInt();
+        if (mb <= beat && mb > bestBeat)
+        {
+            bestBeat = mb;
+            best = marker.value(QStringLiteral("energy"), -1.0).toDouble();
+        }
+    }
+
+    return best;
 }
