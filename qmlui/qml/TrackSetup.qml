@@ -35,7 +35,7 @@ Rectangle
     readonly property color cDim:   "#9A9A9A"
     readonly property color cLine:  "#555555"
 
-    property var states: [ "normal", "break", "build", "drop" ]
+    property var sectionNames: [ "normal", "break", "build", "drop" ]
     property string filter: ""
     property bool advancedOpen: false
     property int refresh: 0
@@ -79,35 +79,6 @@ Rectangle
     {
         target: trackManager
         function onLooksChanged() { setupRoot.refresh++ }
-    }
-
-    // ------------------------------------------------------------------ tile
-    component Tile: Rectangle
-    {
-        property alias label: tileText.text
-        property bool active: false
-        property color activeColor: "#4A4A4A"
-        signal tapped()
-
-        radius: 3
-        color: active ? activeColor : setupRoot.cBtn
-        border.width: 1
-        border.color: active ? Qt.lighter(activeColor, 1.3) : setupRoot.cLine
-
-        Text
-        {
-            id: tileText
-            anchors.centerIn: parent
-            color: parent.active ? "#101010" : setupRoot.cText
-            font.bold: parent.active
-            font.pixelSize: 13
-        }
-
-        MouseArea
-        {
-            anchors.fill: parent
-            onClicked: parent.tapped()
-        }
     }
 
     ColumnLayout
@@ -166,7 +137,7 @@ Rectangle
 
             Item { Layout.fillWidth: true }
 
-            Tile
+            TrackTile
             {
                 Layout.preferredWidth: 110
                 Layout.preferredHeight: 36
@@ -174,7 +145,7 @@ Rectangle
                 onTapped: if (trackManager) trackManager.autoAssignRoles(true)
             }
 
-            Tile
+            TrackTile
             {
                 Layout.preferredWidth: 130
                 Layout.preferredHeight: 36
@@ -297,7 +268,7 @@ Rectangle
                     {
                         model: trackManager ? trackManager.roleCount : 0
 
-                        Tile
+                        TrackTile
                         {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
@@ -308,7 +279,7 @@ Rectangle
                         }
                     }
 
-                    Tile
+                    TrackTile
                     {
                         Layout.preferredWidth: 60
                         Layout.fillHeight: true
@@ -352,7 +323,7 @@ Rectangle
 
                     Repeater
                     {
-                        model: setupRoot.states
+                        model: setupRoot.sectionNames
 
                         Column
                         {
@@ -392,7 +363,7 @@ Rectangle
                                         font.pixelSize: 12
                                     }
 
-                                    Tile
+                                    TrackTile
                                     {
                                         width: 60
                                         height: 30
@@ -411,7 +382,7 @@ Rectangle
                                                       !active)
                                     }
 
-                                    Tile
+                                    TrackTile
                                     {
                                         width: 200
                                         height: 30
