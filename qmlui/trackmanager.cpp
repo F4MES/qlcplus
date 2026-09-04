@@ -49,29 +49,29 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     , m_energyTrim(100)
     , m_liveBpm(0)
 {
-    // slot names default to the groups a club rig is usually built from
     m_slotNames << tr("Laser Bars") << tr("Position") << tr("Animation")
-                << tr("Strobes") << tr("Colors");
+                << tr("Strobes") << tr("Moving Heads") << tr("Colors");
+
     for (int i = 0; i < TRACK_SLOT_COUNT; i++)
+    {
         m_slotFolders << QString();
+        // chases follow the section tempo by default, movement does not
+        m_slotSpeed << (i != 1 && i != 5);
+    }
 
     QSettings settings;
+    QVariant var;
 
-    QVariant var = settings.value(SETTINGS_TRACK_PORT);
-    if (var.isValid())
-        m_port = var.toInt();
+    var = settings.value(SETTINGS_TRACK_PORT);
+    if (var.isValid()) m_port = var.toInt();
     var = settings.value(SETTINGS_TRACK_BPMLOW);
-    if (var.isValid())
-        m_bpmLow = var.toInt();
+    if (var.isValid()) m_bpmLow = var.toInt();
     var = settings.value(SETTINGS_TRACK_BPMHIGH);
-    if (var.isValid())
-        m_bpmHigh = var.toInt();
+    if (var.isValid()) m_bpmHigh = var.toInt();
     var = settings.value(SETTINGS_TRACK_TRIM);
-    if (var.isValid())
-        m_energyTrim = var.toInt();
+    if (var.isValid()) m_energyTrim = var.toInt();
     var = settings.value(SETTINGS_TRACK_QUANTIZE);
-    if (var.isValid())
-        m_quantize = var.toInt();
+    if (var.isValid()) m_quantize = var.toInt();
 
     loadSettingsMaps();
 
@@ -99,10 +99,7 @@ QStringList TrackManager::stateNames()
                          << QStringLiteral("drop");
 }
 
-int TrackManager::slotCount() const
-{
-    return TRACK_SLOT_COUNT;
-}
+int TrackManager::slotCount() const { return TRACK_SLOT_COUNT; }
 
 /*********************************************************************
  * Server
@@ -121,10 +118,7 @@ void TrackManager::restartServer()
         qWarning() << "[TrackManager] cannot listen on" << m_port << m_server->errorString();
 }
 
-int TrackManager::listenPort() const
-{
-    return m_port;
-}
+int TrackManager::listenPort() const { return m_port; }
 
 void TrackManager::setListenPort(int port)
 {
@@ -136,10 +130,7 @@ void TrackManager::setListenPort(int port)
     emit listenPortChanged();
 }
 
-bool TrackManager::connected() const
-{
-    return m_clients.isEmpty() == false;
-}
+bool TrackManager::connected() const { return m_clients.isEmpty() == false; }
 
 void TrackManager::slotNewConnection()
 {
@@ -152,7 +143,6 @@ void TrackManager::slotNewConnection()
         m_buffers.insert(sock, QByteArray());
         connect(sock, SIGNAL(readyRead()), this, SLOT(slotReadyRead()));
         connect(sock, SIGNAL(disconnected()), this, SLOT(slotDisconnected()));
-        qDebug() << "[TrackManager] client connected";
         emit connectedChanged();
     }
 }
@@ -312,10 +302,7 @@ QString TrackManager::currentState() const
     return m_overrideState.isEmpty() ? m_analysedState : m_overrideState;
 }
 
-QString TrackManager::overrideState() const
-{
-    return m_overrideState;
-}
+QString TrackManager::overrideState() const { return m_overrideState; }
 
 void TrackManager::setOverrideState(QString state)
 {
@@ -371,6 +358,7 @@ void TrackManager::applyLook()
     stopLook();
 
     QString state = currentState();
+    int division = stateDivision(state);
 
     for (int slot = 0; slot < TRACK_SLOT_COUNT; slot++)
     {
@@ -382,13 +370,27 @@ void TrackManager::applyLook()
         if (func == nullptr)
             continue;
 
-        func->start(m_doc->masterTimer(), FunctionParent::master());
+        // Passing the division as an overrideDuration with tempo type Beats
+        // keeps Ableton Link as the single timing source: we only change how
+        // many beats a step lasts, never the clock itself.
+        if (division > 0 && slotFollowsSpeed(slot))
+        {
+            func->start(m_doc->masterTimer(), FunctionParent::master(), 0,
+                        Function::defaultSpeed(), Function::defaultSpeed(),
+                        uint(division), Function::Beats);
+        }
+        else
+        {
+            func->start(m_doc->masterTimer(), FunctionParent::master());
+        }
+
         m_runningFunctions.append(fid);
         m_runningAttrIds.insert(fid,
             func->requestAttributeOverride(TRACK_INTENSITY_ATTR, appliedEnergy()));
     }
 
-    qDebug() << "[TrackManager] look for" << state << ":" << runningLook();
+    qDebug() << "[TrackManager] look for" << state << "division" << division
+             << ":" << runningLook();
     emit stateChanged();
 }
 
@@ -427,15 +429,6 @@ QString TrackManager::slotName(int slot) const
     return m_slotNames.at(slot);
 }
 
-void TrackManager::setSlotName(int slot, QString name)
-{
-    if (slot < 0 || slot >= m_slotNames.count())
-        return;
-    m_slotNames[slot] = name;
-    QSettings().setValue(SETTINGS_TRACK_SLOTNAMES, m_slotNames.join('|'));
-    emit looksChanged();
-}
-
 QString TrackManager::slotFolder(int slot) const
 {
     if (slot < 0 || slot >= m_slotFolders.count())
@@ -449,6 +442,28 @@ void TrackManager::setSlotFolder(int slot, QString folder)
         return;
     m_slotFolders[slot] = folder;
     QSettings().setValue(SETTINGS_TRACK_SLOTDIRS, m_slotFolders.join('|'));
+    emit looksChanged();
+}
+
+bool TrackManager::slotFollowsSpeed(int slot) const
+{
+    if (slot < 0 || slot >= m_slotSpeed.count())
+        return false;
+    return m_slotSpeed.at(slot);
+}
+
+void TrackManager::setSlotFollowsSpeed(int slot, bool follow)
+{
+    if (slot < 0 || slot >= m_slotSpeed.count())
+        return;
+
+    m_slotSpeed[slot] = follow;
+
+    QStringList flags;
+    for (int i = 0; i < m_slotSpeed.count(); i++)
+        flags.append(m_slotSpeed.at(i) ? "1" : "0");
+    QSettings().setValue(SETTINGS_TRACK_SLOTSPEED, flags.join(','));
+
     emit looksChanged();
 }
 
@@ -537,7 +552,6 @@ void TrackManager::setLookRandom(QString state, int slot, bool random)
 {
     if (stateNames().contains(state) == false)
         return;
-
     m_lookRandom.insert(mapKey(state, slot), random);
     saveLooks();
     emit looksChanged();
@@ -552,7 +566,6 @@ void TrackManager::setStateIntensity(QString state, int percent)
 {
     if (stateNames().contains(state) == false || percent < 0 || percent > 100)
         return;
-
     m_stateIntensity.insert(state, percent);
     saveLooks();
     emit energyChanged();
@@ -562,12 +575,34 @@ void TrackManager::setStateIntensity(QString state, int percent)
 int TrackManager::stateIntensity(QString state) const
 {
     int dflt = 100;
-    if (state == QStringLiteral("break"))
-        dflt = 35;
-    else if (state == QStringLiteral("build"))
-        dflt = 70;
-
+    if (state == QStringLiteral("break")) dflt = 35;
+    else if (state == QStringLiteral("build")) dflt = 70;
     return m_stateIntensity.value(state, dflt);
+}
+
+void TrackManager::setStateDivision(QString state, int milliBeats)
+{
+    if (stateNames().contains(state) == false)
+        return;
+    if (milliBeats < 0 || milliBeats > 16000)
+        return;
+
+    m_stateDivision.insert(state, milliBeats);
+    saveLooks();
+    emit looksChanged();
+
+    if (state == currentState() && m_autoRun)
+        applyLook();
+}
+
+int TrackManager::stateDivision(QString state) const
+{
+    // a musical default: calm in a break, hardest in a drop
+    int dflt = 500;
+    if (state == QStringLiteral("break")) dflt = 1000;
+    else if (state == QStringLiteral("build")) dflt = 250;
+    else if (state == QStringLiteral("drop")) dflt = 125;
+    return m_stateDivision.value(state, dflt);
 }
 
 /*********************************************************************
@@ -578,14 +613,6 @@ void TrackManager::loadSettingsMaps()
 {
     QSettings settings;
 
-    QString names = settings.value(SETTINGS_TRACK_SLOTNAMES).toString();
-    if (names.isEmpty() == false)
-    {
-        QStringList parts = names.split('|');
-        for (int i = 0; i < parts.count() && i < m_slotNames.count(); i++)
-            m_slotNames[i] = parts.at(i);
-    }
-
     QString dirs = settings.value(SETTINGS_TRACK_SLOTDIRS).toString();
     if (dirs.isEmpty() == false)
     {
@@ -594,7 +621,14 @@ void TrackManager::loadSettingsMaps()
             m_slotFolders[i] = parts.at(i);
     }
 
-    // looks: state/slot:fid,...
+    QString speed = settings.value(SETTINGS_TRACK_SLOTSPEED).toString();
+    if (speed.isEmpty() == false)
+    {
+        QStringList parts = speed.split(',');
+        for (int i = 0; i < parts.count() && i < m_slotSpeed.count(); i++)
+            m_slotSpeed[i] = (parts.at(i) == "1");
+    }
+
     foreach (QString pair, settings.value(SETTINGS_TRACK_LOOKS).toString()
                                    .split(',', Qt::SkipEmptyParts))
     {
@@ -614,6 +648,14 @@ void TrackManager::loadSettingsMaps()
         if (parts.count() == 2 && stateNames().contains(parts.at(0)))
             m_stateIntensity.insert(parts.at(0), parts.at(1).toInt());
     }
+
+    foreach (QString pair, settings.value(SETTINGS_TRACK_DIVISION).toString()
+                                   .split(',', Qt::SkipEmptyParts))
+    {
+        QStringList parts = pair.split(':');
+        if (parts.count() == 2 && stateNames().contains(parts.at(0)))
+            m_stateDivision.insert(parts.at(0), parts.at(1).toInt());
+    }
 }
 
 void TrackManager::saveLooks()
@@ -622,31 +664,27 @@ void TrackManager::saveLooks()
 
     QStringList looks;
     QMapIterator<QString, quint32> it(m_lookFunctions);
-    while (it.hasNext())
-    {
-        it.next();
-        looks.append(QString("%1:%2").arg(it.key()).arg(it.value()));
-    }
+    while (it.hasNext()) { it.next();
+        looks.append(QString("%1:%2").arg(it.key()).arg(it.value())); }
     settings.setValue(SETTINGS_TRACK_LOOKS, looks.join(','));
 
     QStringList rnd;
     QMapIterator<QString, bool> rit(m_lookRandom);
-    while (rit.hasNext())
-    {
-        rit.next();
-        if (rit.value())
-            rnd.append(rit.key());
-    }
+    while (rit.hasNext()) { rit.next();
+        if (rit.value()) rnd.append(rit.key()); }
     settings.setValue(SETTINGS_TRACK_RANDOM, rnd.join(','));
 
     QStringList ints;
     QMapIterator<QString, int> iit(m_stateIntensity);
-    while (iit.hasNext())
-    {
-        iit.next();
-        ints.append(QString("%1:%2").arg(iit.key()).arg(iit.value()));
-    }
+    while (iit.hasNext()) { iit.next();
+        ints.append(QString("%1:%2").arg(iit.key()).arg(iit.value())); }
     settings.setValue(SETTINGS_TRACK_INTENSITY, ints.join(','));
+
+    QStringList divs;
+    QMapIterator<QString, int> dit(m_stateDivision);
+    while (dit.hasNext()) { dit.next();
+        divs.append(QString("%1:%2").arg(dit.key()).arg(dit.value())); }
+    settings.setValue(SETTINGS_TRACK_DIVISION, divs.join(','));
 }
 
 /*********************************************************************
@@ -671,7 +709,6 @@ qreal TrackManager::energy() const
 {
     if (m_bpmHigh <= m_bpmLow)
         return 1.0;
-
     qreal e = qreal(m_liveBpm - m_bpmLow) / qreal(m_bpmHigh - m_bpmLow);
     e = qBound(0.0, e, 1.0) * (qreal(m_energyTrim) / 100.0);
     return qBound(0.0, e, 1.0);
@@ -742,10 +779,8 @@ void TrackManager::setAutoRun(bool enable)
         return;
     m_autoRun = enable;
 
-    if (m_autoRun)
-        applyLook();
-    else
-        stopLook();
+    if (m_autoRun) applyLook();
+    else stopLook();
 
     emit autoRunChanged();
 }
@@ -762,7 +797,6 @@ void TrackManager::setQuantize(int beats)
 }
 
 QString TrackManager::title() const { return m_title; }
-qreal TrackManager::bpm() const { return m_bpm; }
 int TrackManager::beatCount() const { return m_beatCount; }
 QVariantList TrackManager::waveform() const { return m_waveform; }
 QVariantList TrackManager::markers() const { return m_markers; }

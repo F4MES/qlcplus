@@ -5,10 +5,13 @@
   Receives track structure and playback position from Beat Link Trigger, derives
   the current section of the track, and fires a "look" for each section.
 
-  A look is one Function per slot, where slots mirror the groups in the rig
-  (laser bars, position, animation lasers, strobes, colours). A slot can be
-  bound to a Function folder and set to RANDOM, so each time the section is
-  entered it picks a different Function from that folder.
+  A look is one Function per slot, where slots mirror the groups in the rig. A
+  slot can be bound to a Function folder and set to RANDOM, so each time the
+  section is entered it picks a different Function from that folder.
+
+  Each section also carries a beat division. It is passed to Function::start()
+  as an overrideDuration with overrideTempoType Beats, so Ableton Link remains
+  the only timing source and we only change how many beats a step lasts.
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -44,13 +47,15 @@ class Doc;
 #define SETTINGS_TRACK_LOOKS      QStringLiteral("trackmanager/looks")
 #define SETTINGS_TRACK_RANDOM     QStringLiteral("trackmanager/random")
 #define SETTINGS_TRACK_INTENSITY  QStringLiteral("trackmanager/intensity")
+#define SETTINGS_TRACK_DIVISION   QStringLiteral("trackmanager/division")
 #define SETTINGS_TRACK_SLOTNAMES  QStringLiteral("trackmanager/slotnames")
 #define SETTINGS_TRACK_SLOTDIRS   QStringLiteral("trackmanager/slotdirs")
+#define SETTINGS_TRACK_SLOTSPEED  QStringLiteral("trackmanager/slotspeed")
 
 #define TRACK_DEFAULT_PORT     9998
 #define TRACK_DEFAULT_BPM_LOW  80
 #define TRACK_DEFAULT_BPM_HIGH 140
-#define TRACK_SLOT_COUNT       5
+#define TRACK_SLOT_COUNT       6
 
 class TrackManager : public QObject
 {
@@ -61,7 +66,6 @@ class TrackManager : public QObject
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
 
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
-    Q_PROPERTY(qreal bpm READ bpm NOTIFY trackChanged)
     Q_PROPERTY(int beatCount READ beatCount NOTIFY trackChanged)
     Q_PROPERTY(QVariantList waveform READ waveform NOTIFY trackChanged)
     Q_PROPERTY(QVariantList markers READ markers NOTIFY markersChanged)
@@ -97,7 +101,6 @@ public:
     bool connected() const;
 
     QString title() const;
-    qreal bpm() const;
     int beatCount() const;
     QVariantList waveform() const;
     QVariantList markers() const;
@@ -109,7 +112,6 @@ public:
     QString currentState() const;
     QString overrideState() const;
     void setOverrideState(QString state);
-    /** Names of the Functions currently running, for display */
     QString runningLook() const;
 
     bool autoRun() const;
@@ -133,13 +135,13 @@ public:
 
     /* ---- slots ---- */
     Q_INVOKABLE QString slotName(int slot) const;
-    Q_INVOKABLE void setSlotName(int slot, QString name);
     Q_INVOKABLE QString slotFolder(int slot) const;
     Q_INVOKABLE void setSlotFolder(int slot, QString folder);
+    /** Does this slot follow the section's beat division? */
+    Q_INVOKABLE bool slotFollowsSpeed(int slot) const;
+    Q_INVOKABLE void setSlotFollowsSpeed(int slot, bool follow);
 
-    /** Distinct Function folders in this project, for binding a slot */
     Q_INVOKABLE QVariantList folderList() const;
-    /** Functions available to a slot: everything in its folder */
     Q_INVOKABLE QVariantList slotFunctions(int slot) const;
 
     /* ---- looks ---- */
@@ -148,13 +150,16 @@ public:
     Q_INVOKABLE void setLookRandom(QString state, int slot, bool random);
     Q_INVOKABLE bool lookRandom(QString state, int slot) const;
 
-    /** Per-section level, in percent, applied on top of the tempo energy */
     Q_INVOKABLE void setStateIntensity(QString state, int percent);
     Q_INVOKABLE int stateIntensity(QString state) const;
 
-    /** Re-roll every RANDOM slot of the current section and fire it again */
-    Q_INVOKABLE void reroll();
+    /** Beat division for a section, in milliBEATs. 1000 = one beat per step,
+     *  500 = half a beat, 250 = a quarter. 0 leaves the Function's own tempo
+     *  alone. */
+    Q_INVOKABLE void setStateDivision(QString state, int milliBeats);
+    Q_INVOKABLE int stateDivision(QString state) const;
 
+    Q_INVOKABLE void reroll();
     Q_INVOKABLE void clear();
 
 signals:
@@ -220,13 +225,13 @@ private:
 
     QStringList m_slotNames;
     QStringList m_slotFolders;
+    QList<bool> m_slotSpeed;
 
-    /** "state/slot" -> Function ID, and "state/slot" -> random flag */
     QMap<QString, quint32> m_lookFunctions;
     QMap<QString, bool> m_lookRandom;
     QMap<QString, int> m_stateIntensity;
+    QMap<QString, int> m_stateDivision;
 
-    /** Functions we started for the running look, with their override handles */
     QList<quint32> m_runningFunctions;
     QMap<quint32, int> m_runningAttrIds;
 

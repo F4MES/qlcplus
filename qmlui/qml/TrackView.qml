@@ -27,6 +27,9 @@ Rectangle
     property string liveState: trackManager ? trackManager.currentState : "normal"
     property var states: [ "normal", "break", "build", "drop" ]
 
+    property var divValues: [ 0, 4000, 2000, 1000, 500, 250, 125 ]
+    property var divLabels: [ "-", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8" ]
+
     property int dragIndex: -1
     property real dragX: 0
     property bool zoomActive: false
@@ -43,12 +46,11 @@ Rectangle
 
     function fmtTime(ms)
     {
-        if (ms <= 0)
-            return "--:--"
-        var total = Math.floor(ms / 1000)
-        var mins = Math.floor(total / 60)
-        var secs = total % 60
-        return mins + ":" + (secs < 10 ? "0" : "") + secs
+        if (ms <= 0) return "--:--"
+        var t = Math.floor(ms / 1000)
+        var m = Math.floor(t / 60)
+        var s = t % 60
+        return m + ":" + (s < 10 ? "0" : "") + s
     }
 
     function viewCount()
@@ -97,12 +99,10 @@ Rectangle
         onTriggered:
         {
             if (trackViewRoot.dragIndex < 0) { running = false; return }
-
             var step = Math.max(1, Math.round(trackViewRoot.viewCount() / 32))
             trackViewRoot.zoomCenter =
                 Math.max(1, Math.min(trackViewRoot.beatCount,
                                      trackViewRoot.zoomCenter + dir * step))
-
             trackManager.moveMarker(trackViewRoot.dragIndex,
                                     wfArea.beatAt(trackViewRoot.dragX))
             wfCanvas.requestPaint()
@@ -159,8 +159,8 @@ Rectangle
                         var b = vf + i
                         if (b < 1 || b > n) continue
                         var v = ((b - 1) < wf.length ? wf[b - 1] : 0) / 255.0
-                        var bh = Math.max(1, v * (base - lane))
-                        ctx.fillRect(i * px, base - bh, Math.max(1, px), bh)
+                        ctx.fillRect(i * px, base - Math.max(1, v * (base - lane)),
+                                     Math.max(1, px), Math.max(1, v * (base - lane)))
                     }
 
                     var gridStep = trackViewRoot.zoomActive ? 4 : 32
@@ -255,8 +255,7 @@ Rectangle
                         if (d < bestDist) { bestDist = d; best = i }
                     }
 
-                    var tol = Math.max(2, trackViewRoot.viewCount() * 0.02)
-                    if (bestDist <= tol)
+                    if (bestDist <= Math.max(2, trackViewRoot.viewCount() * 0.02))
                     {
                         trackViewRoot.dragIndex = best
                         trackViewRoot.dragX = mouse.x
@@ -270,7 +269,6 @@ Rectangle
                 onPositionChanged: function (mouse)
                 {
                     if (trackViewRoot.dragIndex < 0) return
-
                     trackViewRoot.dragX = mouse.x
                     trackManager.moveMarker(trackViewRoot.dragIndex, beatAt(mouse.x))
 
@@ -409,40 +407,82 @@ Rectangle
             Layout.fillHeight: true
             color: UISettings.bgMedium
 
-            GridLayout
+            Column
             {
-                id: lookGrid
                 anchors.fill: parent
                 anchors.margins: UISettings.iconSizeDefault / 3
-                columns: 6
-                columnSpacing: UISettings.iconSizeDefault / 3
-                rowSpacing: 4
+                spacing: 4
 
-                // ---- header row ----
-                RobotoText
+                // ---- header: state names + division per state ----
+                Row
                 {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 1.6
-                    label: qsTr("Slot")
-                    fontSize: UISettings.textSizeDefault
-                }
+                    spacing: UISettings.iconSizeDefault / 3
 
-                Repeater
-                {
-                    model: trackViewRoot.states
+                    Item
+                    {
+                        width: UISettings.bigItemHeight * 1.5
+                        height: UISettings.listItemHeight
+                    }
+
+                    Repeater
+                    {
+                        model: trackViewRoot.states
+
+                        Column
+                        {
+                            width: UISettings.bigItemHeight * 2.2
+                            spacing: 2
+
+                            RobotoText
+                            {
+                                label: modelData.toUpperCase()
+                                color: trackViewRoot.markerColor(modelData)
+                                fontSize: UISettings.textSizeDefault * 1.1
+                            }
+
+                            Row
+                            {
+                                spacing: 4
+
+                                RobotoText
+                                {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    label: qsTr("speed")
+                                    fontSize: UISettings.textSizeDefault * 0.8
+                                }
+
+                                ComboBox
+                                {
+                                    width: UISettings.bigItemHeight
+                                    model: trackViewRoot.divLabels
+                                    currentIndex:
+                                    {
+                                        if (!trackManager) return 0
+                                        var d = trackManager.stateDivision(modelData)
+                                        var i = trackViewRoot.divValues.indexOf(d)
+                                        return i < 0 ? 0 : i
+                                    }
+                                    onActivated:
+                                        trackManager.setStateDivision(
+                                            modelData, trackViewRoot.divValues[currentIndex])
+                                }
+                            }
+                        }
+                    }
+
                     RobotoText
                     {
-                        Layout.fillWidth: true
-                        label: modelData.toUpperCase()
-                        color: trackViewRoot.markerColor(modelData)
-                        fontSize: UISettings.textSizeDefault * 1.1
+                        width: UISettings.bigItemHeight * 1.5
+                        label: qsTr("Folder")
+                        fontSize: UISettings.textSizeDefault
                     }
-                }
 
-                RobotoText
-                {
-                    Layout.preferredWidth: UISettings.bigItemHeight * 1.4
-                    label: qsTr("Folder")
-                    fontSize: UISettings.textSizeDefault
+                    RobotoText
+                    {
+                        width: UISettings.bigItemHeight * 0.7
+                        label: qsTr("spd")
+                        fontSize: UISettings.textSizeDefault * 0.9
+                    }
                 }
 
                 // ---- one row per slot ----
@@ -450,68 +490,55 @@ Rectangle
                 {
                     model: trackManager ? trackManager.slotCount : 0
 
-                    Repeater
+                    Row
                     {
                         property int slotIndex: index
-                        model: 6
+                        spacing: UISettings.iconSizeDefault / 3
 
-                        Item
+                        RobotoText
                         {
-                            property int cell: index
-                            Layout.fillWidth: cell > 0 && cell < 5
-                            Layout.preferredWidth: cell === 0
-                                                   ? UISettings.bigItemHeight * 1.6
-                                                   : (cell === 5 ? UISettings.bigItemHeight * 1.4 : -1)
-                            Layout.preferredHeight: UISettings.listItemHeight
+                            width: UISettings.bigItemHeight * 1.5
+                            height: UISettings.listItemHeight
+                            label: trackManager ? trackManager.slotName(slotIndex) : ""
+                            fontSize: UISettings.textSizeDefault
+                        }
 
-                            // slot name
-                            RobotoText
-                            {
-                                anchors.fill: parent
-                                visible: cell === 0
-                                label: trackManager ? trackManager.slotName(parent.parent.slotIndex) : ""
-                                fontSize: UISettings.textSizeDefault
-                            }
+                        Repeater
+                        {
+                            model: trackViewRoot.states
 
-                            // one picker per state
                             Row
                             {
-                                anchors.fill: parent
-                                visible: cell > 0 && cell < 5
+                                property string stateName: modelData
+                                width: UISettings.bigItemHeight * 2.2
                                 spacing: 3
-
-                                property string stateName: cell > 0 && cell < 5
-                                                           ? trackViewRoot.states[cell - 1] : ""
 
                                 CheckBox
                                 {
                                     id: rndBox
-                                    anchors.verticalCenter: parent.verticalCenter
                                     width: UISettings.iconSizeMedium
                                     checked: trackManager
-                                             ? trackManager.lookRandom(parent.stateName,
-                                                                       parent.parent.parent.slotIndex)
-                                             : false
-                                    onToggled: trackManager.setLookRandom(parent.stateName,
-                                                                          parent.parent.parent.slotIndex,
-                                                                          checked)
+                                             ? trackManager.lookRandom(stateName,
+                                                   parent.parent.slotIndex) : false
+                                    onToggled: trackManager.setLookRandom(
+                                                   stateName, parent.parent.slotIndex, checked)
                                 }
 
                                 ComboBox
                                 {
-                                    width: parent.width - UISettings.iconSizeMedium - 6
+                                    width: UISettings.bigItemHeight * 2.2
+                                           - UISettings.iconSizeMedium - 6
                                     enabled: !rndBox.checked
                                     model: trackManager
-                                           ? trackManager.slotFunctions(parent.parent.parent.slotIndex)
+                                           ? trackManager.slotFunctions(parent.parent.slotIndex)
                                            : []
                                     textRole: "name"
 
-                                    Component.onCompleted: sync()
-                                    function sync()
+                                    Component.onCompleted:
                                     {
                                         if (!trackManager) return
-                                        var fid = trackManager.lookFunction(parent.stateName,
-                                                                            parent.parent.parent.slotIndex)
+                                        var fid = trackManager.lookFunction(
+                                                      parent.stateName, parent.parent.slotIndex)
                                         for (var i = 0; i < model.length; i++)
                                             if (model[i].id === fid) { currentIndex = i; return }
                                         currentIndex = -1
@@ -521,37 +548,42 @@ Rectangle
                                     {
                                         var e = model[currentIndex]
                                         if (e !== undefined)
-                                            trackManager.setLookFunction(parent.stateName,
-                                                                         parent.parent.parent.slotIndex,
-                                                                         e.id)
+                                            trackManager.setLookFunction(
+                                                parent.stateName, parent.parent.slotIndex, e.id)
                                     }
                                 }
                             }
+                        }
 
-                            // folder binding
-                            ComboBox
+                        ComboBox
+                        {
+                            width: UISettings.bigItemHeight * 1.5
+                            model: trackManager ? trackManager.folderList() : []
+                            textRole: "name"
+
+                            Component.onCompleted:
                             {
-                                anchors.fill: parent
-                                visible: cell === 5
-                                model: trackManager ? trackManager.folderList() : []
-                                textRole: "name"
-
-                                Component.onCompleted:
-                                {
-                                    if (!trackManager) return
-                                    var f = trackManager.slotFolder(parent.parent.slotIndex)
-                                    for (var i = 0; i < model.length; i++)
-                                        if (model[i].path === f) { currentIndex = i; return }
-                                    currentIndex = 0
-                                }
-
-                                onActivated:
-                                {
-                                    var e = model[currentIndex]
-                                    if (e !== undefined)
-                                        trackManager.setSlotFolder(parent.parent.slotIndex, e.path)
-                                }
+                                if (!trackManager) return
+                                var f = trackManager.slotFolder(parent.slotIndex)
+                                for (var i = 0; i < model.length; i++)
+                                    if (model[i].path === f) { currentIndex = i; return }
+                                currentIndex = 0
                             }
+
+                            onActivated:
+                            {
+                                var e = model[currentIndex]
+                                if (e !== undefined)
+                                    trackManager.setSlotFolder(parent.slotIndex, e.path)
+                            }
+                        }
+
+                        CheckBox
+                        {
+                            width: UISettings.bigItemHeight * 0.7
+                            checked: trackManager
+                                     ? trackManager.slotFollowsSpeed(parent.slotIndex) : false
+                            onToggled: trackManager.setSlotFollowsSpeed(parent.slotIndex, checked)
                         }
                     }
                 }
@@ -620,7 +652,8 @@ Rectangle
                 {
                     anchors.verticalCenter: parent.verticalCenter
                     label: "   " + qsTr("Level") + " "
-                           + (trackManager ? trackManager.stateIntensity(trackViewRoot.liveState) : 100)
+                           + (trackManager
+                              ? trackManager.stateIntensity(trackViewRoot.liveState) : 100)
                            + "%   " + qsTr("Output") + " "
                            + (trackManager ? Math.round(trackManager.appliedEnergy * 100) : 0) + "%"
                     fontSize: UISettings.textSizeDefault
@@ -644,8 +677,7 @@ Rectangle
                     anchors.verticalCenter: parent.verticalCenter
                     label: "   " + qsTr("Energy") + " "
                            + (trackManager ? Math.round(trackManager.energy * 100) : 0) + "%  ("
-                           + (trackManager ? trackManager.liveBpm : 0) + " BPM)  "
-                           + qsTr("trim")
+                           + (trackManager ? trackManager.liveBpm : 0) + " BPM)  " + qsTr("trim")
                     fontSize: UISettings.textSizeDefault
                 }
 
