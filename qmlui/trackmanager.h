@@ -2,10 +2,13 @@
   Q Light Controller Plus
   trackmanager.h
 
-  Receives track structure (waveform, beat grid, markers) and playback position
-  from Beat Link Trigger over a line-delimited JSON TCP link, derives the
-  current section of the track, and drives the QLC+ Functions assigned to each
-  section.
+  Receives track structure and playback position from Beat Link Trigger, derives
+  the current section of the track, and fires a "look" for each section.
+
+  A look is one Function per slot, where slots mirror the groups in the rig
+  (laser bars, position, animation lasers, strobes, colours). A slot can be
+  bound to a Function folder and set to RANDOM, so each time the section is
+  entered it picks a different Function from that folder.
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -38,22 +41,23 @@ class Doc;
 #define SETTINGS_TRACK_BPMHIGH    QStringLiteral("trackmanager/bpmhigh")
 #define SETTINGS_TRACK_TRIM       QStringLiteral("trackmanager/trim")
 #define SETTINGS_TRACK_QUANTIZE   QStringLiteral("trackmanager/quantize")
-#define SETTINGS_TRACK_FUNCTIONS  QStringLiteral("trackmanager/functions")
+#define SETTINGS_TRACK_LOOKS      QStringLiteral("trackmanager/looks")
+#define SETTINGS_TRACK_RANDOM     QStringLiteral("trackmanager/random")
 #define SETTINGS_TRACK_INTENSITY  QStringLiteral("trackmanager/intensity")
+#define SETTINGS_TRACK_SLOTNAMES  QStringLiteral("trackmanager/slotnames")
+#define SETTINGS_TRACK_SLOTDIRS   QStringLiteral("trackmanager/slotdirs")
 
 #define TRACK_DEFAULT_PORT     9998
 #define TRACK_DEFAULT_BPM_LOW  80
 #define TRACK_DEFAULT_BPM_HIGH 140
+#define TRACK_SLOT_COUNT       5
 
-/** Receives per-track structure from Beat Link Trigger and runs the Functions
- *  assigned to each section of the track. */
 class TrackManager : public QObject
 {
     Q_OBJECT
     Q_DISABLE_COPY(TrackManager)
 
     Q_PROPERTY(int listenPort READ listenPort WRITE setListenPort NOTIFY listenPortChanged)
-    Q_PROPERTY(bool listening READ listening NOTIFY listeningChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
 
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
@@ -68,11 +72,12 @@ class TrackManager : public QObject
     Q_PROPERTY(int durationMs READ durationMs NOTIFY trackChanged)
 
     Q_PROPERTY(QString currentState READ currentState NOTIFY stateChanged)
-    Q_PROPERTY(QString analysedState READ analysedState NOTIFY stateChanged)
     Q_PROPERTY(QString overrideState READ overrideState WRITE setOverrideState NOTIFY stateChanged)
+    Q_PROPERTY(QString runningLook READ runningLook NOTIFY stateChanged)
 
     Q_PROPERTY(bool autoRun READ autoRun WRITE setAutoRun NOTIFY autoRunChanged)
     Q_PROPERTY(int quantize READ quantize WRITE setQuantize NOTIFY quantizeChanged)
+    Q_PROPERTY(int slotCount READ slotCount CONSTANT)
 
     Q_PROPERTY(int liveBpm READ liveBpm NOTIFY energyChanged)
     Q_PROPERTY(qreal energy READ energy NOTIFY energyChanged)
@@ -85,12 +90,10 @@ public:
     TrackManager(QQuickView *view, Doc *doc, QObject *parent = nullptr);
     ~TrackManager();
 
-    /** The four sections a track is divided into */
     static QStringList stateNames();
 
     int listenPort() const;
     void setListenPort(int port);
-    bool listening() const;
     bool connected() const;
 
     QString title() const;
@@ -103,21 +106,20 @@ public:
     int positionMs() const;
     int durationMs() const;
 
-    /** The state actually in force: the manual override if set, else the
-     *  state derived from the markers */
     QString currentState() const;
-    QString analysedState() const;
     QString overrideState() const;
     void setOverrideState(QString state);
+    /** Names of the Functions currently running, for display */
+    QString runningLook() const;
 
     bool autoRun() const;
     void setAutoRun(bool enable);
     int quantize() const;
     void setQuantize(int beats);
+    int slotCount() const;
 
     int liveBpm() const;
     qreal energy() const;
-    /** energy() scaled by the current section's own intensity */
     qreal appliedEnergy() const;
     int energyTrim() const;
     void setEnergyTrim(int percent);
@@ -126,33 +128,37 @@ public:
     int bpmHigh() const;
     void setBpmHigh(int bpm);
 
-    /** Move a marker to a new (already beat-snapped) position.
-     *  Local only - nothing is ever sent back to BLT. */
     Q_INVOKABLE void moveMarker(int index, int beat);
-
-    /** The state that applies at a given beat */
     Q_INVOKABLE QString stateAtBeat(int beat) const;
 
-    /** Functions of this project that can be assigned to a state */
-    Q_INVOKABLE QVariantList functionList() const;
+    /* ---- slots ---- */
+    Q_INVOKABLE QString slotName(int slot) const;
+    Q_INVOKABLE void setSlotName(int slot, QString name);
+    Q_INVOKABLE QString slotFolder(int slot) const;
+    Q_INVOKABLE void setSlotFolder(int slot, QString folder);
 
-    Q_INVOKABLE void setStateFunction(QString state, quint32 fid);
-    Q_INVOKABLE quint32 stateFunction(QString state) const;
-    Q_INVOKABLE QString stateFunctionName(QString state) const;
+    /** Distinct Function folders in this project, for binding a slot */
+    Q_INVOKABLE QVariantList folderList() const;
+    /** Functions available to a slot: everything in its folder */
+    Q_INVOKABLE QVariantList slotFunctions(int slot) const;
 
-    /** Per-section intensity, in percent. Multiplies the tempo-derived energy */
+    /* ---- looks ---- */
+    Q_INVOKABLE void setLookFunction(QString state, int slot, quint32 fid);
+    Q_INVOKABLE quint32 lookFunction(QString state, int slot) const;
+    Q_INVOKABLE void setLookRandom(QString state, int slot, bool random);
+    Q_INVOKABLE bool lookRandom(QString state, int slot) const;
+
+    /** Per-section level, in percent, applied on top of the tempo energy */
     Q_INVOKABLE void setStateIntensity(QString state, int percent);
     Q_INVOKABLE int stateIntensity(QString state) const;
 
-    /** Assign a random Function to every state and re-apply the current one */
-    Q_INVOKABLE void randomize();
+    /** Re-roll every RANDOM slot of the current section and fire it again */
+    Q_INVOKABLE void reroll();
 
-    /** Stop whatever we started and forget the track */
     Q_INVOKABLE void clear();
 
 signals:
     void listenPortChanged();
-    void listeningChanged();
     void connectedChanged();
     void trackChanged();
     void markersChanged();
@@ -161,7 +167,7 @@ signals:
     void autoRunChanged();
     void quantizeChanged();
     void energyChanged();
-    void functionsChanged();
+    void looksChanged();
 
 protected slots:
     void slotNewConnection();
@@ -176,12 +182,14 @@ protected:
     void handlePosition(const QJsonObject &obj);
 
     void updateState();
-    void applyState();
-    void stopCurrentFunction();
+    void applyLook();
+    void stopLook();
     void applyEnergy();
+    quint32 resolveSlot(QString state, int slot) const;
+
+    QString mapKey(QString state, int slot) const;
     void loadSettingsMaps();
-    void saveAssignments();
-    void saveIntensities();
+    void saveLooks();
 
 private:
     QQuickView *m_view;
@@ -210,13 +218,17 @@ private:
     bool m_autoRun;
     int m_quantize;
 
-    /** state name -> Function ID, and state name -> intensity percent */
-    QMap<QString, quint32> m_stateFunctions;
+    QStringList m_slotNames;
+    QStringList m_slotFolders;
+
+    /** "state/slot" -> Function ID, and "state/slot" -> random flag */
+    QMap<QString, quint32> m_lookFunctions;
+    QMap<QString, bool> m_lookRandom;
     QMap<QString, int> m_stateIntensity;
 
-    /** the Function we started, and its intensity override handle */
-    quint32 m_runningFunction;
-    int m_intensityAttrId;
+    /** Functions we started for the running look, with their override handles */
+    QList<quint32> m_runningFunctions;
+    QMap<quint32, int> m_runningAttrIds;
 
     int m_bpmLow;
     int m_bpmHigh;
