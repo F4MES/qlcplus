@@ -52,6 +52,8 @@ Rectangle
             item = smEntry
         else if (ctx === "IOMGR")
             item = ioEntry
+        else if (ctx === "TRACK")
+            item = trackEntry
 
         if (item)
         {
@@ -292,6 +294,23 @@ Rectangle
                 {
                     ioEntry.visible = false
                     contextManager.detachContext("IOMGR")
+                }
+            }
+            MenuBarEntry
+            {
+                id: trackEntry
+                Layout.alignment: Qt.AlignTop
+                property string ctxName: "TRACK"
+                property string ctxRes: "qrc:/TrackView.qml"
+
+                visible: qlcplus.accessMask & App.AC_VCControl
+                imgSource: "qrc:/showmanager.svg"
+                entryText: qsTr("Track")
+                ButtonGroup.group: menuBarGroup
+                onCheckedChanged:
+                {
+                    if (checked === true)
+                        switchToContext(trackEntry.ctxName, trackEntry.ctxRes)
                 }
             }
             Rectangle

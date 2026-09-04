@@ -44,6 +44,7 @@ class InputOutputManager;
 class ImportManager;
 class NetworkManager;
 class VideoProvider;
+class TrackManager;
 class FixtureEditor;
 class Tardis;
 class QMouseEvent;
@@ -237,6 +238,7 @@ private:
     NetworkManager *m_networkManager;
     UiManager *m_uiManager;
     Tardis *m_tardis;
+    TrackManager *m_trackManager;
 
     /*********************************************************************
      * Doc

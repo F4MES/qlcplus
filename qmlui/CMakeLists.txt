@@ -58,6 +58,7 @@ set(SRC_FILES
     tardis/networkpacketizer.cpp tardis/networkpacketizer.h
     tardis/simplecrypt.cpp tardis/simplecrypt.h
     tardis/tardis.cpp tardis/tardis.h
+    trackmanager.cpp trackmanager.h
     treemodel.cpp treemodel.h
     treemodelitem.cpp treemodelitem.h
     uimanager.cpp uimanager.h
