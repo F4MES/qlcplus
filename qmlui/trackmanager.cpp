@@ -40,9 +40,9 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     , m_beatCount(0)
     , m_currentBeat(0)
     , m_playing(false)
-    , m_currentState(QStringLiteral("normal"))
     , m_trackTimeMs(0)
     , m_durationMs(0)
+    , m_analysedState(QStringLiteral("normal"))
     , m_autoRun(false)
     , m_quantize(1)
     , m_runningFunction(Function::invalidId())
@@ -74,7 +74,7 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     if (var.isValid())
         m_quantize = var.toInt();
 
-    loadAssignments();
+    loadSettingsMaps();
 
     m_server = new QTcpServer(this);
     connect(m_server, SIGNAL(newConnection()), this, SLOT(slotNewConnection()));
@@ -329,10 +329,41 @@ void TrackManager::updateState()
         beat = ((beat - 1) / m_quantize) * m_quantize + 1;
 
     QString state = stateAtBeat(beat);
-    if (state == m_currentState)
+    if (state == m_analysedState)
         return;
 
-    m_currentState = state;
+    m_analysedState = state;
+    emit stateChanged();
+
+    // a manual override wins until it is released
+    if (m_autoRun && m_overrideState.isEmpty())
+        applyState();
+}
+
+QString TrackManager::currentState() const
+{
+    return m_overrideState.isEmpty() ? m_analysedState : m_overrideState;
+}
+
+QString TrackManager::analysedState() const
+{
+    return m_analysedState;
+}
+
+QString TrackManager::overrideState() const
+{
+    return m_overrideState;
+}
+
+void TrackManager::setOverrideState(QString state)
+{
+    if (state == m_overrideState)
+        return;
+
+    if (state.isEmpty() == false && stateNames().contains(state) == false)
+        return;
+
+    m_overrideState = state;
     emit stateChanged();
 
     if (m_autoRun)
@@ -341,7 +372,7 @@ void TrackManager::updateState()
 
 void TrackManager::applyState()
 {
-    quint32 fid = stateFunction(m_currentState);
+    quint32 fid = stateFunction(currentState());
 
     if (fid == m_runningFunction)
     {
@@ -362,9 +393,9 @@ void TrackManager::applyState()
     m_runningFunction = fid;
 
     // take an intensity override so the energy can ride on top of the Function
-    m_intensityAttrId = func->requestAttributeOverride(TRACK_INTENSITY_ATTR, energy());
+    m_intensityAttrId = func->requestAttributeOverride(TRACK_INTENSITY_ATTR, appliedEnergy());
 
-    qDebug() << "[TrackManager] state" << m_currentState << "-> function" << func->name();
+    qDebug() << "[TrackManager] state" << currentState() << "-> function" << func->name();
 }
 
 void TrackManager::stopCurrentFunction()
@@ -424,6 +455,18 @@ qreal TrackManager::energy() const
     return e;
 }
 
+qreal TrackManager::appliedEnergy() const
+{
+    qreal e = energy() * (qreal(stateIntensity(currentState())) / 100.0);
+
+    if (e < 0.0)
+        e = 0.0;
+    if (e > 1.0)
+        e = 1.0;
+
+    return e;
+}
+
 void TrackManager::applyEnergy()
 {
     if (m_runningFunction == Function::invalidId() || m_intensityAttrId < 0)
@@ -431,7 +474,7 @@ void TrackManager::applyEnergy()
 
     Function *func = m_doc->function(m_runningFunction);
     if (func != nullptr)
-        func->adjustAttribute(energy(), m_intensityAttrId);
+        func->adjustAttribute(appliedEnergy(), m_intensityAttrId);
 }
 
 int TrackManager::liveBpm() const
@@ -497,7 +540,7 @@ void TrackManager::setBpmHigh(int bpm)
 }
 
 /*********************************************************************
- * Function assignment
+ * Function assignment and per-section intensity
  *********************************************************************/
 
 QVariantList TrackManager::functionList() const
@@ -507,7 +550,6 @@ QVariantList TrackManager::functionList() const
     if (m_doc == nullptr)
         return list;
 
-    // an explicit "none" entry so a state can be left empty
     QVariantMap none;
     none.insert(QStringLiteral("id"), QVariant::fromValue(Function::invalidId()));
     none.insert(QStringLiteral("name"), QObject::tr("(none)"));
@@ -518,7 +560,6 @@ QVariantList TrackManager::functionList() const
         if (func == nullptr || func->isVisible() == false)
             continue;
 
-        // only things that make sense to fire as a look
         Function::Type t = func->type();
         if (t != Function::SceneType && t != Function::ChaserType &&
             t != Function::EFXType && t != Function::RGBMatrixType &&
@@ -543,8 +584,7 @@ void TrackManager::setStateFunction(QString state, quint32 fid)
     saveAssignments();
     emit functionsChanged();
 
-    // if this is the state we're in, swap immediately
-    if (state == m_currentState && m_autoRun)
+    if (state == currentState() && m_autoRun)
         applyState();
 }
 
@@ -563,11 +603,36 @@ QString TrackManager::stateFunctionName(QString state) const
     return func != nullptr ? func->name() : QObject::tr("(none)");
 }
 
+void TrackManager::setStateIntensity(QString state, int percent)
+{
+    if (stateNames().contains(state) == false)
+        return;
+    if (percent < 0 || percent > 100)
+        return;
+
+    m_stateIntensity.insert(state, percent);
+    saveIntensities();
+
+    emit energyChanged();
+    applyEnergy();
+}
+
+int TrackManager::stateIntensity(QString state) const
+{
+    // sensible defaults: calm in a break, full in a drop
+    int dflt = 100;
+    if (state == QStringLiteral("break"))
+        dflt = 35;
+    else if (state == QStringLiteral("build"))
+        dflt = 70;
+
+    return m_stateIntensity.value(state, dflt);
+}
+
 void TrackManager::randomize()
 {
     QVariantList list = functionList();
 
-    // drop the "(none)" entry - a random pick should always be a real Function
     if (list.count() <= 1)
         return;
     list.removeFirst();
@@ -586,22 +651,25 @@ void TrackManager::randomize()
         applyState();
 }
 
-void TrackManager::loadAssignments()
+void TrackManager::loadSettingsMaps()
 {
     QSettings settings;
-    QString stored = settings.value(SETTINGS_TRACK_FUNCTIONS).toString();
-    if (stored.isEmpty())
-        return;
 
-    // format: state:id,state:id,...
+    // format: state:value,state:value,...
+    QString stored = settings.value(SETTINGS_TRACK_FUNCTIONS).toString();
     foreach (QString pair, stored.split(',', Qt::SkipEmptyParts))
     {
         QStringList parts = pair.split(':');
-        if (parts.count() != 2)
-            continue;
-        if (stateNames().contains(parts.at(0)) == false)
-            continue;
-        m_stateFunctions.insert(parts.at(0), parts.at(1).toUInt());
+        if (parts.count() == 2 && stateNames().contains(parts.at(0)))
+            m_stateFunctions.insert(parts.at(0), parts.at(1).toUInt());
+    }
+
+    stored = settings.value(SETTINGS_TRACK_INTENSITY).toString();
+    foreach (QString pair, stored.split(',', Qt::SkipEmptyParts))
+    {
+        QStringList parts = pair.split(':');
+        if (parts.count() == 2 && stateNames().contains(parts.at(0)))
+            m_stateIntensity.insert(parts.at(0), parts.at(1).toInt());
     }
 }
 
@@ -617,6 +685,20 @@ void TrackManager::saveAssignments()
 
     QSettings settings;
     settings.setValue(SETTINGS_TRACK_FUNCTIONS, parts.join(','));
+}
+
+void TrackManager::saveIntensities()
+{
+    QStringList parts;
+    QMapIterator<QString, int> it(m_stateIntensity);
+    while (it.hasNext())
+    {
+        it.next();
+        parts.append(QString("%1:%2").arg(it.key()).arg(it.value()));
+    }
+
+    QSettings settings;
+    settings.setValue(SETTINGS_TRACK_INTENSITY, parts.join(','));
 }
 
 /*********************************************************************
@@ -700,13 +782,6 @@ bool TrackManager::playing() const
     return m_playing;
 }
 
-QString TrackManager::currentState() const
-{
-    return m_currentState;
-}
-
-/** Elapsed time within the track. Uses the exact CDJ time when BLT supplies it,
- *  otherwise derives it from the beat number and the tempo. */
 int TrackManager::positionMs() const
 {
     if (m_trackTimeMs > 0)
@@ -761,11 +836,13 @@ void TrackManager::clear()
     m_title.clear();
     m_bpm = 0;
     m_beatCount = 0;
+    m_durationMs = 0;
     m_waveform.clear();
     m_markers.clear();
     m_currentBeat = 0;
+    m_trackTimeMs = 0;
     m_playing = false;
-    m_currentState = QStringLiteral("normal");
+    m_analysedState = QStringLiteral("normal");
 
     emit trackChanged();
     emit markersChanged();

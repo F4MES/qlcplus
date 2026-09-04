@@ -33,22 +33,20 @@ class QQuickView;
 class Function;
 class Doc;
 
-#define SETTINGS_TRACK_PORT      QStringLiteral("trackmanager/port")
-#define SETTINGS_TRACK_BPMLOW    QStringLiteral("trackmanager/bpmlow")
-#define SETTINGS_TRACK_BPMHIGH   QStringLiteral("trackmanager/bpmhigh")
-#define SETTINGS_TRACK_TRIM      QStringLiteral("trackmanager/trim")
-#define SETTINGS_TRACK_QUANTIZE  QStringLiteral("trackmanager/quantize")
-#define SETTINGS_TRACK_FUNCTIONS QStringLiteral("trackmanager/functions")
+#define SETTINGS_TRACK_PORT       QStringLiteral("trackmanager/port")
+#define SETTINGS_TRACK_BPMLOW     QStringLiteral("trackmanager/bpmlow")
+#define SETTINGS_TRACK_BPMHIGH    QStringLiteral("trackmanager/bpmhigh")
+#define SETTINGS_TRACK_TRIM       QStringLiteral("trackmanager/trim")
+#define SETTINGS_TRACK_QUANTIZE   QStringLiteral("trackmanager/quantize")
+#define SETTINGS_TRACK_FUNCTIONS  QStringLiteral("trackmanager/functions")
+#define SETTINGS_TRACK_INTENSITY  QStringLiteral("trackmanager/intensity")
 
 #define TRACK_DEFAULT_PORT     9998
 #define TRACK_DEFAULT_BPM_LOW  80
 #define TRACK_DEFAULT_BPM_HIGH 140
 
 /** Receives per-track structure from Beat Link Trigger and runs the Functions
- *  assigned to each section of the track.
- *
- *  BLT analyses the whole track once on load and sends the plan here, so QLC+
- *  can look up the current beat locally and no per-beat traffic is needed. */
+ *  assigned to each section of the track. */
 class TrackManager : public QObject
 {
     Q_OBJECT
@@ -66,15 +64,19 @@ class TrackManager : public QObject
 
     Q_PROPERTY(int currentBeat READ currentBeat NOTIFY positionChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY positionChanged)
-    Q_PROPERTY(QString currentState READ currentState NOTIFY stateChanged)
     Q_PROPERTY(int positionMs READ positionMs NOTIFY positionChanged)
     Q_PROPERTY(int durationMs READ durationMs NOTIFY trackChanged)
+
+    Q_PROPERTY(QString currentState READ currentState NOTIFY stateChanged)
+    Q_PROPERTY(QString analysedState READ analysedState NOTIFY stateChanged)
+    Q_PROPERTY(QString overrideState READ overrideState WRITE setOverrideState NOTIFY stateChanged)
 
     Q_PROPERTY(bool autoRun READ autoRun WRITE setAutoRun NOTIFY autoRunChanged)
     Q_PROPERTY(int quantize READ quantize WRITE setQuantize NOTIFY quantizeChanged)
 
     Q_PROPERTY(int liveBpm READ liveBpm NOTIFY energyChanged)
     Q_PROPERTY(qreal energy READ energy NOTIFY energyChanged)
+    Q_PROPERTY(qreal appliedEnergy READ appliedEnergy NOTIFY energyChanged)
     Q_PROPERTY(int energyTrim READ energyTrim WRITE setEnergyTrim NOTIFY energyChanged)
     Q_PROPERTY(int bpmLow READ bpmLow WRITE setBpmLow NOTIFY energyChanged)
     Q_PROPERTY(int bpmHigh READ bpmHigh WRITE setBpmHigh NOTIFY energyChanged)
@@ -98,9 +100,15 @@ public:
     QVariantList markers() const;
     int currentBeat() const;
     bool playing() const;
-    QString currentState() const;
     int positionMs() const;
     int durationMs() const;
+
+    /** The state actually in force: the manual override if set, else the
+     *  state derived from the markers */
+    QString currentState() const;
+    QString analysedState() const;
+    QString overrideState() const;
+    void setOverrideState(QString state);
 
     bool autoRun() const;
     void setAutoRun(bool enable);
@@ -109,6 +117,8 @@ public:
 
     int liveBpm() const;
     qreal energy() const;
+    /** energy() scaled by the current section's own intensity */
+    qreal appliedEnergy() const;
     int energyTrim() const;
     void setEnergyTrim(int percent);
     int bpmLow() const;
@@ -126,10 +136,13 @@ public:
     /** Functions of this project that can be assigned to a state */
     Q_INVOKABLE QVariantList functionList() const;
 
-    /** Get/Set the Function assigned to a state */
     Q_INVOKABLE void setStateFunction(QString state, quint32 fid);
     Q_INVOKABLE quint32 stateFunction(QString state) const;
     Q_INVOKABLE QString stateFunctionName(QString state) const;
+
+    /** Per-section intensity, in percent. Multiplies the tempo-derived energy */
+    Q_INVOKABLE void setStateIntensity(QString state, int percent);
+    Q_INVOKABLE int stateIntensity(QString state) const;
 
     /** Assign a random Function to every state and re-apply the current one */
     Q_INVOKABLE void randomize();
@@ -166,8 +179,9 @@ protected:
     void applyState();
     void stopCurrentFunction();
     void applyEnergy();
-    void loadAssignments();
+    void loadSettingsMaps();
     void saveAssignments();
+    void saveIntensities();
 
 private:
     QQuickView *m_view;
@@ -187,15 +201,18 @@ private:
 
     int m_currentBeat;
     bool m_playing;
-    QString m_currentState;
     int m_trackTimeMs;
     int m_durationMs;
+
+    QString m_analysedState;
+    QString m_overrideState;
 
     bool m_autoRun;
     int m_quantize;
 
-    /** state name -> Function ID */
+    /** state name -> Function ID, and state name -> intensity percent */
     QMap<QString, quint32> m_stateFunctions;
+    QMap<QString, int> m_stateIntensity;
 
     /** the Function we started, and its intensity override handle */
     quint32 m_runningFunction;

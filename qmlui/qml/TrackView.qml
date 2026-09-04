@@ -24,17 +24,20 @@ Rectangle
 
     property int beatCount: trackManager ? trackManager.beatCount : 0
     property int currentBeat: trackManager ? trackManager.currentBeat : 0
-    property string state0: trackManager ? trackManager.currentState : "normal"
+    property string liveState: trackManager ? trackManager.currentState : "normal"
+
+    // ---- marker dragging with zoom ----
     property int dragIndex: -1
+    property real dragX: 0
+    property bool zoomActive: false
+    property int zoomCenter: 1
+    property int zoomSpan: 64
 
     function markerColor(type)
     {
-        if (type === "drop")
-            return "#FF4444"
-        if (type === "build")
-            return "#FFAA22"
-        if (type === "break")
-            return "#4499FF"
+        if (type === "drop")  return "#FF4444"
+        if (type === "build") return "#FFAA22"
+        if (type === "break") return "#4499FF"
         return "#BBBBBB"
     }
 
@@ -48,12 +51,31 @@ Rectangle
         return mins + ":" + (secs < 10 ? "0" : "") + secs
     }
 
-    /** The next marker after the playhead, or null */
+    // ---- the beat range currently drawn ----
+    function viewCount()
+    {
+        if (beatCount <= 0)
+            return 1
+        return zoomActive ? Math.min(zoomSpan, beatCount) : beatCount
+    }
+
+    function viewFirst()
+    {
+        if (!zoomActive || beatCount <= 0)
+            return 1
+        var vc = viewCount()
+        var f = Math.round(zoomCenter - vc / 2)
+        if (f < 1)
+            f = 1
+        if (f > beatCount - vc + 1)
+            f = beatCount - vc + 1
+        return f
+    }
+
     function nextMarker()
     {
         if (!trackManager)
             return null
-
         var mk = trackManager.markers
         var best = null
         for (var i = 0; i < mk.length; i++)
@@ -72,6 +94,39 @@ Rectangle
         function onPositionChanged() { wfCanvas.requestPaint() }
     }
 
+    // Auto-pan while a dragged marker is held near the edge of the zoomed view
+    Timer
+    {
+        id: panTimer
+        interval: 40
+        repeat: true
+        running: false
+        property int dir: 0
+
+        onTriggered:
+        {
+            if (trackViewRoot.dragIndex < 0)
+            {
+                running = false
+                return
+            }
+
+            var vc = trackViewRoot.viewCount()
+            var step = Math.max(1, Math.round(vc / 32))
+            trackViewRoot.zoomCenter += dir * step
+
+            if (trackViewRoot.zoomCenter < 1)
+                trackViewRoot.zoomCenter = 1
+            if (trackViewRoot.zoomCenter > trackViewRoot.beatCount)
+                trackViewRoot.zoomCenter = trackViewRoot.beatCount
+
+            // keep the marker under the finger as the view slides past
+            trackManager.moveMarker(trackViewRoot.dragIndex,
+                                    wfArea.beatAt(trackViewRoot.dragX))
+            wfCanvas.requestPaint()
+        }
+    }
+
     ColumnLayout
     {
         anchors.fill: parent
@@ -86,7 +141,7 @@ Rectangle
                                              trackViewRoot.height * 0.17)
             color: "#141414"
             border.width: 1
-            border.color: UISettings.bgLight
+            border.color: trackViewRoot.zoomActive ? "#FFAA22" : UISettings.bgLight
 
             Canvas
             {
@@ -109,49 +164,60 @@ Rectangle
                     if (n <= 0)
                         return
 
-                    var px = w / n
+                    var vf = trackViewRoot.viewFirst()
+                    var vc = trackViewRoot.viewCount()
+                    var px = w / vc
                     var wf = trackManager.waveform
 
-                    var lane = Math.round(h * 0.34)   // top lane for marker flags
-                    var base = h - 4                  // waveform sits on this line
+                    var lane = Math.round(h * 0.34)
+                    var base = h - 4
 
-                    // ---- waveform bars, one per beat ----
+                    function xOf(beat) { return (beat - vf) * px }
+
+                    // ---- waveform bars ----
                     ctx.fillStyle = "#2E6DA4"
-                    for (var i = 0; i < n; i++)
+                    for (var i = 0; i < vc; i++)
                     {
-                        var v = (i < wf.length ? wf[i] : 0) / 255.0
+                        var b = vf + i
+                        if (b < 1 || b > n)
+                            continue
+                        var v = ((b - 1) < wf.length ? wf[b - 1] : 0) / 255.0
                         var bh = Math.max(1, v * (base - lane))
                         ctx.fillRect(i * px, base - bh, Math.max(1, px), bh)
                     }
 
-                    // ---- phrase grid every 32 beats ----
+                    // ---- grid: bars when zoomed, phrases when not ----
+                    var gridStep = trackViewRoot.zoomActive ? 4 : 32
                     ctx.strokeStyle = "rgba(255,255,255,0.14)"
                     ctx.lineWidth = 1
-                    for (var b = 0; b < n; b += 32)
+                    for (var g = Math.ceil(vf / gridStep) * gridStep; g < vf + vc; g += gridStep)
                     {
-                        var gx = b * px
                         ctx.beginPath()
-                        ctx.moveTo(gx, lane)
-                        ctx.lineTo(gx, base)
+                        ctx.moveTo(xOf(g), lane)
+                        ctx.lineTo(xOf(g), base)
                         ctx.stroke()
                     }
 
-                    // ---- markers: full-height line + labelled flag ----
+                    // ---- markers ----
                     var mk = trackManager.markers
                     for (var m = 0; m < mk.length; m++)
                     {
-                        var mx = (mk[m].beat - 1) * px
+                        var mb = mk[m].beat
+                        if (mb < vf - 2 || mb > vf + vc + 2)
+                            continue
+
+                        var mx = xOf(mb)
                         var col = trackViewRoot.markerColor(mk[m].type)
                         var label = mk[m].type.toUpperCase()
+                        var held = (m === trackViewRoot.dragIndex)
 
                         ctx.strokeStyle = col
-                        ctx.lineWidth = 2
+                        ctx.lineWidth = held ? 4 : 2
                         ctx.beginPath()
                         ctx.moveTo(mx, 0)
                         ctx.lineTo(mx, base)
                         ctx.stroke()
 
-                        // flag box, kept inside the canvas at both edges
                         ctx.font = "bold 11px sans-serif"
                         var tw = ctx.measureText(label).width + 10
                         var bx = Math.min(Math.max(mx, 0), w - tw)
@@ -160,13 +226,20 @@ Rectangle
                         ctx.fillRect(bx, 0, tw, lane - 3)
                         ctx.fillStyle = "#000000"
                         ctx.fillText(label, bx + 5, lane - 8)
+
+                        if (held)
+                        {
+                            ctx.fillStyle = col
+                            ctx.font = "bold 10px sans-serif"
+                            ctx.fillText("beat " + mb, bx + 5, lane + 12)
+                        }
                     }
 
-                    // ---- playhead: bright pin with a head ----
-                    if (trackViewRoot.currentBeat > 0)
+                    // ---- playhead ----
+                    var cb = trackViewRoot.currentBeat
+                    if (cb > 0 && cb >= vf && cb <= vf + vc)
                     {
-                        var ph = (trackViewRoot.currentBeat - 1) * px
-
+                        var ph = xOf(cb)
                         ctx.strokeStyle = "#FFFFFF"
                         ctx.lineWidth = 2
                         ctx.beginPath()
@@ -185,17 +258,18 @@ Rectangle
                 }
             }
 
-            // Dragging a marker. The beat is rounded, so it always lands on a
-            // beat - snapping is inherent.
+            // Grab a marker to zoom in around it; drag to the edge to pan.
             MouseArea
             {
+                id: wfArea
                 anchors.fill: parent
                 enabled: trackViewRoot.beatCount > 0
 
                 function beatAt(mx)
                 {
-                    var px = width / trackViewRoot.beatCount
-                    return Math.round(mx / px) + 1
+                    var vc = trackViewRoot.viewCount()
+                    var vf = trackViewRoot.viewFirst()
+                    return Math.round(mx / (width / vc)) + vf
                 }
 
                 onPressed: function (mouse)
@@ -215,18 +289,56 @@ Rectangle
                         }
                     }
 
-                    var tol = Math.max(4, trackViewRoot.beatCount * 0.02)
-                    trackViewRoot.dragIndex = (bestDist <= tol) ? best : -1
+                    // grab tolerance follows the zoom level, so it stays about
+                    // the same number of pixels either way
+                    var tol = Math.max(2, trackViewRoot.viewCount() * 0.02)
+
+                    if (bestDist <= tol)
+                    {
+                        trackViewRoot.dragIndex = best
+                        trackViewRoot.dragX = mouse.x
+                        trackViewRoot.zoomCenter = mk[best].beat
+                        trackViewRoot.zoomActive = true
+                        wfCanvas.requestPaint()
+                    }
+                    else
+                    {
+                        trackViewRoot.dragIndex = -1
+                    }
                 }
 
                 onPositionChanged: function (mouse)
                 {
-                    if (trackViewRoot.dragIndex >= 0)
-                        trackManager.moveMarker(trackViewRoot.dragIndex, beatAt(mouse.x))
+                    if (trackViewRoot.dragIndex < 0)
+                        return
+
+                    trackViewRoot.dragX = mouse.x
+                    trackManager.moveMarker(trackViewRoot.dragIndex, beatAt(mouse.x))
+
+                    // pan when the finger reaches either edge
+                    var edge = width * 0.08
+                    if (mouse.x < edge)
+                        panTimer.dir = -1
+                    else if (mouse.x > width - edge)
+                        panTimer.dir = 1
+                    else
+                        panTimer.dir = 0
+
+                    panTimer.running = (panTimer.dir !== 0)
+                    wfCanvas.requestPaint()
                 }
 
-                onReleased: trackViewRoot.dragIndex = -1
-                onCanceled: trackViewRoot.dragIndex = -1
+                function release()
+                {
+                    panTimer.running = false
+                    panTimer.dir = 0
+                    trackViewRoot.dragIndex = -1
+                    trackViewRoot.zoomActive = false
+                    wfCanvas.requestPaint()
+                }
+
+                onReleased: release()
+                onCanceled: release()
             }
 
             RobotoText
@@ -251,7 +363,6 @@ Rectangle
                 anchors.margins: UISettings.iconSizeDefault / 2
                 spacing: UISettings.iconSizeDefault / 3
 
-                // track title
                 RobotoText
                 {
                     Layout.fillWidth: true
@@ -261,7 +372,6 @@ Rectangle
                     fontSize: UISettings.textSizeDefault * 1.5
                 }
 
-                // big state badge + next marker countdown
                 RowLayout
                 {
                     Layout.fillWidth: true
@@ -272,15 +382,31 @@ Rectangle
                     {
                         Layout.preferredWidth: UISettings.bigItemHeight * 2.4
                         Layout.fillHeight: true
-                        color: trackViewRoot.markerColor(trackViewRoot.state0)
+                        color: trackViewRoot.markerColor(trackViewRoot.liveState)
                         radius: 6
+                        border.width: trackManager && trackManager.overrideState !== "" ? 4 : 0
+                        border.color: "#FFFFFF"
 
-                        RobotoText
+                        Column
                         {
                             anchors.centerIn: parent
-                            label: trackViewRoot.state0.toUpperCase()
-                            color: "#000000"
-                            fontSize: UISettings.textSizeDefault * 2.2
+                            spacing: 4
+
+                            RobotoText
+                            {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                label: trackViewRoot.liveState.toUpperCase()
+                                color: "#000000"
+                                fontSize: UISettings.textSizeDefault * 2.2
+                            }
+                            RobotoText
+                            {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                visible: trackManager && trackManager.overrideState !== ""
+                                label: qsTr("FORCED")
+                                color: "#000000"
+                                fontSize: UISettings.textSizeDefault * 0.9
+                            }
                         }
                     }
 
@@ -294,7 +420,7 @@ Rectangle
                         {
                             label: qsTr("Running") + ": "
                                    + (trackManager
-                                      ? trackManager.stateFunctionName(trackViewRoot.state0)
+                                      ? trackManager.stateFunctionName(trackViewRoot.liveState)
                                       : "")
                             fontSize: UISettings.textSizeDefault * 1.2
                         }
@@ -313,6 +439,14 @@ Rectangle
                             }
                             color: nm === null ? "#BBBBBB" : trackViewRoot.markerColor(nm.type)
                             fontSize: UISettings.textSizeDefault * 1.4
+                        }
+
+                        RobotoText
+                        {
+                            label: qsTr("Output") + ": "
+                                   + (trackManager ? Math.round(trackManager.appliedEnergy * 100) : 0)
+                                   + "%"
+                            fontSize: UISettings.textSizeDefault * 1.1
                         }
                     }
 
@@ -357,11 +491,62 @@ Rectangle
             }
         }
 
+        // =============================================== force a section
+        Rectangle
+        {
+            Layout.fillWidth: true
+            height: UISettings.iconSizeMedium * 1.2
+            color: UISettings.bgMedium
+
+            Row
+            {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: UISettings.iconSizeDefault / 4
+                spacing: UISettings.iconSizeDefault / 3
+
+                RobotoText
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: qsTr("Force section") + ":"
+                    fontSize: UISettings.textSizeDefault
+                }
+
+                Repeater
+                {
+                    model: [ "normal", "break", "build", "drop" ]
+
+                    Button
+                    {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData.toUpperCase()
+                        checkable: true
+                        checked: trackManager ? trackManager.overrideState === modelData : false
+                        onClicked:
+                        {
+                            if (trackManager.overrideState === modelData)
+                                trackManager.overrideState = ""
+                            else
+                                trackManager.overrideState = modelData
+                        }
+                    }
+                }
+
+                Button
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("AUTO")
+                    enabled: trackManager ? trackManager.overrideState !== "" : false
+                    onClicked: trackManager.overrideState = ""
+                }
+            }
+        }
+
         // =============================================== state functions
         Rectangle
         {
             Layout.fillWidth: true
-            height: UISettings.iconSizeMedium * 1.5
+            height: UISettings.iconSizeMedium * 1.9
             color: UISettings.bgMedium
 
             property var functions: trackManager ? trackManager.functionList() : []
@@ -433,6 +618,31 @@ Rectangle
                                 var entry = assignRow.parent.functions[currentIndex]
                                 if (entry !== undefined)
                                     trackManager.setStateFunction(parent.stateName, entry.id)
+                            }
+                        }
+
+                        Row
+                        {
+                            spacing: 4
+
+                            RobotoText
+                            {
+                                anchors.verticalCenter: parent.verticalCenter
+                                height: UISettings.listItemHeight * 0.7
+                                label: qsTr("level")
+                                fontSize: UISettings.textSizeDefault * 0.8
+                            }
+
+                            SpinBox
+                            {
+                                width: UISettings.bigItemHeight
+                                from: 0
+                                to: 100
+                                stepSize: 5
+                                value: trackManager
+                                       ? trackManager.stateIntensity(parent.parent.stateName) : 100
+                                onValueModified:
+                                    trackManager.setStateIntensity(parent.parent.stateName, value)
                             }
                         }
                     }
