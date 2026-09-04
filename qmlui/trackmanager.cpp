@@ -26,6 +26,9 @@
 #include "mastertimer.h"
 #include "function.h"
 #include "doc.h"
+#include "qlcchannel.h"
+#include "fixture.h"
+#include "scene.h"
 
 #define TRACK_INTENSITY_ATTR 0
 
@@ -73,7 +76,15 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     var = settings.value(SETTINGS_TRACK_QUANTIZE);
     if (var.isValid()) m_quantize = var.toInt();
 
+    m_roleMode = true;
+    m_colorCursor = 0;
+    m_lastColorBar = -1;
+    m_lastEngineBeat = -1;
+    for (int i = 0; i < TRACK_ROLE_COUNT; i++)
+        m_roleFunctions.append(QList<quint32>());
+
     loadSettingsMaps();
+    loadRoles();
 
     m_server = new QTcpServer(this);
     connect(m_server, SIGNAL(newConnection()), this, SLOT(slotNewConnection()));
@@ -255,6 +266,7 @@ void TrackManager::handlePosition(const QJsonObject &obj)
 
     emit positionChanged();
     updateState();
+    runEngine(false);
 }
 
 /*********************************************************************
@@ -355,6 +367,15 @@ quint32 TrackManager::resolveSlot(QString state, int slot) const
 
 void TrackManager::applyLook()
 {
+    if (m_roleMode)
+    {
+        // The engine owns the output in role mode. Force a fresh decision
+        // rather than waiting for the next beat.
+        m_lastEngineBeat = -1;
+        runEngine(true);
+        return;
+    }
+
     stopLook();
 
     QString state = currentState();
@@ -396,6 +417,8 @@ void TrackManager::applyLook()
 
 void TrackManager::stopLook()
 {
+    stopAllRoles();
+
     foreach (quint32 fid, m_runningFunctions)
     {
         Function *func = m_doc->function(fid);
@@ -860,4 +883,636 @@ void TrackManager::clear()
     emit markersChanged();
     emit positionChanged();
     emit stateChanged();
+}
+
+
+/*********************************************************************
+ * Roles
+ *
+ * A busking project is almost all static scenes, so assigning "a program
+ * per section" asks for chases that do not exist. Instead every function
+ * is given a role - what it DOES - and the engine below decides which
+ * role runs when, and rides its intensity. That is what the operator's
+ * hands do on the Virtual Console; here it happens on its own.
+ *********************************************************************/
+
+bool TrackManager::roleMode() const { return m_roleMode; }
+
+void TrackManager::setRoleMode(bool enable)
+{
+    if (enable == m_roleMode)
+        return;
+
+    stopLook();
+    m_roleMode = enable;
+    QSettings().setValue(SETTINGS_TRACK_ROLEMODE, m_roleMode);
+
+    emit looksChanged();
+    if (m_autoRun)
+        applyLook();
+}
+
+int TrackManager::roleCount() const { return TRACK_ROLE_COUNT; }
+
+QString TrackManager::roleName(int role) const
+{
+    switch (role)
+    {
+    case TRACK_ROLE_COLOR:    return tr("Colour");
+    case TRACK_ROLE_MOVEMENT: return tr("Movement");
+    case TRACK_ROLE_BEAM:     return tr("Beams");
+    case TRACK_ROLE_STROBE:   return tr("Strobe");
+    case TRACK_ROLE_DARK:     return tr("Ambient");
+    default:                  return tr("Unused");
+    }
+}
+
+QString TrackManager::roleHint(int role) const
+{
+    switch (role)
+    {
+    case TRACK_ROLE_COLOR:
+        return tr("Base look. Rotates on bar lines, faster as energy rises.");
+    case TRACK_ROLE_MOVEMENT:
+        return tr("Runs from the groove onward, holds still through a break.");
+    case TRACK_ROLE_BEAM:
+        return tr("Drops, and the second half of a build.");
+    case TRACK_ROLE_STROBE:
+        return tr("The last bar before a drop, and the drop's first hit.");
+    case TRACK_ROLE_DARK:
+        return tr("Breakdowns and intros.");
+    default:
+        return QString();
+    }
+}
+
+QString TrackManager::roleKey(QString state, int role) const
+{
+    return QString("%1/%2").arg(state).arg(role);
+}
+
+int TrackManager::roleOf(quint32 fid) const
+{
+    for (int r = 0; r < m_roleFunctions.count(); r++)
+        if (m_roleFunctions.at(r).contains(fid))
+            return r;
+    return -1;
+}
+
+void TrackManager::assignRole(quint32 fid, int role)
+{
+    for (int r = 0; r < m_roleFunctions.count(); r++)
+        m_roleFunctions[r].removeAll(fid);
+
+    if (role >= 0 && role < m_roleFunctions.count())
+        m_roleFunctions[role].append(fid);
+
+    saveRoles();
+    emit looksChanged();
+
+    if (m_autoRun && m_roleMode)
+    {
+        m_lastEngineBeat = -1;
+        runEngine(true);
+    }
+}
+
+QVariantList TrackManager::roleFunctions(int role) const
+{
+    QVariantList list;
+    if (m_doc == nullptr || role < 0 || role >= m_roleFunctions.count())
+        return list;
+
+    foreach (quint32 fid, m_roleFunctions.at(role))
+    {
+        Function *func = m_doc->function(fid);
+        if (func == nullptr)
+            continue;
+
+        QVariantMap entry;
+        entry.insert(QStringLiteral("id"), QVariant::fromValue(func->id()));
+        entry.insert(QStringLiteral("name"), func->name());
+        list.append(entry);
+    }
+
+    return list;
+}
+
+QVariantList TrackManager::roleTable() const
+{
+    QVariantList list;
+    if (m_doc == nullptr)
+        return list;
+
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func == nullptr || func->isVisible() == false)
+            continue;
+
+        Function::Type t = func->type();
+        if (t != Function::SceneType && t != Function::ChaserType &&
+            t != Function::EFXType && t != Function::RGBMatrixType &&
+            t != Function::CollectionType && t != Function::SequenceType)
+            continue;
+
+        QVariantMap entry;
+        entry.insert(QStringLiteral("id"), QVariant::fromValue(func->id()));
+        entry.insert(QStringLiteral("name"), func->name());
+        entry.insert(QStringLiteral("path"), func->path(true));
+        entry.insert(QStringLiteral("role"), roleOf(func->id()));
+        list.append(entry);
+    }
+
+    return list;
+}
+
+/** Guess what a function does. The name wins when it says anything useful -
+ *  the operator chose it - and otherwise we look at which channel groups the
+ *  scene actually touches. */
+int TrackManager::classifyFunction(Function *func) const
+{
+    if (func == nullptr || m_doc == nullptr)
+        return -1;
+
+    QString n = (func->name() + QLatin1Char(' ') + func->path(true)).toLower();
+
+    if (n.contains("strob") || n.contains("blind") || n.contains("flash")
+        || n.contains("blitz"))
+        return TRACK_ROLE_STROBE;
+    if (n.contains("laser") || n.contains("beam") || n.contains("gobo")
+        || n.contains("prism") || n.contains("spot"))
+        return TRACK_ROLE_BEAM;
+    if (n.contains("move") || n.contains("pan") || n.contains("tilt")
+        || n.contains("pos") || n.contains("sweep") || n.contains("fan")
+        || n.contains("circle") || n.contains("cirkel") || n.contains("wave")
+        || n.contains("anim"))
+        return TRACK_ROLE_MOVEMENT;
+    if (n.contains("dark") || n.contains("ambient") || n.contains("chill")
+        || n.contains("intro") || n.contains("break"))
+        return TRACK_ROLE_DARK;
+    if (n.contains("colour") || n.contains("color") || n.contains("farve"))
+        return TRACK_ROLE_COLOR;
+
+    if (func->type() == Function::EFXType)
+        return TRACK_ROLE_MOVEMENT;
+    if (func->type() == Function::RGBMatrixType)
+        return TRACK_ROLE_COLOR;
+
+    Scene *scene = qobject_cast<Scene *>(func);
+    if (scene == nullptr)
+        return TRACK_ROLE_COLOR;
+
+    bool hasPos = false, hasShutter = false, hasColour = false, hasBeam = false;
+    int dimCount = 0, dimSum = 0;
+
+    foreach (SceneValue sv, scene->values())
+    {
+        Fixture *fxi = m_doc->fixture(sv.fxi);
+        if (fxi == nullptr)
+            continue;
+
+        const QLCChannel *ch = fxi->channel(sv.channel);
+        if (ch == nullptr)
+            continue;
+
+        switch (ch->group())
+        {
+        case QLCChannel::Pan:
+        case QLCChannel::Tilt:
+            hasPos = true;
+            break;
+        case QLCChannel::Shutter:
+            // a shutter parked wide open is not a strobe look
+            if (sv.value > 0 && sv.value < 250)
+                hasShutter = true;
+            break;
+        case QLCChannel::Colour:
+            hasColour = true;
+            break;
+        case QLCChannel::Gobo:
+        case QLCChannel::Beam:
+        case QLCChannel::Prism:
+            hasBeam = true;
+            break;
+        case QLCChannel::Intensity:
+            if (ch->colour() != QLCChannel::NoColour)
+                hasColour = true;
+            else
+            {
+                dimCount++;
+                dimSum += int(sv.value);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (hasPos)     return TRACK_ROLE_MOVEMENT;
+    if (hasShutter) return TRACK_ROLE_STROBE;
+    if (hasColour)  return TRACK_ROLE_COLOR;
+    if (hasBeam)    return TRACK_ROLE_BEAM;
+
+    if (dimCount > 0)
+    {
+        int avg = dimSum / dimCount;
+        if (avg > 200) return TRACK_ROLE_STROBE;   // a plain dimmer at full: blinder
+        if (avg < 80)  return TRACK_ROLE_DARK;     // a low wash: ambient
+    }
+
+    return TRACK_ROLE_COLOR;
+}
+
+void TrackManager::autoAssignRoles(bool force)
+{
+    if (m_doc == nullptr)
+        return;
+
+    if (force)
+    {
+        for (int r = 0; r < m_roleFunctions.count(); r++)
+            m_roleFunctions[r].clear();
+    }
+    else
+    {
+        // drop anything that no longer exists in the project
+        for (int r = 0; r < m_roleFunctions.count(); r++)
+        {
+            QList<quint32> keep;
+            foreach (quint32 fid, m_roleFunctions.at(r))
+                if (m_doc->function(fid) != nullptr)
+                    keep.append(fid);
+            m_roleFunctions[r] = keep;
+        }
+    }
+
+    int added = 0;
+
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func == nullptr || func->isVisible() == false)
+            continue;
+
+        Function::Type t = func->type();
+        if (t != Function::SceneType && t != Function::ChaserType &&
+            t != Function::EFXType && t != Function::RGBMatrixType &&
+            t != Function::CollectionType && t != Function::SequenceType)
+            continue;
+
+        if (roleOf(func->id()) >= 0)
+            continue;                       // never overwrite a manual choice
+
+        int role = classifyFunction(func);
+        if (role >= 0 && role < m_roleFunctions.count())
+        {
+            m_roleFunctions[role].append(func->id());
+            added++;
+        }
+    }
+
+    qDebug() << "[TrackManager] auto-assigned" << added << "functions to roles";
+
+    saveRoles();
+    emit looksChanged();
+}
+
+/*********************************************************************
+ * Advanced: pin a role inside one section
+ *********************************************************************/
+
+void TrackManager::setForcedRole(QString state, int role, quint32 fid)
+{
+    if (stateNames().contains(state) == false)
+        return;
+
+    if (fid == Function::invalidId())
+        m_forcedRole.remove(roleKey(state, role));
+    else
+        m_forcedRole.insert(roleKey(state, role), fid);
+
+    saveRoles();
+    emit looksChanged();
+
+    if (state == currentState() && m_autoRun)
+        applyLook();
+}
+
+quint32 TrackManager::forcedRole(QString state, int role) const
+{
+    return m_forcedRole.value(roleKey(state, role), Function::invalidId());
+}
+
+void TrackManager::setRoleEnabled(QString state, int role, bool enable)
+{
+    if (stateNames().contains(state) == false)
+        return;
+
+    if (enable)
+        m_roleOff.remove(roleKey(state, role));
+    else
+        m_roleOff.insert(roleKey(state, role), true);
+
+    saveRoles();
+    emit looksChanged();
+
+    if (state == currentState() && m_autoRun)
+        applyLook();
+}
+
+bool TrackManager::roleEnabled(QString state, int role) const
+{
+    return m_roleOff.value(roleKey(state, role), false) == false;
+}
+
+/*********************************************************************
+ * The engine
+ *********************************************************************/
+
+void TrackManager::sectionBounds(int beat, int &start, int &end) const
+{
+    start = 1;
+    end = m_beatCount > 0 ? m_beatCount : beat + 64;
+
+    for (int i = 0; i < m_markers.count(); i++)
+    {
+        int mb = m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt();
+        if (mb <= beat && mb > start)
+            start = mb;
+        if (mb > beat && mb < end)
+            end = mb;
+    }
+
+    if (end <= start)
+        end = start + 32;
+}
+
+quint32 TrackManager::pickRole(QString state, int role, int cursor) const
+{
+    if (roleEnabled(state, role) == false)
+        return Function::invalidId();
+
+    quint32 forced = forcedRole(state, role);
+    if (forced != Function::invalidId() && m_doc != nullptr
+        && m_doc->function(forced) != nullptr)
+        return forced;
+
+    if (role < 0 || role >= m_roleFunctions.count())
+        return Function::invalidId();
+
+    const QList<quint32> &list = m_roleFunctions.at(role);
+    if (list.isEmpty())
+        return Function::invalidId();
+
+    return list.at(qAbs(cursor) % list.count());
+}
+
+void TrackManager::runEngine(bool sectionChanged)
+{
+    if (m_roleMode == false || m_autoRun == false || m_doc == nullptr)
+        return;
+
+    if (m_playing == false)
+    {
+        stopAllRoles();
+        m_lastEngineBeat = -1;
+        return;
+    }
+
+    int beat = m_currentBeat;
+    if (beat <= 0)
+        return;
+    if (sectionChanged == false && beat == m_lastEngineBeat)
+        return;
+    m_lastEngineBeat = beat;
+
+    QString state = currentState();
+
+    int secStart = 1, secEnd = 1;
+    sectionBounds(beat, secStart, secEnd);
+
+    int len = qMax(1, secEnd - secStart);
+    qreal prog = qBound(0.0, qreal(beat - secStart) / qreal(len), 1.0);
+    int bar = (beat - secStart) / 4;
+    int beatInBar = (beat - secStart) % 4;
+
+    qreal en = appliedEnergy();
+    int division = stateDivision(state);
+
+    bool isBreak = (state == QStringLiteral("break"));
+    bool isBuild = (state == QStringLiteral("build"));
+    bool isDrop  = (state == QStringLiteral("drop"));
+
+    /* ---- colour: the base look. Rotates on bar lines, and a build tightens
+     *      the rotation as it climbs. ---- */
+    int period = isBreak ? 8 : (isDrop ? 1 : 4);
+    if (isBuild)
+        period = prog > 0.66 ? 1 : (prog > 0.33 ? 2 : 4);
+
+    if (sectionChanged)
+    {
+        m_lastColorBar = -1;
+        if (isDrop || isBuild)
+            m_colorCursor++;            // a new section deserves a new colour
+    }
+
+    int colourBar = bar / qMax(1, period);
+    if (colourBar != m_lastColorBar)
+    {
+        if (m_lastColorBar >= 0)
+            m_colorCursor++;
+        m_lastColorBar = colourBar;
+    }
+
+    qreal colLevel = isBreak ? (0.20 + 0.30 * en)
+                   : isBuild ? ((0.40 + 0.60 * prog) * (0.55 + 0.45 * en))
+                   : isDrop  ? 1.0
+                             : (0.45 + 0.55 * en);
+
+    driveRole(TRACK_ROLE_COLOR,
+              pickRole(state, TRACK_ROLE_COLOR, m_colorCursor),
+              colLevel, division);
+
+    /* ---- movement: everything but a break ---- */
+    if (isBreak)
+        stopRole(TRACK_ROLE_MOVEMENT);
+    else
+        driveRole(TRACK_ROLE_MOVEMENT,
+                  pickRole(state, TRACK_ROLE_MOVEMENT, m_colorCursor),
+                  isBuild ? (0.35 + 0.65 * prog) : (0.55 + 0.45 * en),
+                  division);
+
+    /* ---- beams: the drop, and the half of a build that is already climbing ---- */
+    if (isDrop || (isBuild && prog > 0.5))
+        driveRole(TRACK_ROLE_BEAM,
+                  pickRole(state, TRACK_ROLE_BEAM, m_colorCursor),
+                  isDrop ? 1.0 : prog, division);
+    else
+        stopRole(TRACK_ROLE_BEAM);
+
+    /* ---- strobe: the last bar of a build, and the drop's opening hit ---- */
+    bool strobe = (isBuild && prog > 0.82)
+               || (isDrop && bar == 0 && beatInBar < 2);
+    if (strobe)
+        driveRole(TRACK_ROLE_STROBE,
+                  pickRole(state, TRACK_ROLE_STROBE, 0), 1.0, division);
+    else
+        stopRole(TRACK_ROLE_STROBE);
+
+    /* ---- ambient: breakdowns ---- */
+    if (isBreak)
+        driveRole(TRACK_ROLE_DARK,
+                  pickRole(state, TRACK_ROLE_DARK, m_colorCursor),
+                  0.35 + 0.40 * en, division);
+    else
+        stopRole(TRACK_ROLE_DARK);
+
+    if (sectionChanged)
+        emit stateChanged();
+}
+
+void TrackManager::driveRole(int role, quint32 fid, qreal level, int division)
+{
+    if (fid == Function::invalidId())
+    {
+        stopRole(role);
+        return;
+    }
+
+    level = qBound(0.0, level, 1.0);
+
+    // already the right function: just ride its intensity, never restart it
+    if (m_roleActive.value(role, Function::invalidId()) == fid)
+    {
+        Function *func = m_doc->function(fid);
+        int attr = m_roleAttr.value(role, -1);
+        if (func != nullptr && attr >= 0)
+            func->adjustAttribute(level, attr);
+        return;
+    }
+
+    stopRole(role);
+
+    Function *func = m_doc->function(fid);
+    if (func == nullptr)
+        return;
+
+    // The division goes in as an overrideDuration with tempo type Beats, so
+    // Ableton Link stays the only clock: we change how long a step lasts,
+    // never the timing source.
+    if (division > 0)
+        func->start(m_doc->masterTimer(), FunctionParent::master(), 0,
+                    Function::defaultSpeed(), Function::defaultSpeed(),
+                    uint(division), Function::Beats);
+    else
+        func->start(m_doc->masterTimer(), FunctionParent::master());
+
+    m_roleActive.insert(role, fid);
+    m_roleAttr.insert(role,
+        func->requestAttributeOverride(TRACK_INTENSITY_ATTR, level));
+}
+
+void TrackManager::stopRole(int role)
+{
+    quint32 fid = m_roleActive.value(role, Function::invalidId());
+    if (fid == Function::invalidId())
+        return;
+
+    Function *func = m_doc->function(fid);
+    if (func != nullptr)
+    {
+        int attr = m_roleAttr.value(role, -1);
+        if (attr >= 0)
+            func->releaseAttributeOverride(attr);
+        func->stop(FunctionParent::master());
+    }
+
+    m_roleActive.remove(role);
+    m_roleAttr.remove(role);
+}
+
+void TrackManager::stopAllRoles()
+{
+    foreach (int role, m_roleActive.keys())
+        stopRole(role);
+}
+
+QString TrackManager::roleReport() const
+{
+    if (m_roleMode == false)
+        return runningLook();
+
+    QStringList parts;
+    for (int role = 0; role < TRACK_ROLE_COUNT; role++)
+    {
+        quint32 fid = m_roleActive.value(role, Function::invalidId());
+        if (fid == Function::invalidId())
+            continue;
+        Function *func = m_doc ? m_doc->function(fid) : nullptr;
+        if (func != nullptr)
+            parts << QString("%1: %2").arg(roleName(role)).arg(func->name());
+    }
+
+    return parts.isEmpty() ? tr("(nothing)") : parts.join("   ");
+}
+
+/*********************************************************************
+ * Role persistence
+ *********************************************************************/
+
+void TrackManager::saveRoles()
+{
+    QStringList roles;
+    for (int r = 0; r < m_roleFunctions.count(); r++)
+    {
+        QStringList ids;
+        foreach (quint32 fid, m_roleFunctions.at(r))
+            ids << QString::number(fid);
+        roles << ids.join(',');
+    }
+    QSettings().setValue(SETTINGS_TRACK_ROLES, roles.join(';'));
+
+    QStringList forced;
+    QMapIterator<QString, quint32> fit(m_forcedRole);
+    while (fit.hasNext())
+    {
+        fit.next();
+        forced << QString("%1=%2").arg(fit.key()).arg(fit.value());
+    }
+    QSettings().setValue(SETTINGS_TRACK_FORCED, forced.join(';'));
+
+    QSettings().setValue(SETTINGS_TRACK_ROLEOFF,
+                         QStringList(m_roleOff.keys()).join(';'));
+}
+
+void TrackManager::loadRoles()
+{
+    QSettings settings;
+
+    m_roleMode = settings.value(SETTINGS_TRACK_ROLEMODE, true).toBool();
+
+    QString stored = settings.value(SETTINGS_TRACK_ROLES, QString()).toString();
+    if (stored.isEmpty() == false)
+    {
+        QStringList roles = stored.split(';');
+        for (int r = 0; r < roles.count() && r < m_roleFunctions.count(); r++)
+        {
+            m_roleFunctions[r].clear();
+            foreach (QString id, roles.at(r).split(',', Qt::SkipEmptyParts))
+                m_roleFunctions[r].append(id.toUInt());
+        }
+    }
+
+    foreach (QString entry,
+             settings.value(SETTINGS_TRACK_FORCED, QString()).toString()
+                     .split(';', Qt::SkipEmptyParts))
+    {
+        QStringList parts = entry.split('=');
+        if (parts.count() == 2)
+            m_forcedRole.insert(parts.at(0), parts.at(1).toUInt());
+    }
+
+    foreach (QString key,
+             settings.value(SETTINGS_TRACK_ROLEOFF, QString()).toString()
+                     .split(';', Qt::SkipEmptyParts))
+        m_roleOff.insert(key, true);
 }

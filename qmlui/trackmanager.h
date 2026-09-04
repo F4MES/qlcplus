@@ -57,6 +57,21 @@ class Doc;
 #define TRACK_DEFAULT_BPM_HIGH 140
 #define TRACK_SLOT_COUNT       6
 
+/* Roles replace slots for automatic operation. A role is what a look DOES
+ * in the rig, not which fixture it lives on, so the engine can pick a
+ * function for each role on its own. */
+#define TRACK_ROLE_COUNT       5
+#define TRACK_ROLE_COLOR       0
+#define TRACK_ROLE_MOVEMENT    1
+#define TRACK_ROLE_BEAM        2
+#define TRACK_ROLE_STROBE      3
+#define TRACK_ROLE_DARK        4
+
+#define SETTINGS_TRACK_ROLES    QStringLiteral("trackmanager/roles")
+#define SETTINGS_TRACK_ROLEMODE QStringLiteral("trackmanager/rolemode")
+#define SETTINGS_TRACK_FORCED   QStringLiteral("trackmanager/forcedroles")
+#define SETTINGS_TRACK_ROLEOFF  QStringLiteral("trackmanager/roleoff")
+
 class TrackManager : public QObject
 {
     Q_OBJECT
@@ -82,6 +97,7 @@ class TrackManager : public QObject
     Q_PROPERTY(bool autoRun READ autoRun WRITE setAutoRun NOTIFY autoRunChanged)
     Q_PROPERTY(int quantize READ quantize WRITE setQuantize NOTIFY quantizeChanged)
     Q_PROPERTY(int slotCount READ slotCount CONSTANT)
+    Q_PROPERTY(bool roleMode READ roleMode WRITE setRoleMode NOTIFY looksChanged)
 
     Q_PROPERTY(int liveBpm READ liveBpm NOTIFY energyChanged)
     Q_PROPERTY(qreal energy READ energy NOTIFY energyChanged)
@@ -162,6 +178,32 @@ public:
     Q_INVOKABLE void reroll();
     Q_INVOKABLE void clear();
 
+    /* ---- roles ---- */
+    bool roleMode() const;
+    void setRoleMode(bool enable);
+    Q_INVOKABLE int roleCount() const;
+    Q_INVOKABLE QString roleName(int role) const;
+    Q_INVOKABLE QString roleHint(int role) const;
+
+    /** Every assignable function with the role it currently sits in.
+     *  Entries: { id, name, path, role }. role is -1 when unassigned. */
+    Q_INVOKABLE QVariantList roleTable() const;
+    Q_INVOKABLE QVariantList roleFunctions(int role) const;
+    Q_INVOKABLE int roleOf(quint32 fid) const;
+    Q_INVOKABLE void assignRole(quint32 fid, int role);
+
+    /** Guess a role for every function from its channels and its name.
+     *  force=false only fills in what has not been assigned yet. */
+    Q_INVOKABLE void autoAssignRoles(bool force);
+
+    /* ---- advanced: pin a role in one section ---- */
+    Q_INVOKABLE void setForcedRole(QString state, int role, quint32 fid);
+    Q_INVOKABLE quint32 forcedRole(QString state, int role) const;
+    Q_INVOKABLE void setRoleEnabled(QString state, int role, bool enable);
+    Q_INVOKABLE bool roleEnabled(QString state, int role) const;
+
+    Q_INVOKABLE QString roleReport() const;
+
 signals:
     void listenPortChanged();
     void connectedChanged();
@@ -191,6 +233,19 @@ protected:
     void stopLook();
     void applyEnergy();
     quint32 resolveSlot(QString state, int slot) const;
+
+    /* The busking engine. Called on every beat; decides what each role
+     * should be doing right now and rides the intensities. */
+    void runEngine(bool sectionChanged);
+    void sectionBounds(int beat, int &start, int &end) const;
+    quint32 pickRole(QString state, int role, int cursor) const;
+    void driveRole(int role, quint32 fid, qreal level, int division);
+    void stopRole(int role);
+    void stopAllRoles();
+    int classifyFunction(Function *func) const;
+    QString roleKey(QString state, int role) const;
+    void saveRoles();
+    void loadRoles();
 
     QString mapKey(QString state, int slot) const;
     void loadSettingsMaps();
@@ -241,6 +296,19 @@ private:
     int m_liveBpm;
 
     QTimer m_energyTimer;
+
+    /* ---- roles ---- */
+    bool m_roleMode;
+    QList<QList<quint32> > m_roleFunctions;
+    QMap<QString, quint32> m_forcedRole;
+    QMap<QString, bool> m_roleOff;
+
+    QMap<int, quint32> m_roleActive;
+    QMap<int, int> m_roleAttr;
+
+    int m_colorCursor;
+    int m_lastColorBar;
+    int m_lastEngineBeat;
 };
 
 #endif // TRACKMANAGER_H

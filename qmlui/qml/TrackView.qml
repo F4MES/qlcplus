@@ -833,16 +833,27 @@ Rectangle
             {
                 anchors.centerIn: parent
                 visible: !trackViewRoot.setupOpen
-                text: qsTr("Press SETUP to assign functions to each section")
+                text: qsTr("Lights are running themselves. "
+                           + "Press SETUP to change what each look does.")
                 color: "#5A5A5A"
                 font.pixelSize: 15
             }
 
-            Flickable
+            // The role picker owns setup now: one tap per function decides
+            // what it does, and the engine handles the rest.
+            TrackSetup
             {
                 anchors.fill: parent
+                visible: trackViewRoot.setupOpen && trackManager
+                         && trackManager.roleMode
+            }
+
+            Flickable
+            {
+                visible: trackViewRoot.setupOpen && trackManager
+                         && !trackManager.roleMode
+                anchors.fill: parent
                 anchors.margins: 8
-                visible: trackViewRoot.setupOpen
                 contentHeight: setupCol.height
                 clip: true
 
