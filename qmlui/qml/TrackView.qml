@@ -841,11 +841,41 @@ Rectangle
 
             // The role picker owns setup now: one tap per function decides
             // what it does, and the engine handles the rest.
-            TrackSetup
+            // Loaded indirectly so a fault in TrackSetup cannot take the whole
+            // page down with it - and so the fault is shown instead of hidden.
+            Loader
             {
+                id: setupLoader
                 anchors.fill: parent
                 visible: trackViewRoot.setupOpen && trackManager
                          && trackManager.roleMode
+                active: visible
+                source: "qrc:/TrackSetup.qml"
+            }
+
+            Rectangle
+            {
+                anchors.fill: parent
+                anchors.margins: 8
+                visible: setupLoader.visible && setupLoader.status === Loader.Error
+                color: "#3A1A1A"
+                radius: 4
+
+                Text
+                {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    wrapMode: Text.Wrap
+                    color: "#FFB0B0"
+                    font.pixelSize: 13
+                    text:
+                    {
+                        var c = Qt.createComponent("qrc:/TrackSetup.qml")
+                        return "TrackSetup.qml failed to load:\n\n"
+                               + (c.status === Component.Error
+                                  ? c.errorString() : "(no detail)")
+                    }
+                }
             }
 
             Flickable

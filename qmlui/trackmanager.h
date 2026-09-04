@@ -98,6 +98,7 @@ class TrackManager : public QObject
     Q_PROPERTY(int quantize READ quantize WRITE setQuantize NOTIFY quantizeChanged)
     Q_PROPERTY(int slotCount READ slotCount CONSTANT)
     Q_PROPERTY(bool roleMode READ roleMode WRITE setRoleMode NOTIFY looksChanged)
+    Q_PROPERTY(int roleCount READ roleCount CONSTANT)
 
     Q_PROPERTY(int liveBpm READ liveBpm NOTIFY energyChanged)
     Q_PROPERTY(qreal energy READ energy NOTIFY energyChanged)
