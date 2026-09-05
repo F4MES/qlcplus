@@ -552,6 +552,31 @@ Rectangle
                 onTapped: trackEngine.accent = !trackEngine.accent
             }
 
+            Item { Layout.preferredWidth: 20 }
+
+            // the clock creeps the ENERGY slider up through the night; a
+            // hand on the slider turns it off, this turns it back on
+            TrackTile
+            {
+                Layout.preferredWidth: 180
+                Layout.preferredHeight: 34
+                label: qsTr("ENERGY by clock")
+                active: trackEngine ? trackEngine.roomAuto : true
+                activeColor: "#7ED07E"
+                onTapped: trackEngine.roomAuto = !trackEngine.roomAuto
+            }
+
+            // an operator tool: freeze the look until released
+            TrackTile
+            {
+                Layout.preferredWidth: 90
+                Layout.preferredHeight: 34
+                label: qsTr("HOLD")
+                active: trackEngine ? trackEngine.hold : false
+                activeColor: "#E3B44F"
+                onTapped: trackEngine.hold = !trackEngine.hold
+            }
+
             Item { Layout.fillWidth: true }
         }
 

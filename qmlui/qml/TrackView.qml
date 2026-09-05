@@ -827,7 +827,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V6_ROOM_CLOCK)
+        // =============================================== live controls  (LIVE_V8_NEXT_LOOK)
         // What a DJ touches while playing: the colour, the master, and a
         // flash for the strobes. Everything else runs itself.
         RowLayout
@@ -966,6 +966,33 @@ Rectangle
                 }
             }
 
+            // ---- next look: a new colour, cast and moves right now - the
+            //      DJ's "something else, please"
+            Rectangle
+            {
+                Layout.preferredWidth: trackViewRoot.touchH * 2.4
+                Layout.fillHeight: true
+                radius: 4
+                color: "#2E4A63"
+                border.width: 1
+                border.color: "#6FB3F3"
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("NEXT LOOK")
+                    color: "#EEEEEE"
+                    font.bold: true
+                    font.pixelSize: 16
+                }
+
+                MouseArea
+                {
+                    anchors.fill: parent
+                    onClicked: trackEngine.next()
+                }
+            }
+
             // ---- flash: hold to strobe
             Rectangle
             {
@@ -990,77 +1017,6 @@ Rectangle
                     onReleased: trackEngine.setFlash(false)
                     onCanceled: trackEngine.setFlash(false)
                 }
-            }
-        }
-
-        // =============================================== room / next / hold
-        // ROOM tells the engine how full the floor is - the same track gets
-        // less light at 22:00 than at 01:00. NEXT draws a new look now, HOLD
-        // freezes the current one.
-        RowLayout
-        {
-            id: controlRow
-            Layout.fillWidth: true
-            Layout.fillHeight: false
-            Layout.preferredHeight: trackViewRoot.touchH
-            Layout.maximumHeight: trackViewRoot.touchH
-            spacing: 10
-            visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
-
-            Text
-            {
-                text: qsTr("ROOM")
-                color: "#9A9A9A"
-                font.bold: true
-                font.pixelSize: 13
-            }
-
-            // the clock sets the room by default; a tap on a level takes over
-            TrackTile
-            {
-                Layout.preferredWidth: trackViewRoot.touchH * 1.6
-                Layout.fillHeight: true
-                label: qsTr("BY CLOCK")
-                active: trackEngine ? trackEngine.roomAuto : true
-                activeColor: "#7ED07E"
-                onTapped: trackEngine.roomAuto = !trackEngine.roomAuto
-            }
-
-            Repeater
-            {
-                model: [ qsTr("EMPTY"), qsTr("WARMING"), qsTr("FULL"), qsTr("PEAK") ]
-
-                TrackTile
-                {
-                    Layout.preferredWidth: trackViewRoot.touchH * 2
-                    Layout.fillHeight: true
-                    label: modelData
-                    active: trackEngine ? trackEngine.room === index : index === 2
-                    activeColor: [ "#5A7A9A", "#4FA3E3", "#7ED07E", "#E3B44F" ][index]
-                    border.width: (trackEngine && trackEngine.roomAuto && trackEngine.room === index) ? 3 : 1
-                    onTapped: trackEngine.room = index
-                }
-            }
-
-            Item { Layout.fillWidth: true }
-
-            TrackTile
-            {
-                Layout.preferredWidth: trackViewRoot.touchH * 2.2
-                Layout.fillHeight: true
-                label: qsTr("NEXT LOOK")
-                active: false
-                onTapped: trackEngine.next()
-            }
-
-            TrackTile
-            {
-                Layout.preferredWidth: trackViewRoot.touchH * 2.2
-                Layout.fillHeight: true
-                label: qsTr("HOLD")
-                active: trackEngine ? trackEngine.hold : false
-                activeColor: "#E3B44F"
-                onTapped: trackEngine.hold = !trackEngine.hold
             }
         }
 

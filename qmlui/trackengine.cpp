@@ -1940,18 +1940,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     tickFades();
     m_lastBeat = beat;
 
-    // the room: the same track is quieter at 22:00 than at 01:00. ROOM sets
-    // the ENERGY trim (through roomChanged), so it is already in the energy
-    // that arrives here - nothing to multiply
-    if (m_roomAuto)
-    {
-        int want = roomByClock();
-        if (want != m_room)
-        {
-            m_room = want;
-            m_moves.clear();
-        }
-    }
+    // the clock moves the ENERGY slider (through roomChanged), so the time
+    // of night is already in the energy that arrives here
     announceRoom();
 
     // NEXT: treat this beat as a fresh section with a fresh colour
@@ -2764,7 +2754,9 @@ void TrackEngine::setRoom(int room)
     }
     m_room = room;
     m_moves.clear();             // the new energy draws new moves
-    announceRoom();
+    static const int percent[4] = { 55, 80, 100, 125 };
+    m_roomSent = percent[m_room];
+    emit roomChanged(m_roomSent);
     emit liveChanged();
 }
 
@@ -2777,24 +2769,46 @@ void TrackEngine::setRoomAuto(bool on)
     m_roomAuto = on;
     if (on)
     {
-        m_room = roomByClock();
+        m_roomSent = -1;             // hand the clock's value over right away
         announceRoom();
     }
     emit liveChanged();
 }
 
-int TrackEngine::roomPercent() const
+int TrackEngine::roomPercent() const { return m_roomSent; }
+
+int TrackEngine::clockPercent() const
 {
-    static const int percent[4] = { 55, 80, 100, 125 };
-    return percent[qBound(0, m_room, 3)];
+    // anchor points through the night, minutes past 21:00 -> percent
+    static const int anchor[][2] = { { 0, 55 }, { 120, 80 }, { 210, 100 }, { 270, 125 }, { 420, 125 }, { 480, 55 } };
+    QTime now = QTime::currentTime();
+    int minutes = now.hour() * 60 + now.minute() - 21 * 60;
+    if (minutes < 0)
+        minutes += 24 * 60;          // past midnight
+    if (minutes >= 480)
+        return 55;                   // 05:00 - 21:00: the room is empty
+    for (int i = 1; i < 6; i++)
+    {
+        if (minutes <= anchor[i][0])
+        {
+            int span = anchor[i][0] - anchor[i - 1][0];
+            qreal f = span > 0 ? qreal(minutes - anchor[i - 1][0]) / qreal(span) : 1.0;
+            return int(qRound(anchor[i - 1][1] + f * (anchor[i][1] - anchor[i - 1][1])));
+        }
+    }
+    return 55;
 }
 
 void TrackEngine::announceRoom()
 {
-    if (roomPercent() == m_roomSent)
+    if (m_roomAuto == false)
         return;
-    m_roomSent = roomPercent();
-    emit roomChanged(m_roomSent);
+    int p = clockPercent();
+    if (p == m_roomSent)
+        return;
+    m_roomSent = p;
+    m_room = p < 70 ? 0 : (p < 90 ? 1 : (p < 115 ? 2 : 3));
+    emit roomChanged(p);
 }
 
 int TrackEngine::roomByClock() const

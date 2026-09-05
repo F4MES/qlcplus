@@ -178,13 +178,11 @@ class TrackEngine : public QObject
     Q_PROPERTY(int calmBarsLeft READ calmBarsLeft NOTIFY liveChanged)
     Q_PROPERTY(bool logEnabled READ logEnabled WRITE setLogEnabled NOTIFY tableChanged)
 
-    /** How full the room is: 0 empty, 1 warming up, 2 full, 3 peak. Scales
-     *  the energy the analysis reports, so the same track gets less light at
-     *  22:00 than at 01:00. Not remembered between nights. */
+    /** Kept for scripts: 0 empty, 1 warming, 2 full, 3 peak - a preset for
+     *  the ENERGY slider. The page itself only has the slider. */
     Q_PROPERTY(int room READ room WRITE setRoom NOTIFY liveChanged)
-    /** Let the clock set ROOM: empty before 21:30, warming until 23:00, full
-     *  until 00:30, peak after that, empty again from 05:00. Tapping a ROOM
-     *  tile turns it off for the night. */
+    /** Let the clock move the ENERGY slider through the night. A hand on
+     *  the slider turns it off. */
     Q_PROPERTY(bool roomAuto READ roomAuto WRITE setRoomAuto NOTIFY liveChanged)
     /** Freeze the look: no colour, cast or move changes until released. */
     Q_PROPERTY(bool hold READ hold WRITE setHold NOTIFY liveChanged)
@@ -252,7 +250,12 @@ public:
     bool roomAuto() const;
     void setRoomAuto(bool on);
     int roomByClock() const;
+    /** The ENERGY percent the clock last handed to TrackManager. */
     Q_INVOKABLE int roomPercent() const;
+    /** ENERGY by the clock: 55 % at 21:00 rising to 80 % at 23:00, 100 % at
+     *  00:30 and 125 % from 01:30, back to 55 % at 05:00 - a slow creep, not
+     *  steps, so the slider moves the way a careful hand would. */
+    int clockPercent() const;
     void announceRoom();
     bool hold() const;
     void setHold(bool on);
