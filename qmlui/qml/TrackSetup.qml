@@ -2,12 +2,9 @@
   Q Light Controller Plus
   TrackSetup.qml
 
-  Role picker for the Track page.
-
-  One row per function, and one tap to say what that function DOES. No
-  dropdowns, no per-section grid to fill in: the engine works out the rest.
-  The advanced fold at the bottom is for pinning a role inside one section
-  when the automatic choice is not what you want.
+  Setup for the automatic busker: what each look DOES (colour, motion,
+  position, flash), which fixture groups may be used, and how calm the
+  palette is. One tap per row. The engine handles the rest.
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -18,7 +15,6 @@
 
 import QtQuick
 import QtQuick.Layouts
-import QtQuick.Controls
 
 import org.qlcplus.classes 1.0
 import "."
@@ -29,27 +25,22 @@ Rectangle
     color: "#262626"
     radius: 4
 
-    readonly property color cBtn:   "#3A3A3A"
-    readonly property color cBtnHi: "#4A4A4A"
-    readonly property color cText:  "#EEEEEE"
-    readonly property color cDim:   "#9A9A9A"
-    readonly property color cLine:  "#555555"
+    readonly property color cText: "#EEEEEE"
+    readonly property color cDim:  "#9A9A9A"
+    readonly property color cLine: "#555555"
 
-    property var sectionNames: [ "normal", "break", "build", "drop" ]
     property string filter: ""
     property bool advancedOpen: false
     property int refresh: 0
 
-    // colours mirror the marker colours on the waveform
     function roleColor(role)
     {
         switch (role)
         {
         case 0: return "#4FA3E3"   // colour
-        case 1: return "#7ED07E"   // movement
-        case 2: return "#E3B44F"   // beams
-        case 3: return "#E36B6B"   // strobe
-        case 4: return "#9A7ED0"   // ambient
+        case 1: return "#7ED07E"   // motion
+        case 2: return "#E3B44F"   // position
+        case 3: return "#E36B6B"   // flash
         }
         return "#5A5A5A"
     }
@@ -59,26 +50,43 @@ Rectangle
         switch (role)
         {
         case 0: return qsTr("COLOUR")
-        case 1: return qsTr("MOVE")
-        case 2: return qsTr("BEAM")
-        case 3: return qsTr("STROBE")
-        case 4: return qsTr("AMBIENT")
+        case 1: return qsTr("MOTION")
+        case 2: return qsTr("POSITION")
+        case 3: return qsTr("FLASH")
         }
         return "–"
     }
 
+    function swatch(name)
+    {
+        switch (name)
+        {
+        case "red":     return "#E03030"
+        case "green":   return "#30C050"
+        case "blue":    return "#3060E0"
+        case "cyan":    return "#30C0D0"
+        case "magenta": return "#D040C0"
+        case "yellow":  return "#E0D030"
+        case "orange":  return "#E08030"
+        case "amber":   return "#E0A040"
+        case "uv":      return "#7030C0"
+        case "white":   return "#E8E8E8"
+        }
+        return "#3A3A3A"
+    }
+
     Component.onCompleted:
     {
-        // fill in anything the operator has not placed, so the page works
-        // straight away on a project it has never seen
-        if (trackManager)
-            trackManager.autoAssignRoles(false)
+        // guess anything not placed yet, so the page works on a project it
+        // has never seen
+        if (trackEngine)
+            trackEngine.autoAssign(false)
     }
 
     Connections
     {
-        target: trackManager
-        function onLooksChanged() { setupRoot.refresh++ }
+        target: trackEngine
+        function onTableChanged() { setupRoot.refresh++ }
     }
 
     ColumnLayout
@@ -91,7 +99,7 @@ Rectangle
         RowLayout
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: 44
+            Layout.preferredHeight: 40
             spacing: 8
 
             Text
@@ -104,8 +112,8 @@ Rectangle
 
             Rectangle
             {
-                Layout.preferredWidth: 220
-                Layout.preferredHeight: 36
+                Layout.preferredWidth: 200
+                Layout.preferredHeight: 34
                 color: "#1B1B1B"
                 radius: 3
                 border.width: 1
@@ -139,20 +147,96 @@ Rectangle
 
             TrackTile
             {
-                Layout.preferredWidth: 110
-                Layout.preferredHeight: 36
-                label: qsTr("RE-GUESS")
-                onTapped: if (trackManager) trackManager.autoAssignRoles(true)
+                Layout.preferredWidth: 100
+                Layout.preferredHeight: 34
+                label: qsTr("SHOW ALL")
+                active: trackEngine ? trackEngine.showAll : false
+                onTapped: trackEngine.showAll = !trackEngine.showAll
             }
 
             TrackTile
             {
-                Layout.preferredWidth: 130
-                Layout.preferredHeight: 36
-                label: setupRoot.advancedOpen ? qsTr("HIDE ADVANCED")
-                                              : qsTr("ADVANCED")
+                Layout.preferredWidth: 100
+                Layout.preferredHeight: 34
+                label: qsTr("RE-GUESS")
+                onTapped: if (trackEngine) trackEngine.autoAssign(true)
+            }
+
+            TrackTile
+            {
+                Layout.preferredWidth: 120
+                Layout.preferredHeight: 34
+                label: setupRoot.advancedOpen ? qsTr("HIDE ADVANCED") : qsTr("ADVANCED")
                 active: setupRoot.advancedOpen
                 onTapped: setupRoot.advancedOpen = !setupRoot.advancedOpen
+            }
+        }
+
+        // ------------------------------------------------- groups
+        RowLayout
+        {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 52
+            spacing: 6
+
+            Text
+            {
+                Layout.preferredWidth: 70
+                text: qsTr("GROUPS")
+                color: setupRoot.cDim
+                font.bold: true
+                font.pixelSize: 12
+            }
+
+            Repeater
+            {
+                model:
+                {
+                    setupRoot.refresh
+                    return trackEngine ? trackEngine.groups : []
+                }
+
+                Rectangle
+                {
+                    id: groupTile
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: 3
+                    color: modelData.enabled ? "#333333" : "#1F1F1F"
+                    border.width: 1
+                    border.color: modelData.enabled ? "#666666" : "#333333"
+
+                    Column
+                    {
+                        anchors.centerIn: parent
+                        spacing: 1
+
+                        Text
+                        {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: modelData.key
+                            color: modelData.enabled ? setupRoot.cText : "#666666"
+                            font.bold: true
+                            font.pixelSize: 12
+                        }
+                        Text
+                        {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: modelData.fixtures + " fx · "
+                                  + modelData.colours + " col · "
+                                  + modelData.motions + " mot · "
+                                  + (modelData.dimmer ? qsTr("dimmer") : qsTr("NO DIMMER"))
+                            color: modelData.dimmer ? setupRoot.cDim : "#E36B6B"
+                            font.pixelSize: 10
+                        }
+                    }
+
+                    MouseArea
+                    {
+                        anchors.fill: parent
+                        onClicked: trackEngine.setGroupEnabled(modelData.key, !modelData.enabled)
+                    }
+                }
             }
         }
 
@@ -160,12 +244,14 @@ Rectangle
         RowLayout
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: 30
+            Layout.preferredHeight: 26
             spacing: 6
+
+            Item { Layout.preferredWidth: 330 }
 
             Repeater
             {
-                model: trackManager ? trackManager.roleCount : 0
+                model: trackEngine ? trackEngine.roleCount : 0
 
                 Rectangle
                 {
@@ -183,15 +269,14 @@ Rectangle
                         verticalAlignment: Text.AlignVCenter
                         horizontalAlignment: Text.AlignHCenter
                         elide: Text.ElideRight
-                        text: trackManager
-                              ? trackManager.roleHint(index) : ""
+                        text: trackEngine ? trackEngine.roleHint(index) : ""
                         color: setupRoot.cDim
                         font.pixelSize: 10
                     }
                 }
             }
 
-            Item { Layout.preferredWidth: 64 }
+            Item { Layout.preferredWidth: 56 }
         }
 
         // ------------------------------------------------- function rows
@@ -201,23 +286,28 @@ Rectangle
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            spacing: 4
+            spacing: 3
 
             model:
             {
-                setupRoot.refresh    // re-evaluate when roles change
-                if (!trackManager)
+                setupRoot.refresh
+                if (!trackEngine)
                     return []
 
-                var all = trackManager.roleTable()
+                var all = trackEngine.table()
                 if (setupRoot.filter === "")
                     return all
 
                 var out = []
                 for (var i = 0; i < all.length; i++)
-                    if (all[i].name.toLowerCase().indexOf(setupRoot.filter) >= 0
-                        || all[i].path.toLowerCase().indexOf(setupRoot.filter) >= 0)
-                        out.push(all[i])
+                {
+                    var row = all[i]
+                    if (row.name.toLowerCase().indexOf(setupRoot.filter) >= 0
+                        || row.path.toLowerCase().indexOf(setupRoot.filter) >= 0
+                        || row.group.toLowerCase().indexOf(setupRoot.filter) >= 0
+                        || row.colour.indexOf(setupRoot.filter) >= 0)
+                        out.push(row)
+                }
                 return out
             }
 
@@ -225,12 +315,10 @@ Rectangle
             {
                 id: funcRow
                 width: funcList.width
-                height: 46
-                color: "#1F1F1F"
+                height: 44
+                color: modelData.hidden ? "#181818" : "#1F1F1F"
                 radius: 3
 
-                // held here so the role tiles below can reach them without
-                // walking up through the layout
                 property int rowRole: modelData.role
                 property var rowId: modelData.id
 
@@ -240,24 +328,33 @@ Rectangle
                     anchors.margins: 4
                     spacing: 4
 
+                    Rectangle
+                    {
+                        Layout.preferredWidth: 10
+                        Layout.fillHeight: true
+                        radius: 2
+                        color: setupRoot.swatch(modelData.colour)
+                        visible: true
+                    }
+
                     ColumnLayout
                     {
-                        Layout.preferredWidth: 200
+                        Layout.preferredWidth: 310
                         spacing: 0
 
                         Text
                         {
                             Layout.fillWidth: true
                             text: modelData.name
-                            color: setupRoot.cText
+                            color: modelData.hidden ? "#888888" : setupRoot.cText
                             font.pixelSize: 14
                             elide: Text.ElideRight
                         }
                         Text
                         {
                             Layout.fillWidth: true
-                            visible: modelData.path.length > 0
-                            text: modelData.path
+                            text: modelData.group
+                                  + (modelData.path.length > 0 ? "   ·   " + modelData.path : "")
                             color: "#6A6A6A"
                             font.pixelSize: 10
                             elide: Text.ElideRight
@@ -266,7 +363,7 @@ Rectangle
 
                     Repeater
                     {
-                        model: trackManager ? trackManager.roleCount : 0
+                        model: trackEngine ? trackEngine.roleCount : 0
 
                         TrackTile
                         {
@@ -275,173 +372,71 @@ Rectangle
                             label: setupRoot.roleShort(index)
                             active: funcRow.rowRole === index
                             activeColor: setupRoot.roleColor(index)
-                            onTapped: trackManager.assignRole(funcRow.rowId, index)
+                            onTapped: trackEngine.assignRole(funcRow.rowId, index)
                         }
                     }
 
                     TrackTile
                     {
-                        Layout.preferredWidth: 60
+                        Layout.preferredWidth: 52
                         Layout.fillHeight: true
                         label: "–"
                         active: funcRow.rowRole < 0
-                        onTapped: trackManager.assignRole(funcRow.rowId, -1)
+                        onTapped: trackEngine.assignRole(funcRow.rowId, -1)
                     }
                 }
             }
         }
 
         // ------------------------------------------------- advanced
-        Rectangle
+        RowLayout
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: setupRoot.advancedOpen ? 230 : 0
+            Layout.preferredHeight: setupRoot.advancedOpen ? 40 : 0
             visible: setupRoot.advancedOpen
-            color: "#1B1B1B"
-            radius: 3
+            spacing: 8
 
-            Flickable
+            Text
             {
-                anchors.fill: parent
-                anchors.margins: 8
-                contentHeight: advCol.height
-                clip: true
+                text: qsTr("Colour holds for")
+                color: setupRoot.cDim
+                font.pixelSize: 13
+            }
 
-                Column
+            Repeater
+            {
+                model: [ 16, 32, 64 ]
+                TrackTile
                 {
-                    id: advCol
-                    width: parent.width
-                    spacing: 6
-
-                    Text
-                    {
-                        text: qsTr("Pin a role inside one section. Leave on AUTO "
-                                   + "to let the engine choose.")
-                        color: setupRoot.cDim
-                        font.pixelSize: 12
-                    }
-
-                    Repeater
-                    {
-                        model: setupRoot.sectionNames
-
-                        Column
-                        {
-                            id: secCol
-                            width: advCol.width
-                            spacing: 3
-
-                            property string secName: modelData
-
-                            Text
-                            {
-                                text: secCol.secName.toUpperCase()
-                                color: setupRoot.cText
-                                font.bold: true
-                                font.pixelSize: 13
-                            }
-
-                            Repeater
-                            {
-                                model: trackManager ? trackManager.roleCount : 0
-
-                                Row
-                                {
-                                    id: advRow
-                                    spacing: 5
-                                    property int roleIdx: index
-                                    property string secName: secCol.secName
-
-                                    Text
-                                    {
-                                        width: 90
-                                        height: 30
-                                        verticalAlignment: Text.AlignVCenter
-                                        text: trackManager
-                                              ? trackManager.roleName(advRow.roleIdx) : ""
-                                        color: setupRoot.roleColor(advRow.roleIdx)
-                                        font.pixelSize: 12
-                                    }
-
-                                    TrackTile
-                                    {
-                                        width: 60
-                                        height: 30
-                                        label: active ? qsTr("ON") : qsTr("OFF")
-                                        active:
-                                        {
-                                            setupRoot.refresh
-                                            return trackManager
-                                                   ? trackManager.roleEnabled(
-                                                       advRow.secName, advRow.roleIdx)
-                                                   : true
-                                        }
-                                        activeColor: "#7ED07E"
-                                        onTapped: trackManager.setRoleEnabled(
-                                                      advRow.secName, advRow.roleIdx,
-                                                      !active)
-                                    }
-
-                                    TrackTile
-                                    {
-                                        width: 200
-                                        height: 30
-                                        label:
-                                        {
-                                            setupRoot.refresh
-                                            if (!trackManager)
-                                                return qsTr("AUTO")
-                                            var fid = trackManager.forcedRole(
-                                                          advRow.secName, advRow.roleIdx)
-                                            var list = trackManager.roleFunctions(
-                                                           advRow.roleIdx)
-                                            for (var i = 0; i < list.length; i++)
-                                                if (list[i].id === fid)
-                                                    return list[i].name
-                                            return qsTr("AUTO")
-                                        }
-                                        active: label !== qsTr("AUTO")
-                                        activeColor: setupRoot.roleColor(advRow.roleIdx)
-
-                                        // step through this role's functions,
-                                        // wrapping back around to AUTO
-                                        onTapped:
-                                        {
-                                            var list = trackManager.roleFunctions(
-                                                           advRow.roleIdx)
-                                            if (list.length === 0)
-                                                return
-
-                                            var fid = trackManager.forcedRole(
-                                                          advRow.secName, advRow.roleIdx)
-                                            var at = -1
-                                            for (var i = 0; i < list.length; i++)
-                                                if (list[i].id === fid)
-                                                    at = i
-
-                                            if (at + 1 >= list.length)
-                                                trackManager.setForcedRole(
-                                                    advRow.secName, advRow.roleIdx, 0)
-                                            else
-                                                trackManager.setForcedRole(
-                                                    advRow.secName, advRow.roleIdx,
-                                                    list[at + 1].id)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    Layout.preferredWidth: 80
+                    Layout.preferredHeight: 34
+                    label: modelData + qsTr(" bars")
+                    active: trackEngine ? trackEngine.holdBars === modelData : false
+                    activeColor: "#4FA3E3"
+                    onTapped: trackEngine.holdBars = modelData
                 }
             }
+
+            Item { Layout.preferredWidth: 20 }
+
+            TrackTile
+            {
+                Layout.preferredWidth: 220
+                Layout.preferredHeight: 34
+                label: qsTr("Accent colour in drops")
+                active: trackEngine ? trackEngine.accent : false
+                activeColor: "#7ED07E"
+                onTapped: trackEngine.accent = !trackEngine.accent
+            }
+
+            Item { Layout.fillWidth: true }
         }
 
         // ------------------------------------------------- running
         Text
         {
             Layout.fillWidth: true
-            text: qsTr("Running") + ": "
-                  + (trackManager ? trackManager.roleReport() : "")
+            text: qsTr("Running") + ":  " + (trackEngine ? trackEngine.report : "")
             color: setupRoot.cDim
             font.pixelSize: 13
             elide: Text.ElideRight

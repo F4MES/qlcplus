@@ -36,6 +36,7 @@
 class QTcpServer;
 class QTcpSocket;
 class QQuickView;
+class TrackEngine;
 class Function;
 class Doc;
 
@@ -265,6 +266,7 @@ protected:
 private:
     QQuickView *m_view;
     Doc *m_doc;
+    TrackEngine *m_engine;
 
     QTcpServer *m_server;
     QList<QTcpSocket *> m_clients;
@@ -325,6 +327,10 @@ private:
     int m_colorCursor;
     int m_lastColorBar;
     int m_lastEngineBeat;
+
+    /* The movement pick is sticky: it only changes when a break starts,
+     * inside a one-beat dark gap. Never at a drop, never mid-section. */
+    quint32 m_movePick;
 };
 
 #endif // TRACKMANAGER_H

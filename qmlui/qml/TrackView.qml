@@ -821,41 +821,169 @@ Rectangle
             }
         }
 
-        // =============================================== role activity
+        // =============================================== live controls
+        // What a DJ touches while playing: the colour, the master, and a
+        // flash for the strobes. Everything else runs itself.
+        RowLayout
+        {
+            id: liveRow
+            Layout.fillWidth: true
+            Layout.preferredHeight: trackViewRoot.touchH * 1.4
+            spacing: 10
+            visible: trackManager ? trackManager.roleMode : false
+
+            function swatch(name)
+            {
+                switch (name)
+                {
+                case "red":     return "#E03030"
+                case "green":   return "#30C050"
+                case "blue":    return "#3060E0"
+                case "cyan":    return "#30C0D0"
+                case "magenta": return "#D040C0"
+                case "yellow":  return "#E0D030"
+                case "orange":  return "#E08030"
+                case "amber":   return "#E0A040"
+                case "uv":      return "#7030C0"
+                case "white":   return "#E8E8E8"
+                }
+                return "#4A4A4A"
+            }
+
+            // ---- colour: AUTO or a locked palette colour
+            Row
+            {
+                Layout.fillHeight: true
+                spacing: 6
+
+                TrackTile
+                {
+                    width: trackViewRoot.touchH * 1.5
+                    height: liveRow.height
+                    label: qsTr("AUTO")
+                    active: trackEngine ? trackEngine.colourOverride === "" : true
+                    activeColor: "#7ED07E"
+                    onTapped: trackEngine.colourOverride = ""
+                }
+
+                Repeater
+                {
+                    model: trackEngine ? trackEngine.palette : []
+
+                    TrackTile
+                    {
+                        width: trackViewRoot.touchH * 1.5
+                        height: liveRow.height
+                        label: modelData.toUpperCase()
+                        activeColor: liveRow.swatch(modelData)
+                        active: trackEngine
+                                ? (trackEngine.colourOverride === modelData
+                                   || (trackEngine.colourOverride === ""
+                                       && trackEngine.currentColour === modelData))
+                                : false
+                        border.width: trackEngine && trackEngine.colourOverride === modelData ? 3 : 1
+                        onTapped: trackEngine.colourOverride =
+                                      (trackEngine.colourOverride === modelData) ? "" : modelData
+                    }
+                }
+            }
+
+            // ---- master dimmer
+            Rectangle
+            {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: 4
+                color: "#1B1B1B"
+                border.width: 1
+                border.color: "#555555"
+
+                Rectangle
+                {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 3
+                    width: (parent.width - 6) * (trackEngine ? trackEngine.master : 1)
+                    radius: 3
+                    color: "#4FA3E3"
+                }
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("MASTER") + "  " + Math.round((trackEngine ? trackEngine.master : 1) * 100) + "%"
+                    color: "#EEEEEE"
+                    font.bold: true
+                    font.pixelSize: 16
+                }
+
+                MouseArea
+                {
+                    anchors.fill: parent
+                    function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, x / width)) }
+                    onPressed: (mouse) => apply(mouse.x)
+                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                }
+            }
+
+            // ---- flash: hold to strobe
+            Rectangle
+            {
+                Layout.preferredWidth: trackViewRoot.touchH * 2.6
+                Layout.fillHeight: true
+                radius: 4
+                color: (trackEngine && trackEngine.flashing) ? "#FFFFFF" : "#E36B6B"
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("FLASH WHITE")
+                    color: "#101010"
+                    font.bold: true
+                    font.pixelSize: 18
+                }
+
+                MouseArea
+                {
+                    anchors.fill: parent
+                    onPressed: trackEngine.setFlash(true)
+                    onReleased: trackEngine.setFlash(false)
+                    onCanceled: trackEngine.setFlash(false)
+                }
+            }
+        }
+
+        // =============================================== cast
         RowLayout
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: 36
+            Layout.preferredHeight: 30
             spacing: 6
             visible: trackManager ? trackManager.roleMode : false
 
             Repeater
             {
-                model: trackManager ? trackManager.roleCount : 0
+                model: trackEngine ? trackEngine.groups : []
 
                 Rectangle
                 {
-                    id: actTile
+                    id: castTile
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: 3
-
-                    readonly property var palette:
-                        [ "#4FA3E3", "#7ED07E", "#E3B44F", "#E36B6B", "#9A7ED0" ]
-                    property var acts: trackManager ? trackManager.roleActivity : []
-                    property bool lit: acts.length > index ? acts[index] === true : false
-
-                    color: lit ? palette[index] : "#242424"
+                    property bool lit: trackEngine ? trackEngine.cast.indexOf(modelData.key) >= 0 : false
+                    color: lit ? "#4FA3E3" : "#242424"
                     border.width: 1
-                    border.color: lit ? Qt.lighter(palette[index], 1.3) : "#3A3A3A"
+                    border.color: lit ? "#7FC3FF" : "#3A3A3A"
 
                     Text
                     {
                         anchors.centerIn: parent
-                        text: trackManager
-                              ? trackManager.roleName(index).toUpperCase() : ""
-                        color: actTile.lit ? "#101010" : "#6A6A6A"
-                        font.bold: actTile.lit
+                        text: modelData.key.toUpperCase()
+                              + (modelData.enabled ? "" : "  (off)")
+                        color: castTile.lit ? "#101010" : "#6A6A6A"
+                        font.bold: castTile.lit
                         font.pixelSize: 12
                     }
                 }

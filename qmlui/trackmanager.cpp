@@ -22,6 +22,8 @@
 #include <QDebug>
 
 #include "trackmanager.h"
+#include "trackengine.h"
+#include <QQmlContext>
 #include "functionparent.h"
 #include "mastertimer.h"
 #include "function.h"
@@ -29,6 +31,7 @@
 #include "qlcchannel.h"
 #include "fixture.h"
 #include "scene.h"
+#include <QRegularExpression>
 
 #define TRACK_INTENSITY_ATTR 0
 
@@ -80,11 +83,16 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_colorCursor = 0;
     m_lastColorBar = -1;
     m_lastEngineBeat = -1;
+    m_movePick = Function::invalidId();
     for (int i = 0; i < TRACK_ROLE_COUNT; i++)
         m_roleFunctions.append(QList<quint32>());
 
     loadSettingsMaps();
     loadRoles();
+
+    m_engine = new TrackEngine(m_doc, this);
+    if (m_view != nullptr)
+        m_view->rootContext()->setContextProperty("trackEngine", m_engine);
 
     m_server = new QTcpServer(this);
     connect(m_server, SIGNAL(newConnection()), this, SLOT(slotNewConnection()));
@@ -243,6 +251,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
 
     m_currentBeat = 0;
     m_trackTimeMs = 0;
+    m_movePick = Function::invalidId();    // a new track picks afresh
+    if (m_engine != nullptr)
+        m_engine->trackLoaded();
 
     qDebug() << "[TrackManager] track:" << m_title << m_beatCount << "beats,"
              << m_markers.count() << "markers";
@@ -1047,22 +1058,46 @@ int TrackManager::classifyFunction(Function *func) const
 
     QString n = (func->name() + QLatin1Char(' ') + func->path(true)).toLower();
 
-    if (n.contains("strob") || n.contains("blind") || n.contains("flash")
-        || n.contains("blitz"))
-        return TRACK_ROLE_STROBE;
-    if (n.contains("laser") || n.contains("beam") || n.contains("gobo")
-        || n.contains("prism") || n.contains("spot"))
-        return TRACK_ROLE_BEAM;
-    if (n.contains("move") || n.contains("pan") || n.contains("tilt")
-        || n.contains("pos") || n.contains("sweep") || n.contains("fan")
-        || n.contains("circle") || n.contains("cirkel") || n.contains("wave")
-        || n.contains("anim"))
-        return TRACK_ROLE_MOVEMENT;
-    if (n.contains("dark") || n.contains("ambient") || n.contains("chill")
-        || n.contains("intro") || n.contains("break"))
-        return TRACK_ROLE_DARK;
-    if (n.contains("colour") || n.contains("color") || n.contains("farve"))
-        return TRACK_ROLE_COLOR;
+    // What the scene DOES beats what it is on. "Laser green" is a colour,
+    // "Laser up" is a position - "laser" only decides when nothing else does.
+    static const QStringList strobeWords = { "strob", "blind", "flash", "blitz" };
+    static const QStringList moveWords   = { "move", "pan", "tilt", "pos", "sweep",
+        "fan", "circle", "cirkel", "wave", "anim", "position", "up", "down", "left", "right",
+        "center", "centre", "midt", "op", "ned", "venstre", "hoejre", "højre" };
+    static const QStringList colourWords = { "colour", "color", "farve", "red",
+        "green", "blue", "cyan", "magenta", "magneta", "yellow", "white", "amber",
+        "pink", "purple", "orange", "uv", "lime", "roed", "rød", "groen", "grøn",
+        "blaa", "blå", "gul", "hvid", "lilla", "rgb", "rainbow", "regnbue" };
+    static const QStringList darkWords   = { "dark", "ambient", "chill", "intro",
+        "break", "moerk", "mørk", "dim", "low" };
+    static const QStringList beamWords   = { "laser", "beam", "gobo", "prism", "spot" };
+
+    auto hasWord = [](const QString &t, const QStringList &words) {
+        foreach (const QString &w, words)
+        {
+            // short words must stand alone so "up" does not match "group"
+            if (w.length() <= 3)
+            {
+                QRegularExpression re(QStringLiteral("(^|[^a-z\\x{00e6}\\x{00f8}\\x{00e5}])%1([^a-z\\x{00e6}\\x{00f8}\\x{00e5}]|$)").arg(w));
+                if (re.match(t).hasMatch()) return true;
+            }
+            else if (t.contains(w))
+                return true;
+        }
+        return false;
+    };
+
+    // "laserup" -> "up": strip the fixture words so what is left can be
+    // matched on its own
+    QString core = n;
+    foreach (const QString &w, beamWords)
+        core.replace(w, QStringLiteral(" "));
+
+    if (hasWord(core, strobeWords)) return TRACK_ROLE_STROBE;
+    if (hasWord(core, moveWords))   return TRACK_ROLE_MOVEMENT;
+    if (hasWord(core, colourWords)) return TRACK_ROLE_COLOR;
+    if (hasWord(core, darkWords))   return TRACK_ROLE_DARK;
+    if (hasWord(n, beamWords))      return TRACK_ROLE_BEAM;
 
     if (func->type() == Function::EFXType)
         return TRACK_ROLE_MOVEMENT;
@@ -1279,12 +1314,12 @@ quint32 TrackManager::pickRole(QString state, int role, int cursor) const
 
 void TrackManager::runEngine(bool sectionChanged)
 {
-    if (m_roleMode == false || m_autoRun == false || m_doc == nullptr)
+    if (m_roleMode == false || m_autoRun == false || m_doc == nullptr || m_engine == nullptr)
         return;
 
     if (m_playing == false)
     {
-        stopAllRoles();
+        m_engine->stopAll();
         m_lastEngineBeat = -1;
         return;
     }
@@ -1297,90 +1332,13 @@ void TrackManager::runEngine(bool sectionChanged)
     m_lastEngineBeat = beat;
 
     QString state = currentState();
-
-    tickFades();
-
     int secStart = 1, secEnd = 1;
     sectionBounds(beat, secStart, secEnd);
 
-    int len = qMax(1, secEnd - secStart);
-    qreal prog = qBound(0.0, qreal(beat - secStart) / qreal(len), 1.0);
-    int bar = (beat - secStart) / 4;
-    int beatInBar = (beat - secStart) % 4;
-
-    qreal en = appliedEnergy();
-    int division = stateDivision(state);
-
-    bool isBreak = (state == QStringLiteral("break"));
-    bool isBuild = (state == QStringLiteral("build"));
-    bool isDrop  = (state == QStringLiteral("drop"));
-
-    // A drop must hit, not blend. Everything else may crossfade.
-    bool hard = sectionChanged && isDrop;
-
-    /* ---- colour: the base look. Rotates on bar lines, and a build tightens
-     *      the rotation as it climbs. ---- */
-    int period = isBreak ? 8 : (isDrop ? 1 : 4);
-    if (isBuild)
-        period = prog > 0.66 ? 1 : (prog > 0.33 ? 2 : 4);
-
-    if (sectionChanged)
-    {
-        m_lastColorBar = -1;
-        if (isDrop || isBuild)
-            m_colorCursor++;            // a new section deserves a new colour
-    }
-
-    int colourBar = bar / qMax(1, period);
-    if (colourBar != m_lastColorBar)
-    {
-        if (m_lastColorBar >= 0)
-            m_colorCursor++;
-        m_lastColorBar = colourBar;
-    }
-
-    qreal colLevel = isBreak ? (0.20 + 0.30 * en)
-                   : isBuild ? ((0.40 + 0.60 * prog) * (0.55 + 0.45 * en))
-                   : isDrop  ? 1.0
-                             : (0.45 + 0.55 * en);
-
-    driveRole(TRACK_ROLE_COLOR,
-              pickRole(state, TRACK_ROLE_COLOR, m_colorCursor),
-              colLevel, division, hard);
-
-    /* ---- movement: everything but a break ---- */
-    if (isBreak)
-        stopRole(TRACK_ROLE_MOVEMENT);
-    else
-        driveRole(TRACK_ROLE_MOVEMENT,
-                  pickRole(state, TRACK_ROLE_MOVEMENT, m_colorCursor),
-                  isBuild ? (0.35 + 0.65 * prog) : (0.55 + 0.45 * en),
-                  division, hard);
-
-    /* ---- beams: the drop, and the half of a build that is already climbing ---- */
-    if (isDrop || (isBuild && prog > 0.5))
-        driveRole(TRACK_ROLE_BEAM,
-                  pickRole(state, TRACK_ROLE_BEAM, m_colorCursor),
-                  isDrop ? 1.0 : prog, division, hard);
-    else
-        stopRole(TRACK_ROLE_BEAM);
-
-    /* ---- strobe: the last bar of a build, and the drop's opening hit ---- */
-    bool strobe = (isBuild && prog > 0.82)
-               || (isDrop && bar == 0 && beatInBar < 2);
-    if (strobe)
-        driveRole(TRACK_ROLE_STROBE,
-                  pickRole(state, TRACK_ROLE_STROBE, 0), 1.0, division, true);
-    else
-        stopRole(TRACK_ROLE_STROBE);
-
-    /* ---- ambient: breakdowns ---- */
-    if (isBreak)
-        driveRole(TRACK_ROLE_DARK,
-                  pickRole(state, TRACK_ROLE_DARK, m_colorCursor),
-                  0.35 + 0.40 * en, division);
-    else
-        stopRole(TRACK_ROLE_DARK);
+    // The engine decides cast, palette, motion and dimmers; we only tell it
+    // where in the track we are and how much energy the track has.
+    m_engine->tick(state, beat, secStart, secEnd, appliedEnergy(),
+                   stateDivision(state), sectionChanged);
 
     if (sectionChanged)
         emit stateChanged();
@@ -1469,6 +1427,9 @@ void TrackManager::stopRole(int role)
 
 void TrackManager::stopAllRoles()
 {
+    if (m_engine != nullptr)
+        m_engine->stopAll();
+
     foreach (int role, m_roleActive.keys())
         stopRole(role);
 
@@ -1483,6 +1444,7 @@ void TrackManager::stopAllRoles()
     }
     m_fadeAttr.clear();
     m_fadeLevel.clear();
+    m_movePick = Function::invalidId();
     emit engineChanged();
 }
 
