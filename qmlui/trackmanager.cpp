@@ -37,6 +37,8 @@
 
 #define TRACK_INTENSITY_ATTR 0
 
+static int tmSnapBar(int beat);
+
 TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     : QObject(parent)
     , m_view(view)
@@ -95,6 +97,9 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_lastPosMs = 0;
     m_linkStale = false;
     m_markersManual = false;
+    m_lastMoveIndex = -1;
+    m_lastMoveMs = 0;
+    m_mixing = false;
     m_dropKick = settings.value(SETTINGS_TRACK_DROPKICK, 0.55).toDouble();
     m_breakKick = settings.value(SETTINGS_TRACK_BREAKKICK, 0.30).toDouble();
     m_lastPosMs = 0;
@@ -236,6 +241,8 @@ void TrackManager::handleLine(const QByteArray &line)
         handleTrack(obj);
     else if (evt == QStringLiteral("pos"))
         handlePosition(obj);
+    else
+        handleExtra(evt, obj);
 }
 
 void TrackManager::handleTrack(const QJsonObject &obj)
@@ -284,6 +291,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     m_currentBeat = 0;
     m_trackTimeMs = 0;
     m_movePick = Function::invalidId();    // a new track picks afresh
+    m_undo.clear();
+    if (m_nextTitle == m_title)
+        m_nextTitle.clear();
     if (m_engine != nullptr)
         m_engine->trackLoaded();
 
@@ -938,12 +948,19 @@ void TrackManager::moveMarker(int index, int beat)
     if (index < 0 || index >= m_markers.count())
         return;
 
-    beat = qBound(1, beat, m_beatCount > 0 ? m_beatCount : beat);
+    // a dragged flag snaps to the bar line
+    beat = qBound(1, tmSnapBar(beat), m_beatCount > 0 ? m_beatCount : beat);
 
     QVariantMap marker = m_markers.at(index).toMap();
     if (marker.value(QStringLiteral("beat")).toInt() == beat)
         return;
 
+    // one undo step per drag, not one per bar it passes
+    qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (index != m_lastMoveIndex || nowMs - m_lastMoveMs > 1500)
+        pushUndo();
+    m_lastMoveIndex = index;
+    m_lastMoveMs = nowMs;
     marker.insert(QStringLiteral("beat"), beat);
     m_markers.replace(index, marker);
 
@@ -1932,6 +1949,7 @@ void TrackManager::addMarker(int beat, QString type)
         }
     }
 
+    pushUndo();
     QVariantMap mk;
     mk.insert(QStringLiteral("beat"), beat);
     mk.insert(QStringLiteral("type"), type);
@@ -1946,6 +1964,7 @@ void TrackManager::removeMarker(int index)
     if (index < 0 || index >= m_markers.count())
         return;
     QVariantMap mk = m_markers.at(index).toMap();
+    pushUndo();
     learnFromFlag(mk.value(QStringLiteral("type")).toString(), mk.value(QStringLiteral("beat")).toInt(), false);
     m_markers.removeAt(index);
     markersEdited();
@@ -1958,6 +1977,7 @@ void TrackManager::setMarkerType(int index, QString type)
     QVariantMap mk = m_markers.at(index).toMap();
     if (mk.value(QStringLiteral("type")).toString() == type)
         return;
+    pushUndo();
     learnFromFlag(mk.value(QStringLiteral("type")).toString(), mk.value(QStringLiteral("beat")).toInt(), false);
     mk.insert(QStringLiteral("type"), type);
     m_markers.replace(index, mk);
@@ -2010,3 +2030,148 @@ void TrackManager::learnFromFlag(const QString &type, int beat, bool added)
 }
 
 bool TrackManager::markersManual() const { return m_markersManual; }
+
+/*********************************************************************
+ * Undo, the mix, the next track, the cache editor, generic events
+ *********************************************************************/
+
+void TrackManager::pushUndo()
+{
+    // a snapshot of the flags and the two learned thresholds, so an undo
+    // takes the lesson back with the flag
+    QVariantMap snap;
+    snap.insert(QStringLiteral("markers"), m_markers);
+    snap.insert(QStringLiteral("drop"), m_dropKick);
+    snap.insert(QStringLiteral("break"), m_breakKick);
+    m_undo.append(snap);
+    while (m_undo.count() > 30)
+        m_undo.removeFirst();
+}
+
+bool TrackManager::canUndoMarkers() const { return m_undo.isEmpty() == false; }
+
+void TrackManager::undoMarkers()
+{
+    if (m_undo.isEmpty())
+        return;
+    QVariantMap snap = m_undo.takeLast();
+    m_markers = snap.value(QStringLiteral("markers")).toList();
+    m_dropKick = snap.value(QStringLiteral("drop"), m_dropKick).toDouble();
+    m_breakKick = snap.value(QStringLiteral("break"), m_breakKick).toDouble();
+    QSettings settings;
+    settings.setValue(SETTINGS_TRACK_DROPKICK, m_dropKick);
+    settings.setValue(SETTINGS_TRACK_BREAKKICK, m_breakKick);
+    m_markersManual = true;
+    emit markersChanged();
+    updateState();
+    if (m_autoRun && m_roleMode)
+    {
+        m_lastEngineBeat = -1;
+        runEngine(true);
+    }
+    sendMarkers(true);
+}
+
+void TrackManager::sendEvent(const QJsonObject &obj)
+{
+    QByteArray line = QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n";
+    foreach (QTcpSocket *client, m_clients)
+        if (client != nullptr && client->state() == QAbstractSocket::ConnectedState)
+            client->write(line);
+}
+
+bool TrackManager::mixing() const { return m_mixing; }
+QString TrackManager::nextTitle() const { return m_nextTitle; }
+QVariantList TrackManager::nextMarkers() const { return m_nextMarkers; }
+
+int TrackManager::nextFirstDrop() const
+{
+    // the bar the next track's first drop lands on, or 0
+    int best = 0;
+    foreach (const QVariant &v, m_nextMarkers)
+    {
+        QVariantMap mk = v.toMap();
+        if (mk.value(QStringLiteral("type")).toString() == QStringLiteral("drop"))
+        {
+            int beat = mk.value(QStringLiteral("beat")).toInt();
+            if (best == 0 || beat < best)
+                best = beat;
+        }
+    }
+    return best > 0 ? (best - 1) / 4 + 1 : 0;
+}
+
+QVariantList TrackManager::cacheList() const { return m_cacheList; }
+
+void TrackManager::requestCache()
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("evt"), QStringLiteral("cache-list"));
+    sendEvent(obj);
+}
+
+void TrackManager::forgetTrack(QString title)
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("evt"), QStringLiteral("cache-forget"));
+    obj.insert(QStringLiteral("title"), title);
+    sendEvent(obj);
+}
+
+void TrackManager::forgetAutomatic()
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("evt"), QStringLiteral("cache-forget-auto"));
+    sendEvent(obj);
+}
+
+void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
+{
+    if (evt == QStringLiteral("mix"))
+    {
+        // two decks on air: a transition. The engine holds colour and calm.
+        bool mixing = obj.value(QStringLiteral("mixing")).toBool(false);
+        if (mixing != m_mixing)
+        {
+            m_mixing = mixing;
+            if (m_engine != nullptr)
+                m_engine->setMixing(mixing);
+            emit mixChanged();
+        }
+    }
+    else if (evt == QStringLiteral("next"))
+    {
+        // what is loaded on the other deck, analysed ahead of time
+        m_nextTitle = obj.value(QStringLiteral("title")).toString();
+        m_nextMarkers.clear();
+        QJsonArray mk = obj.value(QStringLiteral("markers")).toArray();
+        for (int i = 0; i < mk.count(); i++)
+        {
+            QJsonObject mo = mk.at(i).toObject();
+            QVariantMap marker;
+            marker.insert(QStringLiteral("beat"), mo.value(QStringLiteral("beat")).toInt());
+            marker.insert(QStringLiteral("type"), mo.value(QStringLiteral("type")).toString());
+            marker.insert(QStringLiteral("energy"), mo.value(QStringLiteral("energy")).toDouble(-1.0));
+            m_nextMarkers.append(marker);
+        }
+        if (m_nextTitle == m_title)
+            m_nextTitle.clear();         // it is this track, not the next
+        emit mixChanged();
+    }
+    else if (evt == QStringLiteral("cache"))
+    {
+        m_cacheList.clear();
+        QJsonArray tracks = obj.value(QStringLiteral("tracks")).toArray();
+        for (int i = 0; i < tracks.count(); i++)
+        {
+            QJsonObject t = tracks.at(i).toObject();
+            QVariantMap row;
+            row.insert(QStringLiteral("title"), t.value(QStringLiteral("title")).toString());
+            row.insert(QStringLiteral("flags"), t.value(QStringLiteral("flags")).toInt());
+            row.insert(QStringLiteral("manual"), t.value(QStringLiteral("manual")).toBool(false));
+            row.insert(QStringLiteral("version"), t.value(QStringLiteral("version")).toInt());
+            m_cacheList.append(row);
+        }
+        emit cacheChanged();
+    }
+}

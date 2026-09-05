@@ -146,6 +146,7 @@ struct TrackGroup
      * each colour sets them to; and channels every colour scene sets alike */
     QMap<quint32, QMap<quint32, QMap<QString, uchar> > > colourValue;  // fixture -> channel -> colour -> value
     QMap<quint32, QMap<quint32, uchar> > baseValue;                     // fixture -> channel -> value
+    bool perEye = false;          // several per-eye colour channels: two colours on one lamp
     bool generatable() const { return patternDevice == false && (rgb || colourValue.isEmpty() == false); }
 };
 
@@ -183,6 +184,9 @@ class TrackEngine : public QObject
      *  the engine keeps following the track underneath, so releasing it
      *  lands on the right look. A toggle, not a hold. */
     Q_PROPERTY(bool blackout READ blackout WRITE setBlackout NOTIFY liveChanged)
+    /** Two decks on air (from BLT): a transition. The colour holds and the
+     *  engine stays at groove level until the outgoing track is gone. */
+    Q_PROPERTY(bool mixing READ mixing NOTIFY liveChanged)
     Q_PROPERTY(QString report READ report NOTIFY liveChanged)
 
     Q_PROPERTY(QStringList warnings READ warnings NOTIFY liveChanged)
@@ -253,6 +257,12 @@ public:
     Q_INVOKABLE void setFlash(bool pressed);
     bool blackout() const;
     void setBlackout(bool on);
+    bool mixing() const;
+    void setMixing(bool on);
+    /** Every trackengine/ and trackmanager/ setting to and from
+     *  Documents/QLC+/track-settings.json. Returns a message for the page. */
+    Q_INVOKABLE QString exportSettings();
+    Q_INVOKABLE QString importSettings();
     QString report() const;
 
     /** Everything that is not right at the moment: a slider overriding the
@@ -341,6 +351,9 @@ protected:
     /* choosing */
     QList<TrackFuncInfo *> candidates(int role, const QString &group) const;
     quint32 colourFunction(const QString &group, const QString &colour) const;
+    /** A hidden scene with colour a on the even eyes and b on the odd ones,
+     *  for groups whose colour lives on per-eye channels. Made on demand. */
+    quint32 splitColourFunction(const QString &group, const QString &a, const QString &b);
     quint32 motionFunction(const QString &group, const QString &colour,
                            const QSet<QString> &cast, int cursor) const;
     quint32 motionFor(const QString &group, const QString &colour,
@@ -406,6 +419,8 @@ private:
     QMap<QString, quint32> m_position;   // sticky position pick per group
     qreal m_master;
     bool m_blackout;
+    bool m_mixing;
+    QMap<QString, quint32> m_splitScenes;  // "group|a|b" -> hidden two-colour scene
     int m_speed;                          // -1 half, 0 as the music, +1 double
     QMap<QString, qreal> m_groupTrim;     // the DJ's fader per group, 1.0 when untouched
     bool m_flash;

@@ -143,7 +143,7 @@ Rectangle
             //      of this section tinted in the running colour, and a countdown
             //      to the next section. Tap a section band to select its flag;
             //      the tools at the bottom left add, retype and delete flags.
-            //      (WF_OVERLAY_V3)
+            //      (WF_OVERLAY_V4)
             Canvas
             {
                 id: wfOverlay
@@ -405,6 +405,19 @@ Rectangle
                     activeColor: "#E36B6B"
                     active: true
                     onTapped: { var i = wfOverlay.selected; wfOverlay.selected = -1; trackManager.removeMarker(i) }
+                }
+
+                Item { width: 12; height: 1 }
+
+                // one step back - the flag and the lesson it taught
+                TrackTile
+                {
+                    width: 88
+                    height: 34
+                    label: qsTr("UNDO")
+                    visible: trackManager ? trackManager.canUndoMarkers : false
+                    opacity: 0.9
+                    onTapped: { wfOverlay.selected = -1; trackManager.undoMarkers() }
                 }
             }
 
@@ -825,7 +838,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V15_BLACKOUT)
+        // =============================================== live controls  (LIVE_V16_NEXT)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -1068,7 +1081,12 @@ Rectangle
                         for (var i = 0; i < mk.length; i++)
                             if (mk[i].beat > cur && (next === null || mk[i].beat < next.beat)) next = mk[i]
                         var count = (next && trackManager.playing) ? "   \u2192 " + next.type.toUpperCase() + " " + Math.ceil((next.beat - cur) / 4) : ""
-                        return colour + "   \u00b7   " + state + count
+                        // the other deck, analysed ahead of time
+                        var nxt = (trackManager.nextTitle !== undefined && trackManager.nextTitle !== "")
+                                  ? "     " + qsTr("NEXT") + ": " + trackManager.nextTitle
+                                    + (trackManager.nextFirstDrop > 0 ? " (" + qsTr("drop at bar") + " " + trackManager.nextFirstDrop + ")" : "")
+                                  : ""
+                        return colour + "   \u00b7   " + state + count + nxt
                     }
                     color: "#8A8A8A"
                     font.pixelSize: 12

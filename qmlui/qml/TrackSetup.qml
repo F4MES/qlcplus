@@ -31,6 +31,8 @@ Rectangle
 
     property string filter: ""
     property bool advancedOpen: false
+    property bool cacheOpen: false
+    property string ioMessage: ""
     property int refresh: 0
 
     function roleColor(role)
@@ -198,6 +200,22 @@ Rectangle
                 onTapped: setupRoot.advancedOpen = !setupRoot.advancedOpen
             }
 
+            // BLT's analysis cache: which tracks are known, hand-corrected
+            // or automatic, and a way to forget one (re-analyse next time)
+            TrackTile
+            {
+                Layout.preferredWidth: 100
+                Layout.preferredHeight: 34
+                label: setupRoot.cacheOpen ? qsTr("HIDE CACHE") : qsTr("CACHE")
+                active: setupRoot.cacheOpen
+                activeColor: "#4FA3E3"
+                onTapped:
+                {
+                    setupRoot.cacheOpen = !setupRoot.cacheOpen
+                    if (setupRoot.cacheOpen && trackManager) trackManager.requestCache()
+                }
+            }
+
             TrackTile
             {
                 Layout.preferredWidth: 110
@@ -206,6 +224,123 @@ Rectangle
                 activeColor: "#E36B6B"
                 active: true
                 onTapped: trackViewRoot.setupOpen = false
+            }
+        }
+
+        // ------------------------------------------------- cache (fold-out)
+        Rectangle
+        {
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: visible ? 260 : 0
+            Layout.maximumHeight: 260
+            visible: setupRoot.cacheOpen
+            color: "#181818"
+            radius: 4
+            border.width: 1
+            border.color: "#333333"
+
+            ColumnLayout
+            {
+                anchors.fill: parent
+                anchors.margins: 6
+                spacing: 4
+
+                RowLayout
+                {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 30
+                    spacing: 8
+
+                    Text
+                    {
+                        Layout.fillWidth: true
+                        text: trackManager
+                              ? qsTr("%1 tracks in BLT's cache - MANUAL ones are your corrections and never re-analysed").arg(trackManager.cacheList.length)
+                              : ""
+                        color: setupRoot.cDim
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+                    TrackTile
+                    {
+                        Layout.preferredWidth: 90
+                        Layout.preferredHeight: 28
+                        label: qsTr("REFRESH")
+                        onTapped: if (trackManager) trackManager.requestCache()
+                    }
+                    TrackTile
+                    {
+                        Layout.preferredWidth: 190
+                        Layout.preferredHeight: 28
+                        label: qsTr("FORGET ALL AUTOMATIC")
+                        activeColor: "#E36B6B"
+                        onTapped: if (trackManager) trackManager.forgetAutomatic()
+                    }
+                }
+
+                ListView
+                {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 2
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: trackManager ? trackManager.cacheList : []
+
+                    delegate: Rectangle
+                    {
+                        width: ListView.view.width
+                        height: 30
+                        color: "#1F1F1F"
+                        radius: 3
+
+                        RowLayout
+                        {
+                            anchors.fill: parent
+                            anchors.margins: 3
+                            spacing: 8
+
+                            Text
+                            {
+                                Layout.fillWidth: true
+                                text: modelData.title
+                                color: setupRoot.cText
+                                font.pixelSize: 13
+                                elide: Text.ElideRight
+                            }
+                            Text
+                            {
+                                Layout.preferredWidth: 70
+                                text: modelData.flags + " " + qsTr("flags")
+                                color: setupRoot.cDim
+                                font.pixelSize: 12
+                            }
+                            Rectangle
+                            {
+                                Layout.preferredWidth: 72
+                                Layout.preferredHeight: 22
+                                radius: 11
+                                color: modelData.manual ? "#E3B44F" : "#3A3A3A"
+                                Text
+                                {
+                                    anchors.centerIn: parent
+                                    text: modelData.manual ? qsTr("MANUAL") : qsTr("AUTO")
+                                    color: modelData.manual ? "#101010" : "#AAAAAA"
+                                    font.bold: true
+                                    font.pixelSize: 10
+                                }
+                            }
+                            TrackTile
+                            {
+                                Layout.preferredWidth: 80
+                                Layout.preferredHeight: 24
+                                label: qsTr("FORGET")
+                                onTapped: trackManager.forgetTrack(modelData.title)
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -566,7 +701,32 @@ Rectangle
                 onTapped: trackEngine.roomAuto = !trackEngine.roomAuto
             }
 
-            Item { Layout.fillWidth: true }
+            Item { Layout.preferredWidth: 20 }
+
+            // every Track setting to / from Documents/QLC+/track-settings.json
+            TrackTile
+            {
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 34
+                label: qsTr("EXPORT")
+                onTapped: setupRoot.ioMessage = trackEngine.exportSettings()
+            }
+            TrackTile
+            {
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 34
+                label: qsTr("IMPORT")
+                onTapped: setupRoot.ioMessage = trackEngine.importSettings()
+            }
+
+            Text
+            {
+                Layout.fillWidth: true
+                text: setupRoot.ioMessage
+                color: setupRoot.cDim
+                font.pixelSize: 11
+                elide: Text.ElideLeft
+            }
         }
 
         // ------------------------------------------------- running

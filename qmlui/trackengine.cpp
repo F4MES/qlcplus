@@ -17,6 +17,8 @@
 #include <algorithm>
 
 #include <QStandardPaths>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QDateTime>
 #include <QTime>
 #include <QTextStream>
@@ -79,6 +81,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_motionCursor(0)
     , m_master(1.0)
     , m_blackout(false)
+    , m_mixing(false)
     , m_speed(0)
     , m_flash(false)
     , m_effects(0)
@@ -865,7 +868,101 @@ void TrackEngine::learnGroups()
                     g.colourValue[fid].insert(ch, byColour.value(fid).value(ch));
             }
         }
+
+        // per-eye colour channels ("Laser Color 1..8", "Eye 3"): four or more
+        // of them, and the group can wear two colours on one lamp
+        g.perEye = false;
+        foreach (quint32 fid, g.colourValue.keys())
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr)
+                continue;
+            int eyes = 0;
+            foreach (quint32 ch, g.colourValue.value(fid).keys())
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch != nullptr && qch->name().contains(QRegularExpression(QStringLiteral("(colou?r|eye)\\s*\\d+"), QRegularExpression::CaseInsensitiveOption)))
+                    eyes++;
+            }
+            if (eyes >= 4)
+                g.perEye = true;
+        }
     }
+}
+
+quint32 TrackEngine::splitColourFunction(const QString &group, const QString &a, const QString &b)
+{
+    // Two palette colours on one laser bar: colour a on the even eyes, b on
+    // the odd ones, from the values the user's own colour scenes taught us.
+    // Still two colours in the room - the accent just moved onto the eyes.
+    QString key = group + "|" + a + "|" + b;
+    if (m_splitScenes.contains(key) && m_doc->function(m_splitScenes.value(key)) != nullptr)
+        return m_splitScenes.value(key);
+
+    const TrackGroup &g = m_groups.value(group);
+    if (g.perEye == false)
+        return Function::invalidId();
+
+    QRegularExpression eye(QStringLiteral("(colou?r|eye)\\s*\\d+"), QRegularExpression::CaseInsensitiveOption);
+    QList<SceneValue> values;
+    int touched = 0;
+    foreach (quint32 fid, g.fixtures)
+    {
+        Fixture *fxi = m_doc->fixture(fid);
+        if (fxi == nullptr || g.colourValue.contains(fid) == false)
+            continue;
+        const QMap<quint32, QMap<QString, uchar> > &chans = g.colourValue.value(fid);
+        int index = 0;
+        bool ok = false;
+        for (QMap<quint32, QMap<QString, uchar> >::const_iterator cit = chans.constBegin(); cit != chans.constEnd(); ++cit)
+        {
+            const QLCChannel *qch = fxi->channel(cit.key());
+            bool isEye = qch != nullptr && qch->name().contains(eye);
+            const QString &colour = (isEye && (index % 2) == 1) ? b : a;
+            if (isEye)
+                index++;
+            if (cit.value().contains(colour) == false)
+                continue;
+            values.append(SceneValue(fid, cit.key(), cit.value().value(colour)));
+            ok = true;
+        }
+        if (ok == false)
+            continue;
+        const QMap<quint32, uchar> base = g.baseValue.value(fid);
+        for (QMap<quint32, uchar>::const_iterator bit = base.constBegin(); bit != base.constEnd(); ++bit)
+            values.append(SceneValue(fid, bit.key(), bit.value()));
+        touched++;
+    }
+    if (touched == 0)
+        return Function::invalidId();
+
+    QString name = ENGINE_COLOUR_PREFIX + QString("%1 %2+%3").arg(group).arg(a).arg(b);
+    Scene *scene = nullptr;
+    foreach (Function *func, m_doc->functions())
+        if (func != nullptr && func->name() == name)
+            scene = qobject_cast<Scene *>(func);
+    if (scene != nullptr)
+    {
+        foreach (SceneValue old, scene->values())
+            scene->unsetValue(old.fxi, old.channel);
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+    }
+    else
+    {
+        scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setVisible(false);
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+        if (m_doc->addFunction(scene) == false)
+        {
+            delete scene;
+            return Function::invalidId();
+        }
+    }
+    m_splitScenes.insert(key, scene->id());
+    return scene->id();
 }
 
 void TrackEngine::ensurePositionScenes()
@@ -1734,6 +1831,87 @@ void TrackEngine::setBlackout(bool on)
     emit liveChanged();
 }
 
+bool TrackEngine::mixing() const { return m_mixing; }
+
+void TrackEngine::setMixing(bool on)
+{
+    if (on == m_mixing)
+        return;
+    m_mixing = on;
+    emit liveChanged();
+}
+
+static QString engineSettingsPath()
+{
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                  + QDir::separator() + "QLC+";
+    QDir().mkpath(dir);
+    return dir + QDir::separator() + "track-settings.json";
+}
+
+QString TrackEngine::exportSettings()
+{
+    // roles, stars, thresholds, banned colours, FULL AUTO, hold, accent ...
+    // everything under trackengine/ and trackmanager/, as one JSON file
+    QSettings settings;
+    QJsonObject obj;
+    foreach (const QString &key, settings.allKeys())
+    {
+        if (key.startsWith(QStringLiteral("trackengine/")) == false && key.startsWith(QStringLiteral("trackmanager/")) == false)
+            continue;
+        QVariant v = settings.value(key);
+        switch (v.typeId())
+        {
+            case QMetaType::Bool:   obj.insert(key, v.toBool()); break;
+            case QMetaType::Int:    obj.insert(key, v.toInt()); break;
+            case QMetaType::Double: obj.insert(key, v.toDouble()); break;
+            default:                obj.insert(key, v.toString()); break;
+        }
+    }
+    QFile file(engineSettingsPath());
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate) == false)
+        return tr("could not write %1").arg(file.fileName());
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+    file.close();
+    return tr("saved %1 settings to %2").arg(obj.count()).arg(file.fileName());
+}
+
+QString TrackEngine::importSettings()
+{
+    QFile file(engineSettingsPath());
+    if (file.open(QIODevice::ReadOnly) == false)
+        return tr("no %1").arg(file.fileName());
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    file.close();
+    if (err.error != QJsonParseError::NoError || doc.isObject() == false)
+        return tr("not a settings file: %1").arg(err.errorString());
+
+    QSettings settings;
+    QJsonObject obj = doc.object();
+    int n = 0;
+    foreach (const QString &key, obj.keys())
+    {
+        if (key.startsWith(QStringLiteral("trackengine/")) == false && key.startsWith(QStringLiteral("trackmanager/")) == false)
+            continue;
+        settings.setValue(key, obj.value(key).toVariant());
+        n++;
+    }
+    // take them on board: roles, stars and options are read in ensureTable
+    m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
+    m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
+    m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
+    m_fullAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
+    m_groupOff.clear();
+    foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString()).toString().split(';', Qt::SkipEmptyParts))
+        m_groupOff.insert(key);
+    m_dirty = true;
+    m_moves.clear();
+    emit tableChanged();
+    emit liveChanged();
+    return tr("loaded %1 settings - restart QLC+ for the Track page's own values").arg(n);
+}
+
 int TrackEngine::speed() const { return m_speed; }
 
 void TrackEngine::setSpeed(int speed)
@@ -2066,6 +2244,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool isDrop  = (state == QStringLiteral("drop"));
     int tier = isBreak ? 0 : (isDrop ? 2 : 1);
     bool isCalm = beat < m_calmUntil;
+    // a mix: two decks on air. Whatever the analysis says, this is groove
+    // at most - the drop belongs to the outgoing track
+    if (m_mixing && isBreak == false)
+    {
+        isDrop = false;
+        isBuild = false;
+        tier = 1;
+    }
 
     int len = qMax(1, secEnd - secStart);
     qreal prog = qBound(0.0, qreal(beat - secStart) / qreal(len), 1.0);
@@ -2094,7 +2280,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         changeColour = m_colour.isEmpty();
     if (forceNext)
         changeColour = true;
-    if (hold && m_colour.isEmpty() == false)
+    if ((hold || m_mixing) && m_colour.isEmpty() == false)
         changeColour = false;
     if (changeColour || m_colourBar >= 0)
         m_colourBar = 0;
@@ -2368,6 +2554,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mv.stepBeats = qMax(1, mv.stepBeats / 2);
 
         QString colour = m_colour;
+        quint32 splitScene = Function::invalidId();
         if (accentColour.isEmpty() == false && key == accentGroup)
         {
             // the accent either holds, or trades places with the palette
@@ -2375,13 +2562,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             colour = accentColour;
             if (mv.colourBars > 0 && ((bar / mv.colourBars) % 2) == 1)
                 colour = m_colour;
+            // on a per-eye lamp the two colours share the bar, and swap eyes
+            // every second bar
+            if (g.perEye && m_fullAuto)
+            {
+                bool swap = ((bar / 2) % 2) == 1;
+                splitScene = splitColourFunction(key, swap ? accentColour : m_colour, swap ? m_colour : accentColour);
+            }
         }
 
         // the base is the light the room stands on: brighter than the
         // effects in a break, where it is often the only thing lit
         qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0), 1.0);
         qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_groupTrim.value(key, 1.0) * m_master;
-        quint32 cf = colourFunction(key, colour);
+        quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
         if (cf != Function::invalidId())
             run("col:" + key, cf, m_funcs.value(cf).dimmer ? gl : 1.0, 0, hard);
         else
@@ -2466,7 +2660,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     while (m_hitBeats.isEmpty() == false && m_hitBeats.first() < beat - 32)
         m_hitBeats.removeFirst();
     bool crowded = m_hitBeats.count() >= 8;
-    bool hit = isCalm == false && still == false
+    bool hit = isCalm == false && still == false && m_mixing == false
             && ((isBuild && prog > 0.82 && crowded == false)
                 || (isDrop && bar == 0 && beatInBar < 2)
                 || (moveHit && crowded == false));
@@ -2509,7 +2703,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
         .arg(isCalm ? tr("  CALM") : QString())
         .arg(QString(m_hold ? tr("  HOLD") : QString()) + (still ? tr("  STILL") : QString())
-             + (m_blackout ? tr("  BLACKOUT") : QString()) + (m_fullAuto ? tr("  FULL AUTO") : QString()));
+             + (m_blackout ? tr("  BLACKOUT") : QString()) + (m_mixing ? tr("  MIX") : QString())
+             + (m_fullAuto ? tr("  FULL AUTO") : QString()));
     emit liveChanged();
 }
 

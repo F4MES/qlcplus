@@ -94,6 +94,11 @@ class TrackManager : public QObject
     Q_PROPERTY(QVariantList highCurve READ highCurve NOTIFY trackChanged)
     Q_PROPERTY(QVariantList kickCurve READ kickCurve NOTIFY trackChanged)
     Q_PROPERTY(QVariantList markers READ markers NOTIFY markersChanged)
+    Q_PROPERTY(bool canUndoMarkers READ canUndoMarkers NOTIFY markersChanged)
+    Q_PROPERTY(bool mixing READ mixing NOTIFY mixChanged)
+    Q_PROPERTY(QString nextTitle READ nextTitle NOTIFY mixChanged)
+    Q_PROPERTY(int nextFirstDrop READ nextFirstDrop NOTIFY mixChanged)
+    Q_PROPERTY(QVariantList cacheList READ cacheList NOTIFY cacheChanged)
 
     Q_PROPERTY(int currentBeat READ currentBeat NOTIFY positionChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY positionChanged)
@@ -170,6 +175,18 @@ public:
     Q_INVOKABLE void removeMarker(int index);
     Q_INVOKABLE void setMarkerType(int index, QString type);
     Q_INVOKABLE bool markersManual() const;
+    /** One step back: flags and the lesson they taught. */
+    Q_INVOKABLE void undoMarkers();
+    bool canUndoMarkers() const;
+    bool mixing() const;
+    QString nextTitle() const;
+    QVariantList nextMarkers() const;
+    int nextFirstDrop() const;
+    /** BLT's analysis cache, on request: { title, flags, manual, version }. */
+    QVariantList cacheList() const;
+    Q_INVOKABLE void requestCache();
+    Q_INVOKABLE void forgetTrack(QString title);
+    Q_INVOKABLE void forgetAutomatic();
     Q_INVOKABLE QString stateAtBeat(int beat) const;
 
     /* ---- slots ---- */
@@ -238,6 +255,8 @@ signals:
     void linkChanged();
     void trackChanged();
     void markersChanged();
+    void mixChanged();
+    void cacheChanged();
     void positionChanged();
     void stateChanged();
     void autoRunChanged();
@@ -274,6 +293,9 @@ protected:
     bool refineMarkers();
     qreal kickMean(int fromBeat, int count) const;
     void markersEdited();
+    void pushUndo();
+    void sendEvent(const QJsonObject &obj);
+    void handleExtra(const QString &evt, const QJsonObject &obj);
     void learnFromFlag(const QString &type, int beat, bool added);
     quint32 pickRole(QString state, int role, int cursor) const;
     void driveRole(int role, quint32 fid, qreal level, int division,
@@ -313,6 +335,13 @@ private:
     bool m_markersManual;     // the flags are the operator's, or a cached correction
     qreal m_dropKick;         // learned: the kick a drop needs
     qreal m_breakKick;        // learned: the kick a break stays under
+    QList<QVariantMap> m_undo;   // snapshots: flags + thresholds
+    int m_lastMoveIndex;         // a drag is one undo step
+    qint64 m_lastMoveMs;
+    bool m_mixing;
+    QString m_nextTitle;
+    QVariantList m_nextMarkers;
+    QVariantList m_cacheList;
 
     int m_currentBeat;
     bool m_playing;
