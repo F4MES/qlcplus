@@ -390,7 +390,10 @@ private:
     QString m_override;
     QString m_colour;
     int m_colourCursor;
-    int m_colourBar;
+    int m_colourBar;          // -1: a fresh track, hold the colour until a break or drop
+    int m_colourSince;        // beat of the last colour change
+    int m_holdNow;            // bars this colour holds - drawn each change around holdBars
+    QString m_accentPick;     // the accent drawn for this section
     int m_castCursor;
     int m_motionCursor;
     QSet<QString> m_cast;

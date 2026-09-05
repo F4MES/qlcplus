@@ -73,6 +73,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_holdBars(32)
     , m_colourCursor(0)
     , m_colourBar(-1)
+    , m_colourSince(-1)
+    , m_holdNow(32)
     , m_castCursor(0)
     , m_motionCursor(0)
     , m_master(1.0)
@@ -532,7 +534,8 @@ void TrackEngine::ensureTable()
         info.step = steps.contains(func->id());
 
         QString n = (info.name + " " + info.path).toLower();
-        info.junk = hasWord(n, junkWords);
+        // "Preset Red" is not a reset: strip the word before the junk test
+        info.junk = hasWord(QString(n).replace(QStringLiteral("preset"), QStringLiteral(" ")), junkWords);
         info.colour = colourOf(n);
         if (info.colour.isEmpty())
             info.colour = colourOf(info.name);          // case-sensitive suffix rule
@@ -1929,10 +1932,15 @@ QString TrackEngine::accentFor(const QString &colour) const
         { "amber",   { "red", "white" } },
         { "uv",      { "white" } },
     };
+    // of the partners the palette has, one at random - the same pair every
+    // drop would be a habit, not a choice
+    QStringList have;
     foreach (const QString &p, pairs.value(colour))
-        if (m_palette.contains(p) && engineBannedColour(p) == false)
-            return p;
-    return QString();
+        if (m_palette.contains(p) && engineBannedColour(p) == false && p != colour)
+            have << p;
+    if (have.isEmpty())
+        return QString();
+    return have.at(int(QRandomGenerator::global()->bounded(have.count())));
 }
 
 qreal TrackEngine::tempoScore(const TrackFuncInfo &info, qreal bpm) const
@@ -2014,6 +2022,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // nothing moves or changes - no pulse, no patterns, no colour rotation,
     // no positions. A hold the slider imposes.
     bool still = energy < 0.03;
+    QRandomGenerator *rng = QRandomGenerator::global();
     bool hold = (m_hold || still) && forceNext == false;      // NEXT breaks a hold for one beat
     if (forceNext)
     {
@@ -2043,14 +2052,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     /* ---- palette: one colour, changed rarely. A fresh track keeps the colour
      *      it arrived with until its first break or drop. ---- */
-    int holdBar = beat / qMax(4, m_holdBars * 4);
+    // the hold is counted from the last change and varies around the SETUP
+    // value (x0.5, x0.75, x1, x1.5), always ending on a bar line - so the
+    // colour does not change on the same beat of every track
+    bool holdUp = m_colourSince >= 0 && beatInBar == 0
+               && beat - m_colourSince >= qMax(4, m_holdNow * 4);
     bool changeColour;
     if (m_colour.isEmpty())
         changeColour = true;
     else if (m_colourBar < 0)
         changeColour = sectionChanged && (isBreak || isDrop);
     else
-        changeColour = (sectionChanged && (isBreak || isDrop)) || holdBar != m_colourBar;
+        changeColour = (sectionChanged && (isBreak || isDrop)) || holdUp;
     if (isCalm)
         changeColour = m_colour.isEmpty();
     if (forceNext)
@@ -2058,7 +2071,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (hold && m_colour.isEmpty() == false)
         changeColour = false;
     if (changeColour || m_colourBar >= 0)
-        m_colourBar = holdBar;
+        m_colourBar = 0;
+    if (changeColour)
+    {
+        m_colourSince = beat;
+        static const qreal stretch[4] = { 0.5, 0.75, 1.0, 1.5 };
+        m_holdNow = qMax(4, int(qRound(m_holdBars * stretch[rng->bounded(4)])));
+    }
 
     if (engineBannedColour(m_override))
         m_override.clear();
@@ -2087,7 +2106,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     /* ---- cast: the base group is always lit; effects are added on top as
      *      the evening's energy rises. Decided once per section, and never
      *      more than one step from the last section. ---- */
-    QRandomGenerator *rng = QRandomGenerator::global();
     if (sectionChanged && hold == false)
     {
         // a random stride, so the rotation of groups, looks and positions
@@ -2157,7 +2175,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     /* ---- accent: a partner colour on one effect group in drops ---- */
     QString accentColour;
     if (m_accent && isDrop && isCalm == false && castSet.count() >= 2 && m_override.isEmpty())
-        accentColour = accentFor(m_colour);
+    {
+        if (sectionChanged || m_accentPick.isEmpty() || m_palette.contains(m_accentPick) == false)
+            m_accentPick = accentFor(m_colour);
+        accentColour = m_accentPick;
+    }
 
     /* ---- positions: sticky, tiered, only changed in the dark for lasers ---- */
     QSet<QString> darkGroups;
@@ -3085,6 +3107,7 @@ void TrackEngine::trackLoaded()
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
     m_colourBar = -1;            // hold the colour until the first break or drop
+    m_colourSince = -1;
     m_castCursor++;
     m_moves.clear();             // the new track draws its own moves
     m_hitBeats.clear();
