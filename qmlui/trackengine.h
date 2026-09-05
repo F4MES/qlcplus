@@ -401,6 +401,7 @@ private:
     QMap<quint32, int> m_lastPan;         // last pan reading per head, for the Light Rider check
     QMap<QString, int> m_headMoveBeats;   // beats in a row a head group moved without us
     int m_effects;            // effect groups this section (locked, hysteresis)
+    int m_starCeil;           // hottest star allowed this section (drawn from the energy)
     int m_lastBeat;
     int m_calmUntil;          // beat until which the panic look holds
     QTimer m_fadeTimer;       // keeps fades ticking after a release

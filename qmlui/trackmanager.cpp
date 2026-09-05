@@ -773,11 +773,9 @@ void TrackManager::slotEnergyTick()
 
 qreal TrackManager::energy() const
 {
-    if (m_bpmHigh <= m_bpmLow)
-        return 1.0;
-    qreal e = qreal(m_liveBpm - m_bpmLow) / qreal(m_bpmHigh - m_bpmLow);
-    e = qBound(0.0, e, 1.0) * (qreal(m_energyTrim) / 100.0);
-    return qBound(0.0, e, 1.0);
+    // the slider is the energy, 0..100. BPM barely moves in a set and only
+    // shifted the scale; the section's loudness still shapes it downstream
+    return qBound(0.0, qreal(m_energyTrim) / 100.0, 1.0);
 }
 
 qreal TrackManager::appliedEnergy() const

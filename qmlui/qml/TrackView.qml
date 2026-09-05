@@ -554,7 +554,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V12_LAYOUT)
+        // =============================================== live controls  (LIVE_V13_ENERGY_100)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -569,7 +569,8 @@ Rectangle
             spacing: 10
             visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
-            // ---- energy: the trim, 0..200 %, 100 in the middle
+            // ---- energy: 0..100 %, the one dial. No words on it: the DJ
+            //      hears what it does
             Rectangle
             {
                 Layout.fillWidth: true
@@ -579,7 +580,7 @@ Rectangle
                 border.width: 1
                 border.color: "#555555"
 
-                property real trim: trackManager ? trackManager.energyTrim / 200 : 0.5
+                property real trim: trackManager ? Math.min(1, trackManager.energyTrim / 100) : 0.5
 
                 Rectangle
                 {
@@ -592,28 +593,10 @@ Rectangle
                     color: "#E3B44F"
                 }
 
-                // the 100 % mark
-                Rectangle
-                {
-                    x: 3 + (parent.width - 6) * 0.5 - 1
-                    y: 3
-                    width: 2
-                    height: parent.height - 6
-                    color: "#00000060"
-                }
-
                 Text
                 {
                     anchors.centerIn: parent
-                    text:
-                    {
-                        var e = trackManager ? trackManager.energy : 0
-                        var groove = e < 0.50 ? 0 : 1
-                        var drop = e < 0.30 ? 0 : (e < 0.65 ? 1 : 2)
-                        return qsTr("ENERGY") + "  " + (trackManager ? trackManager.energyTrim : 100) + "%"
-                               + "     " + qsTr("groove") + " +" + groove + "   " + qsTr("drop") + " +" + drop
-                               + (trackEngine && trackEngine.roomAuto ? "     " + qsTr("by clock") : "")
-                    }
+                    text: qsTr("ENERGY") + "  " + (trackManager ? trackManager.energyTrim : 50) + "%"
                     color: "#EEEEEE"
                     font.bold: true
                     font.pixelSize: 15
@@ -624,8 +607,7 @@ Rectangle
                     anchors.fill: parent
                     function apply(x)
                     {
-                        var v = Math.round(Math.max(0, Math.min(1, x / width)) * 200)
-                        if (Math.abs(v - 100) < 4) v = 100
+                        var v = Math.round(Math.max(0, Math.min(1, x / width)) * 100)
                         if (trackManager) trackManager.energyTrim = v
                     }
                     onPressed: (mouse) => apply(mouse.x)

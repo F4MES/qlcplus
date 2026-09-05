@@ -72,6 +72,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_speed(0)
     , m_flash(false)
     , m_effects(0)
+    , m_starCeil(0)
     , m_lastBeat(0)
     , m_calmUntil(0)
     , m_logEnabled(true)
@@ -2083,10 +2084,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     QString base = baseGroup();
     bool silent = sectionEnergy >= 0.0 && sectionEnergy < 0.12;
 
-    auto effectsFor = [&energy](bool drop, bool brk) {
-        if (drop) return energy < 0.30 ? 0 : (energy < 0.65 ? 1 : 2);
-        if (brk)  return 0;
-        return energy < 0.50 ? 0 : 1;
+    // how many effect groups join the base: a ramp of the energy, with the
+    // fraction decided by dice once per section - 55 % and 65 % differ
+    auto effectsFor = [&energy, rng](bool drop, bool brk) {
+        if (brk)
+            return 0;
+        qreal want = drop ? 2.0 * qBound(0.0, (energy - 0.15) / 0.65, 1.0)
+                          : 1.0 * qBound(0.0, (energy - 0.30) / 0.45, 1.0);
+        int whole = int(want);
+        qreal frac = want - whole;
+        return whole + (rng->bounded(1000) < int(frac * 1000.0) ? 1 : 0);
     };
     if ((sectionChanged || m_lastState.isEmpty()) && hold == false)
     {
@@ -2186,7 +2193,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     /* ---- the blink: one dark beat right before a drop, then everything
      *      lands on the one. The base stays - the room never goes black. ---- */
-    if (preDrop && beatsToNext == 1 && energy > 0.6 && isCalm == false && hold == false)
+    if (preDrop && beatsToNext == 1 && energy > 0.5 && isCalm == false && hold == false)
     {
         foreach (const QString &key, castSet)
             if (key != base)
@@ -2230,10 +2237,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_moves.insert(key, fresh);
     }
 
-    // how hot a chase may be right now: the stars a motion needs
-    int maxStars = isBreak ? 1
-                 : isDrop  ? (energy < 0.30 ? 1 : (energy < 0.65 ? 2 : 3))
-                           : (energy < 0.45 ? 1 : (energy < 0.70 ? 2 : 3));
+    // how hot a chase may be right now: the stars a motion needs. Drawn once
+    // per section from ramps of the energy, not read off a step
+    if (redraw || m_starCeil <= 0)
+    {
+        qreal p2 = isDrop ? qBound(0.0, (energy - 0.15) / 0.35, 1.0) : qBound(0.0, (energy - 0.30) / 0.35, 1.0);
+        qreal p3 = isDrop ? qBound(0.0, (energy - 0.45) / 0.35, 1.0) : qBound(0.0, (energy - 0.60) / 0.35, 1.0);
+        m_starCeil = 1;
+        if (rng->bounded(1000) < int(p2 * 1000.0))
+        {
+            m_starCeil = 2;
+            if (rng->bounded(1000) < int(p3 * 1000.0))
+                m_starCeil = 3;
+        }
+    }
+    int maxStars = isBreak ? 1 : m_starCeil;
 
     // this beat's clock: the pulse timer measures its breath against it
     if (bpm > 0.0)
@@ -2270,7 +2288,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         // the turnaround: the last bar of an eight-bar phrase moves twice as
         // fast, the way a drummer fills into the next phrase
-        else if (isBreak == false && energy > 0.5 && (bar % 8) == 7 && mv.pattern != ENGINE_PAT_STATIC)
+        else if (isBreak == false && energy > 0.45 && (bar % 8) == 7 && mv.pattern != ENGINE_PAT_STATIC)
             mv.stepBeats = qMax(1, mv.stepBeats / 2);
         // the DJ's SPEED: half or double everything that steps
         if (m_speed < 0)
@@ -2428,7 +2446,6 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     TrackMove mv;
     QRandomGenerator *rng = QRandomGenerator::global();
     auto pick = [rng](const QList<int> &opts) { return opts.at(int(rng->bounded(opts.count()))); };
-    auto pickReal = [rng](const QList<qreal> &opts) { return opts.at(int(rng->bounded(opts.count()))); };
     const TrackGroup &g = m_groups.value(group);
     qreal e = qBound(0.0, energy, 1.0);
     mv.phase = int(rng->bounded(8));
@@ -2477,61 +2494,52 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     else if (tier == 2)
         mv.ownChaser = rng->bounded(10) < 6;
     else
-        mv.ownChaser = e >= 0.35 && rng->bounded(10) < 3;
+        mv.ownChaser = rng->bounded(1000) < int(300.0 * qBound(0.0, (e - 0.25) / 0.5, 1.0));
+
+    // A linear slider deserves a linear engine: nothing below switches at a
+    // threshold. Every chance and depth is a ramp of the energy, so 55 % and
+    // 65 % look different, and 100 % is everything at once.
+    auto ramp = [](qreal x, qreal from, qreal to) { return qBound(0.0, (x - from) / (to - from), 1.0); };
+    auto chance = [rng](qreal p) { return rng->bounded(1000) < int(p * 1000.0); };
 
     if (tier == 1)
     {
-        if (e < 0.35)
+        // groove: a static look at the bottom, patterns and a pulse growing in
+        qreal live = ramp(e, 0.25, 0.75);            // 0 = still, 1 = full groove
+        if (chance(live))
         {
-            // low energy: hold the look, with a slow breath on the base
-            if (isBase)
-                mv.breatheBars = 4;
-            return mv;
+            qreal quick = ramp(e, 0.55, 0.95);       // chases and short steps
+            QList<int> menu = { ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES };
+            if (chance(quick))
+                menu << ENGINE_PAT_CHASE << ENGINE_PAT_PINGPONG;
+            mv.pattern = pick(menu);
+            mv.stepBeats = chance(quick) ? pick({ 2, 4 }) : pick({ 4, 8 });
         }
-        if (e < 0.70)
-        {
-            mv.pattern = pick({ ENGINE_PAT_STATIC, ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES });
-            mv.stepBeats = pick({ 4, 8 });
-            mv.pulse = pickReal({ 0.0, 0.15, 0.25 });
-            mv.pulseOn = pick({ 1, 3 });
-        }
-        else
-        {
-            mv.pattern = pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES,
-                                ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
-            mv.stepBeats = pick({ 2, 4 });
-            mv.pulse = pickReal({ 0.2, 0.3 });
-            mv.pulseOn = pick({ 0, 1 });
-            mv.colourBars = pick({ 0, 0, 4 });
-        }
+        else if (isBase)
+            mv.breatheBars = 4;                      // still, but alive
+        mv.pulse = 0.35 * ramp(e, 0.30, 0.90) * (0.6 + 0.4 * rng->bounded(1000) / 1000.0);
+        if (mv.pulse < 0.08)
+            mv.pulse = 0.0;
+        mv.pulseOn = e < 0.6 ? pick({ 1, 3 }) : pick({ 0, 1 });
+        if (chance(0.4 * ramp(e, 0.55, 0.95)))
+            mv.colourBars = 4;
     }
     else
     {
-        if (e < 0.30)
-        {
-            mv.pattern = pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN });
-            mv.stepBeats = 4;
-            mv.pulse = 0.25;
-        }
-        else if (e < 0.65)
-        {
-            mv.pattern = pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES,
-                                ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
-            mv.stepBeats = pick({ 1, 2 });
-            mv.pulse = pickReal({ 0.3, 0.4 });
-            mv.pulseOn = pick({ 0, 0, 1, 2 });
-            mv.colourBars = pick({ 0, 0, 2, 4 });
-        }
-        else
-        {
-            mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG, ENGINE_PAT_SPARKLE,
-                                ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES, ENGINE_PAT_STATIC });
-            mv.stepBeats = pick({ 1, 1, 2 });
-            mv.pulse = pickReal({ 0.4, 0.5, 0.6 });
-            mv.pulseOn = pick({ 0, 0, 2 });
-            mv.colourBars = pick({ 0, 1, 2, 4 });
-            mv.flashBar = rng->bounded(3) == 0;
-        }
+        // drop: always moving; how fast, how deep, how wild follows the energy
+        qreal wild = ramp(e, 0.20, 0.90);
+        QList<int> menu = { ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES, ENGINE_PAT_STATIC };
+        if (chance(ramp(e, 0.15, 0.60)))
+            menu << ENGINE_PAT_CHASE << ENGINE_PAT_PINGPONG;
+        if (chance(ramp(e, 0.55, 0.95)))
+            menu << ENGINE_PAT_SPARKLE << ENGINE_PAT_CHASE;
+        mv.pattern = pick(menu);
+        mv.stepBeats = chance(wild) ? pick({ 1, 1, 2 }) : pick({ 2, 4 });
+        mv.pulse = 0.25 + 0.40 * wild * (0.7 + 0.3 * rng->bounded(1000) / 1000.0);
+        mv.pulseOn = chance(0.7) ? 0 : pick({ 1, 2 });
+        if (chance(0.5 * ramp(e, 0.30, 0.90)))
+            mv.colourBars = pick({ 1, 2, 4 });
+        mv.flashBar = chance(0.35 * ramp(e, 0.55, 0.95));
     }
 
     if (isBase)
@@ -2811,7 +2819,7 @@ void TrackEngine::setRoom(int room)
     }
     m_room = room;
     m_moves.clear();             // the new energy draws new moves
-    static const int percent[4] = { 55, 80, 100, 125 };
+    static const int percent[4] = { 35, 55, 75, 90 };
     m_roomSent = percent[m_room];
     emit roomChanged(m_roomSent);
     emit liveChanged();
@@ -2837,13 +2845,13 @@ int TrackEngine::roomPercent() const { return m_roomSent; }
 int TrackEngine::clockPercent() const
 {
     // anchor points through the night, minutes past 21:00 -> percent
-    static const int anchor[][2] = { { 0, 55 }, { 120, 80 }, { 210, 100 }, { 270, 125 }, { 420, 125 }, { 480, 55 } };
+    static const int anchor[][2] = { { 0, 35 }, { 120, 55 }, { 210, 75 }, { 270, 90 }, { 420, 90 }, { 480, 35 } };
     QTime now = QTime::currentTime();
     int minutes = now.hour() * 60 + now.minute() - 21 * 60;
     if (minutes < 0)
         minutes += 24 * 60;          // past midnight
     if (minutes >= 480)
-        return 55;                   // 05:00 - 21:00: the room is empty
+        return 35;                   // 05:00 - 21:00: the room is empty
     for (int i = 1; i < 6; i++)
     {
         if (minutes <= anchor[i][0])
@@ -2853,7 +2861,7 @@ int TrackEngine::clockPercent() const
             return int(qRound(anchor[i - 1][1] + f * (anchor[i][1] - anchor[i - 1][1])));
         }
     }
-    return 55;
+    return 35;
 }
 
 void TrackEngine::announceRoom()
@@ -3007,6 +3015,7 @@ void TrackEngine::trackLoaded()
     m_castCursor++;
     m_moves.clear();             // the new track draws its own moves
     m_hitBeats.clear();
+    m_starCeil = 0;
 }
 
 /*********************************************************************
