@@ -834,7 +834,9 @@ Rectangle
         {
             id: liveRow
             Layout.fillWidth: true
+            Layout.fillHeight: false
             Layout.preferredHeight: trackViewRoot.touchH * 1.4
+            Layout.maximumHeight: trackViewRoot.touchH * 1.4
             spacing: 10
             visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
@@ -1030,7 +1032,9 @@ Rectangle
         {
             id: atmosRow
             Layout.fillWidth: true
+            Layout.fillHeight: false
             Layout.preferredHeight: trackViewRoot.touchH
+            Layout.maximumHeight: trackViewRoot.touchH
             spacing: 10
             visible: trackManager && trackManager.roleMode && trackEngine
                      && trackEngine.hazeAvailable && !trackViewRoot.setupOpen
@@ -1095,7 +1099,9 @@ Rectangle
         RowLayout
         {
             Layout.fillWidth: true
+            Layout.fillHeight: false
             Layout.preferredHeight: 30
+            Layout.maximumHeight: 30
             spacing: 6
             visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 

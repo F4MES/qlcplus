@@ -74,7 +74,9 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
     m_fadeTimer.setInterval(250);
     connect(&m_fadeTimer, SIGNAL(timeout()), this, SLOT(slotFadeTimer()));
-    m_master = settings.value(SETTINGS_ENGINE_MASTER, 1.0).toDouble();
+    // MASTER is deliberately not restored: a night that starts at 40 %
+    // because someone dimmed last time is worse than one that starts bright
+    m_master = 1.0;
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
@@ -496,7 +498,7 @@ void TrackEngine::ensureTable()
             foreach (SceneValue sv, scene->values())
             {
                 Fixture *fxi = m_doc->fixture(sv.fxi);
-                if (fxi != nullptr && sv.channel == fxi->masterIntensityChannel() && sv.value > 0)
+                if (fxi != nullptr && sv.channel == dimmerChannel(fxi) && sv.value > 0)
                     info.dimmer = true;
             }
         }
@@ -550,6 +552,34 @@ void TrackEngine::ensureTable()
              << "functions, palette" << m_palette;
 }
 
+quint32 TrackEngine::dimmerChannel(Fixture *fxi) const
+{
+    // QLC's own answer first - but it gives up on definitions that declare
+    // heads (the animation lasers, the mini pars), so fall back to reading
+    // the channel list: a plain white Intensity channel, master dimmer
+    // preset preferred.
+    if (fxi == nullptr)
+        return QLCChannel::invalid();
+
+    quint32 ch = fxi->masterIntensityChannel();
+    if (ch != QLCChannel::invalid())
+        return ch;
+
+    quint32 plain = QLCChannel::invalid();
+    for (quint32 i = 0; i < fxi->channels(); i++)
+    {
+        const QLCChannel *qch = fxi->channel(i);
+        if (qch == nullptr || qch->group() != QLCChannel::Intensity
+            || qch->colour() != QLCChannel::NoColour)
+            continue;
+        if (qch->preset() == QLCChannel::IntensityMasterDimmer)
+            return i;
+        if (plain == QLCChannel::invalid())
+            plain = i;
+    }
+    return plain;
+}
+
 void TrackEngine::ensureDimmerScenes()
 {
     // one hidden scene per group, holding every master dimmer at full;
@@ -569,7 +599,7 @@ void TrackEngine::ensureDimmerScenes()
             Fixture *fxi = m_doc->fixture(fid);
             if (fxi == nullptr)
                 continue;
-            quint32 ch = fxi->masterIntensityChannel();
+            quint32 ch = dimmerChannel(fxi);
             if (ch != QLCChannel::invalid())
                 values.append(SceneValue(fid, ch, 255));
         }
@@ -745,6 +775,9 @@ QVariantList TrackEngine::table()
     QVariantList list;
     QList<TrackFuncInfo> rows = m_funcs.values();
     std::sort(rows.begin(), rows.end(), [](const TrackFuncInfo &a, const TrackFuncInfo &b) {
+        bool ha = a.junk || a.step || a.groups.isEmpty();
+        bool hb = b.junk || b.step || b.groups.isEmpty();
+        if (ha != hb) return hb;                 // the usable looks first
         QString ga = a.groups.isEmpty() ? QString() : *a.groups.constBegin();
         QString gb = b.groups.isEmpty() ? QString() : *b.groups.constBegin();
         if (ga != gb) return ga < gb;
@@ -932,7 +965,6 @@ void TrackEngine::setMaster(qreal level)
     if (qFuzzyCompare(level, m_master))
         return;
     m_master = level;
-    QSettings().setValue(SETTINGS_ENGINE_MASTER, level);
 
     // re-apply to whatever is lit right now
     foreach (const QString &slot, m_active.keys())
@@ -1472,7 +1504,7 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
             Fixture *fxi = m_doc->fixture(fid);
             if (fxi == nullptr)
                 continue;
-            quint32 ch = fxi->masterIntensityChannel();
+            quint32 ch = dimmerChannel(fxi);
             int uni = int(fxi->universe());
             if (ch == QLCChannel::invalid() || uni < 0 || uni >= universes.count()
                 || universes.at(uni) == nullptr)

@@ -45,6 +45,7 @@
 #include <QSet>
 
 class Function;
+class Fixture;
 class Scene;
 class Doc;
 
@@ -209,6 +210,7 @@ protected:
     void loadRoles();
     void saveRoles();
     void ensureDimmerScenes();
+    quint32 dimmerChannel(Fixture *fxi) const;
     void ensureAtmosScenes();
     void applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32> > &channels, qreal level);
 

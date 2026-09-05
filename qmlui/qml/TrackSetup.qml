@@ -97,11 +97,16 @@ Rectangle
         anchors.margins: 8
         spacing: 8
 
+        // Nested layouts fill the height by default in Qt Quick Layouts, so
+        // every row here pins itself and only the list below may grow.
+
         // ------------------------------------------------- header
         RowLayout
         {
             Layout.fillWidth: true
+            Layout.fillHeight: false
             Layout.preferredHeight: 40
+            Layout.maximumHeight: 40
             spacing: 8
 
             Text
@@ -188,7 +193,9 @@ Rectangle
         RowLayout
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: 52
+            Layout.fillHeight: false
+            Layout.preferredHeight: 56
+            Layout.maximumHeight: 56
             spacing: 6
 
             Text
@@ -260,7 +267,9 @@ Rectangle
         RowLayout
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: 26
+            Layout.fillHeight: false
+            Layout.preferredHeight: 28
+            Layout.maximumHeight: 28
             spacing: 6
 
             Item { Layout.preferredWidth: 330 }
@@ -301,8 +310,11 @@ Rectangle
             id: funcList
             Layout.fillWidth: true
             Layout.fillHeight: true
+            Layout.preferredHeight: 300
+            Layout.minimumHeight: 120
             clip: true
             spacing: 3
+            boundsBehavior: Flickable.StopAtBounds
 
             model:
             {
@@ -408,7 +420,9 @@ Rectangle
         RowLayout
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: setupRoot.advancedOpen ? 40 : 0
+            Layout.fillHeight: false
+            Layout.preferredHeight: 40
+            Layout.maximumHeight: 40
             visible: setupRoot.advancedOpen
             spacing: 8
 
@@ -452,6 +466,7 @@ Rectangle
         Text
         {
             Layout.fillWidth: true
+            Layout.fillHeight: false
             text: qsTr("Running") + ":  " + (trackEngine ? trackEngine.report : "")
             color: setupRoot.cDim
             font.pixelSize: 13
