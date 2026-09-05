@@ -232,6 +232,7 @@ protected:
 
     /* running */
     void run(const QString &slot, quint32 fid, qreal level, int division, bool hard);
+    void startFunction(Function *func, int division);
     void stopSlot(const QString &slot, bool hard);
     void tickFades();
     void setDimmer(const QString &group, qreal level);

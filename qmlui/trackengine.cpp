@@ -1591,11 +1591,13 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 void TrackEngine::release()
 {
     // AUTO went off: let everything fade out over a bar instead of clipping,
-    // and let the dimmers fall back to the sliders
+    // and let the dimmers fall back to the sliders. Positions stay where they
+    // are - stopping a laser position is a move, and a slider may still have
+    // the beam lit.
     foreach (const QString &slot, m_active.keys())
-        stopSlot(slot, false);
+        if (slot.startsWith("pos:") == false)
+            stopSlot(slot, false);
     m_cast.clear();
-    m_position.clear();
     m_lastState.clear();
     m_flash = false;
     m_report = tr("(released)");
@@ -1621,6 +1623,10 @@ void TrackEngine::idle()
         run("idle:" + QString::number(info->id), info->id,
             info->dimmer ? m_master : 1.0, 0, false);
 
+    // nothing plays, so no beats tick the fades: keep them moving on a timer
+    if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
+        m_fadeTimer.start();
+
     m_cast.clear();
     m_report = list.isEmpty() ? tr("(idle - no start scene)") : tr("(start scene)");
     emit liveChanged();
@@ -1628,7 +1634,7 @@ void TrackEngine::idle()
 
 void TrackEngine::trackLoaded()
 {
-    m_position.clear();
+    // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
     m_colourBar = -1;            // hold the colour until the first break or drop
     m_castCursor++;
@@ -1652,7 +1658,18 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     {
         Function *func = m_doc->function(fid);
         int attr = m_activeAttr.value(slot, -1);
-        if (func != nullptr && attr >= 0 && qFuzzyCompare(level, m_activeLevel.value(slot, -1.0)) == false)
+        if (func != nullptr && func->isRunning() == false)
+        {
+            // someone stopped it from the Virtual Console: it is still ours,
+            // so bring it back rather than adjusting a dead function forever
+            startFunction(func, division);
+            if (attr >= 0)
+                func->releaseAttributeOverride(attr);
+            attr = func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, level);
+            m_activeAttr.insert(slot, attr);
+        }
+        else if (func != nullptr && attr >= 0
+                 && qFuzzyCompare(level, m_activeLevel.value(slot, -1.0)) == false)
             func->adjustAttribute(level, attr);
         m_activeLevel.insert(slot, level);
         return;
@@ -1671,18 +1688,26 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         m_fadeLevel.remove(fid);
     }
     else if (func->isRunning() == false)
-    {
-        if (division > 0)
-            func->start(m_doc->masterTimer(), FunctionParent::master(), 0,
-                        Function::defaultSpeed(), Function::defaultSpeed(),
-                        uint(division), Function::Beats);
-        else
-            func->start(m_doc->masterTimer(), FunctionParent::master());
-    }
+        startFunction(func, division);
 
     m_active.insert(slot, fid);
     m_activeLevel.insert(slot, level);
     m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, level));
+}
+
+void TrackEngine::startFunction(Function *func, int division)
+{
+    if (func == nullptr)
+        return;
+    // The division goes in as an overrideDuration with tempo type Beats, so
+    // Ableton Link stays the only clock: we change how long a step lasts,
+    // never the timing source.
+    if (division > 0)
+        func->start(m_doc->masterTimer(), FunctionParent::master(), 0,
+                    Function::defaultSpeed(), Function::defaultSpeed(),
+                    uint(division), Function::Beats);
+    else
+        func->start(m_doc->masterTimer(), FunctionParent::master());
 }
 
 void TrackEngine::stopSlot(const QString &slot, bool hard)
@@ -1774,7 +1799,15 @@ void TrackEngine::setDimmer(const QString &group, qreal level)
     Function *func = m_doc->function(fid);
     if (func == nullptr)
         return;
-    if (func->isRunning() == false)
+
+    // back in the cast while still fading out: take the fade over, so two
+    // overrides never multiply into a dip
+    if (m_fadeAttr.contains(fid))
+    {
+        func->releaseAttributeOverride(m_fadeAttr.take(fid));
+        m_fadeLevel.remove(fid);
+    }
+    else if (func->isRunning() == false)
         func->start(m_doc->masterTimer(), FunctionParent::master());
 
     m_active.insert(slot, fid);
