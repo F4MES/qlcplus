@@ -143,7 +143,7 @@ Rectangle
             //      of this section tinted in the running colour, and a countdown
             //      to the next section. Tap a section band to select its flag;
             //      the tools at the bottom left add, retype and delete flags.
-            //      (WF_OVERLAY_V2)
+            //      (WF_OVERLAY_V3)
             Canvas
             {
                 id: wfOverlay
@@ -372,8 +372,8 @@ Rectangle
                         height: 34
                         label: "+ " + modelData.toUpperCase()
                         activeColor: trackViewRoot.markerColor(modelData)
-                        active: false
-                        opacity: 0.9
+                        active: true                  // in its section colour, like the SECTION row
+                        opacity: 0.85
                         onTapped: trackManager.addMarker(trackManager.currentBeat > 0 ? trackManager.currentBeat : 1, modelData)
                     }
                 }
