@@ -553,258 +553,127 @@ Rectangle
             }
         }
 
-        // =============================================== SPEED
-        Rectangle
+        // =============================================== live controls  (LIVE_V10_DIALS)
+        // What a DJ touches while playing. Two bars, one style: ENERGY (how
+        // wild - the engine's appetite for effects, pulse and speed; creeps up
+        // by the clock unless a hand takes over) and MASTER (how bright). Then
+        // colour, and four buttons: CALM, HOLD, NEXT LOOK, FLASH WHITE.
+        RowLayout
         {
+            id: dialsRow
             Layout.fillWidth: true
-            Layout.preferredHeight: trackViewRoot.touchH + 12
-            color: trackViewRoot.cPanel
-            radius: 4
+            Layout.fillHeight: false
+            Layout.preferredHeight: trackViewRoot.touchH * 1.2
+            Layout.maximumHeight: trackViewRoot.touchH * 1.2
+            spacing: 10
+            visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
-            RowLayout
+            // ---- energy: the trim, 0..200 %, 100 in the middle
+            Rectangle
             {
-                anchors.fill: parent
-                anchors.margins: 6
-                spacing: 6
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: 4
+                color: "#1B1B1B"
+                border.width: 1
+                border.color: "#555555"
+
+                property real trim: trackManager ? trackManager.energyTrim / 200 : 0.5
+
+                Rectangle
+                {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 3
+                    width: (parent.width - 6) * parent.trim
+                    radius: 3
+                    color: "#E3B44F"
+                }
+
+                // the 100 % mark
+                Rectangle
+                {
+                    x: 3 + (parent.width - 6) * 0.5 - 1
+                    y: 3
+                    width: 2
+                    height: parent.height - 6
+                    color: "#00000060"
+                }
 
                 Text
                 {
-                    Layout.preferredWidth: 150
-                    text: qsTr("SPEED") + " · " + trackViewRoot.liveState.toUpperCase()
-                    color: trackViewRoot.markerColor(trackViewRoot.liveState)
+                    anchors.centerIn: parent
+                    text:
+                    {
+                        var e = trackManager ? trackManager.energy : 0
+                        var groove = e < 0.50 ? 0 : 1
+                        var drop = e < 0.30 ? 0 : (e < 0.65 ? 1 : 2)
+                        return qsTr("ENERGY") + "  " + (trackManager ? trackManager.energyTrim : 100) + "%"
+                               + "     " + qsTr("groove") + " +" + groove + "   " + qsTr("drop") + " +" + drop
+                               + (trackEngine && trackEngine.roomAuto ? "     " + qsTr("by clock") : "")
+                    }
+                    color: "#EEEEEE"
                     font.bold: true
-                    font.pixelSize: 14
+                    font.pixelSize: 16
                 }
 
-                Repeater
+                MouseArea
                 {
-                    model: trackViewRoot.divLabels.length
-
-                    Button
+                    anchors.fill: parent
+                    function apply(x)
                     {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        property int divVal: trackViewRoot.divValues[index]
-                        checkable: true
-                        checked: trackManager
-                                 ? trackManager.stateDivision(trackViewRoot.liveState) === divVal
-                                 : false
-                        onClicked: trackManager.setStateDivision(trackViewRoot.liveState, divVal)
-
-                        contentItem: Text
-                        {
-                            text: trackViewRoot.divLabels[index]
-                            color: parent.checked ? "#000000" : trackViewRoot.cText
-                            font.bold: true
-                            font.pixelSize: 20
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle
-                        {
-                            radius: 5
-                            color: parent.checked
-                                   ? trackViewRoot.markerColor(trackViewRoot.liveState)
-                                   : trackViewRoot.cBtn
-                            border.width: 1
-                            border.color: trackViewRoot.cLine
-                        }
+                        var v = Math.round(Math.max(0, Math.min(1, x / width)) * 200)
+                        if (Math.abs(v - 100) < 4) v = 100
+                        if (trackManager) trackManager.energyTrim = v
                     }
+                    onPressed: (mouse) => apply(mouse.x)
+                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
                 }
             }
-        }
 
-        // =============================================== LEVEL + ENERGY
-        Rectangle
-        {
-            Layout.fillWidth: true
-            Layout.preferredHeight: trackViewRoot.touchH * 2 + 22
-            color: trackViewRoot.cPanel
-            radius: 4
-
-            Column
+            // ---- master: how bright
+            Rectangle
             {
-                anchors.fill: parent
-                anchors.margins: 6
-                spacing: 8
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: 4
+                color: "#1B1B1B"
+                border.width: 1
+                border.color: "#555555"
 
-                Row
+                Rectangle
                 {
-                    width: parent.width
-                    height: trackViewRoot.touchH
-                    spacing: 10
-
-                    Text
-                    {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 150
-                        text: qsTr("LEVEL") + " · " + trackViewRoot.liveState.toUpperCase()
-                        color: trackViewRoot.markerColor(trackViewRoot.liveState)
-                        font.bold: true
-                        font.pixelSize: 14
-                    }
-
-                    Slider
-                    {
-                        id: levelSlider
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - 150 - 200
-                        height: trackViewRoot.touchH
-                        from: 0
-                        to: 100
-                        stepSize: 1
-                        value: trackManager
-                               ? trackManager.stateIntensity(trackViewRoot.liveState) : 100
-                        onMoved: trackManager.setStateIntensity(trackViewRoot.liveState,
-                                                                Math.round(value))
-
-                        background: Rectangle
-                        {
-                            x: levelSlider.leftPadding
-                            y: levelSlider.topPadding + levelSlider.availableHeight / 2 - height / 2
-                            width: levelSlider.availableWidth
-                            height: 14
-                            radius: 7
-                            color: "#161616"
-                            border.width: 1
-                            border.color: trackViewRoot.cLine
-
-                            Rectangle
-                            {
-                                width: levelSlider.visualPosition * (parent.width - 2) + 1
-                                height: parent.height - 2
-                                x: 1
-                                y: 1
-                                radius: 6
-                                color: trackViewRoot.markerColor(trackViewRoot.liveState)
-                            }
-                        }
-
-                        handle: Rectangle
-                        {
-                            x: levelSlider.leftPadding
-                               + levelSlider.visualPosition * (levelSlider.availableWidth - width)
-                            y: levelSlider.topPadding + levelSlider.availableHeight / 2 - height / 2
-                            width: 38
-                            height: 38
-                            radius: 6
-                            color: "#DDDDDD"
-                            border.width: 2
-                            border.color: "#111111"
-                        }
-                    }
-
-                    Text
-                    {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 190
-                        text: (trackManager
-                               ? trackManager.stateIntensity(trackViewRoot.liveState) : 100)
-                              + "%  " + qsTr("brightness")
-                        color: trackViewRoot.cText
-                        font.bold: true
-                        font.pixelSize: 19
-                    }
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 3
+                    width: (parent.width - 6) * (trackEngine ? trackEngine.master : 1)
+                    radius: 3
+                    color: "#4FA3E3"
                 }
 
-                Row
+                Text
                 {
-                    width: parent.width
-                    height: trackViewRoot.touchH
-                    spacing: 10
+                    anchors.centerIn: parent
+                    text: qsTr("MASTER") + "  " + Math.round((trackEngine ? trackEngine.master : 1) * 100) + "%"
+                    color: "#EEEEEE"
+                    font.bold: true
+                    font.pixelSize: 16
+                }
 
-                    Text
-                    {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 150
-                        text: qsTr("ENERGY")
-                        color: trackViewRoot.cDim
-                        font.bold: true
-                        font.pixelSize: 14
-                    }
-
-                    Slider
-                    {
-                        id: energySlider
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - 150 - 380
-                        height: trackViewRoot.touchH
-                        from: 0
-                        to: 200
-                        stepSize: 1
-                        value: trackManager ? trackManager.energyTrim : 100
-                        onMoved: trackManager.energyTrim = Math.round(value)
-
-                        background: Rectangle
-                        {
-                            x: energySlider.leftPadding
-                            y: energySlider.topPadding + energySlider.availableHeight / 2 - height / 2
-                            width: energySlider.availableWidth
-                            height: 14
-                            radius: 7
-                            color: "#161616"
-                            border.width: 1
-                            border.color: trackViewRoot.cLine
-
-                            Rectangle
-                            {
-                                width: energySlider.visualPosition * (parent.width - 2) + 1
-                                height: parent.height - 2
-                                x: 1
-                                y: 1
-                                radius: 6
-                                color: "#2E6DA4"
-                            }
-
-                            // the 100% mark, so neutral can be found by eye
-                            Rectangle
-                            {
-                                x: parent.width * 0.5 - 1
-                                width: 2
-                                height: parent.height
-                                color: "#AAAAAA"
-                            }
-                        }
-
-                        handle: Rectangle
-                        {
-                            x: energySlider.leftPadding
-                               + energySlider.visualPosition * (energySlider.availableWidth - width)
-                            y: energySlider.topPadding + energySlider.availableHeight / 2 - height / 2
-                            width: 38
-                            height: 38
-                            radius: 6
-                            color: "#DDDDDD"
-                            border.width: 2
-                            border.color: "#111111"
-                        }
-                    }
-
-                    Text
-                    {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 370
-                        text:
-                        {
-                            // what this energy buys: effect groups on top of the base
-                            var e = trackManager ? trackManager.energy : 0
-                            var groove = e < 0.50 ? 0 : 1
-                            var drop = e < 0.30 ? 0 : (e < 0.65 ? 1 : 2)
-                            return Math.round(e * 100) + "%   ·   "
-                                   + qsTr("groove") + " +" + groove + "   "
-                                   + qsTr("drop") + " +" + drop + " " + qsTr("effects")
-                        }
-                        color: trackViewRoot.cText
-                        font.bold: true
-                        font.pixelSize: 19
-                    }
+                MouseArea
+                {
+                    anchors.fill: parent
+                    function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, x / width)) }
+                    onPressed: (mouse) => apply(mouse.x)
+                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
                 }
             }
+
         }
 
-        // =============================================== live controls  (LIVE_V9_HOLD_DJ)
-        // What a DJ touches while playing: colour, MASTER, and four buttons -
-        // CALM, HOLD, NEXT LOOK, FLASH WHITE. Everything else runs itself.
+        // ---- colour and the four buttons
         RowLayout
         {
             id: liveRow
@@ -872,44 +741,7 @@ Rectangle
                 }
             }
 
-            // ---- master dimmer
-            Rectangle
-            {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: 4
-                color: "#1B1B1B"
-                border.width: 1
-                border.color: "#555555"
-
-                Rectangle
-                {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    anchors.margins: 3
-                    width: (parent.width - 6) * (trackEngine ? trackEngine.master : 1)
-                    radius: 3
-                    color: "#4FA3E3"
-                }
-
-                Text
-                {
-                    anchors.centerIn: parent
-                    text: qsTr("MASTER") + "  " + Math.round((trackEngine ? trackEngine.master : 1) * 100) + "%"
-                    color: "#EEEEEE"
-                    font.bold: true
-                    font.pixelSize: 16
-                }
-
-                MouseArea
-                {
-                    anchors.fill: parent
-                    function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, x / width)) }
-                    onPressed: (mouse) => apply(mouse.x)
-                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
-                }
-            }
+            Item { Layout.fillWidth: true }
 
             // ---- calm: panic button. Base group only, one colour, no motion,
             //      for 16 bars - then back to automatic. Tap again to end it.
