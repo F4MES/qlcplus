@@ -87,6 +87,10 @@ class TrackManager : public QObject
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
     Q_PROPERTY(int beatCount READ beatCount NOTIFY trackChanged)
     Q_PROPERTY(QVariantList waveform READ waveform NOTIFY trackChanged)
+    /** What the analysis saw, per beat 0..255: bass, highs, kick. */
+    Q_PROPERTY(QVariantList lowCurve READ lowCurve NOTIFY trackChanged)
+    Q_PROPERTY(QVariantList highCurve READ highCurve NOTIFY trackChanged)
+    Q_PROPERTY(QVariantList kickCurve READ kickCurve NOTIFY trackChanged)
     Q_PROPERTY(QVariantList markers READ markers NOTIFY markersChanged)
 
     Q_PROPERTY(int currentBeat READ currentBeat NOTIFY positionChanged)
@@ -126,6 +130,9 @@ public:
     QString title() const;
     int beatCount() const;
     QVariantList waveform() const;
+    QVariantList lowCurve() const;
+    QVariantList highCurve() const;
+    QVariantList kickCurve() const;
     QVariantList markers() const;
     int currentBeat() const;
     bool playing() const;
@@ -285,6 +292,9 @@ private:
     qreal m_bpm;
     int m_beatCount;
     QVariantList m_waveform;
+    QVariantList m_low;
+    QVariantList m_high;
+    QVariantList m_kick;
     QVariantList m_markers;
 
     int m_currentBeat;

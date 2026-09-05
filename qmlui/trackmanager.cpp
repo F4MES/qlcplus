@@ -247,6 +247,15 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     if (m_beatCount <= 0)
         m_beatCount = m_waveform.count();
 
+    // the analysis curves, if BLT sends them (older BLT code does not)
+    m_low.clear(); m_high.clear(); m_kick.clear();
+    QJsonArray lowArr = obj.value(QStringLiteral("low")).toArray();
+    for (int i = 0; i < lowArr.count(); i++) m_low.append(lowArr.at(i).toInt());
+    QJsonArray highArr = obj.value(QStringLiteral("high")).toArray();
+    for (int i = 0; i < highArr.count(); i++) m_high.append(highArr.at(i).toInt());
+    QJsonArray kickArr = obj.value(QStringLiteral("kick")).toArray();
+    for (int i = 0; i < kickArr.count(); i++) m_kick.append(kickArr.at(i).toInt());
+
     m_markers.clear();
     QJsonArray mk = obj.value(QStringLiteral("markers")).toArray();
     for (int i = 0; i < mk.count(); i++)
@@ -875,6 +884,9 @@ void TrackManager::setQuantize(int beats)
 QString TrackManager::title() const { return m_title; }
 int TrackManager::beatCount() const { return m_beatCount; }
 QVariantList TrackManager::waveform() const { return m_waveform; }
+QVariantList TrackManager::lowCurve() const { return m_low; }
+QVariantList TrackManager::highCurve() const { return m_high; }
+QVariantList TrackManager::kickCurve() const { return m_kick; }
 QVariantList TrackManager::markers() const { return m_markers; }
 int TrackManager::currentBeat() const { return m_currentBeat; }
 bool TrackManager::playing() const { return m_playing; }
@@ -927,6 +939,7 @@ void TrackManager::clear()
     m_beatCount = 0;
     m_durationMs = 0;
     m_waveform.clear();
+    m_low.clear(); m_high.clear(); m_kick.clear();
     m_markers.clear();
     m_currentBeat = 0;
     m_trackTimeMs = 0;

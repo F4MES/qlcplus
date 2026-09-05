@@ -137,6 +137,165 @@ Rectangle
             border.width: 1
             border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cLine
 
+            // ---- what the analysis and the engine see, drawn over the
+            //      waveform: bass as a warm floor, highs as a cool line, kicks
+            //      as ticks, section bands with their energy, the played part
+            //      of this section tinted in the running colour, and a countdown
+            //      to the next section. (WF_OVERLAY_V1)
+            Canvas
+            {
+                id: wfOverlay
+                anchors.fill: parent
+                anchors.margins: 1
+                z: 1
+                renderStrategy: Canvas.Threaded
+
+                function beatX(beat, first, count) { return (beat - first) / count * width }
+
+                onPaint:
+                {
+                    var ctx = getContext("2d")
+                    var w = width, h = height
+                    ctx.clearRect(0, 0, w, h)
+                    if (!trackManager || trackManager.beatCount <= 0)
+                        return
+
+                    var total = trackManager.beatCount
+                    var first = trackViewRoot.zoomActive ? trackViewRoot.viewFirst() : 1
+                    var count = trackViewRoot.zoomActive ? trackViewRoot.viewCount() : total
+                    if (count <= 0) count = total
+                    var step = Math.max(1, Math.floor(count / w))
+                    var low = trackManager.lowCurve, high = trackManager.highCurve, kick = trackManager.kickCurve
+
+                    // bass: a warm floor, the lower third
+                    if (low && low.length > 0)
+                    {
+                        ctx.beginPath()
+                        ctx.moveTo(0, h)
+                        for (var b = first; b < first + count && b <= low.length; b += step)
+                        {
+                            var v = 0
+                            for (var k = 0; k < step && b - 1 + k < low.length; k++) v = Math.max(v, low[b - 1 + k])
+                            ctx.lineTo(beatX(b, first, count), h - (v / 255) * h * 0.34)
+                        }
+                        ctx.lineTo(w, h)
+                        ctx.closePath()
+                        ctx.fillStyle = "rgba(227, 180, 79, 0.28)"
+                        ctx.fill()
+                    }
+
+                    // highs: a thin cool line in the upper third
+                    if (high && high.length > 0)
+                    {
+                        ctx.beginPath()
+                        var started = false
+                        for (var b2 = first; b2 < first + count && b2 <= high.length; b2 += step)
+                        {
+                            var v2 = 0
+                            for (var k2 = 0; k2 < step && b2 - 1 + k2 < high.length; k2++) v2 = Math.max(v2, high[b2 - 1 + k2])
+                            var y = h * 0.32 - (v2 / 255) * h * 0.24
+                            if (!started) { ctx.moveTo(beatX(b2, first, count), y); started = true }
+                            else ctx.lineTo(beatX(b2, first, count), y)
+                        }
+                        ctx.strokeStyle = "rgba(127, 211, 255, 0.75)"
+                        ctx.lineWidth = 1.5
+                        ctx.stroke()
+                    }
+
+                    // kicks: ticks along the floor, brighter the harder
+                    if (kick && kick.length > 0 && count < w * 2)
+                    {
+                        for (var b3 = first; b3 < first + count && b3 <= kick.length; b3++)
+                        {
+                            var kv = kick[b3 - 1] / 255
+                            if (kv < 0.45) continue
+                            ctx.fillStyle = "rgba(255, 106, 106, " + (0.25 + 0.75 * kv).toFixed(2) + ")"
+                            ctx.fillRect(beatX(b3, first, count), h - 4, Math.max(1, w / count * 0.6), 4)
+                        }
+                    }
+
+                    // section bands at the top, with the analysed energy
+                    var mk = trackManager.markers
+                    var sorted = []
+                    for (var i = 0; i < mk.length; i++) sorted.push(mk[i])
+                    sorted.sort(function(a, b) { return a.beat - b.beat })
+                    ctx.font = "bold 11px sans-serif"
+                    ctx.textBaseline = "top"
+                    for (var j = 0; j < sorted.length; j++)
+                    {
+                        var m = sorted[j]
+                        var endBeat = j + 1 < sorted.length ? sorted[j + 1].beat : total + 1
+                        if (endBeat < first || m.beat > first + count) continue
+                        var x0 = Math.max(0, beatX(m.beat, first, count))
+                        var x1 = Math.min(w, beatX(endBeat, first, count))
+                        var e = m.energy >= 0 ? m.energy : 0.5
+                        var col = Qt.color(trackViewRoot.markerColor(m.type))
+                        ctx.fillStyle = Qt.rgba(col.r, col.g, col.b, 0.18 + 0.5 * e)
+                        ctx.fillRect(x0, 0, x1 - x0, 7)
+                        if (x1 - x0 > 60)
+                        {
+                            ctx.fillStyle = "rgba(255,255,255,0.75)"
+                            ctx.fillText(m.type.toUpperCase() + (m.energy >= 0 ? "  " + Math.round(m.energy * 100) + "%" : ""), x0 + 4, 10)
+                        }
+                    }
+
+                    // the played part of this section, tinted in the running colour
+                    var cur = trackManager.currentBeat
+                    if (cur > 0 && trackEngine && trackEngine.currentColour !== "")
+                    {
+                        var secStart = 1
+                        var secEnd = total + 1
+                        var next = null
+                        for (var s = 0; s < sorted.length; s++)
+                        {
+                            if (sorted[s].beat <= cur) secStart = sorted[s].beat
+                            else { secEnd = sorted[s].beat; next = sorted[s]; break }
+                        }
+                        var swatch = liveRow.swatch(trackEngine.currentColour)
+                        var c = Qt.color(swatch)
+                        ctx.fillStyle = Qt.rgba(c.r, c.g, c.b, 0.10)
+                        ctx.fillRect(beatX(secStart, first, count), 7, beatX(cur, first, count) - beatX(secStart, first, count), h - 7)
+
+                        // the countdown to the next section, in bars
+                        if (next && trackManager.playing)
+                        {
+                            var bars = Math.ceil((next.beat - cur) / 4)
+                            if (bars <= 32)
+                            {
+                                var ncol = Qt.color(trackViewRoot.markerColor(next.type))
+                                ctx.font = "bold 26px sans-serif"
+                                ctx.textBaseline = "alphabetic"
+                                var label = next.type.toUpperCase() + "  " + bars
+                                var tw = ctx.measureText(label).width
+                                ctx.fillStyle = "rgba(0,0,0,0.55)"
+                                ctx.fillRect(w - tw - 24, 14, tw + 16, 36)
+                                ctx.fillStyle = Qt.rgba(ncol.r, ncol.g, ncol.b, 1)
+                                ctx.fillText(label, w - tw - 16, 42)
+                            }
+                        }
+                    }
+                }
+
+                Connections
+                {
+                    target: trackManager
+                    function onTrackChanged() { wfOverlay.requestPaint() }
+                    function onMarkersChanged() { wfOverlay.requestPaint() }
+                    function onPositionChanged() { wfOverlay.requestPaint() }
+                }
+                Connections
+                {
+                    target: trackEngine
+                    function onLiveChanged() { wfOverlay.requestPaint() }
+                }
+                Connections
+                {
+                    target: trackViewRoot
+                    function onZoomActiveChanged() { wfOverlay.requestPaint() }
+                    function onZoomCenterChanged() { wfOverlay.requestPaint() }
+                }
+            }
+
             Canvas
             {
                 id: wfCanvas
@@ -554,7 +713,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V13_ENERGY_100)
+        // =============================================== live controls  (LIVE_V14_TOUCH)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -564,8 +723,8 @@ Rectangle
             id: dialsRow
             Layout.fillWidth: true
             Layout.fillHeight: false
-            Layout.preferredHeight: trackViewRoot.touchH
-            Layout.maximumHeight: trackViewRoot.touchH
+            Layout.preferredHeight: trackViewRoot.touchH * 1.25
+            Layout.maximumHeight: trackViewRoot.touchH * 1.25
             spacing: 10
             visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
@@ -693,8 +852,8 @@ Rectangle
             id: liveRow
             Layout.fillWidth: true
             Layout.fillHeight: false
-            Layout.preferredHeight: trackViewRoot.touchH * 1.15
-            Layout.maximumHeight: trackViewRoot.touchH * 1.15
+            Layout.preferredHeight: trackViewRoot.touchH * 1.3
+            Layout.maximumHeight: trackViewRoot.touchH * 1.3
             spacing: 10
             visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
@@ -859,8 +1018,8 @@ Rectangle
             id: atmosRow
             Layout.fillWidth: true
             Layout.fillHeight: false
-            Layout.preferredHeight: trackViewRoot.touchH * 0.7
-            Layout.maximumHeight: trackViewRoot.touchH * 0.7
+            Layout.preferredHeight: trackViewRoot.touchH * 0.95
+            Layout.maximumHeight: trackViewRoot.touchH * 0.95
             spacing: 10
             visible: trackManager && trackManager.roleMode && trackEngine
                      && trackEngine.hazeAvailable && !trackViewRoot.setupOpen
@@ -933,7 +1092,7 @@ Rectangle
 
             // The cast, large: one fader per group - the DJ's trim on top of
             // everything the engine does - lit when the group is in the cast,
-            // with a switch to leave it out for the night. (CAST_V3_COMPACT)
+            // with a switch to leave it out for the night. (CAST_V4_TOUCH)
             Column
             {
                 id: castPanel
@@ -1027,9 +1186,9 @@ Rectangle
                                 anchors.top: parent.top
                                 anchors.right: parent.right
                                 anchors.margins: 5
-                                width: 48
-                                height: 24
-                                radius: 12
+                                width: 56
+                                height: 30
+                                radius: 15
                                 visible: !modelData.base
                                 color: castTile.off ? "#3A3A3A" : "#7ED07E"
 
@@ -1039,7 +1198,7 @@ Rectangle
                                     text: castTile.off ? qsTr("OFF") : qsTr("ON")
                                     color: castTile.off ? "#9A9A9A" : "#102010"
                                     font.bold: true
-                                    font.pixelSize: 11
+                                    font.pixelSize: 12
                                 }
 
                                 MouseArea
