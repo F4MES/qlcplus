@@ -44,6 +44,7 @@ Rectangle
 
     property int dragIndex: -1
     property real dragX: 0
+    property real dragOffset: 0
     property bool zoomActive: false
     property int zoomCenter: 1
     property int zoomSpan: 64
@@ -116,7 +117,7 @@ Rectangle
                 Math.max(1, Math.min(trackViewRoot.beatCount,
                                      trackViewRoot.zoomCenter + dir * step))
             trackManager.moveMarker(trackViewRoot.dragIndex,
-                                    wfArea.beatAt(trackViewRoot.dragX))
+                                    wfArea.beatAt(trackViewRoot.dragX) + trackViewRoot.dragOffset)
             wfCanvas.requestPaint()
         }
     }
@@ -141,9 +142,9 @@ Rectangle
             //      waveform: bass as a warm floor, highs as a cool line, kicks
             //      as ticks, section bands with their energy, the played part
             //      of this section tinted in the running colour, and a countdown
-            //      to the next section. Tap a section band to select its flag;
-            //      the tools at the bottom left add, retype and delete flags.
-            //      (WF_OVERLAY_V4)
+            //      to the next section. A finger on a flag selects it (drag to
+            //      move it); the tools at the bottom left add, retype and delete.
+            //      (WF_OVERLAY_V5)
             Canvas
             {
                 id: wfOverlay
@@ -162,37 +163,6 @@ Rectangle
                     for (var i = 0; i < mk.length; i++) out.push({ beat: mk[i].beat, type: mk[i].type, energy: mk[i].energy, index: i })
                     out.sort(function(a, b) { return a.beat - b.beat })
                     return out
-                }
-
-                // a tap on the section bands picks the nearest flag. A TapHandler
-                // takes a passive grab only, so the marker dragging underneath
-                // keeps working.
-                Item
-                {
-                    anchors.top: parent.top
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    height: 24
-
-                    TapHandler
-                    {
-                        onTapped: (eventPoint, button) =>
-                        {
-                            if (!trackManager || trackManager.beatCount <= 0) return
-                            var total = trackManager.beatCount
-                            var first = trackViewRoot.zoomActive ? trackViewRoot.viewFirst() : 1
-                            var count = trackViewRoot.zoomActive ? trackViewRoot.viewCount() : total
-                            var mk = trackManager.markers
-                            var best = -1, bestD = 18
-                            for (var i = 0; i < mk.length; i++)
-                            {
-                                var d = Math.abs(wfOverlay.beatX(mk[i].beat, first, count) - eventPoint.position.x)
-                                if (d < bestD) { bestD = d; best = i }
-                            }
-                            wfOverlay.selected = (best === wfOverlay.selected) ? -1 : best
-                            wfOverlay.requestPaint()
-                        }
-                    }
                 }
 
                 function beatX(beat, first, count) { return (beat - first) / count * width }
@@ -533,6 +503,12 @@ Rectangle
                 anchors.fill: parent
                 enabled: trackViewRoot.beatCount > 0
 
+                // A finger on a flag: press = select it (RETYPE / DELETE appear),
+                // move = drag it. The flag keeps its distance to the finger and
+                // the zoom opens around the finger, so nothing jumps.
+                property int pressIndex: -1
+                property real pressX: 0
+
                 function beatAt(mx)
                 {
                     return Math.round(mx / (width / trackViewRoot.viewCount()))
@@ -544,29 +520,37 @@ Rectangle
                     var b = beatAt(mouse.x)
                     var mk = trackManager.markers
                     var best = -1, bestDist = 1e9
-
                     for (var i = 0; i < mk.length; i++)
                     {
                         var d = Math.abs(mk[i].beat - b)
                         if (d < bestDist) { bestDist = d; best = i }
                     }
-
-                    if (bestDist <= Math.max(3, trackViewRoot.viewCount() * 0.025))
+                    pressIndex = (best >= 0 && bestDist <= Math.max(3, trackViewRoot.viewCount() * 0.03)) ? best : -1
+                    pressX = mouse.x
+                    trackViewRoot.dragIndex = -1
+                    if (typeof wfOverlay !== "undefined")
                     {
-                        trackViewRoot.dragIndex = best
-                        trackViewRoot.dragX = mouse.x
-                        trackViewRoot.zoomCenter = mk[best].beat
-                        trackViewRoot.zoomActive = true
-                        wfCanvas.requestPaint()
+                        wfOverlay.selected = pressIndex
+                        wfOverlay.requestPaint()
                     }
-                    else trackViewRoot.dragIndex = -1
                 }
 
                 onPositionChanged: function (mouse)
                 {
-                    if (trackViewRoot.dragIndex < 0) return
+                    if (pressIndex < 0) return
+                    if (trackViewRoot.dragIndex < 0)
+                    {
+                        if (Math.abs(mouse.x - pressX) < 6) return
+                        // the drag begins: zoom in with the flag staying under the finger
+                        var mk = trackManager.markers[pressIndex]
+                        trackViewRoot.dragIndex = pressIndex
+                        trackViewRoot.zoomActive = true
+                        var vc = trackViewRoot.viewCount()
+                        trackViewRoot.zoomCenter = Math.round(mk.beat - mouse.x / width * vc + vc / 2)
+                        trackViewRoot.dragOffset = mk.beat - beatAt(mouse.x)
+                    }
                     trackViewRoot.dragX = mouse.x
-                    trackManager.moveMarker(trackViewRoot.dragIndex, beatAt(mouse.x))
+                    trackManager.moveMarker(trackViewRoot.dragIndex, beatAt(mouse.x) + trackViewRoot.dragOffset)
 
                     var edge = width * 0.08
                     panTimer.dir = mouse.x < edge ? -1 : (mouse.x > width - edge ? 1 : 0)
@@ -578,6 +562,7 @@ Rectangle
                 {
                     panTimer.running = false
                     panTimer.dir = 0
+                    pressIndex = -1
                     trackViewRoot.dragIndex = -1
                     trackViewRoot.zoomActive = false
                     wfCanvas.requestPaint()
@@ -586,7 +571,6 @@ Rectangle
                 onReleased: release()
                 onCanceled: release()
             }
-
             Text
             {
                 anchors.centerIn: parent
