@@ -52,6 +52,8 @@ class Doc;
 #define SETTINGS_TRACK_SLOTNAMES  QStringLiteral("trackmanager/slotnames")
 #define SETTINGS_TRACK_SLOTDIRS   QStringLiteral("trackmanager/slotdirs")
 #define SETTINGS_TRACK_SLOTSPEED  QStringLiteral("trackmanager/slotspeed")
+#define SETTINGS_TRACK_DROPKICK   QStringLiteral("trackmanager/dropkick")
+#define SETTINGS_TRACK_BREAKKICK  QStringLiteral("trackmanager/breakkick")
 
 #define TRACK_DEFAULT_PORT     9998
 #define TRACK_DEFAULT_BPM_LOW  80
@@ -161,6 +163,13 @@ public:
     void setBpmHigh(int bpm);
 
     Q_INVOKABLE void moveMarker(int index, int beat);
+    /** Flags by hand: a flag on the bar nearest beat, a flag removed, a
+     *  flag's type changed. Each goes to BLT's cache as manual and teaches
+     *  the second pass what a drop and a break sound like here. */
+    Q_INVOKABLE void addMarker(int beat, QString type);
+    Q_INVOKABLE void removeMarker(int index);
+    Q_INVOKABLE void setMarkerType(int index, QString type);
+    Q_INVOKABLE bool markersManual() const;
     Q_INVOKABLE QString stateAtBeat(int beat) const;
 
     /* ---- slots ---- */
@@ -260,7 +269,12 @@ protected:
     void runEngine(bool sectionChanged);
     void sectionBounds(int beat, int &start, int &end) const;
     void nextSection(int beat, QString &state, int &beatsToNext) const;
-    void sendMarkers();
+    void sendMarkers(bool manual = true);
+    /** The second pass over a fresh analysis. True when it changed anything. */
+    bool refineMarkers();
+    qreal kickMean(int fromBeat, int count) const;
+    void markersEdited();
+    void learnFromFlag(const QString &type, int beat, bool added);
     quint32 pickRole(QString state, int role, int cursor) const;
     void driveRole(int role, quint32 fid, qreal level, int division,
                    bool hard = false);
@@ -296,6 +310,9 @@ private:
     QVariantList m_high;
     QVariantList m_kick;
     QVariantList m_markers;
+    bool m_markersManual;     // the flags are the operator's, or a cached correction
+    qreal m_dropKick;         // learned: the kick a drop needs
+    qreal m_breakKick;        // learned: the kick a break stays under
 
     int m_currentBeat;
     bool m_playing;

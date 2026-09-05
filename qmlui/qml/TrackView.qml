@@ -141,7 +141,9 @@ Rectangle
             //      waveform: bass as a warm floor, highs as a cool line, kicks
             //      as ticks, section bands with their energy, the played part
             //      of this section tinted in the running colour, and a countdown
-            //      to the next section. (WF_OVERLAY_V1)
+            //      to the next section. Tap a section band to select its flag;
+            //      the tools at the bottom left add, retype and delete flags.
+            //      (WF_OVERLAY_V2)
             Canvas
             {
                 id: wfOverlay
@@ -149,6 +151,49 @@ Rectangle
                 anchors.margins: 1
                 z: 1
                 renderStrategy: Canvas.Threaded
+
+                // the selected flag (an index into trackManager.markers), -1 = none
+                property int selected: -1
+
+                function sortedMarkers()
+                {
+                    var mk = trackManager ? trackManager.markers : []
+                    var out = []
+                    for (var i = 0; i < mk.length; i++) out.push({ beat: mk[i].beat, type: mk[i].type, energy: mk[i].energy, index: i })
+                    out.sort(function(a, b) { return a.beat - b.beat })
+                    return out
+                }
+
+                // a tap on the section bands picks the nearest flag. A TapHandler
+                // takes a passive grab only, so the marker dragging underneath
+                // keeps working.
+                Item
+                {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 24
+
+                    TapHandler
+                    {
+                        onTapped: (eventPoint, button) =>
+                        {
+                            if (!trackManager || trackManager.beatCount <= 0) return
+                            var total = trackManager.beatCount
+                            var first = trackViewRoot.zoomActive ? trackViewRoot.viewFirst() : 1
+                            var count = trackViewRoot.zoomActive ? trackViewRoot.viewCount() : total
+                            var mk = trackManager.markers
+                            var best = -1, bestD = 18
+                            for (var i = 0; i < mk.length; i++)
+                            {
+                                var d = Math.abs(wfOverlay.beatX(mk[i].beat, first, count) - eventPoint.position.x)
+                                if (d < bestD) { bestD = d; best = i }
+                            }
+                            wfOverlay.selected = (best === wfOverlay.selected) ? -1 : best
+                            wfOverlay.requestPaint()
+                        }
+                    }
+                }
 
                 function beatX(beat, first, count) { return (beat - first) / count * width }
 
@@ -215,10 +260,7 @@ Rectangle
                     }
 
                     // section bands at the top, with the analysed energy
-                    var mk = trackManager.markers
-                    var sorted = []
-                    for (var i = 0; i < mk.length; i++) sorted.push(mk[i])
-                    sorted.sort(function(a, b) { return a.beat - b.beat })
+                    var sorted = sortedMarkers()
                     ctx.font = "bold 11px sans-serif"
                     ctx.textBaseline = "top"
                     for (var j = 0; j < sorted.length; j++)
@@ -236,6 +278,15 @@ Rectangle
                         {
                             ctx.fillStyle = "rgba(255,255,255,0.75)"
                             ctx.fillText(m.type.toUpperCase() + (m.energy >= 0 ? "  " + Math.round(m.energy * 100) + "%" : ""), x0 + 4, 10)
+                        }
+                        if (m.index === selected)
+                        {
+                            // the selected flag: a white frame on its band and a line down
+                            ctx.strokeStyle = "rgba(255,255,255,0.9)"
+                            ctx.lineWidth = 2
+                            ctx.strokeRect(x0 + 1, 1, Math.max(4, x1 - x0 - 2), 22)
+                            ctx.fillStyle = "rgba(255,255,255,0.35)"
+                            ctx.fillRect(x0, 0, 2, h)
                         }
                     }
 
@@ -279,8 +330,12 @@ Rectangle
                 Connections
                 {
                     target: trackManager
-                    function onTrackChanged() { wfOverlay.requestPaint() }
-                    function onMarkersChanged() { wfOverlay.requestPaint() }
+                    function onTrackChanged() { wfOverlay.selected = -1; wfOverlay.requestPaint() }
+                    function onMarkersChanged()
+                    {
+                        if (wfOverlay.selected >= trackManager.markers.length) wfOverlay.selected = -1
+                        wfOverlay.requestPaint()
+                    }
                     function onPositionChanged() { wfOverlay.requestPaint() }
                 }
                 Connections
@@ -293,6 +348,63 @@ Rectangle
                     target: trackViewRoot
                     function onZoomActiveChanged() { wfOverlay.requestPaint() }
                     function onZoomCenterChanged() { wfOverlay.requestPaint() }
+                }
+            }
+
+            // ---- flag tools: a flag on the bar the track is at, the selected
+            //      flag retyped or deleted. What the operator sets is the truth -
+            //      it goes to BLT's cache as manual and teaches the second pass.
+            Row
+            {
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.margins: 8
+                spacing: 6
+                z: 3
+                visible: trackManager && trackManager.beatCount > 0 && trackManager.roleMode
+
+                Repeater
+                {
+                    model: [ "break", "build", "drop" ]
+                    TrackTile
+                    {
+                        width: 88
+                        height: 34
+                        label: "+ " + modelData.toUpperCase()
+                        activeColor: trackViewRoot.markerColor(modelData)
+                        active: false
+                        opacity: 0.9
+                        onTapped: trackManager.addMarker(trackManager.currentBeat > 0 ? trackManager.currentBeat : 1, modelData)
+                    }
+                }
+
+                Item { width: 12; height: 1 }
+
+                TrackTile
+                {
+                    width: 96
+                    height: 34
+                    label: qsTr("RETYPE")
+                    visible: wfOverlay.selected >= 0
+                    opacity: 0.9
+                    onTapped:
+                    {
+                        var mk = trackManager.markers[wfOverlay.selected]
+                        var order = [ "normal", "break", "build", "drop" ]
+                        var next = order[(order.indexOf(mk.type) + 1) % order.length]
+                        trackManager.setMarkerType(wfOverlay.selected, next)
+                    }
+                }
+
+                TrackTile
+                {
+                    width: 96
+                    height: 34
+                    label: qsTr("DELETE")
+                    visible: wfOverlay.selected >= 0
+                    activeColor: "#E36B6B"
+                    active: true
+                    onTapped: { var i = wfOverlay.selected; wfOverlay.selected = -1; trackManager.removeMarker(i) }
                 }
             }
 

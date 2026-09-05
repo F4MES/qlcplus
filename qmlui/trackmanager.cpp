@@ -33,6 +33,7 @@
 #include "fixture.h"
 #include "scene.h"
 #include <QRegularExpression>
+#include <algorithm>
 
 #define TRACK_INTENSITY_ATTR 0
 
@@ -93,6 +94,9 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
 
     m_lastPosMs = 0;
     m_linkStale = false;
+    m_markersManual = false;
+    m_dropKick = settings.value(SETTINGS_TRACK_DROPKICK, 0.55).toDouble();
+    m_breakKick = settings.value(SETTINGS_TRACK_BREAKKICK, 0.30).toDouble();
     m_engine = new TrackEngine(m_doc, this);
     // ROOM (by clock, or a tap) is the ENERGY trim: one dial, not two
     connect(m_engine, &TrackEngine::roomChanged, this, &TrackManager::setEnergyTrim);
@@ -255,6 +259,12 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     for (int i = 0; i < highArr.count(); i++) m_high.append(highArr.at(i).toInt());
     QJsonArray kickArr = obj.value(QStringLiteral("kick")).toArray();
     for (int i = 0; i < kickArr.count(); i++) m_kick.append(kickArr.at(i).toInt());
+
+    // hand-made flags are the truth; a fresh analysis gets the second pass,
+    // and what it changed goes back to BLT's cache (as automatic)
+    m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
+    if (m_markersManual == false && refineMarkers())
+        sendMarkers(false);
 
     m_markers.clear();
     QJsonArray mk = obj.value(QStringLiteral("markers")).toArray();
@@ -937,7 +947,8 @@ void TrackManager::moveMarker(int index, int beat)
 
     emit markersChanged();
     updateState();
-    sendMarkers();                       // let BLT remember the correction
+    m_markersManual = true;
+    sendMarkers(true);                   // let BLT remember the correction
 }
 
 void TrackManager::clear()
@@ -1717,7 +1728,7 @@ void TrackManager::nextSection(int beat, QString &state, int &beatsToNext) const
         beatsToNext = best - beat;
 }
 
-void TrackManager::sendMarkers()
+void TrackManager::sendMarkers(bool manual)
 {
     // The operator moved a flag. Tell BLT, so the correction is cached with
     // the track and comes back right the next time it is played.
@@ -1734,6 +1745,7 @@ void TrackManager::sendMarkers()
     QJsonObject obj;
     obj.insert(QStringLiteral("evt"), QStringLiteral("markers"));
     obj.insert(QStringLiteral("title"), m_title);
+    obj.insert(QStringLiteral("manual"), manual);
     obj.insert(QStringLiteral("markers"), arr);
     QByteArray line = QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n";
 
@@ -1741,3 +1753,258 @@ void TrackManager::sendMarkers()
         if (client != nullptr && client->state() == QAbstractSocket::ConnectedState)
             client->write(line);
 }
+
+/*********************************************************************
+ * Marker editing and the second pass
+ *
+ * BLT analyses the track; QLC+ has the beat curves too, and the operator.
+ * Flags the operator sets are the truth and go back to BLT's cache as
+ * manual. Flags from a fresh analysis get a second pass here - snapped to
+ * bars, too-short sections merged, drops and breaks checked against the
+ * kick, missed drops added - and two thresholds that learn from every
+ * correction the operator makes: what counts as a drop's kick, and as a
+ * break's silence, for THIS room's music.
+ *********************************************************************/
+
+qreal TrackManager::kickMean(int fromBeat, int count) const
+{
+    // mean kick 0..1 over [fromBeat, fromBeat + count), -1 without a curve
+    if (m_kick.isEmpty())
+        return -1.0;
+    qreal sum = 0.0;
+    int n = 0;
+    for (int b = fromBeat; b < fromBeat + count; b++)
+    {
+        if (b < 1 || b - 1 >= m_kick.count())
+            continue;
+        sum += m_kick.at(b - 1).toInt() / 255.0;
+        n++;
+    }
+    return n > 0 ? sum / n : -1.0;
+}
+
+static int tmSnapBar(int beat)
+{
+    // the nearest bar line (beats count from 1)
+    int bar = (beat - 1 + 2) / 4;
+    return qMax(1, bar * 4 + 1);
+}
+
+bool TrackManager::refineMarkers()
+{
+    if (m_beatCount < 64 || m_kick.isEmpty())
+        return false;
+
+    struct Flag { int beat; QString type; qreal energy; };
+    QList<Flag> flags;
+    for (int i = 0; i < m_markers.count(); i++)
+    {
+        QVariantMap mk = m_markers.at(i).toMap();
+        Flag f;
+        f.beat = tmSnapBar(mk.value(QStringLiteral("beat")).toInt());
+        f.type = mk.value(QStringLiteral("type")).toString();
+        f.energy = mk.value(QStringLiteral("energy"), -1.0).toDouble();
+        if (f.type.isEmpty())
+            f.type = QStringLiteral("normal");
+        flags.append(f);
+    }
+    std::sort(flags.begin(), flags.end(), [](const Flag &a, const Flag &b) { return a.beat < b.beat; });
+
+    bool changed = false;
+    QStringList notes;
+
+    // 1. sections shorter than four bars are noise: the later flag goes,
+    //    unless it is a drop landing after a build (that is the point)
+    for (int i = 1; i < flags.count(); i++)
+    {
+        if (flags.at(i).beat - flags.at(i - 1).beat < 16
+            && !(flags.at(i).type == QStringLiteral("drop") && flags.at(i - 1).type == QStringLiteral("build")))
+        {
+            notes << QString("merged %1@%2").arg(flags.at(i).type).arg(flags.at(i).beat);
+            flags.removeAt(i);
+            i--;
+            changed = true;
+        }
+    }
+
+    // 2. what the kick says about each flag
+    for (int i = 0; i < flags.count(); i++)
+    {
+        int end = i + 1 < flags.count() ? flags.at(i + 1).beat : m_beatCount + 1;
+        int len = qMin(8, end - flags.at(i).beat);
+        qreal k = kickMean(flags.at(i).beat, qMax(1, len));
+        if (k < 0.0)
+            continue;
+        QString was = flags.at(i).type;
+        if (was == QStringLiteral("drop") && k < m_dropKick * 0.6)
+            flags[i].type = QStringLiteral("normal");
+        else if (was == QStringLiteral("break") && k > qMax(0.6, m_breakKick * 2.0))
+            flags[i].type = QStringLiteral("normal");
+        else if (was == QStringLiteral("normal") && k >= m_dropKick && i > 0
+                 && (flags.at(i - 1).type == QStringLiteral("break") || flags.at(i - 1).type == QStringLiteral("build")))
+            flags[i].type = QStringLiteral("drop");
+        if (flags.at(i).type != was)
+        {
+            notes << QString("%1@%2 -> %3").arg(was).arg(flags.at(i).beat).arg(flags.at(i).type);
+            changed = true;
+        }
+    }
+
+    // 3. a drop the analysis missed: two bars without a kick, then two bars
+    //    of kick, on a bar line, and no flag within two bars of it
+    for (int b = 17; b + 8 <= m_beatCount; b += 4)
+    {
+        qreal before = kickMean(b - 8, 8);
+        qreal after = kickMean(b, 8);
+        if (before < 0.0 || after < 0.0 || before >= m_breakKick || after < m_dropKick)
+            continue;
+        bool near = false;
+        foreach (const Flag &f, flags)
+            if (qAbs(f.beat - b) <= 8)
+                near = true;
+        if (near)
+            continue;
+        Flag drop;
+        drop.beat = b;
+        drop.type = QStringLiteral("drop");
+        drop.energy = -1.0;
+        flags.append(drop);
+        // and the break that led into it, if none is flagged
+        int start = b;
+        while (start - 4 >= 1 && kickMean(start - 4, 4) >= 0.0 && kickMean(start - 4, 4) < m_breakKick)
+            start -= 4;
+        bool hasBreak = false;
+        foreach (const Flag &f, flags)
+            if (f.beat >= start - 8 && f.beat < b && f.type != QStringLiteral("normal"))
+                hasBreak = true;
+        if (hasBreak == false && start < b)
+        {
+            Flag brk;
+            brk.beat = start;
+            brk.type = QStringLiteral("break");
+            brk.energy = -1.0;
+            flags.append(brk);
+        }
+        std::sort(flags.begin(), flags.end(), [](const Flag &x, const Flag &y) { return x.beat < y.beat; });
+        notes << QString("drop added @%1").arg(b);
+        changed = true;
+    }
+
+    // snapping alone counts as a change only if a beat moved
+    if (changed == false)
+    {
+        for (int i = 0; i < flags.count() && i < m_markers.count(); i++)
+            if (flags.at(i).beat != m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt())
+                changed = true;
+    }
+    if (changed == false)
+        return false;
+
+    m_markers.clear();
+    foreach (const Flag &f, flags)
+    {
+        QVariantMap mk;
+        mk.insert(QStringLiteral("beat"), f.beat);
+        mk.insert(QStringLiteral("type"), f.type);
+        mk.insert(QStringLiteral("energy"), f.energy);
+        m_markers.append(mk);
+    }
+    qDebug() << "[TrackManager] second pass:" << notes.join(", ");
+    emit markersChanged();
+    return true;
+}
+
+void TrackManager::addMarker(int beat, QString type)
+{
+    if (m_beatCount <= 0 || stateNames().contains(type) == false)
+        return;
+    beat = qBound(1, tmSnapBar(beat), m_beatCount);
+
+    // a flag already on this bar takes the new type instead
+    for (int i = 0; i < m_markers.count(); i++)
+    {
+        if (m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt() == beat)
+        {
+            setMarkerType(i, type);
+            return;
+        }
+    }
+
+    QVariantMap mk;
+    mk.insert(QStringLiteral("beat"), beat);
+    mk.insert(QStringLiteral("type"), type);
+    mk.insert(QStringLiteral("energy"), -1.0);
+    m_markers.append(mk);
+    learnFromFlag(type, beat, true);
+    markersEdited();
+}
+
+void TrackManager::removeMarker(int index)
+{
+    if (index < 0 || index >= m_markers.count())
+        return;
+    QVariantMap mk = m_markers.at(index).toMap();
+    learnFromFlag(mk.value(QStringLiteral("type")).toString(), mk.value(QStringLiteral("beat")).toInt(), false);
+    m_markers.removeAt(index);
+    markersEdited();
+}
+
+void TrackManager::setMarkerType(int index, QString type)
+{
+    if (index < 0 || index >= m_markers.count() || stateNames().contains(type) == false)
+        return;
+    QVariantMap mk = m_markers.at(index).toMap();
+    if (mk.value(QStringLiteral("type")).toString() == type)
+        return;
+    learnFromFlag(mk.value(QStringLiteral("type")).toString(), mk.value(QStringLiteral("beat")).toInt(), false);
+    mk.insert(QStringLiteral("type"), type);
+    m_markers.replace(index, mk);
+    learnFromFlag(type, mk.value(QStringLiteral("beat")).toInt(), true);
+    markersEdited();
+}
+
+void TrackManager::markersEdited()
+{
+    m_markersManual = true;
+    emit markersChanged();
+    updateState();
+    if (m_autoRun && m_roleMode)
+    {
+        m_lastEngineBeat = -1;
+        runEngine(true);
+    }
+    sendMarkers(true);                   // BLT keeps it as a hand-made correction
+}
+
+void TrackManager::learnFromFlag(const QString &type, int beat, bool added)
+{
+    // The operator is the teacher. A drop they add at a soft kick lowers
+    // what the second pass demands of a drop; a drop they delete at a hard
+    // kick raises it. Breaks the other way round. Small steps, remembered.
+    qreal k = kickMean(beat, 8);
+    if (k < 0.0)
+        return;
+    const qreal rate = 0.2;
+    if (type == QStringLiteral("drop"))
+    {
+        if (added && k < m_dropKick)
+            m_dropKick = m_dropKick * (1.0 - rate) + k * rate;
+        else if (added == false && k > m_dropKick)
+            m_dropKick = m_dropKick * (1.0 - rate) + k * rate;
+    }
+    else if (type == QStringLiteral("break"))
+    {
+        if (added && k > m_breakKick)
+            m_breakKick = m_breakKick * (1.0 - rate) + k * rate;
+        else if (added == false && k < m_breakKick)
+            m_breakKick = m_breakKick * (1.0 - rate) + k * rate;
+    }
+    m_dropKick = qBound(0.30, m_dropKick, 0.90);
+    m_breakKick = qBound(0.05, m_breakKick, qMin(0.50, m_dropKick - 0.10));
+    QSettings settings;
+    settings.setValue(SETTINGS_TRACK_DROPKICK, m_dropKick);
+    settings.setValue(SETTINGS_TRACK_BREAKKICK, m_breakKick);
+    qDebug() << "[TrackManager] learned: drop kick" << m_dropKick << "break kick" << m_breakKick;
+}
+
+bool TrackManager::markersManual() const { return m_markersManual; }
