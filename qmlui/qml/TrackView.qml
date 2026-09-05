@@ -1092,7 +1092,9 @@ Rectangle
 
             // The cast, large: one fader per group - the DJ's trim on top of
             // everything the engine does - lit when the group is in the cast,
-            // with a switch to leave it out for the night. (CAST_V4_TOUCH)
+            // with a switch to leave it out for the night. Reads as a fader
+            // without arrows: a scale on the sides, a bright edge on the level,
+            // and the level line follows the finger. (CAST_V5_FADER_LOOK)
             Column
             {
                 id: castPanel
@@ -1127,22 +1129,51 @@ Rectangle
                             border.color: lit ? "#9FD3FF" : (modelData.base ? "#4FA3E3" : "#3A3A3A")
                             clip: true
 
-                            // the fader: the trim fills from the bottom
+                            // a fader scale along both edges: 25, 50, 75 %
+                            Repeater
+                            {
+                                model: [ 0.25, 0.5, 0.75 ]
+                                Item
+                                {
+                                    width: parent.width
+                                    y: 3 + (parent.height - 6) * (1 - modelData) - 1
+                                    height: 2
+                                    Rectangle { x: 0; width: 10; height: 2; color: "#3A3A3A" }
+                                    Rectangle { x: parent.width - 10; width: 10; height: 2; color: "#3A3A3A" }
+                                }
+                            }
+
+                            // the fader: the trim fills from the bottom, with a
+                            // bright edge where the level is
                             Rectangle
                             {
+                                id: castFill
                                 anchors.left: parent.left
                                 anchors.right: parent.right
                                 anchors.bottom: parent.bottom
                                 anchors.margins: 3
                                 height: (parent.height - 6) * (castTile.off ? 0 : castTile.trim)
                                 radius: 4
-                                color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4") : "#2C2C2C"
+                                color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4")
+                                                    : (castArea.pressed ? "#3A3A3A" : "#303030")
                                 Behavior on color { ColorAnimation { duration: 150 } }
+
+                                Rectangle
+                                {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    height: castArea.pressed ? 4 : 3
+                                    radius: 2
+                                    visible: parent.height > 4
+                                    color: castTile.lit ? "#BFE3FF" : (castArea.pressed ? "#DDDDDD" : "#8A8A8A")
+                                }
                             }
 
                             // drag anywhere: the trim
                             MouseArea
                             {
+                                id: castArea
                                 anchors.fill: parent
                                 enabled: !castTile.off
                                 function apply(y)
