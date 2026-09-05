@@ -2777,6 +2777,21 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
         if (m_groups.value(key).hasDimmer == false && m_groupOff.contains(key) == false)
             found << tr("%1 has no master dimmer - on/off only").arg(key);
 
+    // a group the engine cannot make colours for (an animation laser) and
+    // that lacks a palette colour will sit dark whenever that colour runs
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.generatable() || m_groupOff.contains(key))
+            continue;
+        QStringList missing;
+        foreach (const QString &colour, m_palette)
+            if (colourFunction(key, colour) == Function::invalidId())
+                missing << colour;
+        if (missing.isEmpty() == false)
+            found << tr("%1 has no scene for %2").arg(key).arg(missing.join(", "));
+    }
+
     // Moving heads whose pan changes while none of our sweeps runs are being
     // steered from elsewhere - the Light Rider app on the iPad, usually.
     // Two programs on one head is a fight nobody wins.
@@ -3018,26 +3033,50 @@ void TrackEngine::idle()
     ensureTable();
     tickFades();
 
+    QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_IDLE, QString());
+    QString base = baseGroup();
+    // no start scene: the base stands in its colour, still and dimmed - a
+    // pause between tracks is not a blackout in a restaurant
+    bool holdBase = list.isEmpty() && base.isEmpty() == false && m_groupOff.contains(base) == false;
+
     // everything from the track goes; the start scene(s) come on
     foreach (const QString &slot, m_active.keys())
-        if (slot.startsWith("idle:") == false)
-            stopSlot(slot, false);
+    {
+        if (slot.startsWith("idle:"))
+            continue;
+        if (holdBase && (slot == "col:" + base || slot.startsWith("dim:" + base + "#") || slot == "pos:" + base))
+            continue;
+        stopSlot(slot, false);
+    }
 
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();
 
-    QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_IDLE, QString());
     foreach (TrackFuncInfo *info, list)
         run("idle:" + QString::number(info->id), info->id,
             info->dimmer ? m_master : 1.0, 0, false);
+
+    if (holdBase)
+    {
+        QString colour = m_colour.isEmpty() ? (m_palette.isEmpty() ? QString() : m_palette.first()) : m_colour;
+        quint32 cf = colourFunction(base, colour);
+        if (cf != Function::invalidId())
+            run("col:" + base, cf, m_funcs.value(cf).dimmer ? 0.35 * m_master : 1.0, 0, false);
+        if (m_groups.value(base).hasDimmer)
+            setDimmer(base, 0.35);
+        m_cast.clear();
+        m_cast.insert(base);
+    }
+    else
+        m_cast.clear();
 
     // nothing plays, so no beats tick the fades: keep them moving on a timer
     if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
         m_fadeTimer.start();
 
-    m_cast.clear();
-    m_report = list.isEmpty() ? tr("(idle - no start scene)") : tr("(start scene)");
+    m_report = list.isEmpty() ? (holdBase ? tr("(idle - base held)") : tr("(idle - no start scene)"))
+                              : tr("(start scene)");
     emit liveChanged();
 }
 

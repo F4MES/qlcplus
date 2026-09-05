@@ -767,6 +767,16 @@ void TrackManager::slotEnergyTick()
         m_linkStale = stale;
         emit linkChanged();
     }
+    // half a minute without a word from BLT is not a hiccup: the track is
+    // over as far as we know - fall back to the idle look instead of a
+    // chase running on forever
+    if (stale && m_playing && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 30000)
+    {
+        m_playing = false;
+        emit positionChanged();
+        if (m_engine != nullptr && m_autoRun && m_roleMode)
+            m_engine->idle();
+    }
 
     int bpm = 0;
     if (m_doc != nullptr && m_doc->masterTimer() != nullptr)
