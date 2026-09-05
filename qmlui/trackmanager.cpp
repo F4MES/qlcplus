@@ -97,6 +97,8 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_markersManual = false;
     m_dropKick = settings.value(SETTINGS_TRACK_DROPKICK, 0.55).toDouble();
     m_breakKick = settings.value(SETTINGS_TRACK_BREAKKICK, 0.30).toDouble();
+    m_lastPosMs = 0;
+    m_linkStale = false;
     m_engine = new TrackEngine(m_doc, this);
     // ROOM (by clock, or a tap) is the ENERGY trim: one dial, not two
     connect(m_engine, &TrackEngine::roomChanged, this, &TrackManager::setEnergyTrim);
@@ -1858,11 +1860,11 @@ bool TrackManager::refineMarkers()
         qreal after = kickMean(b, 8);
         if (before < 0.0 || after < 0.0 || before >= m_breakKick || after < m_dropKick)
             continue;
-        bool near = false;
+        bool nearby = false;             // near is a macro in windows.h
         foreach (const Flag &f, flags)
             if (qAbs(f.beat - b) <= 8)
-                near = true;
-        if (near)
+                nearby = true;
+        if (nearby)
             continue;
         Flag drop;
         drop.beat = b;
