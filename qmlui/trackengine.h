@@ -174,6 +174,10 @@ class TrackEngine : public QObject
      *  Not remembered between nights. */
     Q_PROPERTY(QVariantMap trims READ trims NOTIFY liveChanged)
     Q_PROPERTY(qreal master READ master WRITE setMaster NOTIFY liveChanged)
+    /** The DJ's tempo for everything the engine moves: -1 half speed, 0 as
+     *  the music says, +1 double. Patterns, the user's chases, the heads'
+     *  walk - all of it. Not remembered between nights. */
+    Q_PROPERTY(int speed READ speed WRITE setSpeed NOTIFY liveChanged)
     Q_PROPERTY(bool flashing READ flashing NOTIFY liveChanged)
     Q_PROPERTY(QString report READ report NOTIFY liveChanged)
 
@@ -239,6 +243,8 @@ public:
     QStringList cast() const;
     qreal master() const;
     void setMaster(qreal level);
+    int speed() const;
+    void setSpeed(int speed);
     bool flashing() const;
     Q_INVOKABLE void setFlash(bool pressed);
     QString report() const;
@@ -385,6 +391,7 @@ private:
     QSet<QString> m_cast;
     QMap<QString, quint32> m_position;   // sticky position pick per group
     qreal m_master;
+    int m_speed;                          // -1 half, 0 as the music, +1 double
     QMap<QString, qreal> m_groupTrim;     // the DJ's fader per group, 1.0 when untouched
     bool m_flash;
     QString m_lastState;

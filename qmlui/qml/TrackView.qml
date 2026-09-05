@@ -553,7 +553,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V10_DIALS)
+        // =============================================== live controls  (LIVE_V11_SPEED)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -629,6 +629,37 @@ Rectangle
                     }
                     onPressed: (mouse) => apply(mouse.x)
                     onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                }
+            }
+
+            // ---- speed: half, as the music, double - for everything that moves
+            Row
+            {
+                Layout.fillHeight: true
+                spacing: 6
+
+                Text
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("SPEED")
+                    color: "#9A9A9A"
+                    font.bold: true
+                    font.pixelSize: 13
+                }
+
+                Repeater
+                {
+                    model: [ "\u00bd\u00d7", "1\u00d7", "2\u00d7" ]
+
+                    TrackTile
+                    {
+                        width: trackViewRoot.touchH * 1.3
+                        height: dialsRow.height
+                        label: modelData
+                        active: trackEngine ? trackEngine.speed === index - 1 : index === 1
+                        activeColor: [ "#5A7A9A", "#4FA3E3", "#E3B44F" ][index]
+                        onTapped: trackEngine.speed = index - 1
+                    }
                 }
             }
 

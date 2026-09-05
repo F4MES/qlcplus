@@ -69,6 +69,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_castCursor(0)
     , m_motionCursor(0)
     , m_master(1.0)
+    , m_speed(0)
     , m_flash(false)
     , m_effects(0)
     , m_lastBeat(0)
@@ -749,6 +750,10 @@ int TrackEngine::divisionFor(const TrackFuncInfo &info, qreal bpm, int division)
             best = grid[i];
         }
     }
+    if (m_speed < 0)
+        best *= 2.0;
+    else if (m_speed > 0)
+        best = qMax(0.125, best / 2.0);
     return int(best * 1000.0);
 }
 
@@ -1690,6 +1695,21 @@ void TrackEngine::setMaster(qreal level)
     emit liveChanged();
 }
 
+int TrackEngine::speed() const { return m_speed; }
+
+void TrackEngine::setSpeed(int speed)
+{
+    speed = qBound(-1, speed, 1);
+    if (speed == m_speed)
+        return;
+    m_speed = speed;
+    // running chases keep their old step until restarted: restart them
+    foreach (const QString &slot, m_active.keys())
+        if (slot.startsWith("mot:"))
+            stopSlot(slot, true);
+    emit liveChanged();
+}
+
 bool TrackEngine::flashing() const { return m_flash; }
 
 void TrackEngine::setFlash(bool pressed)
@@ -2150,7 +2170,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the pan/tilt speed channel turns each step into a slow sweep
         if (g.heads && inCast && hold == false && isBreak == false && m_moves.value(key).ownChaser
             && (m_fullAuto || candidates(ENGINE_ROLE_MOTION, key).isEmpty())
-            && beatInBar == 0 && bar > 0 && (bar % (isDrop ? 2 : 4)) == 0)
+            && beatInBar == 0 && bar > 0 && (bar % qMax(1, (isDrop ? 2 : 4) * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1))) == 0)
         {
             quint32 np = positionFunction(key, m_castCursor + bar, -1);
             if (np != Function::invalidId() && np != want)
@@ -2251,6 +2271,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the turnaround: the last bar of an eight-bar phrase moves twice as
         // fast, the way a drummer fills into the next phrase
         else if (isBreak == false && energy > 0.5 && (bar % 8) == 7 && mv.pattern != ENGINE_PAT_STATIC)
+            mv.stepBeats = qMax(1, mv.stepBeats / 2);
+        // the DJ's SPEED: half or double everything that steps
+        if (m_speed < 0)
+            mv.stepBeats *= 2;
+        else if (m_speed > 0)
             mv.stepBeats = qMax(1, mv.stepBeats / 2);
 
         QString colour = m_colour;
