@@ -2000,7 +2000,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // NEXT: treat this beat as a fresh section with a fresh colour
     bool forceNext = m_forceNext;
     m_forceNext = false;
-    bool hold = m_hold && forceNext == false;      // NEXT breaks a hold for one beat
+    // ENERGY at zero is the restaurant: the base stands in its colour and
+    // nothing moves or changes - no pulse, no patterns, no colour rotation,
+    // no positions. A hold the slider imposes.
+    bool still = energy < 0.03;
+    bool hold = (m_hold || still) && forceNext == false;      // NEXT breaks a hold for one beat
     if (forceNext)
     {
         sectionChanged = true;
@@ -2105,7 +2109,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     int effects = m_effects;
     if (preDrop)
         effects = qMax(effects, effectsFor(true, false));
-    if (isCalm)
+    if (isCalm || still)
         effects = 0;
     if (base.isEmpty())
         effects = qMax(effects, 1);                 // no base: something must show
@@ -2278,7 +2282,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
 
         TrackMove mv = m_moves.value(key);
-        if (isCalm)
+        if (isCalm || still)
             mv = TrackMove();
         if (isBuild)
         {
@@ -2322,7 +2326,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the move drew whether this group runs one of the user's own chases
         // or EFX (never in a break, only the climbing half of a build); the
         // base may reach one star higher, it is what carries the room
-        bool moving = mv.ownChaser && isBreak == false && (isBuild == false || prog > 0.5);
+        bool moving = mv.ownChaser && isBreak == false && still == false && (isBuild == false || prog > 0.5);
         int stars = qMin(3, maxStars + (key == base ? 1 : 0));
         quint32 mf = Function::invalidId();
         if (isCalm == false)
@@ -2387,7 +2391,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     while (m_hitBeats.isEmpty() == false && m_hitBeats.first() < beat - 32)
         m_hitBeats.removeFirst();
     bool crowded = m_hitBeats.count() >= 8;
-    bool hit = isCalm == false
+    bool hit = isCalm == false && still == false
             && ((isBuild && prog > 0.82 && crowded == false)
                 || (isDrop && bar == 0 && beatInBar < 2)
                 || (moveHit && crowded == false));
@@ -2429,7 +2433,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         .arg(state)
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
         .arg(isCalm ? tr("  CALM") : QString())
-        .arg(QString(m_hold ? tr("  HOLD") : QString()) + (m_fullAuto ? tr("  FULL AUTO") : QString()));
+        .arg(QString(m_hold ? tr("  HOLD") : QString()) + (still ? tr("  STILL") : QString())
+             + (m_fullAuto ? tr("  FULL AUTO") : QString()));
     emit liveChanged();
 }
 
@@ -2844,15 +2849,17 @@ int TrackEngine::roomPercent() const { return m_roomSent; }
 
 int TrackEngine::clockPercent() const
 {
-    // anchor points through the night, minutes past 21:00 -> percent
-    static const int anchor[][2] = { { 0, 35 }, { 120, 55 }, { 210, 75 }, { 270, 90 }, { 420, 90 }, { 480, 35 } };
+    // anchor points through the night, minutes past 21:00 -> percent. A
+    // restaurant: still until 22:00, then a slow creep - the DJ pushes the
+    // slider when the floor actually opens, somewhere between 23:00 and 01:00
+    static const int anchor[][2] = { { 0, 0 }, { 60, 0 }, { 120, 20 }, { 180, 45 }, { 240, 70 }, { 300, 85 }, { 420, 85 }, { 480, 0 } };
     QTime now = QTime::currentTime();
     int minutes = now.hour() * 60 + now.minute() - 21 * 60;
     if (minutes < 0)
         minutes += 24 * 60;          // past midnight
     if (minutes >= 480)
-        return 35;                   // 05:00 - 21:00: the room is empty
-    for (int i = 1; i < 6; i++)
+        return 0;                    // 05:00 - 21:00: a restaurant, still
+    for (int i = 1; i < 8; i++)
     {
         if (minutes <= anchor[i][0])
         {
@@ -2861,7 +2868,7 @@ int TrackEngine::clockPercent() const
             return int(qRound(anchor[i - 1][1] + f * (anchor[i][1] - anchor[i - 1][1])));
         }
     }
-    return 35;
+    return 0;
 }
 
 void TrackEngine::announceRoom()

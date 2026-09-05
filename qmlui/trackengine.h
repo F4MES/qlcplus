@@ -264,9 +264,10 @@ public:
     int roomByClock() const;
     /** The ENERGY percent the clock last handed to TrackManager. */
     Q_INVOKABLE int roomPercent() const;
-    /** ENERGY by the clock: 55 % at 21:00 rising to 80 % at 23:00, 100 % at
-     *  00:30 and 125 % from 01:30, back to 55 % at 05:00 - a slow creep, not
-     *  steps, so the slider moves the way a careful hand would. */
+    /** ENERGY by the clock, a restaurant's night: 0 (still) until 22:00,
+     *  20 % at 23:00, 45 % at midnight, 70 % at 01:00, 85 % from 02:00, back
+     *  to 0 at 05:00 - a slow creep, not steps. The DJ pushes the slider when
+     *  the floor actually opens. */
     int clockPercent() const;
     void announceRoom();
     bool hold() const;
