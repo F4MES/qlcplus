@@ -88,7 +88,15 @@ Rectangle
     Connections
     {
         target: trackEngine
-        function onTableChanged() { setupRoot.refresh++ }
+        function onTableChanged()
+        {
+            // the list model is rebuilt from the table; a rebuilt model puts
+            // the ListView back at the top, so remember where the finger was
+            var y = funcList.contentY
+            setupRoot.refresh++
+            funcList.contentY = y
+            Qt.callLater(function() { funcList.contentY = Math.min(y, Math.max(0, funcList.contentHeight - funcList.height)) })
+        }
     }
 
     ColumnLayout

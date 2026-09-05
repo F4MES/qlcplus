@@ -165,6 +165,10 @@ class TrackEngine : public QObject
      *  the energy the analysis reports, so the same track gets less light at
      *  22:00 than at 01:00. Not remembered between nights. */
     Q_PROPERTY(int room READ room WRITE setRoom NOTIFY liveChanged)
+    /** Let the clock set ROOM: empty before 21:30, warming until 23:00, full
+     *  until 00:30, peak after that, empty again from 05:00. Tapping a ROOM
+     *  tile turns it off for the night. */
+    Q_PROPERTY(bool roomAuto READ roomAuto WRITE setRoomAuto NOTIFY liveChanged)
     /** Freeze the look: no colour, cast or move changes until released. */
     Q_PROPERTY(bool hold READ hold WRITE setHold NOTIFY liveChanged)
 
@@ -226,6 +230,9 @@ public:
     Q_INVOKABLE void next();
     int room() const;
     void setRoom(int room);
+    bool roomAuto() const;
+    void setRoomAuto(bool on);
+    int roomByClock() const;
     bool hold() const;
     void setHold(bool on);
     bool logEnabled() const;
@@ -367,6 +374,7 @@ private:
     QString m_lastMoves;                   // what the report said, for the log
     QTimer m_pulseTimer;                   // 40 ms: the breath between two beats
     int m_room;
+    bool m_roomAuto;
     bool m_hold;
     bool m_forceNext;
     QList<int> m_hitBeats;                 // beats that carried a hit, last 32 beats

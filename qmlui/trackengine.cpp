@@ -18,6 +18,7 @@
 
 #include <QStandardPaths>
 #include <QDateTime>
+#include <QTime>
 #include <QTextStream>
 #include <QDir>
 #include <cmath>
@@ -75,6 +76,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_beatStartMs(0)
     , m_beatIndex(0)
     , m_room(2)
+    , m_roomAuto(true)
     , m_hold(false)
     , m_forceNext(false)
 {
@@ -594,7 +596,7 @@ void TrackEngine::ensureTable()
                 info.oneShot = chaser->runOrder() == Function::SingleShot;
             }
         }
-        else if (t == Function::EFXType && func->duration() < 600000)
+        else if ((t == Function::EFXType || t == Function::RGBMatrixType) && func->duration() < 600000)
         {
             info.durationMs = func->duration();
         }
@@ -1571,6 +1573,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     m_lastBeat = beat;
 
     // the room: the same track is quieter at 22:00 than at 01:00
+    if (m_roomAuto)
+    {
+        int want = roomByClock();
+        if (want != m_room)
+        {
+            m_room = want;
+            m_moves.clear();
+        }
+    }
     static const qreal roomFactor[4] = { 0.55, 0.80, 1.0, 1.25 };
     energy = qBound(0.0, energy * roomFactor[qBound(0, m_room, 3)], 1.0);
 
@@ -1723,9 +1734,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             continue;
 
         bool inCast = castSet.contains(key);
+        // lasers move only in a dark beat at a break; heads move at break or
+        // drop starts, and half the time at other section changes - every
+        // section would be restless
         bool mayMove = hold == false
                     && ((inCast == false)
-                        || (sectionChanged && (g.lasers ? (isBreak && g.hasDimmer) : true)));
+                        || (sectionChanged && (g.lasers ? (isBreak && g.hasDimmer)
+                                                        : (isBreak || isDrop || rng->bounded(2) == 0))));
         quint32 want = m_position.value(key, Function::invalidId());
         if (want == Function::invalidId() || (mayMove && sectionChanged))
         {
@@ -2343,12 +2358,44 @@ int TrackEngine::room() const { return m_room; }
 
 void TrackEngine::setRoom(int room)
 {
+    // a hand on the dial ends the automatic evening
+    m_roomAuto = false;
     room = qBound(0, room, 3);
     if (room == m_room)
+    {
+        emit liveChanged();
         return;
+    }
     m_room = room;
     m_moves.clear();             // the new energy draws new moves
     emit liveChanged();
+}
+
+bool TrackEngine::roomAuto() const { return m_roomAuto; }
+
+void TrackEngine::setRoomAuto(bool on)
+{
+    if (on == m_roomAuto)
+        return;
+    m_roomAuto = on;
+    if (on)
+        m_room = roomByClock();
+    emit liveChanged();
+}
+
+int TrackEngine::roomByClock() const
+{
+    // a club night, roughly: doors and a thin floor, warming up, full,
+    // peak after midnight; the morning after is empty again
+    QTime now = QTime::currentTime();
+    int minutes = now.hour() * 60 + now.minute();
+    if (minutes >= 5 * 60 && minutes < 21 * 60 + 30)
+        return 0;                                    // 05:00 - 21:30 empty
+    if (minutes >= 21 * 60 + 30 && minutes < 23 * 60)
+        return 1;                                    // 21:30 - 23:00 warming
+    if (minutes >= 23 * 60 || minutes < 30)
+        return 2;                                    // 23:00 - 00:30 full
+    return 3;                                        // 00:30 - 05:00 peak
 }
 
 bool TrackEngine::hold() const { return m_hold; }
