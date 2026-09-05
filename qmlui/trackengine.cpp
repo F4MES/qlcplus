@@ -78,6 +78,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_castCursor(0)
     , m_motionCursor(0)
     , m_master(1.0)
+    , m_blackout(false)
     , m_speed(0)
     , m_flash(false)
     , m_effects(0)
@@ -162,7 +163,7 @@ void TrackEngine::slotPulseTimer()
             Function *func = m_doc->function(m_active.value(slot));
             if (func != nullptr)
                 m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
-                                    qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_groupTrim.value(key, 1.0) * m_master, 1.0)));
+                                    m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_groupTrim.value(key, 1.0) * m_master, 1.0)));
         }
     }
     if (any == false)
@@ -1577,7 +1578,7 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
         Function *func = m_doc->function(m_active.value(slot));
         if (func != nullptr)
             m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
-                qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(key) * level * m_master, 1.0)));
+                m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(key) * level * m_master, 1.0)));
     }
     emit liveChanged();
 }
@@ -1703,8 +1704,33 @@ void TrackEngine::setMaster(qreal level)
             QString group = hash > 4 ? slot.mid(4, hash - 4) : QString();
             if (func != nullptr)
                 m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
-                    qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0)));
+                    m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0)));
         }
+    emit liveChanged();
+}
+
+bool TrackEngine::blackout() const { return m_blackout; }
+
+void TrackEngine::setBlackout(bool on)
+{
+    if (on == m_blackout)
+        return;
+    m_blackout = on;
+    // straight onto everything that runs: parts and functions alike
+    foreach (const QString &slot, m_active.keys())
+    {
+        Function *func = m_doc->function(m_active.value(slot));
+        if (func == nullptr)
+            continue;
+        qreal level = m_activeLevel.value(slot, 1.0);
+        if (slot.startsWith("dim:"))
+        {
+            int hash = slot.lastIndexOf('#');
+            QString group = hash > 4 ? slot.mid(4, hash - 4) : QString();
+            level = qBound(0.0, level * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0);
+        }
+        m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, m_blackout ? 0.0 : level));
+    }
     emit liveChanged();
 }
 
@@ -2483,7 +2509,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
         .arg(isCalm ? tr("  CALM") : QString())
         .arg(QString(m_hold ? tr("  HOLD") : QString()) + (still ? tr("  STILL") : QString())
-             + (m_fullAuto ? tr("  FULL AUTO") : QString()));
+             + (m_blackout ? tr("  BLACKOUT") : QString()) + (m_fullAuto ? tr("  FULL AUTO") : QString()));
     emit liveChanged();
 }
 
@@ -3127,6 +3153,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     }
 
     level = qBound(0.0, level, 1.0);
+    qreal out = m_blackout ? 0.0 : level;        // a blackout: the function runs, at nothing
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
@@ -3139,7 +3166,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
             startFunction(func, division);
             if (attr >= 0)
                 func->releaseAttributeOverride(attr);
-            attr = func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, level);
+            attr = func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out);
             m_activeAttr.insert(slot, attr);
         }
         else if (func != nullptr)
@@ -3147,7 +3174,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
             // requestAttributeOverride returns the existing ID (the attribute
             // is single-override) or a fresh one if a stop reset them - so it
             // heals a stale ID where adjustAttribute would fail silently
-            m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, level));
+            m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
         }
         m_activeLevel.insert(slot, level);
         return;
@@ -3170,7 +3197,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
 
     m_active.insert(slot, fid);
     m_activeLevel.insert(slot, level);
-    m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, level));
+    m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
 }
 
 void TrackEngine::startFunction(Function *func, int division)
@@ -3277,6 +3304,8 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
         applied = applied > 0.10 ? 1.0 : 0.0;
+    if (m_blackout)
+        applied = 0.0;
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {

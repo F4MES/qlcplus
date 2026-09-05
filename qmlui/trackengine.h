@@ -179,6 +179,10 @@ class TrackEngine : public QObject
      *  walk - all of it. Not remembered between nights. */
     Q_PROPERTY(int speed READ speed WRITE setSpeed NOTIFY liveChanged)
     Q_PROPERTY(bool flashing READ flashing NOTIFY liveChanged)
+    /** Everything the engine drives at zero - colours, chases, parts - while
+     *  the engine keeps following the track underneath, so releasing it
+     *  lands on the right look. A toggle, not a hold. */
+    Q_PROPERTY(bool blackout READ blackout WRITE setBlackout NOTIFY liveChanged)
     Q_PROPERTY(QString report READ report NOTIFY liveChanged)
 
     Q_PROPERTY(QStringList warnings READ warnings NOTIFY liveChanged)
@@ -247,6 +251,8 @@ public:
     void setSpeed(int speed);
     bool flashing() const;
     Q_INVOKABLE void setFlash(bool pressed);
+    bool blackout() const;
+    void setBlackout(bool on);
     QString report() const;
 
     /** Everything that is not right at the moment: a slider overriding the
@@ -399,6 +405,7 @@ private:
     QSet<QString> m_cast;
     QMap<QString, quint32> m_position;   // sticky position pick per group
     qreal m_master;
+    bool m_blackout;
     int m_speed;                          // -1 half, 0 as the music, +1 double
     QMap<QString, qreal> m_groupTrim;     // the DJ's fader per group, 1.0 when untouched
     bool m_flash;

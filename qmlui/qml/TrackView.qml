@@ -825,7 +825,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V14_TOUCH)
+        // =============================================== live controls  (LIVE_V15_BLACKOUT)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -1026,7 +1026,55 @@ Rectangle
                 }
             }
 
-            Item { Layout.fillWidth: true }
+            // ---- what the engine is doing, in the room between colours and
+            //      buttons: the cast with its moves, then section, countdown
+            //      and any state (STILL, HOLD, BLACKOUT, FULL AUTO)
+            Item
+            {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
+
+                Column
+                {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                spacing: 2
+
+                Text
+                {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text: trackEngine ? trackEngine.report.split("  |  ")[0] : ""
+                    color: "#CCCCCC"
+                    font.pixelSize: 14
+                    font.bold: true
+                }
+                Text
+                {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text:
+                    {
+                        if (!trackEngine || !trackManager) return ""
+                        var parts = trackEngine.report.split("  |  ")
+                        var colour = parts.length > 1 ? parts[1] : ""
+                        var state = parts.length > 2 ? parts[2] : ""
+                        // the next section, in bars
+                        var cur = trackManager.currentBeat
+                        var mk = trackManager.markers
+                        var next = null
+                        for (var i = 0; i < mk.length; i++)
+                            if (mk[i].beat > cur && (next === null || mk[i].beat < next.beat)) next = mk[i]
+                        var count = (next && trackManager.playing) ? "   \u2192 " + next.type.toUpperCase() + " " + Math.ceil((next.beat - cur) / 4) : ""
+                        return colour + "   \u00b7   " + state + count
+                    }
+                    color: "#8A8A8A"
+                    font.pixelSize: 12
+                }
+                }
+            }
 
             // ---- calm: panic button. Base group only, one colour, no motion,
             //      for 16 bars - then back to automatic. Tap again to end it.
@@ -1087,6 +1135,19 @@ Rectangle
                     onReleased: trackEngine.setFlash(false)
                     onCanceled: trackEngine.setFlash(false)
                 }
+            }
+
+            // ---- blackout: a toggle. Everything at zero; the engine keeps
+            //      following the track underneath, so the lights come back on
+            //      the right look.
+            TrackTile
+            {
+                Layout.preferredWidth: trackViewRoot.touchH * 2.2
+                Layout.fillHeight: true
+                label: qsTr("BLACKOUT")
+                active: trackEngine ? trackEngine.blackout : false
+                activeColor: "#B03030"
+                onTapped: trackEngine.blackout = !trackEngine.blackout
             }
         }
 
@@ -1206,7 +1267,7 @@ Rectangle
             // everything the engine does - lit when the group is in the cast,
             // with a switch to leave it out for the night. Reads as a fader
             // without arrows: a scale on the sides, a bright edge on the level,
-            // and the level line follows the finger. (CAST_V5_FADER_LOOK)
+            // and the level line follows the finger. (CAST_V6_NO_STATUS)
             Column
             {
                 id: castPanel
@@ -1218,7 +1279,7 @@ Rectangle
                 Row
                 {
                     width: parent.width
-                    height: parent.height - statusLine.height - parent.spacing
+                    height: parent.height
                     spacing: 6
 
                     Repeater
@@ -1352,17 +1413,6 @@ Rectangle
                             }
                         }
                     }
-                }
-
-                Text
-                {
-                    id: statusLine
-                    width: parent.width
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideRight
-                    text: trackEngine ? trackEngine.report : ""
-                    color: "#8A8A8A"
-                    font.pixelSize: 13
                 }
             }
             // The role picker owns setup now: one tap per function decides
