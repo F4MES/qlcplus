@@ -20,8 +20,17 @@
       are sticky and only change inside a one-beat dark gap at a break.
 
     * Intensity lives on the groups' master dimmers - the same channels the
-      Group Dimmer sliders move - through one hidden scene per group. Colour
-      scenes are never intensity-scaled.
+      Group Dimmer sliders move - through one hidden scene per FIXTURE. That
+      split is what lets the engine move light without a single chaser:
+      chases, ping-pong, odd/even, sparkle and fill run across a group's
+      fixtures in whatever colour the palette holds, and a 40 ms timer lets
+      the dimmers breathe on the beat.
+
+    * Every section draws a fresh MOVE per group at random - pattern, step
+      length, pulse depth and accent rhythm - from a menu that grows with
+      the energy: low energy gets a static look, the middle gets colour
+      changes and a soft pulse, high energy gets everything. Two sections
+      never look quite the same.
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -33,8 +42,10 @@
 #ifndef TRACKENGINE_H
 #define TRACKENGINE_H
 
+#include <QElapsedTimer>
 #include <QVariantList>
 #include <QStringList>
+#include <QVector>
 #include <QObject>
 #include <QString>
 #include <QTimer>
@@ -55,6 +66,16 @@ class Doc;
 #define ENGINE_ROLE_FLASH     3
 #define ENGINE_ROLE_IDLE      4
 #define ENGINE_ROLE_COUNT     5
+
+/* generated dimmer patterns, run across a group's fixtures */
+#define ENGINE_PAT_STATIC     0
+#define ENGINE_PAT_CHASE      1
+#define ENGINE_PAT_PINGPONG   2
+#define ENGINE_PAT_ODDEVEN    3
+#define ENGINE_PAT_HALVES     4
+#define ENGINE_PAT_SPARKLE    5
+#define ENGINE_PAT_FILL       6
+#define ENGINE_PAT_COUNT      7
 
 #define SETTINGS_ENGINE_ROLES     QStringLiteral("trackengine/roles")
 #define SETTINGS_ENGINE_GROUPOFF  QStringLiteral("trackengine/groupoff")
@@ -84,12 +105,25 @@ struct TrackFuncInfo
     int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
 };
 
+/** How one group moves inside a section. Drawn at random when the section
+ *  starts, from a menu that depends on the section type and the energy. */
+struct TrackMove
+{
+    int pattern = ENGINE_PAT_STATIC;
+    int stepBeats = 4;        // beats per pattern step: 1 = every beat, 4 = every bar
+    qreal pulse = 0.0;        // how deep the dimmers breathe on the beat, 0..1
+    int pulseOn = 0;          // 0 every beat, 1 beats 1+3, 2 beats 2+4, 3 downbeat only
+    int colourBars = 0;       // accent group: swap palette/accent every N bars (0 = hold)
+    bool flashBar = false;    // a hit on the downbeat of every second bar
+    int phase = 0;            // random start offset into the pattern
+};
+
 /** One fixture group as the engine sees it. */
 struct TrackGroup
 {
     QString key;              // stable name
     QList<quint32> fixtures;
-    quint32 dimmerScene = 0;  // hidden scene holding the master dimmers, or invalid
+    QList<quint32> parts;     // hidden scene per fixture holding its master dimmer, or invalid
     bool hasDimmer = false;
     bool strobes = false;     // this is the strobe/blinder group
     bool lasers = false;      // beams that must not move while lit
@@ -199,6 +233,7 @@ signals:
 protected slots:
     void slotDocChanged();
     void slotFadeTimer();
+    void slotPulseTimer();
 
 protected:
     /* table building */
@@ -237,6 +272,15 @@ protected:
     void stopSlot(const QString &slot, bool hard);
     void tickFades();
     void setDimmer(const QString &group, qreal level);
+
+    /* generated motion */
+    TrackMove drawMove(const QString &group, int tier, bool build, qreal energy, bool isBase) const;
+    void applyMove(const QString &group, qreal level, int beat, int secStart, qreal prog,
+                   const TrackMove &move, bool patterned);
+    void setPart(const QString &group, int index, qreal level);
+    QString partSlot(const QString &group, int index) const;
+    qreal pulseFactor(const QString &group) const;
+    QString moveName(const TrackMove &move) const;
 
 private:
     Doc *m_doc;
@@ -281,6 +325,14 @@ private:
     QTimer m_fadeTimer;       // keeps fades ticking after a release
     bool m_logEnabled;
     QFile m_log;
+
+    /* generated motion */
+    QMap<QString, TrackMove> m_moves;      // this section's move per group
+    QMap<QString, qreal> m_pulseDepth;     // groups breathing right now, and how deep
+    QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
+    QElapsedTimer m_clock;
+    qreal m_beatMs;
+    QTimer m_pulseTimer;                   // 40 ms: the breath between two beats
 
     /* what is running: slot name -> fid, and its attribute override */
     QMap<QString, quint32> m_active;

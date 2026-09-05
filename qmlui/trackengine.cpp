@@ -10,6 +10,7 @@
 */
 
 #include <QRegularExpression>
+#include <QRandomGenerator>
 #include <QSettings>
 #include <QDebug>
 #include <functional>
@@ -69,11 +70,15 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_lastBeat(0)
     , m_calmUntil(0)
     , m_logEnabled(true)
+    , m_beatMs(500.0)
 {
     QSettings settings;
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
     m_fadeTimer.setInterval(250);
     connect(&m_fadeTimer, SIGNAL(timeout()), this, SLOT(slotFadeTimer()));
+    m_clock.start();
+    m_pulseTimer.setInterval(40);
+    connect(&m_pulseTimer, SIGNAL(timeout()), this, SLOT(slotPulseTimer()));
     // MASTER is deliberately not restored: a night that starts at 40 %
     // because someone dimmed last time is worse than one that starts bright
     m_master = 1.0;
@@ -109,7 +114,36 @@ void TrackEngine::slotDocChanged()
 {
     m_dirty = true;
     m_position.clear();
+    m_moves.clear();
     emit tableChanged();
+}
+
+void TrackEngine::slotPulseTimer()
+{
+    // between two beats: let every breathing group's dimmers fall back from
+    // the level the beat set, so the light pumps with the kick
+    bool any = false;
+    for (QMap<QString, qreal>::const_iterator it = m_pulseDepth.constBegin();
+         it != m_pulseDepth.constEnd(); ++it)
+    {
+        if (it.value() <= 0.0)
+            continue;
+        any = true;
+        const TrackGroup &g = m_groups.value(it.key());
+        qreal f = pulseFactor(it.key());
+        for (int i = 0; i < g.parts.count(); i++)
+        {
+            QString slot = partSlot(it.key(), i);
+            if (m_active.contains(slot) == false)
+                continue;
+            Function *func = m_doc->function(m_active.value(slot));
+            int attr = m_activeAttr.value(slot, -1);
+            if (func != nullptr && attr >= 0)
+                func->adjustAttribute(qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_master, 1.0), attr);
+        }
+    }
+    if (any == false)
+        m_pulseTimer.stop();
 }
 
 int TrackEngine::roleCount() const { return ENGINE_ROLE_COUNT; }
@@ -584,8 +618,9 @@ quint32 TrackEngine::dimmerChannel(Fixture *fxi) const
 
 void TrackEngine::ensureDimmerScenes()
 {
-    // one hidden scene per group, holding every master dimmer at full;
-    // its intensity attribute is the group's level
+    // one hidden scene per FIXTURE, holding its master dimmer at full; the
+    // scene's intensity attribute is that fixture's level. A group's level is
+    // all of its parts, a chase across the group is the parts in turn.
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
         if (func != nullptr && func->name().startsWith(ENGINE_DIMMER_PREFIX))
@@ -594,45 +629,48 @@ void TrackEngine::ensureDimmerScenes()
     for (QMap<QString, TrackGroup>::iterator it = m_groups.begin(); it != m_groups.end(); ++it)
     {
         TrackGroup &g = it.value();
+        g.parts.clear();
+        g.hasDimmer = false;
 
-        QList<SceneValue> values;
-        foreach (quint32 fid, g.fixtures)
+        for (int i = 0; i < g.fixtures.count(); i++)
         {
-            Fixture *fxi = m_doc->fixture(fid);
-            if (fxi == nullptr)
-                continue;
-            quint32 ch = dimmerChannel(fxi);
-            if (ch != QLCChannel::invalid())
-                values.append(SceneValue(fid, ch, 255));
-        }
-
-        g.hasDimmer = values.isEmpty() == false;
-        g.dimmerScene = Function::invalidId();
-        if (g.hasDimmer == false)
-            continue;
-
-        if (existing.contains(g.key))
-        {
-            Scene *scene = qobject_cast<Scene *>(m_doc->function(existing.value(g.key)));
-            if (scene != nullptr)
+            Fixture *fxi = m_doc->fixture(g.fixtures.at(i));
+            quint32 ch = fxi == nullptr ? QLCChannel::invalid() : dimmerChannel(fxi);
+            if (ch == QLCChannel::invalid())
             {
-                foreach (SceneValue sv, values)
-                    scene->setValue(sv);
-                g.dimmerScene = scene->id();
+                g.parts.append(Function::invalidId());
                 continue;
             }
+            SceneValue sv(fxi->id(), ch, 255);
+            QString name = QString("%1 #%2").arg(g.key).arg(i + 1);
+
+            Scene *scene = nullptr;
+            if (existing.contains(name))
+                scene = qobject_cast<Scene *>(m_doc->function(existing.value(name)));
+            if (scene != nullptr)
+            {
+                // the fixture behind this part may have changed: hold only it
+                foreach (SceneValue old, scene->values())
+                    if (old.fxi != sv.fxi || old.channel != sv.channel)
+                        scene->unsetValue(old.fxi, old.channel);
+                scene->setValue(sv);
+            }
+            else
+            {
+                scene = new Scene(m_doc);
+                scene->setName(ENGINE_DIMMER_PREFIX + name);
+                scene->setVisible(false);
+                scene->setValue(sv);
+                if (m_doc->addFunction(scene) == false)
+                {
+                    delete scene;
+                    scene = nullptr;
+                }
+            }
+            g.parts.append(scene == nullptr ? Function::invalidId() : scene->id());
+            if (scene != nullptr)
+                g.hasDimmer = true;
         }
-
-        Scene *scene = new Scene(m_doc);
-        scene->setName(ENGINE_DIMMER_PREFIX + g.key);
-        scene->setVisible(false);
-        foreach (SceneValue sv, values)
-            scene->setValue(sv);
-
-        if (m_doc->addFunction(scene))
-            g.dimmerScene = scene->id();
-        else
-            delete scene;
     }
 }
 
@@ -1314,11 +1352,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     /* ---- cast: the base group is always lit; effects are added on top as
      *      the evening's energy rises. Decided once per section, and never
      *      more than one step from the last section. ---- */
+    QRandomGenerator *rng = QRandomGenerator::global();
     if (sectionChanged)
     {
+        // a random stride, so the rotation of groups, looks and positions
+        // does not fall into the same order night after night
         if (m_lastState.isEmpty() == false)
-            m_castCursor++;
-        m_motionCursor++;
+            m_castCursor += 1 + int(rng->bounded(2));
+        m_motionCursor += 1 + int(rng->bounded(3));
     }
 
     QString base = baseGroup();
@@ -1424,6 +1465,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     foreach (const QString &key, castSorted)
         if (key != base) accentGroup = key;      // the last effect group takes the accent
 
+    /* ---- moves: every group in the cast draws how it moves this section.
+     *      Long sections redraw every 16 bars, half the time. ---- */
+    bool redraw = sectionChanged || m_moves.isEmpty()
+               || (bar > 0 && bar % 16 == 0 && beatInBar == 0 && rng->bounded(2) == 0);
+    foreach (const QString &key, castSorted)
+        if (redraw || m_moves.contains(key) == false)
+            m_moves.insert(key, drawMove(key, tier, isBuild, energy, key == base));
+
+    // this beat's clock: the pulse timer measures its breath against it
+    if (bpm > 0.0)
+        m_beatMs = 60000.0 / bpm;
+    bool anyPulse = false;
+    bool moveHit = false;
+
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
@@ -1433,13 +1488,25 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             stopSlot("col:" + key, false);
             stopSlot("mot:" + key, false);
-            stopSlot("dim:" + key, false);       // fades out over a bar
+            for (int i = 0; i < g.parts.count(); i++)
+                stopSlot(partSlot(key, i), false);       // fades out over a bar
+            m_pulseDepth.remove(key);
             continue;
         }
 
+        TrackMove mv = m_moves.value(key);
+        if (isCalm)
+            mv = TrackMove();
+
         QString colour = m_colour;
         if (accentColour.isEmpty() == false && key == accentGroup)
+        {
+            // the accent either holds, or trades places with the palette
+            // colour every few bars - never a third colour
             colour = accentColour;
+            if (mv.colourBars > 0 && ((bar / mv.colourBars) % 2) == 1)
+                colour = m_colour;
+        }
 
         qreal gl = darkGroups.contains(key) ? 0.0 : level * m_master;
         quint32 cf = colourFunction(key, colour);
@@ -1465,12 +1532,40 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             stopSlot("mot:" + key, false);
 
         if (g.hasDimmer)
-            setDimmer(key, darkGroups.contains(key) ? 0.0 : level);
+        {
+            // the pulse: on its beats the dimmers jump to the level and fall
+            // back until the next one
+            bool pulseBeat = mv.pulseOn == 0
+                          || (mv.pulseOn == 1 && (beatInBar == 0 || beatInBar == 2))
+                          || (mv.pulseOn == 2 && (beatInBar == 1 || beatInBar == 3))
+                          || (mv.pulseOn == 3 && beatInBar == 0);
+            qreal depth = darkGroups.contains(key) ? 0.0 : mv.pulse;
+            if (depth > 0.0 && pulseBeat)
+                m_pulseStart.insert(key, m_clock.elapsed());
+            if (depth > 0.0)
+                anyPulse = true;
+            m_pulseDepth.insert(key, depth);
+
+            // a real chase or EFX of theirs is the movement; the generated
+            // pattern only runs when the look is static. A colour scene that
+            // sets the dimmers itself hides the parts (HTP), so no pattern
+            bool patterned = (mf == Function::invalidId() || m_funcs.value(mf).type == int(Function::SceneType))
+                          && (cf == Function::invalidId() || m_funcs.value(cf).dimmer == false)
+                          && (mf == Function::invalidId() || m_funcs.value(mf).dimmer == false);
+            applyMove(key, darkGroups.contains(key) ? 0.0 : level, beat, secStart, prog, mv, patterned);
+            if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1)
+                moveHit = true;
+        }
     }
+
+    if (anyPulse && m_pulseTimer.isActive() == false)
+        m_pulseTimer.start();
+    else if (anyPulse == false)
+        m_pulseTimer.stop();
 
     /* ---- hits ---- */
     bool hit = isCalm == false
-            && ((isBuild && prog > 0.82) || (isDrop && bar == 0 && beatInBar < 2));
+            && ((isBuild && prog > 0.82) || (isDrop && bar == 0 && beatInBar < 2) || moveHit);
     if (m_flash == false)
     {
         if (hit)
@@ -1489,15 +1584,243 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     logBeat(state, beat, level, energy, sectionEnergy);
 
     m_cast = castSet;
+    QStringList moveNames;
+    foreach (const QString &key, castSorted)
+    {
+        QString mn = isCalm ? QString() : moveName(m_moves.value(key));
+        moveNames << (mn.isEmpty() ? key : QString("%1 %2").arg(key).arg(mn));
+    }
     m_report = QString("%1  |  %2%3  |  %4%5%6")
-        .arg(castSorted.isEmpty() ? (silent ? tr("(silence)") : tr("(no groups)"))
-                                  : castSorted.join(" + "))
+        .arg(moveNames.isEmpty() ? (silent ? tr("(silence)") : tr("(no groups)"))
+                                 : moveNames.join(" + "))
         .arg(m_colour.isEmpty() ? tr("(no colour)") : m_colour)
         .arg(accentColour.isEmpty() ? QString() : QString(" + %1").arg(accentColour))
         .arg(state)
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
         .arg(isCalm ? tr("  CALM") : QString());
     emit liveChanged();
+}
+
+/*********************************************************************
+ * Generated motion
+ *********************************************************************/
+
+TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qreal energy, bool isBase) const
+{
+    // The menu grows with the energy. Low: a static look, nothing else.
+    // Middle: colour trades and a soft pulse. High: everything, fast.
+    // The base group (the heads) never sparkles or goes dark in halves
+    // for long - it is the light the room stands on.
+    TrackMove mv;
+    QRandomGenerator *rng = QRandomGenerator::global();
+    auto pick = [rng](const QList<int> &opts) { return opts.at(int(rng->bounded(opts.count()))); };
+    auto pickReal = [rng](const QList<qreal> &opts) { return opts.at(int(rng->bounded(opts.count()))); };
+    const TrackGroup &g = m_groups.value(group);
+    qreal e = qBound(0.0, energy, 1.0);
+    mv.phase = int(rng->bounded(8));
+
+    if (tier == 0)
+    {
+        // break: still. A lit base may slowly trade halves when the room is up
+        if (isBase && e > 0.45 && rng->bounded(3) == 0)
+        {
+            mv.pattern = ENGINE_PAT_HALVES;
+            mv.stepBeats = 8;
+        }
+        return mv;
+    }
+
+    if (build)
+    {
+        // the fill grows with the build; the pulse comes in on the offbeats
+        mv.pattern = rng->bounded(3) == 0 ? ENGINE_PAT_STATIC : ENGINE_PAT_FILL;
+        mv.pulse = e < 0.35 ? 0.0 : 0.15 + 0.25 * e;
+        mv.pulseOn = pick({ 0, 0, 2 });
+        if (isBase)
+        {
+            mv.pattern = ENGINE_PAT_STATIC;
+            mv.pulse = qMin(mv.pulse, 0.25);
+        }
+        return mv;
+    }
+
+    if (tier == 1)
+    {
+        if (e < 0.35)
+            return mv;                                   // low energy: hold the look
+        if (e < 0.70)
+        {
+            mv.pattern = pick({ ENGINE_PAT_STATIC, ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES });
+            mv.stepBeats = pick({ 4, 8 });
+            mv.pulse = pickReal({ 0.0, 0.15, 0.25 });
+            mv.pulseOn = pick({ 1, 3 });
+        }
+        else
+        {
+            mv.pattern = pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES,
+                                ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
+            mv.stepBeats = pick({ 2, 4 });
+            mv.pulse = pickReal({ 0.2, 0.3 });
+            mv.pulseOn = pick({ 0, 1 });
+            mv.colourBars = pick({ 0, 0, 4 });
+        }
+    }
+    else
+    {
+        if (e < 0.30)
+        {
+            mv.pattern = pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN });
+            mv.stepBeats = 4;
+            mv.pulse = 0.25;
+        }
+        else if (e < 0.65)
+        {
+            mv.pattern = pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES,
+                                ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
+            mv.stepBeats = pick({ 1, 2 });
+            mv.pulse = pickReal({ 0.3, 0.4 });
+            mv.pulseOn = pick({ 0, 0, 1, 2 });
+            mv.colourBars = pick({ 0, 0, 2, 4 });
+        }
+        else
+        {
+            mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG, ENGINE_PAT_SPARKLE,
+                                ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES, ENGINE_PAT_STATIC });
+            mv.stepBeats = pick({ 1, 1, 2 });
+            mv.pulse = pickReal({ 0.4, 0.5, 0.6 });
+            mv.pulseOn = pick({ 0, 0, 2 });
+            mv.colourBars = pick({ 0, 1, 2, 4 });
+            mv.flashBar = rng->bounded(3) == 0;
+        }
+    }
+
+    if (isBase)
+    {
+        // the heads: slow trades only, a gentle breath, the palette colour
+        if (mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_ODDEVEN && mv.pattern != ENGINE_PAT_HALVES)
+            mv.pattern = ENGINE_PAT_HALVES;
+        mv.stepBeats = qMax(mv.stepBeats, tier == 2 ? 2 : 4);
+        mv.pulse = qMin(mv.pulse, 0.30);
+        mv.colourBars = 0;
+        mv.flashBar = false;
+    }
+    if (g.strobes)
+        mv.colourBars = 0;
+    if (g.fixtures.count() < 2)
+        mv.pattern = ENGINE_PAT_STATIC;                  // nothing to run across
+    return mv;
+}
+
+void TrackEngine::applyMove(const QString &group, qreal level, int beat, int secStart, qreal prog,
+                            const TrackMove &move, bool patterned)
+{
+    const TrackGroup &g = m_groups.value(group);
+    int n = g.parts.count();
+    if (n == 0)
+        return;
+
+    int pattern = patterned ? move.pattern : ENGINE_PAT_STATIC;
+    int step = (beat - secStart) / qMax(1, move.stepBeats) + move.phase;
+    // the unlit fixtures of a pattern: dark on effects, dim on the base,
+    // which must never look switched off
+    qreal dim = g.heads ? 0.35 : (pattern == ENGINE_PAT_CHASE || pattern == ENGINE_PAT_PINGPONG ? 0.0 : 0.15);
+
+    QVector<qreal> mask(n, 1.0);
+    switch (pattern)
+    {
+        case ENGINE_PAT_CHASE:
+        {
+            int lit = step % n;
+            int tail = (lit + n - 1) % n;
+            for (int i = 0; i < n; i++)
+                mask[i] = i == lit ? 1.0 : (i == tail ? 0.3 : dim);
+        }
+        break;
+        case ENGINE_PAT_PINGPONG:
+        {
+            int period = qMax(1, 2 * n - 2);
+            int idx = step % period;
+            if (idx >= n)
+                idx = period - idx;
+            for (int i = 0; i < n; i++)
+                mask[i] = i == idx ? 1.0 : dim;
+        }
+        break;
+        case ENGINE_PAT_ODDEVEN:
+            for (int i = 0; i < n; i++)
+                mask[i] = (i % 2) == (step % 2) ? 1.0 : dim;
+        break;
+        case ENGINE_PAT_HALVES:
+            for (int i = 0; i < n; i++)
+                mask[i] = ((i < n / 2) == ((step % 2) == 0)) ? 1.0 : dim;
+        break;
+        case ENGINE_PAT_SPARKLE:
+        {
+            // a fresh random half of the group each step, the same for the
+            // whole step, never all dark
+            QRandomGenerator local(quint32(step * 2654435761u) ^ quint32(qHash(group)));
+            bool any = false;
+            for (int i = 0; i < n; i++)
+            {
+                bool on = local.bounded(2) == 0;
+                mask[i] = on ? 1.0 : dim;
+                any = any || on;
+            }
+            if (any == false)
+                mask[int(local.bounded(n))] = 1.0;
+        }
+        break;
+        case ENGINE_PAT_FILL:
+        {
+            // the build fills the group from one end; the drop gets it whole
+            int lit = 1 + int(qRound(prog * (n - 1)));
+            bool fromLeft = (move.phase % 2) == 0;
+            for (int i = 0; i < n; i++)
+            {
+                int pos = fromLeft ? i : n - 1 - i;
+                mask[i] = pos < lit ? 1.0 : dim;
+            }
+        }
+        break;
+        default:
+        break;
+    }
+
+    for (int i = 0; i < n; i++)
+        setPart(group, i, level * mask.at(i));
+}
+
+QString TrackEngine::partSlot(const QString &group, int index) const
+{
+    return QString("dim:%1#%2").arg(group).arg(index);
+}
+
+qreal TrackEngine::pulseFactor(const QString &group) const
+{
+    qreal depth = m_pulseDepth.value(group, 0.0);
+    if (depth <= 0.0 || m_pulseStart.contains(group) == false)
+        return 1.0;
+    // full on the beat, down to (1 - depth) a quarter beat later and flat
+    // from there: a kick, not a sine
+    qreal tau = qMax(40.0, m_beatMs * 0.25);
+    qreal t = qreal(m_clock.elapsed() - m_pulseStart.value(group));
+    qreal env = std::exp(-t / tau);
+    return (1.0 - depth) + depth * env;
+}
+
+QString TrackEngine::moveName(const TrackMove &move) const
+{
+    static const char *names[ENGINE_PAT_COUNT] = { "", "chase", "pingpong", "odd/even", "halves", "sparkle", "fill" };
+    QString s;
+    if (move.pattern > 0 && move.pattern < ENGINE_PAT_COUNT)
+        s = QString("%1/%2").arg(names[move.pattern]).arg(move.stepBeats);
+    if (move.pulse > 0.0)
+        s += QString(s.isEmpty() ? "pulse %1" : " pulse %1").arg(int(move.pulse * 100));
+    if (move.colourBars > 0)
+        s += QString(" swap/%1").arg(move.colourBars);
+    if (move.flashBar)
+        s += " hits";
+    return s.isEmpty() ? QString() : QString("(%1)").arg(s);
 }
 
 /*********************************************************************
@@ -1515,8 +1838,12 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
+        bool fading = false;
+        foreach (quint32 part, g.parts)
+            if (m_fadeAttr.contains(part))
+                fading = true;
         if (g.hasDimmer == false || castSet.contains(key) || m_groupOff.contains(key)
-            || m_fadeAttr.contains(g.dimmerScene) || m_flash)
+            || fading || m_flash)
         {
             m_conflictBeats.remove(key);
             continue;
@@ -1631,6 +1958,8 @@ void TrackEngine::release()
     m_cast.clear();
     m_lastState.clear();
     m_flash = false;
+    m_pulseDepth.clear();
+    m_pulseTimer.stop();
     m_report = tr("(released)");
     if (m_fadeAttr.isEmpty() == false)
         m_fadeTimer.start();
@@ -1648,6 +1977,9 @@ void TrackEngine::idle()
     foreach (const QString &slot, m_active.keys())
         if (slot.startsWith("idle:") == false)
             stopSlot(slot, false);
+
+    m_pulseDepth.clear();
+    m_pulseTimer.stop();
 
     QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_IDLE, QString());
     foreach (TrackFuncInfo *info, list)
@@ -1669,6 +2001,7 @@ void TrackEngine::trackLoaded()
     m_lastState.clear();
     m_colourBar = -1;            // hold the colour until the first break or drop
     m_castCursor++;
+    m_moves.clear();             // the new track draws its own moves
 }
 
 /*********************************************************************
@@ -1809,21 +2142,42 @@ void TrackEngine::tickFades()
 
 void TrackEngine::setDimmer(const QString &group, qreal level)
 {
+    // the whole group at one level: every part the same
     const TrackGroup &g = m_groups.value(group);
-    if (g.hasDimmer == false || g.dimmerScene == Function::invalidId())
+    for (int i = 0; i < g.parts.count(); i++)
+        setPart(group, i, level);
+}
+
+void TrackEngine::setPart(const QString &group, int index, qreal level)
+{
+    const TrackGroup &g = m_groups.value(group);
+    if (index < 0 || index >= g.parts.count())
+        return;
+    quint32 fid = g.parts.at(index);
+    if (fid == Function::invalidId())
         return;
 
-    QString slot = "dim:" + group;
-    quint32 fid = g.dimmerScene;
-    qreal applied = qBound(0.0, level, 1.0) * m_master;
+    QString slot = partSlot(group, index);
+    level = qBound(0.0, level, 1.0);
+    // the level the beat sets already includes where the breath stands, so
+    // an off-beat never bumps the light back up
+    qreal applied = qBound(0.0, level * pulseFactor(group) * m_master, 1.0);
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
         Function *func = m_doc->function(fid);
         int attr = m_activeAttr.value(slot, -1);
-        if (func != nullptr && attr >= 0)
+        if (func != nullptr && func->isRunning() == false)
+        {
+            func->start(m_doc->masterTimer(), FunctionParent::master());
+            if (attr >= 0)
+                func->releaseAttributeOverride(attr);
+            attr = func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, applied);
+            m_activeAttr.insert(slot, attr);
+        }
+        else if (func != nullptr && attr >= 0)
             func->adjustAttribute(applied, attr);
-        m_activeLevel.insert(slot, qBound(0.0, level, 1.0));
+        m_activeLevel.insert(slot, level);
         return;
     }
 
@@ -1842,7 +2196,7 @@ void TrackEngine::setDimmer(const QString &group, qreal level)
         func->start(m_doc->masterTimer(), FunctionParent::master());
 
     m_active.insert(slot, fid);
-    m_activeLevel.insert(slot, qBound(0.0, level, 1.0));
+    m_activeLevel.insert(slot, level);
     m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, applied));
 }
 
@@ -1865,6 +2219,9 @@ void TrackEngine::stopAll()
     m_cast.clear();
     m_position.clear();
     m_lastState.clear();
+    m_moves.clear();
+    m_pulseDepth.clear();
+    m_pulseTimer.stop();
     m_flash = false;
     m_report = tr("(stopped)");
     emit liveChanged();
