@@ -46,17 +46,19 @@ class Function;
 class Scene;
 class Doc;
 
-#define TRACK_ROLE_COLOR     0
-#define TRACK_ROLE_MOTION    1
-#define TRACK_ROLE_POSITION  2
-#define TRACK_ROLE_FLASH     3
-#define TRACK_ROLE_COUNT     4
+#define ENGINE_ROLE_COLOR     0
+#define ENGINE_ROLE_MOTION    1
+#define ENGINE_ROLE_POSITION  2
+#define ENGINE_ROLE_FLASH     3
+#define ENGINE_ROLE_IDLE      4
+#define ENGINE_ROLE_COUNT     5
 
 #define SETTINGS_ENGINE_ROLES     QStringLiteral("trackengine/roles")
 #define SETTINGS_ENGINE_GROUPOFF  QStringLiteral("trackengine/groupoff")
 #define SETTINGS_ENGINE_MASTER    QStringLiteral("trackengine/master")
 #define SETTINGS_ENGINE_ACCENT    QStringLiteral("trackengine/accent")
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
+#define SETTINGS_ENGINE_BASE      QStringLiteral("trackengine/base")
 
 /** Everything the engine needs to know about one function, derived once. */
 struct TrackFuncInfo
@@ -83,6 +85,7 @@ struct TrackGroup
     bool hasDimmer = false;
     bool strobes = false;     // this is the strobe/blinder group
     bool lasers = false;      // beams that must not move while lit
+    bool heads = false;       // pan + tilt and not a laser: a moving head
 };
 
 class TrackEngine : public QObject
@@ -104,6 +107,10 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool flashing READ flashing NOTIFY liveChanged)
     Q_PROPERTY(QString report READ report NOTIFY liveChanged)
 
+    Q_PROPERTY(bool hazeAvailable READ hazeAvailable NOTIFY tableChanged)
+    Q_PROPERTY(qreal haze READ haze WRITE setHaze NOTIFY liveChanged)
+    Q_PROPERTY(qreal fan READ fan WRITE setFan NOTIFY liveChanged)
+
 public:
     TrackEngine(Doc *doc, QObject *parent = nullptr);
     ~TrackEngine();
@@ -122,6 +129,10 @@ public:
     QVariantList groups();
     Q_INVOKABLE void setGroupEnabled(QString key, bool enable);
     Q_INVOKABLE bool groupEnabled(QString key) const;
+    /** ON -> BASE -> OFF -> ON. The base group is always lit; the others
+     *  are effects added on top as the evening's energy rises. */
+    Q_INVOKABLE void cycleGroup(QString key);
+    Q_INVOKABLE QString baseGroup() const;
 
     QVariantList palette();
     bool showAll() const;
@@ -142,10 +153,19 @@ public:
     Q_INVOKABLE void setFlash(bool pressed);
     QString report() const;
 
+    /* ---- atmosphere: the hazer's fan and output, straight from two sliders ---- */
+    bool hazeAvailable() const;
+    qreal haze() const;
+    void setHaze(qreal level);
+    qreal fan() const;
+    void setFan(qreal level);
+
     /* ---- driven by TrackManager ---- */
     void tick(const QString &state, int beat, int secStart, int secEnd,
-              qreal energy, int division, bool sectionChanged);
+              qreal energy, qreal sectionEnergy, int division, bool sectionChanged);
     void trackLoaded();
+    /** Nothing is playing but AUTO is on: run the start scene(s). */
+    void idle();
     void stopAll();
 
 signals:
@@ -166,6 +186,8 @@ protected:
     void loadRoles();
     void saveRoles();
     void ensureDimmerScenes();
+    void ensureAtmosScenes();
+    void applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32> > &channels, qreal level);
 
     /* choosing */
     QList<TrackFuncInfo *> candidates(int role, const QString &group) const;
@@ -189,6 +211,15 @@ private:
     QMap<QString, TrackGroup> m_groups;
     QStringList m_groupOrder;
     QSet<QString> m_groupOff;
+    QString m_base;           // the always-on group, or empty for automatic
+
+    /* atmosphere */
+    QList<QPair<quint32, quint32> > m_hazeChannels;   // fixture, channel
+    QList<QPair<quint32, quint32> > m_fanChannels;
+    quint32 m_hazeScene;
+    quint32 m_fanScene;
+    qreal m_haze;
+    qreal m_fan;
     QStringList m_palette;
     bool m_showAll;
     bool m_accent;

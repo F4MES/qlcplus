@@ -954,6 +954,72 @@ Rectangle
             }
         }
 
+        // =============================================== atmosphere
+        RowLayout
+        {
+            id: atmosRow
+            Layout.fillWidth: true
+            Layout.preferredHeight: trackViewRoot.touchH
+            spacing: 10
+            visible: trackManager && trackManager.roleMode && trackEngine
+                     && trackEngine.hazeAvailable
+
+            Repeater
+            {
+                model: [ "haze", "fan" ]
+
+                Rectangle
+                {
+                    id: atmosSlider
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: 4
+                    color: "#1B1B1B"
+                    border.width: 1
+                    border.color: "#555555"
+
+                    property bool isHaze: modelData === "haze"
+                    property real level: trackEngine
+                                         ? (isHaze ? trackEngine.haze : trackEngine.fan) : 0
+
+                    Rectangle
+                    {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 3
+                        width: (parent.width - 6) * atmosSlider.level
+                        radius: 3
+                        color: atmosSlider.isHaze ? "#8A8A8A" : "#6A8AA0"
+                    }
+
+                    Text
+                    {
+                        anchors.centerIn: parent
+                        text: (atmosSlider.isHaze ? qsTr("HAZE") : qsTr("FAN"))
+                              + "  " + Math.round(atmosSlider.level * 100) + "%"
+                        color: "#EEEEEE"
+                        font.bold: true
+                        font.pixelSize: 15
+                    }
+
+                    MouseArea
+                    {
+                        anchors.fill: parent
+                        function apply(x)
+                        {
+                            var v = Math.max(0, Math.min(1, x / width))
+                            if (v < 0.03) v = 0
+                            if (atmosSlider.isHaze) trackEngine.haze = v
+                            else trackEngine.fan = v
+                        }
+                        onPressed: (mouse) => apply(mouse.x)
+                        onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                    }
+                }
+            }
+        }
+
         // =============================================== cast
         RowLayout
         {

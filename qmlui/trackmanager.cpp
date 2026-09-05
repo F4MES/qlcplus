@@ -1319,7 +1319,8 @@ void TrackManager::runEngine(bool sectionChanged)
 
     if (m_playing == false)
     {
-        m_engine->stopAll();
+        // nothing playing: the start scene, not darkness
+        m_engine->idle();
         m_lastEngineBeat = -1;
         return;
     }
@@ -1337,7 +1338,7 @@ void TrackManager::runEngine(bool sectionChanged)
 
     // The engine decides cast, palette, motion and dimmers; we only tell it
     // where in the track we are and how much energy the track has.
-    m_engine->tick(state, beat, secStart, secEnd, appliedEnergy(),
+    m_engine->tick(state, beat, secStart, secEnd, appliedEnergy(), sectionEnergy(beat),
                    stateDivision(state), sectionChanged);
 
     if (sectionChanged)

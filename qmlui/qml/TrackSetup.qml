@@ -41,6 +41,7 @@ Rectangle
         case 1: return "#7ED07E"   // motion
         case 2: return "#E3B44F"   // position
         case 3: return "#E36B6B"   // flash
+        case 4: return "#9A7ED0"   // start scene
         }
         return "#5A5A5A"
     }
@@ -53,6 +54,7 @@ Rectangle
         case 1: return qsTr("MOTION")
         case 2: return qsTr("POSITION")
         case 3: return qsTr("FLASH")
+        case 4: return qsTr("START")
         }
         return "–"
     }
@@ -182,7 +184,8 @@ Rectangle
             Text
             {
                 Layout.preferredWidth: 70
-                text: qsTr("GROUPS")
+                text: qsTr("GROUPS") + "\n" + qsTr("tap: on / base / off")
+                lineHeight: 0.9
                 color: setupRoot.cDim
                 font.bold: true
                 font.pixelSize: 12
@@ -202,9 +205,9 @@ Rectangle
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: 3
-                    color: modelData.enabled ? "#333333" : "#1F1F1F"
-                    border.width: 1
-                    border.color: modelData.enabled ? "#666666" : "#333333"
+                    color: modelData.base ? "#2A3F55" : (modelData.enabled ? "#333333" : "#1F1F1F")
+                    border.width: modelData.base ? 2 : 1
+                    border.color: modelData.base ? "#4FA3E3" : (modelData.enabled ? "#666666" : "#333333")
 
                     Column
                     {
@@ -215,6 +218,7 @@ Rectangle
                         {
                             anchors.horizontalCenter: parent.horizontalCenter
                             text: modelData.key
+                                  + (modelData.base ? "  · BASE" : (modelData.enabled ? "" : "  · OFF"))
                             color: modelData.enabled ? setupRoot.cText : "#666666"
                             font.bold: true
                             font.pixelSize: 12
@@ -231,10 +235,12 @@ Rectangle
                         }
                     }
 
+                    // tap cycles ON -> BASE -> OFF. The base group is always lit;
+                    // the others are effects added on top as the evening rises.
                     MouseArea
                     {
                         anchors.fill: parent
-                        onClicked: trackEngine.setGroupEnabled(modelData.key, !modelData.enabled)
+                        onClicked: trackEngine.cycleGroup(modelData.key)
                     }
                 }
             }

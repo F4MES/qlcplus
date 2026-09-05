@@ -33,6 +33,8 @@
 
 #define ENGINE_INTENSITY_ATTR 0
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
+#define ENGINE_HAZE_SCENE     QStringLiteral("TRACK Haze")
+#define ENGINE_FAN_SCENE      QStringLiteral("TRACK Fan")
 
 /*********************************************************************
  * Setup
@@ -42,6 +44,10 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     : QObject(parent)
     , m_doc(doc)
     , m_dirty(true)
+    , m_hazeScene(0)
+    , m_fanScene(0)
+    , m_haze(0.0)
+    , m_fan(0.0)
     , m_showAll(false)
     , m_accent(true)
     , m_holdBars(32)
@@ -56,6 +62,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_master = settings.value(SETTINGS_ENGINE_MASTER, 1.0).toDouble();
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
+    m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString())
                                   .toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
@@ -81,16 +88,17 @@ void TrackEngine::slotDocChanged()
     emit tableChanged();
 }
 
-int TrackEngine::roleCount() const { return TRACK_ROLE_COUNT; }
+int TrackEngine::roleCount() const { return ENGINE_ROLE_COUNT; }
 
 QString TrackEngine::roleName(int role) const
 {
     switch (role)
     {
-    case TRACK_ROLE_COLOR:    return tr("Colour");
-    case TRACK_ROLE_MOTION:   return tr("Motion");
-    case TRACK_ROLE_POSITION: return tr("Position");
-    case TRACK_ROLE_FLASH:    return tr("Flash");
+    case ENGINE_ROLE_COLOR:    return tr("Colour");
+    case ENGINE_ROLE_MOTION:   return tr("Motion");
+    case ENGINE_ROLE_POSITION: return tr("Position");
+    case ENGINE_ROLE_FLASH:    return tr("Flash");
+    case ENGINE_ROLE_IDLE:     return tr("Start");
     default:                  return tr("Off");
     }
 }
@@ -99,14 +107,16 @@ QString TrackEngine::roleHint(int role) const
 {
     switch (role)
     {
-    case TRACK_ROLE_COLOR:
+    case ENGINE_ROLE_COLOR:
         return tr("A static colour. The palette puts the same colour on every lit group.");
-    case TRACK_ROLE_MOTION:
+    case ENGINE_ROLE_MOTION:
         return tr("Chases, patterns, EFX. Only in drops and the back half of a build.");
-    case TRACK_ROLE_POSITION:
+    case ENGINE_ROLE_POSITION:
         return tr("Held, never stopped. Changes only inside a dark beat at a break.");
-    case TRACK_ROLE_FLASH:
+    case ENGINE_ROLE_FLASH:
         return tr("Hits: the last bar of a build, the drop, and the FLASH button.");
+    case ENGINE_ROLE_IDLE:
+        return tr("The start of the evening: runs while AUTO is on and nothing plays.");
     default:
         return QString();
     }
@@ -220,8 +230,10 @@ QSet<quint32> TrackEngine::fixturesOf(Function *func, int depth) const
     {
         Scene *scene = qobject_cast<Scene *>(func);
         if (scene != nullptr)
+        {
             foreach (SceneValue sv, scene->values())
                 out.insert(sv.fxi);
+        }
         break;
     }
     case Function::ChaserType:
@@ -229,25 +241,31 @@ QSet<quint32> TrackEngine::fixturesOf(Function *func, int depth) const
     {
         Chaser *chaser = qobject_cast<Chaser *>(func);
         if (chaser != nullptr)
+        {
             foreach (ChaserStep step, chaser->steps())
                 out.unite(fixturesOf(m_doc->function(step.fid), depth + 1));
+        }
         break;
     }
     case Function::CollectionType:
     {
         Collection *coll = qobject_cast<Collection *>(func);
         if (coll != nullptr)
+        {
             foreach (quint32 child, coll->functions())
                 out.unite(fixturesOf(m_doc->function(child), depth + 1));
+        }
         break;
     }
     case Function::EFXType:
     {
         EFX *efx = qobject_cast<EFX *>(func);
         if (efx != nullptr)
+        {
             foreach (EFXFixture *ef, efx->fixtures())
                 if (ef != nullptr)
                     out.insert(ef->head().fxi);
+        }
         break;
     }
     case Function::RGBMatrixType:
@@ -257,8 +275,10 @@ QSet<quint32> TrackEngine::fixturesOf(Function *func, int depth) const
         {
             FixtureGroup *grp = m_doc->fixtureGroup(matrix->fixtureGroup());
             if (grp != nullptr)
+            {
                 foreach (quint32 fid, grp->fixtureList())
                     out.insert(fid);
+            }
         }
         break;
     }
@@ -281,6 +301,8 @@ int TrackEngine::classify(const TrackFuncInfo &info) const
     QString core = n;
     core.replace("laser", " ").replace("beam", " ").replace("strobe", " ");
 
+    static const QStringList idleWords     = { "start scene", "startscene", "opening", "aabning",
+                                               "åbning", "standby", "idle", "aften", "evening" };
     static const QStringList flashWords    = { "flash", "blink", "hold", "blitz", "bump" };
     static const QStringList strobeWords   = { "strob" };
     static const QStringList positionWords = { "up", "upp", "down", "updow", "offset", "wiggle",
@@ -296,16 +318,19 @@ int TrackEngine::classify(const TrackFuncInfo &info) const
         if (m_groups.contains(g) == false || m_groups.value(g).lasers == false)
             laserOnly = false;
 
+    if (hasWord(n, idleWords))
+        return ENGINE_ROLE_IDLE;
+
     switch (info.type)
     {
     case Function::CollectionType:
-        if (hasWord(n, flashWords))   return TRACK_ROLE_FLASH;
-        if (info.colour.isEmpty() == false) return TRACK_ROLE_COLOR;
-        return TRACK_ROLE_MOTION;
+        if (hasWord(n, flashWords))   return ENGINE_ROLE_FLASH;
+        if (info.colour.isEmpty() == false) return ENGINE_ROLE_COLOR;
+        return ENGINE_ROLE_MOTION;
 
     case Function::EFXType:
         // a sweep on lasers is a position; on heads it is motion
-        return laserOnly ? TRACK_ROLE_POSITION : TRACK_ROLE_MOTION;
+        return laserOnly ? ENGINE_ROLE_POSITION : ENGINE_ROLE_MOTION;
 
     case Function::ChaserType:
     case Function::SequenceType:
@@ -315,6 +340,7 @@ int TrackEngine::classify(const TrackFuncInfo &info) const
         Chaser *chaser = qobject_cast<Chaser *>(m_doc->function(info.id));
         bool allPos = chaser != nullptr && chaser->steps().isEmpty() == false;
         if (chaser != nullptr)
+        {
             foreach (ChaserStep step, chaser->steps())
             {
                 Function *sf = m_doc->function(step.fid);
@@ -323,10 +349,11 @@ int TrackEngine::classify(const TrackFuncInfo &info) const
                 if (sf == nullptr || hasWord(sn, positionWords) == false)
                     allPos = false;
             }
-        return allPos ? TRACK_ROLE_POSITION : TRACK_ROLE_MOTION;
+        }
+        return allPos ? ENGINE_ROLE_POSITION : ENGINE_ROLE_MOTION;
     }
     case Function::RGBMatrixType:
-        return TRACK_ROLE_MOTION;
+        return ENGINE_ROLE_MOTION;
 
     default:
         break;
@@ -334,14 +361,14 @@ int TrackEngine::classify(const TrackFuncInfo &info) const
 
     // scenes
     if (hasWord(n, flashWords))
-        return TRACK_ROLE_FLASH;
+        return ENGINE_ROLE_FLASH;
     if (hasWord(core, positionWords))
-        return TRACK_ROLE_POSITION;
+        return ENGINE_ROLE_POSITION;
     if (hasWord(n, patternWords))
-        return TRACK_ROLE_MOTION;
+        return ENGINE_ROLE_MOTION;
     if (hasWord(n, strobeWords) && info.colour.isEmpty())
-        return TRACK_ROLE_FLASH;
-    return TRACK_ROLE_COLOR;
+        return ENGINE_ROLE_FLASH;
+    return ENGINE_ROLE_COLOR;
 }
 
 void TrackEngine::ensureTable()
@@ -369,6 +396,16 @@ void TrackEngine::ensureTable()
             QString low = key.toLower();
             g.strobes = low.contains("strob") || low.contains("blind");
             g.lasers  = low.contains("laser");
+            // pan and tilt on a non-laser: a moving head
+            bool pan = false, tilt = false;
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch == nullptr) continue;
+                if (qch->group() == QLCChannel::Pan)  pan = true;
+                if (qch->group() == QLCChannel::Tilt) tilt = true;
+            }
+            g.heads = pan && tilt && g.lasers == false;
             m_groups.insert(key, g);
             m_groupOrder.append(key);
         }
@@ -381,8 +418,10 @@ void TrackEngine::ensureTable()
     {
         Chaser *chaser = qobject_cast<Chaser *>(func);
         if (chaser != nullptr)
+        {
             foreach (ChaserStep step, chaser->steps())
                 steps.insert(step.fid);
+        }
     }
 
     static const QStringList junkWords = { "blackout", "reset", "new scene", "new chaser",
@@ -396,7 +435,8 @@ void TrackEngine::ensureTable()
     {
         if (func == nullptr || func->isVisible() == false)
             continue;
-        if (func->name().startsWith(ENGINE_DIMMER_PREFIX))
+        if (func->name().startsWith(ENGINE_DIMMER_PREFIX)
+            || func->name() == ENGINE_HAZE_SCENE || func->name() == ENGINE_FAN_SCENE)
             continue;
 
         Function::Type t = func->type();
@@ -430,12 +470,14 @@ void TrackEngine::ensureTable()
         // scale such a scene through its own intensity attribute instead.
         Scene *scene = qobject_cast<Scene *>(func);
         if (scene != nullptr)
+        {
             foreach (SceneValue sv, scene->values())
             {
                 Fixture *fxi = m_doc->fixture(sv.fxi);
                 if (fxi != nullptr && sv.channel == fxi->masterIntensityChannel() && sv.value > 0)
                     info.dimmer = true;
             }
+        }
 
         info.role = old.contains(info.id) ? old.value(info.id).role : -2;   // -2 = not decided yet
         m_funcs.insert(info.id, info);
@@ -456,7 +498,7 @@ void TrackEngine::ensureTable()
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
     {
         const TrackFuncInfo &info = it.value();
-        if (info.role != TRACK_ROLE_COLOR || info.colour.isEmpty())
+        if (info.role != ENGINE_ROLE_COLOR || info.colour.isEmpty())
             continue;
         coverage[info.colour].unite(info.groups);
     }
@@ -476,6 +518,7 @@ void TrackEngine::ensureTable()
         m_palette.append(singles);
 
     ensureDimmerScenes();
+    ensureAtmosScenes();
 
     qDebug() << "[TrackEngine]" << m_groups.count() << "groups," << m_funcs.count()
              << "functions, palette" << m_palette;
@@ -533,6 +576,109 @@ void TrackEngine::ensureDimmerScenes()
         else
             delete scene;
     }
+}
+
+void TrackEngine::ensureAtmosScenes()
+{
+    // the hazer is not a light, so it is not in any group - but its two
+    // channels get their own sliders on the Track page
+    m_hazeChannels.clear();
+    m_fanChannels.clear();
+
+    foreach (Fixture *fxi, m_doc->fixtures())
+    {
+        if (fxi == nullptr || fxi->fixtureDef() == nullptr)
+            continue;
+        QString model = fxi->fixtureDef()->model().toLower();
+        if (model.contains("haze") == false && model.contains("smoke") == false
+            && model.contains("fog") == false && model.contains("hazer") == false)
+            continue;
+
+        for (quint32 ch = 0; ch < fxi->channels(); ch++)
+        {
+            const QLCChannel *qch = fxi->channel(ch);
+            if (qch == nullptr)
+                continue;
+            QString n = qch->name().toLower();
+            if (n.contains("fan") || n.contains("blower"))
+                m_fanChannels.append(qMakePair(fxi->id(), ch));
+            else if (n.contains("haze") || n.contains("fog") || n.contains("smoke")
+                     || n.contains("output") || n.contains("pump"))
+                m_hazeChannels.append(qMakePair(fxi->id(), ch));
+        }
+    }
+
+    auto ensure = [this](const QString &name, quint32 &id,
+                         const QList<QPair<quint32, quint32> > &channels) {
+        id = Function::invalidId();
+        if (channels.isEmpty())
+            return;
+        foreach (Function *func, m_doc->functions())
+        {
+            if (func != nullptr && func->name() == name)
+            {
+                id = func->id();
+                return;
+            }
+        }
+        Scene *scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setVisible(false);
+        for (int i = 0; i < channels.count(); i++)
+            scene->setValue(SceneValue(channels.at(i).first, channels.at(i).second, 0));
+        if (m_doc->addFunction(scene))
+            id = scene->id();
+        else
+            delete scene;
+    };
+    ensure(ENGINE_HAZE_SCENE, m_hazeScene, m_hazeChannels);
+    ensure(ENGINE_FAN_SCENE, m_fanScene, m_fanChannels);
+}
+
+bool TrackEngine::hazeAvailable() const
+{
+    return m_hazeChannels.isEmpty() == false || m_fanChannels.isEmpty() == false;
+}
+
+qreal TrackEngine::haze() const { return m_haze; }
+qreal TrackEngine::fan() const { return m_fan; }
+
+void TrackEngine::applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32> > &channels, qreal level)
+{
+    Scene *scene = qobject_cast<Scene *>(m_doc ? m_doc->function(sceneId) : nullptr);
+    if (scene == nullptr)
+        return;
+
+    uchar value = uchar(qRound(qBound(0.0, level, 1.0) * 255.0));
+    for (int i = 0; i < channels.count(); i++)
+        scene->setValue(channels.at(i).first, channels.at(i).second, value);
+
+    if (value > 0 && scene->isRunning() == false)
+        scene->start(m_doc->masterTimer(), FunctionParent::master());
+    else if (value == 0 && scene->isRunning())
+        scene->stop(FunctionParent::master());
+}
+
+void TrackEngine::setHaze(qreal level)
+{
+    level = qBound(0.0, level, 1.0);
+    if (qFuzzyCompare(level + 1.0, m_haze + 1.0))
+        return;
+    ensureTable();
+    m_haze = level;
+    applyAtmos(m_hazeScene, m_hazeChannels, level);
+    emit liveChanged();
+}
+
+void TrackEngine::setFan(qreal level)
+{
+    level = qBound(0.0, level, 1.0);
+    if (qFuzzyCompare(level + 1.0, m_fan + 1.0))
+        return;
+    ensureTable();
+    m_fan = level;
+    applyAtmos(m_fanScene, m_fanChannels, level);
+    emit liveChanged();
 }
 
 void TrackEngine::loadRoles()
@@ -640,8 +786,8 @@ QVariantList TrackEngine::groups()
         for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
         {
             if (it.value().groups.contains(key) == false) continue;
-            if (it.value().role == TRACK_ROLE_COLOR) colours++;
-            if (it.value().role == TRACK_ROLE_MOTION) motions++;
+            if (it.value().role == ENGINE_ROLE_COLOR) colours++;
+            if (it.value().role == ENGINE_ROLE_MOTION) motions++;
         }
         QVariantMap row;
         row.insert("key", key);
@@ -652,6 +798,8 @@ QVariantList TrackEngine::groups()
         row.insert("motions", motions);
         row.insert("strobes", g.strobes);
         row.insert("lasers", g.lasers);
+        row.insert("heads", g.heads);
+        row.insert("base", key == baseGroup());
         list.append(row);
     }
     return list;
@@ -665,6 +813,40 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
 }
 
 bool TrackEngine::groupEnabled(QString key) const { return m_groupOff.contains(key) == false; }
+
+QString TrackEngine::baseGroup() const
+{
+    if (m_base.isEmpty() == false && m_groups.contains(m_base) && m_groupOff.contains(m_base) == false)
+        return m_base;
+    // automatic: the moving heads, if there are any with a colour to show
+    foreach (const QString &key, m_groupOrder)
+        if (m_groups.value(key).heads && m_groupOff.contains(key) == false
+            && candidates(ENGINE_ROLE_COLOR, key).isEmpty() == false)
+            return key;
+    return QString();
+}
+
+void TrackEngine::cycleGroup(QString key)
+{
+    ensureTable();
+    if (m_groupOff.contains(key))
+    {
+        m_groupOff.remove(key);                 // OFF -> ON
+        if (m_base == key) m_base.clear();
+    }
+    else if (baseGroup() == key)
+    {
+        m_groupOff.insert(key);                 // BASE -> OFF
+        if (m_base == key) m_base.clear();
+    }
+    else
+    {
+        m_base = key;                           // ON -> BASE
+    }
+    QSettings().setValue(SETTINGS_ENGINE_BASE, m_base);
+    saveRoles();
+    emit tableChanged();
+}
 
 QVariantList TrackEngine::palette()
 {
@@ -794,7 +976,7 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
 
 quint32 TrackEngine::colourFunction(const QString &group, const QString &colour) const
 {
-    QList<TrackFuncInfo *> list = candidates(TRACK_ROLE_COLOR, group);
+    QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_COLOR, group);
 
     // exactly this group, exactly this colour
     foreach (TrackFuncInfo *info, list)
@@ -814,7 +996,7 @@ quint32 TrackEngine::colourFunction(const QString &group, const QString &colour)
 quint32 TrackEngine::motionFunction(const QString &group, const QString &colour,
                                     const QSet<QString> &cast, int cursor) const
 {
-    QList<TrackFuncInfo *> all = candidates(TRACK_ROLE_MOTION, group);
+    QList<TrackFuncInfo *> all = candidates(ENGINE_ROLE_MOTION, group);
     QList<TrackFuncInfo *> ok;
     foreach (TrackFuncInfo *info, all)
     {
@@ -835,7 +1017,7 @@ quint32 TrackEngine::motionFunction(const QString &group, const QString &colour,
 
 quint32 TrackEngine::positionFunction(const QString &group, int cursor) const
 {
-    QList<TrackFuncInfo *> list = candidates(TRACK_ROLE_POSITION, group);
+    QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_POSITION, group);
     if (list.isEmpty())
         return Function::invalidId();
     return list.at(qAbs(cursor) % list.count())->id;
@@ -843,7 +1025,7 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor) const
 
 quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &colour) const
 {
-    QList<TrackFuncInfo *> list = candidates(TRACK_ROLE_FLASH, QString());
+    QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_FLASH, QString());
     QList<TrackFuncInfo *> ok;
     foreach (TrackFuncInfo *info, list)
     {
@@ -886,12 +1068,17 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
  *********************************************************************/
 
 void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
-                       qreal energy, int division, bool sectionChanged)
+                       qreal energy, qreal sectionEnergy, int division, bool sectionChanged)
 {
     if (m_doc == nullptr)
         return;
     ensureTable();
     tickFades();
+
+    // a track is playing: the start scene steps aside
+    foreach (const QString &slot, m_active.keys())
+        if (slot.startsWith("idle:"))
+            stopSlot(slot, false);
 
     bool isBreak = (state == QStringLiteral("break"));
     bool isBuild = (state == QStringLiteral("build"));
@@ -921,7 +1108,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_colour = m_palette.first();
 
     QString accentColour;
-    if (m_accent && isDrop && m_palette.count() >= 2 && cast.count() >= 2 && m_override.isEmpty())
+    if (m_accent && isDrop && m_palette.count() >= 2 && castSet.count() >= 2 && m_override.isEmpty())
         accentColour = m_palette.at((m_colourCursor + 1) % m_palette.count());
 
     /* ---- eligible groups: enabled, and with something to show ---- */
@@ -932,13 +1119,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             continue;
         // no colour look at all means the group cannot take the palette -
         // it waits until it has one (moving heads before their scenes exist)
-        if (candidates(TRACK_ROLE_COLOR, key).isEmpty())
+        if (candidates(ENGINE_ROLE_COLOR, key).isEmpty())
             continue;
         eligible.append(key);
     }
 
-    /* ---- cast: how many groups, and which ---- */
-    int castSize = isBreak ? 1 : (isDrop ? 3 : 2);
+    /* ---- castSet: the base group is always lit; effects are added on top as
+     *      the evening's energy rises. Near silence turns everything off. ---- */
     if (sectionChanged)
     {
         if (m_lastState.isEmpty() == false)
@@ -947,17 +1134,47 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     m_lastState = state;
 
-    QSet<QString> cast;
-    if (eligible.isEmpty() == false)
+    QString base = baseGroup();
+    bool silent = sectionEnergy >= 0.0 && sectionEnergy < 0.12;
+
+    // how many effect groups on top of the base
+    int effects = 0;
+    if (isDrop)
+        effects = energy < 0.30 ? 0 : (energy < 0.65 ? 1 : 2);
+    else if (isBreak)
+        effects = 0;
+    else
+        effects = energy < 0.50 ? 0 : 1;
+    if (base.isEmpty())
+        effects = qMax(effects, isBreak ? 1 : 1);       // no base: something must show
+
+    QStringList pool;
+    foreach (const QString &key, eligible)
+        if (key != base)
+            pool.append(key);
+
+    QSet<QString> castSet;
+    if (silent == false)
     {
-        int n = eligible.count();
-        for (int i = 0; i < qMin(castSize, n); i++)
-            cast.insert(eligible.at((m_castCursor + i) % n));
-        // strobes carry a drop; make sure they are in when there is one
-        if (isDrop)
-            foreach (const QString &key, eligible)
-                if (m_groups.value(key).strobes && cast.count() < 3)
-                    cast.insert(key);
+        if (base.isEmpty() == false)
+            castSet.insert(base);
+        int n = pool.count();
+        for (int i = 0; i < qMin(effects, n); i++)
+            castSet.insert(pool.at((m_castCursor + i) % n));
+        // strobes carry a drop; swap one in when the energy allows effects
+        if (isDrop && effects > 0)
+        {
+            foreach (const QString &key, pool)
+                if (m_groups.value(key).strobes && castSet.contains(key) == false && castSet.count() <= 3)
+                    castSet.insert(key);
+        }
+        while (castSet.count() > 3)
+        {
+            // never more than three groups: drop the last non-base effect
+            QStringList sorted = castSet.values(); sorted.sort();
+            for (int i = sorted.count() - 1; i >= 0; i--)
+                if (sorted.at(i) != base) { castSet.remove(sorted.at(i)); break; }
+        }
     }
 
     /* ---- positions: sticky, only changed in the dark ---- */
@@ -965,12 +1182,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        if (candidates(TRACK_ROLE_POSITION, key).isEmpty())
+        if (candidates(ENGINE_ROLE_POSITION, key).isEmpty())
             continue;
 
-        bool inCast = cast.contains(key);
+        bool inCast = castSet.contains(key);
         // heads may move whenever a section changes; a laser only when it is
-        // dark - out of the cast, or in the dark beat that opens a break
+        // dark - out of the castSet, or in the dark beat that opens a break
         bool mayMove = (inCast == false)
                     || (sectionChanged && (g.lasers ? (isBreak && g.hasDimmer) : true));
         quint32 want = m_position.value(key, Function::invalidId());
@@ -997,14 +1214,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     qreal level = tierLevel * (0.5 + 0.5 * qBound(0.0, energy, 1.0));
 
     bool hard = sectionChanged && isDrop;
-    QStringList castSorted = cast.values();
+    QStringList castSorted = castSet.values();
     castSorted.sort();
     int accentIndex = castSorted.isEmpty() ? -1 : castSorted.count() - 1;
 
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        bool inCast = cast.contains(key);
+        bool inCast = castSet.contains(key);
 
         if (inCast == false)
         {
@@ -1027,11 +1244,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         else
             stopSlot("col:" + key, false);
 
-        // motion: drops, and the climbing half of a build
-        bool wantMotion = isDrop || (isBuild && prog > 0.5);
+        // motion: the base moves from the groove onward (that is what heads
+        // are for); effects only in drops and the climbing half of a build
+        bool wantMotion = isDrop || (isBuild && prog > 0.5)
+                       || (key == base && isBreak == false);
         if (wantMotion)
         {
-            quint32 mf = motionFunction(key, colour, cast, m_motionCursor);
+            quint32 mf = motionFunction(key, colour, castSet, m_motionCursor);
             if (mf != Function::invalidId())
                 run("mot:" + key, mf, m_funcs.value(mf).dimmer ? gl : 1.0, division, hard);
             else
@@ -1052,7 +1271,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         if (hit)
         {
-            quint32 ff = flashFunction(cast, m_colour);
+            quint32 ff = flashFunction(castSet, m_colour);
             if (ff != Function::invalidId())
                 run("flash", ff, 1.0, 0, true);
         }
@@ -1062,12 +1281,35 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
-    m_cast = cast;
+    m_cast = castSet;
     m_report = QString("%1  |  %2%3  |  %4")
-        .arg(castSorted.isEmpty() ? tr("(no groups)") : castSorted.join(" + "))
+        .arg(castSorted.isEmpty() ? (silent ? tr("(silence)") : tr("(no groups)"))
+                                  : castSorted.join(" + "))
         .arg(m_colour.isEmpty() ? tr("(no colour)") : m_colour)
         .arg(accentColour.isEmpty() ? QString() : QString(" + %1").arg(accentColour))
         .arg(state);
+    emit liveChanged();
+}
+
+void TrackEngine::idle()
+{
+    if (m_doc == nullptr)
+        return;
+    ensureTable();
+    tickFades();
+
+    // everything from the track goes; the start scene(s) come on
+    foreach (const QString &slot, m_active.keys())
+        if (slot.startsWith("idle:") == false)
+            stopSlot(slot, false);
+
+    QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_IDLE, QString());
+    foreach (TrackFuncInfo *info, list)
+        run("idle:" + QString::number(info->id), info->id,
+            info->dimmer ? m_master : 1.0, 0, false);
+
+    m_cast.clear();
+    m_report = list.isEmpty() ? tr("(idle - no start scene)") : tr("(start scene)");
     emit liveChanged();
 }
 
