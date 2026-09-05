@@ -85,6 +85,7 @@ class Doc;
 #define SETTINGS_ENGINE_BASE      QStringLiteral("trackengine/base")
 #define SETTINGS_ENGINE_LOG       QStringLiteral("trackengine/log")
 #define SETTINGS_ENGINE_STARS     QStringLiteral("trackengine/stars")
+#define SETTINGS_ENGINE_FULLAUTO  QStringLiteral("trackengine/fullauto")
 
 /** Everything the engine needs to know about one function, derived once. */
 struct TrackFuncInfo
@@ -136,6 +137,16 @@ struct TrackGroup
     bool strobes = false;     // this is the strobe/blinder group
     bool lasers = false;      // beams that must not move while lit
     bool heads = false;       // pan + tilt and not a laser: a moving head
+
+    /* what the engine can make from the DMX channels alone */
+    bool rgb = false;             // red, green and blue intensity channels
+    bool patternDevice = false;   // an animation laser: its patterns live in its own scenes
+    /* learned from the user's colour scenes: channels that change with the
+     * colour (a macro, or the laser bars' eight per-eye channels) and what
+     * each colour sets them to; and channels every colour scene sets alike */
+    QMap<quint32, QMap<quint32, QMap<QString, uchar> > > colourValue;  // fixture -> channel -> colour -> value
+    QMap<quint32, QMap<quint32, uchar> > baseValue;                     // fixture -> channel -> value
+    bool generatable() const { return patternDevice == false && (rgb || colourValue.isEmpty() == false); }
 };
 
 class TrackEngine : public QObject
@@ -147,6 +158,12 @@ class TrackEngine : public QObject
     Q_PROPERTY(QVariantList groups READ groups NOTIFY tableChanged)
     Q_PROPERTY(QVariantList palette READ palette NOTIFY tableChanged)
     Q_PROPERTY(bool showAll READ showAll WRITE setShowAll NOTIFY tableChanged)
+    /** The engine makes everything itself from the fixtures' channels -
+     *  colours, head positions and movement, patterns, the flash - and the
+     *  user's scenes step aside. Pattern devices (animation lasers) keep
+     *  their scenes, and so do laser positions: a generated tilt is not
+     *  a safe tilt. */
+    Q_PROPERTY(bool fullAuto READ fullAuto WRITE setFullAuto NOTIFY tableChanged)
     Q_PROPERTY(bool accent READ accent WRITE setAccent NOTIFY tableChanged)
     Q_PROPERTY(int holdBars READ holdBars WRITE setHoldBars NOTIFY tableChanged)
 
@@ -204,6 +221,8 @@ public:
     QVariantList palette();
     bool showAll() const;
     void setShowAll(bool on);
+    bool fullAuto() const;
+    void setFullAuto(bool on);
     bool accent() const;
     void setAccent(bool on);
     int holdBars() const;
@@ -233,6 +252,8 @@ public:
     bool roomAuto() const;
     void setRoomAuto(bool on);
     int roomByClock() const;
+    Q_INVOKABLE int roomPercent() const;
+    void announceRoom();
     bool hold() const;
     void setHold(bool on);
     bool logEnabled() const;
@@ -259,6 +280,9 @@ public:
 signals:
     void tableChanged();
     void liveChanged();
+    /** ROOM in percent of energy (55 / 80 / 100 / 125): TrackManager puts it
+     *  on the ENERGY trim, so ROOM and the ENERGY slider are one dial. */
+    void roomChanged(int percent);
 
 protected slots:
     void slotDocChanged();
@@ -276,7 +300,11 @@ protected:
     void loadRoles();
     void saveRoles();
     void ensureDimmerScenes();
+    void learnGroups();
     void ensureColourScenes();
+    void ensurePositionScenes();
+    bool userAllowed(const TrackFuncInfo &info) const;
+    void genFlash(bool on);
     quint32 dimmerChannel(Fixture *fxi) const;
     int guessStars(const TrackFuncInfo &info) const;
     qreal stepBeats(const TrackFuncInfo &info, qreal bpm) const;
@@ -375,6 +403,9 @@ private:
     QTimer m_pulseTimer;                   // 40 ms: the breath between two beats
     int m_room;
     bool m_roomAuto;
+    int m_roomSent;                        // last percent handed to the ENERGY trim
+    bool m_fullAuto;
+    QSet<QString> m_flashHeld;             // strobe groups the generated flash lit
     bool m_hold;
     bool m_forceNext;
     QList<int> m_hitBeats;                 // beats that carried a hit, last 32 beats

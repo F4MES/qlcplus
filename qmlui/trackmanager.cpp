@@ -94,6 +94,8 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_lastPosMs = 0;
     m_linkStale = false;
     m_engine = new TrackEngine(m_doc, this);
+    // ROOM (by clock, or a tap) is the ENERGY trim: one dial, not two
+    connect(m_engine, &TrackEngine::roomChanged, this, &TrackManager::setEnergyTrim);
     if (m_view != nullptr)
         m_view->rootContext()->setContextProperty("trackEngine", m_engine);
 
@@ -811,6 +813,9 @@ void TrackManager::setEnergyTrim(int percent)
     if (percent == m_energyTrim || percent < 0 || percent > 200)
         return;
     m_energyTrim = percent;
+    // a hand on the slider takes ROOM off the clock
+    if (m_engine != nullptr && percent != m_engine->roomPercent())
+        m_engine->setRoomAuto(false);
     QSettings().setValue(SETTINGS_TRACK_TRIM, m_energyTrim);
     emit energyChanged();
     applyEnergy();

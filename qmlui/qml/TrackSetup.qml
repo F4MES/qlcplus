@@ -177,6 +177,18 @@ Rectangle
                 onTapped: if (trackEngine) trackEngine.autoAssign(true)
             }
 
+            // the engine makes everything from the DMX channels; the user's
+            // scenes step aside (animation lasers and laser positions excepted)
+            TrackTile
+            {
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 34
+                label: qsTr("FULL AUTO")
+                active: trackEngine ? trackEngine.fullAuto : false
+                activeColor: "#E3B44F"
+                onTapped: trackEngine.fullAuto = !trackEngine.fullAuto
+            }
+
             TrackTile
             {
                 Layout.preferredWidth: 120

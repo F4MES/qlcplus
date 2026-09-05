@@ -29,6 +29,7 @@
 #include "universe.h"
 #include "fixturegroup.h"
 #include "qlcfixturedef.h"
+#include "qlccapability.h"
 #include "mastertimer.h"
 #include "collection.h"
 #include "qlcchannel.h"
@@ -44,6 +45,7 @@
 #define ENGINE_INTENSITY_ATTR 0
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
+#define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
 #define ENGINE_HAZE_SCENE     QStringLiteral("TRACK Haze")
 #define ENGINE_FAN_SCENE      QStringLiteral("TRACK Fan")
 
@@ -77,6 +79,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_beatIndex(0)
     , m_room(2)
     , m_roomAuto(true)
+    , m_roomSent(-1)
+    , m_fullAuto(false)
     , m_hold(false)
     , m_forceNext(false)
 {
@@ -93,6 +97,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
+    m_fullAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString())
                                   .toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
@@ -619,14 +624,40 @@ void TrackEngine::ensureTable()
         if (it.value().role == -2)
             it.value().role = it.value().step ? -1 : it.value().guess;
 
-    /* ---- palette: colours that exist on at least two groups ---- */
+    learnGroups();
+
+    /* ---- palette: colours that exist on at least two groups - through
+     *      the user's scenes, or through what the engine can make ---- */
     QMap<QString, QSet<QString> > coverage;
+    QSet<QString> userColours;
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
     {
         const TrackFuncInfo &info = it.value();
         if (info.role != ENGINE_ROLE_COLOR || info.colour.isEmpty())
             continue;
         coverage[info.colour].unite(info.groups);
+        userColours.insert(info.colour);
+    }
+    // an RGB group can make any colour the show uses anywhere (their taste,
+    // not the whole rainbow); a macro group the colours it learned
+    userColours.insert("white");
+    for (QMap<QString, TrackGroup>::const_iterator git = m_groups.constBegin(); git != m_groups.constEnd(); ++git)
+    {
+        const TrackGroup &g = git.value();
+        if (g.generatable() == false)
+            continue;
+        if (g.rgb)
+        {
+            foreach (const QString &col, userColours)
+                coverage[col].insert(g.key);
+        }
+        foreach (quint32 fid, g.colourValue.keys())
+        {
+            const QMap<quint32, QMap<QString, uchar> > &chans = g.colourValue.value(fid);
+            for (QMap<quint32, QMap<QString, uchar> >::const_iterator cit = chans.constBegin(); cit != chans.constEnd(); ++cit)
+                foreach (const QString &col, cit.value().keys())
+                    coverage[col].insert(g.key);
+        }
     }
 
     m_palette.clear();
@@ -644,6 +675,7 @@ void TrackEngine::ensureTable()
         m_palette.append(singles);
 
     ensureColourScenes();
+    ensurePositionScenes();
     ensureDimmerScenes();
     ensureAtmosScenes();
 
@@ -720,6 +752,276 @@ int TrackEngine::divisionFor(const TrackFuncInfo &info, qreal bpm, int division)
     return int(best * 1000.0);
 }
 
+void TrackEngine::learnGroups()
+{
+    // What can the engine make on its own for each group? RGB channels give
+    // any colour. Where colour is a value on some other channel - a macro,
+    // or the laser bars' eight per-eye channels where one value is one
+    // colour - the values are read off the user's own colour scenes: every
+    // channel that changes with the colour is a colour channel, and what
+    // the "green" scene set it to is what green is. Channels every colour
+    // scene of a fixture sets alike (shutter open, an effect mode, a speed)
+    // are the fixture's base and come along in every generated scene.
+    // Animation lasers, whose scenes are patterns, keep their own scenes.
+    for (QMap<QString, TrackGroup>::iterator it = m_groups.begin(); it != m_groups.end(); ++it)
+    {
+        TrackGroup &g = it.value();
+        g.rgb = false;
+        g.patternDevice = hasWord(g.key.toLower(), QStringList() << "anim" << "animation" << "pattern");
+        g.colourValue.clear();
+        g.baseValue.clear();
+
+        foreach (quint32 fid, g.fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr)
+                continue;
+            bool r = false, gr = false, b = false;
+            int effects = 0;
+            for (quint32 i = 0; i < fxi->channels(); i++)
+            {
+                const QLCChannel *qch = fxi->channel(i);
+                if (qch == nullptr)
+                    continue;
+                if (qch->group() == QLCChannel::Intensity && qch->colour() == QLCChannel::Red) r = true;
+                if (qch->group() == QLCChannel::Intensity && qch->colour() == QLCChannel::Green) gr = true;
+                if (qch->group() == QLCChannel::Intensity && qch->colour() == QLCChannel::Blue) b = true;
+                if (qch->group() == QLCChannel::Effect) effects++;
+            }
+            if (r && gr && b)
+                g.rgb = true;
+            else if (effects >= 3)
+                g.patternDevice = true;
+        }
+
+        // the user's colour scenes of exactly this group
+        QMap<quint32, QMap<quint32, QList<uchar> > > seen;             // fixture -> channel -> values
+        QMap<quint32, QMap<quint32, QMap<QString, uchar> > > byColour;  // fixture -> channel -> colour -> value
+        int scenes = 0;
+        for (QHash<quint32, TrackFuncInfo>::const_iterator fit = m_funcs.constBegin(); fit != m_funcs.constEnd(); ++fit)
+        {
+            const TrackFuncInfo &info = fit.value();
+            if (info.role != ENGINE_ROLE_COLOR || info.generated || info.colour.isEmpty()
+                || info.type != int(Function::SceneType)
+                || info.groups.count() != 1 || info.groups.contains(g.key) == false)
+                continue;
+            Scene *scene = qobject_cast<Scene *>(m_doc->function(info.id));
+            if (scene == nullptr)
+                continue;
+            scenes++;
+            foreach (SceneValue sv, scene->values())
+            {
+                seen[sv.fxi][sv.channel].append(sv.value);
+                byColour[sv.fxi][sv.channel].insert(info.colour, sv.value);
+            }
+        }
+        if (scenes < 2)
+            continue;
+
+        foreach (quint32 fid, g.fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr || seen.contains(fid) == false)
+                continue;
+            quint32 dim = dimmerChannel(fxi);
+            const QMap<quint32, QList<uchar> > &channels = seen.value(fid);
+            for (QMap<quint32, QList<uchar> >::const_iterator cit = channels.constBegin(); cit != channels.constEnd(); ++cit)
+            {
+                quint32 ch = cit.key();
+                const QList<uchar> &vals = cit.value();
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch == nullptr || ch == dim)
+                    continue;
+                if (qch->group() == QLCChannel::Intensity && qch->colour() != QLCChannel::NoColour)
+                    continue;                                   // the colour itself
+
+                bool constant = vals.count() == scenes;
+                for (int i = 1; i < vals.count() && constant; i++)
+                    if (vals.at(i) != vals.first())
+                        constant = false;
+
+                if (constant)
+                    g.baseValue[fid].insert(ch, vals.first());
+                else if (qch->group() != QLCChannel::Pan && qch->group() != QLCChannel::Tilt)
+                    g.colourValue[fid].insert(ch, byColour.value(fid).value(ch));
+            }
+        }
+    }
+}
+
+void TrackEngine::ensurePositionScenes()
+{
+    // Five positions for every group of RGB moving heads, made from the
+    // pan/tilt/zoom channels: centre, fan, cross, high, low. The numbers are
+    // the ones the rig was aimed with; a chase through them is the heads'
+    // movement when no EFX of the user's is wanted.
+    struct PosDef { const char *name; qreal slope; int tilt; int zoom; };
+    static const PosDef defs[] = {
+        { "Center", 0.0, 128, 90 }, { "Fan", 14.0, 128, 170 }, { "Cross", -18.0, 112, 120 },
+        { "High", 6.0, 70, 200 },   { "Low", 10.0, 180, 60 } };
+
+    QMap<QString, quint32> existing;
+    foreach (Function *func, m_doc->functions())
+        if (func != nullptr && func->name().startsWith(ENGINE_POS_PREFIX))
+            existing.insert(func->name().mid(ENGINE_POS_PREFIX.length()), func->id());
+
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.heads == false || g.rgb == false || g.patternDevice)
+            continue;
+
+        int n = g.fixtures.count();
+        qreal mid = (n - 1) / 2.0;
+        for (uint d = 0; d < sizeof(defs) / sizeof(defs[0]); d++)
+        {
+            QList<SceneValue> values;
+            for (int i = 0; i < n; i++)
+            {
+                Fixture *fxi = m_doc->fixture(g.fixtures.at(i));
+                if (fxi == nullptr)
+                    continue;
+                quint32 pan = QLCChannel::invalid(), panF = QLCChannel::invalid(),
+                        tilt = QLCChannel::invalid(), tiltF = QLCChannel::invalid(),
+                        speed = QLCChannel::invalid(), zoom = QLCChannel::invalid();
+                bool speedFastSlow = true, zoomSmallBig = true;
+                for (quint32 ch = 0; ch < fxi->channels(); ch++)
+                {
+                    const QLCChannel *qch = fxi->channel(ch);
+                    if (qch == nullptr)
+                        continue;
+                    switch (qch->preset())
+                    {
+                        case QLCChannel::PositionPan:          pan = ch; break;
+                        case QLCChannel::PositionPanFine:      panF = ch; break;
+                        case QLCChannel::PositionTilt:         tilt = ch; break;
+                        case QLCChannel::PositionTiltFine:     tiltF = ch; break;
+                        case QLCChannel::SpeedPanTiltFastSlow: speed = ch; speedFastSlow = true; break;
+                        case QLCChannel::SpeedPanTiltSlowFast: speed = ch; speedFastSlow = false; break;
+                        case QLCChannel::BeamZoomSmallBig:     zoom = ch; zoomSmallBig = true; break;
+                        case QLCChannel::BeamZoomBigSmall:     zoom = ch; zoomSmallBig = false; break;
+                        default: break;
+                    }
+                    if (pan == QLCChannel::invalid() && qch->group() == QLCChannel::Pan && qch->controlByte() == QLCChannel::MSB) pan = ch;
+                    if (tilt == QLCChannel::invalid() && qch->group() == QLCChannel::Tilt && qch->controlByte() == QLCChannel::MSB) tilt = ch;
+                }
+                if (pan == QLCChannel::invalid() || tilt == QLCChannel::invalid())
+                    continue;
+                int panVal = qBound(0, int(qRound(128.0 + defs[d].slope * (i - mid))), 255);
+                values.append(SceneValue(fxi->id(), pan, uchar(panVal)));
+                values.append(SceneValue(fxi->id(), tilt, uchar(defs[d].tilt)));
+                if (panF != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), panF, 0));
+                if (tiltF != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), tiltF, 0));
+                if (speed != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), speed, uchar(speedFastSlow ? 60 : 195)));
+                if (zoom != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), zoom, uchar(zoomSmallBig ? defs[d].zoom : 255 - defs[d].zoom)));
+            }
+            if (values.isEmpty())
+                continue;
+
+            QString name = QString("%1 %2").arg(key).arg(QLatin1String(defs[d].name));
+            Scene *scene = nullptr;
+            if (existing.contains(name))
+                scene = qobject_cast<Scene *>(m_doc->function(existing.value(name)));
+            if (scene != nullptr)
+            {
+                foreach (SceneValue old, scene->values())
+                    scene->unsetValue(old.fxi, old.channel);
+                foreach (SceneValue sv, values)
+                    scene->setValue(sv);
+            }
+            else
+            {
+                scene = new Scene(m_doc);
+                scene->setName(ENGINE_POS_PREFIX + name);
+                scene->setVisible(false);
+                foreach (SceneValue sv, values)
+                    scene->setValue(sv);
+                if (m_doc->addFunction(scene) == false)
+                {
+                    delete scene;
+                    continue;
+                }
+            }
+
+            TrackFuncInfo info;
+            info.id = scene->id();
+            info.name = scene->name();
+            info.type = int(Function::SceneType);
+            info.role = ENGINE_ROLE_POSITION;
+            info.guess = ENGINE_ROLE_POSITION;
+            info.groups.insert(key);
+            info.generated = true;
+            info.tier = tierOf(QString(QLatin1String(defs[d].name)).toLower());
+            info.stars = 1;
+            info.starsGuess = 1;
+            info.fixtureCount = n;
+            m_funcs.insert(info.id, info);
+        }
+    }
+}
+
+bool TrackEngine::userAllowed(const TrackFuncInfo &info) const
+{
+    // In FULL AUTO the user's functions step aside wherever the engine can
+    // make its own: only pattern devices keep theirs, and laser positions
+    // stay in the user's hands - a generated tilt is not a safe tilt.
+    if (m_fullAuto == false || info.generated || info.role == ENGINE_ROLE_IDLE)
+        return true;
+    if (info.groups.isEmpty())
+        return true;
+    foreach (const QString &g, info.groups)
+    {
+        const TrackGroup &tg = m_groups.value(g);
+        if (tg.generatable() == false)
+            return true;
+        if (info.role == ENGINE_ROLE_POSITION && tg.lasers)
+            return true;
+    }
+    return false;
+}
+
+void TrackEngine::genFlash(bool on)
+{
+    // the flash without a scene: the strobe groups go white with every part
+    // at full, whatever the cast is doing; off again, the parts of groups
+    // outside the cast are cut hard, the rest fall back on the next beat
+    if (on)
+    {
+        foreach (const QString &key, m_groupOrder)
+        {
+            const TrackGroup &g = m_groups.value(key);
+            if (g.strobes == false || g.generatable() == false || m_groupOff.contains(key))
+                continue;
+            quint32 white = colourFunction(key, "white");
+            if (white != Function::invalidId())
+                run("flash:" + key, white, 1.0, 0, true);
+            // full means full: no pulse or breath on the flash itself
+            qreal keepDepth = m_pulseDepth.value(key, 0.0);
+            int keepBreath = m_breathe.value(key, 0);
+            m_pulseDepth.insert(key, 0.0);
+            m_breathe.insert(key, 0);
+            setDimmer(key, 1.0);
+            m_pulseDepth.insert(key, keepDepth);
+            m_breathe.insert(key, keepBreath);
+            m_flashHeld.insert(key);
+        }
+    }
+    else
+    {
+        foreach (const QString &key, m_flashHeld)
+        {
+            stopSlot("flash:" + key, true);
+            if (m_cast.contains(key) == false)
+            {
+                const TrackGroup &g = m_groups.value(key);
+                for (int i = 0; i < g.parts.count(); i++)
+                    stopSlot(partSlot(key, i), true);
+            }
+        }
+        m_flashHeld.clear();
+    }
+}
+
 void TrackEngine::ensureColourScenes()
 {
     // A palette colour a group has no scene of is made from its fixtures'
@@ -741,23 +1043,27 @@ void TrackEngine::ensureColourScenes()
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
+        if (g.patternDevice)
+            continue;
 
-        foreach (const QString &colour, m_palette)
+        QStringList wanted = m_palette;
+        if (wanted.contains("white") == false)
+            wanted.append("white");                 // the flash
+        foreach (const QString &colour, wanted)
         {
             bool have = false;
             for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
-                if (it.value().role == ENGINE_ROLE_COLOR && it.value().colour == colour
+                if (it.value().role == ENGINE_ROLE_COLOR && it.value().colour == colour && it.value().generated == false
                     && it.value().groups.count() == 1 && it.value().groups.contains(key))
                     have = true;
-            if (have)
+            // a gap is always filled; in FULL AUTO every colour is ours
+            if (have && m_fullAuto == false)
                 continue;
 
             const Swatch *sw = nullptr;
             for (uint i = 0; i < sizeof(table) / sizeof(table[0]); i++)
                 if (colour == QLatin1String(table[i].name))
                     sw = &table[i];
-            if (sw == nullptr)
-                continue;
 
             QList<SceneValue> values;
             int touched = 0;
@@ -778,13 +1084,51 @@ void TrackEngine::ensureColourScenes()
                     if (qch->colour() == QLCChannel::Blue && bc == QLCChannel::invalid()) bc = i;
                     if (qch->colour() == QLCChannel::White && wc == QLCChannel::invalid()) wc = i;
                 }
-                if (rc == QLCChannel::invalid() || gc == QLCChannel::invalid() || bc == QLCChannel::invalid())
+
+                bool coloured = false;
+                if (sw != nullptr && rc != QLCChannel::invalid() && gc != QLCChannel::invalid() && bc != QLCChannel::invalid())
+                {
+                    values.append(SceneValue(fid, rc, uchar(sw->r)));
+                    values.append(SceneValue(fid, gc, uchar(sw->g)));
+                    values.append(SceneValue(fid, bc, uchar(sw->b)));
+                    if (wc != QLCChannel::invalid())
+                        values.append(SceneValue(fid, wc, uchar(sw->w)));
+                    coloured = true;
+                }
+                else if (g.colourValue.contains(fid))
+                {
+                    // the values the user's own scene of this colour taught us
+                    const QMap<quint32, QMap<QString, uchar> > &chans = g.colourValue.value(fid);
+                    for (QMap<quint32, QMap<QString, uchar> >::const_iterator cit = chans.constBegin(); cit != chans.constEnd(); ++cit)
+                    {
+                        if (cit.value().contains(colour) == false)
+                            continue;
+                        values.append(SceneValue(fid, cit.key(), cit.value().value(colour)));
+                        coloured = true;
+                    }
+                }
+                if (coloured == false)
                     continue;
-                values.append(SceneValue(fid, rc, uchar(sw->r)));
-                values.append(SceneValue(fid, gc, uchar(sw->g)));
-                values.append(SceneValue(fid, bc, uchar(sw->b)));
-                if (wc != QLCChannel::invalid())
-                    values.append(SceneValue(fid, wc, uchar(sw->w)));
+
+                // the fixture's base: what every colour scene of it sets alike
+                const QMap<quint32, uchar> base = g.baseValue.value(fid);
+                for (QMap<quint32, uchar>::const_iterator bit = base.constBegin(); bit != base.constEnd(); ++bit)
+                    values.append(SceneValue(fid, bit.key(), bit.value()));
+                // and an open shutter, when the definition says which value that is
+                for (quint32 i = 0; i < fxi->channels(); i++)
+                {
+                    const QLCChannel *qch = fxi->channel(i);
+                    if (qch == nullptr || qch->group() != QLCChannel::Shutter || base.contains(i))
+                        continue;
+                    foreach (QLCCapability *cap, qch->capabilities())
+                    {
+                        if (cap != nullptr && cap->preset() == QLCCapability::ShutterOpen)
+                        {
+                            values.append(SceneValue(fid, i, uchar(cap->min())));
+                            break;
+                        }
+                    }
+                }
                 touched++;
             }
             if (touched == 0)
@@ -1233,6 +1577,25 @@ QVariantList TrackEngine::palette()
 
 bool TrackEngine::showAll() const { return m_showAll; }
 void TrackEngine::setShowAll(bool on) { if (on != m_showAll) { m_showAll = on; emit tableChanged(); } }
+bool TrackEngine::fullAuto() const { return m_fullAuto; }
+
+void TrackEngine::setFullAuto(bool on)
+{
+    if (on == m_fullAuto)
+        return;
+    m_fullAuto = on;
+    QSettings().setValue(SETTINGS_ENGINE_FULLAUTO, m_fullAuto);
+    // whatever runs now may be a function that is no longer allowed
+    foreach (const QString &slot, m_active.keys())
+        if (slot.startsWith("idle:") == false)
+            stopSlot(slot, false);
+    m_position.clear();
+    m_moves.clear();
+    m_dirty = true;
+    emit tableChanged();
+    emit liveChanged();
+}
+
 bool TrackEngine::accent() const { return m_accent; }
 void TrackEngine::setAccent(bool on)
 {
@@ -1317,10 +1680,13 @@ void TrackEngine::setFlash(bool pressed)
             fid = flashFunction(QSet<QString>(m_groupOrder.begin(), m_groupOrder.end()), "white");
         if (fid != Function::invalidId())
             run("flash", fid, 1.0, 0, true);
+        else
+            genFlash(true);
     }
     else
     {
         stopSlot("flash", true);
+        genFlash(false);
     }
     emit liveChanged();
 }
@@ -1342,6 +1708,8 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         if (group.isEmpty() == false && info.groups.contains(group) == false)
             continue;
         if (m_doc->function(info.id) == nullptr)
+            continue;
+        if (userAllowed(info) == false)
             continue;
         out.append(const_cast<TrackFuncInfo *>(&info));
     }
@@ -1572,7 +1940,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     tickFades();
     m_lastBeat = beat;
 
-    // the room: the same track is quieter at 22:00 than at 01:00
+    // the room: the same track is quieter at 22:00 than at 01:00. ROOM sets
+    // the ENERGY trim (through roomChanged), so it is already in the energy
+    // that arrives here - nothing to multiply
     if (m_roomAuto)
     {
         int want = roomByClock();
@@ -1582,8 +1952,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_moves.clear();
         }
     }
-    static const qreal roomFactor[4] = { 0.55, 0.80, 1.0, 1.25 };
-    energy = qBound(0.0, energy * roomFactor[qBound(0, m_room, 3)], 1.0);
+    announceRoom();
 
     // NEXT: treat this beat as a fresh section with a fresh colour
     bool forceNext = m_forceNext;
@@ -1752,6 +2121,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 want = np;
                 m_position.insert(key, want);
                 m_headMoveBeats.insert(key, -8);     // our own move: grace before the Light Rider check
+            }
+        }
+        // heads without a sweep of the user's (or in FULL AUTO): walk through
+        // the positions every four bars in the groove, every two in a drop -
+        // the pan/tilt speed channel turns each step into a slow sweep
+        if (g.heads && inCast && hold == false && isBreak == false && m_moves.value(key).ownChaser
+            && (m_fullAuto || candidates(ENGINE_ROLE_MOTION, key).isEmpty())
+            && beatInBar == 0 && bar > 0 && (bar % (isDrop ? 2 : 4)) == 0)
+        {
+            quint32 np = positionFunction(key, m_castCursor + bar, -1);
+            if (np != Function::invalidId() && np != want)
+            {
+                want = np;
+                m_position.insert(key, want);
+                m_headMoveBeats.insert(key, -8);
             }
         }
         if (want != Function::invalidId())
@@ -1950,10 +2334,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             quint32 ff = flashFunction(castSet, m_colour);
             if (ff != Function::invalidId())
                 run("flash", ff, 1.0, 0, true);
+            else
+                genFlash(true);
         }
         else
         {
             stopSlot("flash", true);
+            if (m_flashHeld.isEmpty() == false)
+                genFlash(false);
         }
     }
 
@@ -1976,7 +2364,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         .arg(state)
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
         .arg(isCalm ? tr("  CALM") : QString())
-        .arg(m_hold ? tr("  HOLD") : QString());
+        .arg(QString(m_hold ? tr("  HOLD") : QString()) + (m_fullAuto ? tr("  FULL AUTO") : QString()));
     emit liveChanged();
 }
 
@@ -1997,6 +2385,14 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     const TrackGroup &g = m_groups.value(group);
     qreal e = qBound(0.0, energy, 1.0);
     mv.phase = int(rng->bounded(8));
+
+    // a pattern device has no intensity to pulse or chase: its own pattern
+    // scenes are its movement, and it runs them most of the time
+    if (g.patternDevice)
+    {
+        mv.ownChaser = tier > 0 && rng->bounded(10) < 8;
+        return mv;
+    }
 
     if (tier == 0)
     {
@@ -2368,6 +2764,7 @@ void TrackEngine::setRoom(int room)
     }
     m_room = room;
     m_moves.clear();             // the new energy draws new moves
+    announceRoom();
     emit liveChanged();
 }
 
@@ -2379,8 +2776,25 @@ void TrackEngine::setRoomAuto(bool on)
         return;
     m_roomAuto = on;
     if (on)
+    {
         m_room = roomByClock();
+        announceRoom();
+    }
     emit liveChanged();
+}
+
+int TrackEngine::roomPercent() const
+{
+    static const int percent[4] = { 55, 80, 100, 125 };
+    return percent[qBound(0, m_room, 3)];
+}
+
+void TrackEngine::announceRoom()
+{
+    if (roomPercent() == m_roomSent)
+        return;
+    m_roomSent = roomPercent();
+    emit roomChanged(m_roomSent);
 }
 
 int TrackEngine::roomByClock() const
@@ -2476,6 +2890,7 @@ void TrackEngine::release()
     m_flash = false;
     m_pulseDepth.clear();
     m_breathe.clear();
+    m_flashHeld.clear();
     m_pulseTimer.stop();
     m_report = tr("(released)");
     if (m_fadeAttr.isEmpty() == false)
@@ -2683,6 +3098,9 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // the level the beat sets already includes where the breath stands, so
     // an off-beat never bumps the light back up
     qreal applied = qBound(0.0, level * pulseFactor(group) * m_master, 1.0);
+    // an animation laser's "dimmer" is a switch: on above a sliver, else off
+    if (g.patternDevice)
+        applied = applied > 0.10 ? 1.0 : 0.0;
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
