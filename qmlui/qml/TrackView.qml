@@ -131,7 +131,8 @@ Rectangle
         Rectangle
         {
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(110, trackViewRoot.height * 0.15)
+            Layout.fillHeight: true
+            Layout.minimumHeight: 110
             color: "#101010"
             border.width: 1
             border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cLine
@@ -553,7 +554,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V11_SPEED)
+        // =============================================== live controls  (LIVE_V12_LAYOUT)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -563,8 +564,8 @@ Rectangle
             id: dialsRow
             Layout.fillWidth: true
             Layout.fillHeight: false
-            Layout.preferredHeight: trackViewRoot.touchH * 1.2
-            Layout.maximumHeight: trackViewRoot.touchH * 1.2
+            Layout.preferredHeight: trackViewRoot.touchH
+            Layout.maximumHeight: trackViewRoot.touchH
             spacing: 10
             visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
@@ -615,7 +616,7 @@ Rectangle
                     }
                     color: "#EEEEEE"
                     font.bold: true
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                 }
 
                 MouseArea
@@ -690,7 +691,7 @@ Rectangle
                     text: qsTr("MASTER") + "  " + Math.round((trackEngine ? trackEngine.master : 1) * 100) + "%"
                     color: "#EEEEEE"
                     font.bold: true
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                 }
 
                 MouseArea
@@ -710,8 +711,8 @@ Rectangle
             id: liveRow
             Layout.fillWidth: true
             Layout.fillHeight: false
-            Layout.preferredHeight: trackViewRoot.touchH * 1.4
-            Layout.maximumHeight: trackViewRoot.touchH * 1.4
+            Layout.preferredHeight: trackViewRoot.touchH * 1.15
+            Layout.maximumHeight: trackViewRoot.touchH * 1.15
             spacing: 10
             visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
@@ -876,8 +877,8 @@ Rectangle
             id: atmosRow
             Layout.fillWidth: true
             Layout.fillHeight: false
-            Layout.preferredHeight: trackViewRoot.touchH
-            Layout.maximumHeight: trackViewRoot.touchH
+            Layout.preferredHeight: trackViewRoot.touchH * 0.7
+            Layout.maximumHeight: trackViewRoot.touchH * 0.7
             spacing: 10
             visible: trackManager && trackManager.roleMode && trackEngine
                      && trackEngine.hazeAvailable && !trackViewRoot.setupOpen
@@ -916,9 +917,9 @@ Rectangle
                         anchors.centerIn: parent
                         text: (atmosSlider.isHaze ? qsTr("HAZE") : qsTr("FAN SPEED"))
                               + "  " + Math.round(atmosSlider.level * 100) + "%"
-                        color: "#EEEEEE"
+                        color: "#CCCCCC"
                         font.bold: true
-                        font.pixelSize: 15
+                        font.pixelSize: 13
                     }
 
                     MouseArea
@@ -942,26 +943,28 @@ Rectangle
         Rectangle
         {
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: trackViewRoot.touchH * 2.6
+            Layout.minimumHeight: trackViewRoot.touchH * 2.6
             color: trackViewRoot.cPanel
             radius: 4
 
             // The cast, large: one fader per group - the DJ's trim on top of
             // everything the engine does - lit when the group is in the cast,
-            // with a switch to leave it out for the night. (CAST_V2_FADERS)
+            // with a switch to leave it out for the night. (CAST_V3_COMPACT)
             Column
             {
                 id: castPanel
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
+                anchors.margins: 6
+                spacing: 4
                 visible: !trackViewRoot.setupOpen
 
                 Row
                 {
                     width: parent.width
                     height: parent.height - statusLine.height - parent.spacing
-                    spacing: 8
+                    spacing: 6
 
                     Repeater
                     {
@@ -1023,7 +1026,7 @@ Rectangle
                                     text: modelData.key.toUpperCase()
                                     color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#8A8A8A")
                                     font.bold: true
-                                    font.pixelSize: 18
+                                    font.pixelSize: 14
                                 }
                                 Text
                                 {
@@ -1031,7 +1034,7 @@ Rectangle
                                     text: castTile.off ? qsTr("OFF")
                                         : (modelData.base ? qsTr("BASE") + "  " : "") + Math.round(castTile.trim * 100) + "%"
                                     color: castTile.lit ? "#E0F0FF" : "#6A6A6A"
-                                    font.pixelSize: 13
+                                    font.pixelSize: 12
                                 }
                             }
 
@@ -1041,10 +1044,10 @@ Rectangle
                             {
                                 anchors.top: parent.top
                                 anchors.right: parent.right
-                                anchors.margins: 8
-                                width: 58
-                                height: 30
-                                radius: 15
+                                anchors.margins: 5
+                                width: 48
+                                height: 24
+                                radius: 12
                                 visible: !modelData.base
                                 color: castTile.off ? "#3A3A3A" : "#7ED07E"
 
@@ -1054,7 +1057,7 @@ Rectangle
                                     text: castTile.off ? qsTr("OFF") : qsTr("ON")
                                     color: castTile.off ? "#9A9A9A" : "#102010"
                                     font.bold: true
-                                    font.pixelSize: 12
+                                    font.pixelSize: 11
                                 }
 
                                 MouseArea
@@ -1074,8 +1077,8 @@ Rectangle
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
                     text: trackEngine ? trackEngine.report : ""
-                    color: "#9A9A9A"
-                    font.pixelSize: 15
+                    color: "#8A8A8A"
+                    font.pixelSize: 13
                 }
             }
             // The role picker owns setup now: one tap per function decides
