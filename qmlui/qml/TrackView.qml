@@ -502,7 +502,7 @@ Rectangle
                 {
                     Layout.preferredWidth: 95
                     Layout.fillHeight: true
-                    text: qsTr("AUTO")
+                    text: qsTr("FOLLOW")
                     enabled: trackManager ? trackManager.overrideState !== "" : false
                     onClicked: trackManager.overrideState = ""
 
@@ -551,11 +551,11 @@ Rectangle
 
                 Button
                 {
-                    Layout.preferredWidth: 95
+                    Layout.preferredWidth: 130
                     Layout.fillHeight: true
                     checkable: true
                     checked: trackManager ? trackManager.autoRun : false
-                    text: qsTr("RUN")
+                    text: checked ? qsTr("AUTO ON") : qsTr("AUTO OFF")
                     onClicked: trackManager.autoRun = checked
 
                     contentItem: Text
@@ -594,8 +594,8 @@ Rectangle
 
                 Text
                 {
-                    Layout.preferredWidth: 90
-                    text: qsTr("SPEED")
+                    Layout.preferredWidth: 150
+                    text: qsTr("SPEED") + " · " + trackViewRoot.liveState.toUpperCase()
                     color: trackViewRoot.markerColor(trackViewRoot.liveState)
                     font.bold: true
                     font.pixelSize: 14
@@ -662,8 +662,8 @@ Rectangle
                     Text
                     {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 84
-                        text: qsTr("LEVEL")
+                        width: 150
+                        text: qsTr("LEVEL") + " · " + trackViewRoot.liveState.toUpperCase()
                         color: trackViewRoot.markerColor(trackViewRoot.liveState)
                         font.bold: true
                         font.pixelSize: 14
@@ -673,7 +673,7 @@ Rectangle
                     {
                         id: levelSlider
                         anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - 84 - 200
+                        width: parent.width - 150 - 200
                         height: trackViewRoot.touchH
                         from: 0
                         to: 100
@@ -725,8 +725,7 @@ Rectangle
                         width: 190
                         text: (trackManager
                                ? trackManager.stateIntensity(trackViewRoot.liveState) : 100)
-                              + "%   →   " + (trackManager
-                               ? Math.round(trackManager.appliedEnergy * 100) : 0) + "%"
+                              + "%  " + qsTr("brightness")
                         color: trackViewRoot.cText
                         font.bold: true
                         font.pixelSize: 19
@@ -742,7 +741,7 @@ Rectangle
                     Text
                     {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 84
+                        width: 150
                         text: qsTr("ENERGY")
                         color: trackViewRoot.cDim
                         font.bold: true
@@ -753,7 +752,7 @@ Rectangle
                     {
                         id: energySlider
                         anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - 84 - 200
+                        width: parent.width - 150 - 380
                         height: trackViewRoot.touchH
                         from: 0
                         to: 200
@@ -809,10 +808,17 @@ Rectangle
                     Text
                     {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 190
-                        text: qsTr("trim") + " "
-                              + (trackManager ? trackManager.energyTrim : 100) + "%    "
-                              + (trackManager ? Math.round(trackManager.energy * 100) : 0) + "%"
+                        width: 370
+                        text:
+                        {
+                            // what this energy buys: effect groups on top of the base
+                            var e = trackManager ? trackManager.energy : 0
+                            var groove = e < 0.50 ? 0 : 1
+                            var drop = e < 0.30 ? 0 : (e < 0.65 ? 1 : 2)
+                            return Math.round(e * 100) + "%   ·   "
+                                   + qsTr("groove") + " +" + groove + "   "
+                                   + qsTr("drop") + " +" + drop + " " + qsTr("effects")
+                        }
                         color: trackViewRoot.cText
                         font.bold: true
                         font.pixelSize: 19

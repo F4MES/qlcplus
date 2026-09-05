@@ -1194,7 +1194,7 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
 
 void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                        qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
-                       const QString &nextState, int beatsToNext, qreal bpm)
+                       const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale)
 {
     if (m_doc == nullptr)
         return;
@@ -1361,7 +1361,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         tierLevel = qMax(tierLevel, 0.60);
     if (isCalm)
         tierLevel = qMin(tierLevel, 0.55);
-    qreal level = tierLevel * (0.5 + 0.5 * qBound(0.0, energy, 1.0));
+    // the section's LEVEL slider is a brightness trim only; the energy dial
+    // decides how many effects join, never how bright the base is
+    qreal level = tierLevel * (0.5 + 0.5 * qBound(0.0, energy, 1.0)) * qBound(0.0, levelScale, 1.0);
 
     bool hard = sectionChanged && isDrop;
     QStringList castSorted = castSet.values();

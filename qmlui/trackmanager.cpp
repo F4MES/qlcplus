@@ -626,9 +626,8 @@ void TrackManager::setStateIntensity(QString state, int percent)
 
 int TrackManager::stateIntensity(QString state) const
 {
+    // the engine sets the level per tier itself; this is a trim on top
     int dflt = 100;
-    if (state == QStringLiteral("break")) dflt = 35;
-    else if (state == QStringLiteral("build")) dflt = 70;
     return m_stateIntensity.value(state, dflt);
 }
 
@@ -649,11 +648,13 @@ void TrackManager::setStateDivision(QString state, int milliBeats)
 
 int TrackManager::stateDivision(QString state) const
 {
-    // a musical default: calm in a break, hardest in a drop
-    int dflt = 500;
-    if (state == QStringLiteral("break")) dflt = 1000;
-    else if (state == QStringLiteral("build")) dflt = 250;
-    else if (state == QStringLiteral("drop")) dflt = 125;
+    // calm defaults for a minimal style: a chase steps once a beat in the
+    // groove, twice a beat in builds and drops, and runs at its own pace
+    // (tempo-matched by the engine) in a break
+    int dflt = 1000;
+    if (state == QStringLiteral("break")) dflt = 0;
+    else if (state == QStringLiteral("build")) dflt = 500;
+    else if (state == QStringLiteral("drop")) dflt = 500;
     return m_stateDivision.value(state, dflt);
 }
 
@@ -1372,11 +1373,18 @@ void TrackManager::runEngine(bool sectionChanged)
     int beatsToNext = 0;
     nextSection(beat, nextState, beatsToNext);
 
-    // The engine decides cast, palette, motion and dimmers; we only tell it
-    // where in the track we are and how much energy the track has.
-    m_engine->tick(state, beat, secStart, secEnd, appliedEnergy(), sectionEnergy(beat),
+    // Energy = BPM dial x how loud this section is. The section's LEVEL slider
+    // goes in separately as a brightness trim, so it cannot change how many
+    // effects join.
+    qreal se = sectionEnergy(beat);
+    qreal en = energy();
+    if (se >= 0.0)
+        en *= 0.65 + 0.35 * se;
+    qreal levelScale = qreal(stateIntensity(state)) / 100.0;
+
+    m_engine->tick(state, beat, secStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
-                   m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm);
+                   m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale);
 
     if (sectionChanged)
         emit stateChanged();

@@ -182,7 +182,7 @@ public:
     /* ---- driven by TrackManager ---- */
     void tick(const QString &state, int beat, int secStart, int secEnd,
               qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
-              const QString &nextState, int beatsToNext, qreal bpm);
+              const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale);
     void trackLoaded();
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
