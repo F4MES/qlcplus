@@ -566,17 +566,6 @@ Rectangle
                 onTapped: trackEngine.roomAuto = !trackEngine.roomAuto
             }
 
-            // an operator tool: freeze the look until released
-            TrackTile
-            {
-                Layout.preferredWidth: 90
-                Layout.preferredHeight: 34
-                label: qsTr("HOLD")
-                active: trackEngine ? trackEngine.hold : false
-                activeColor: "#E3B44F"
-                onTapped: trackEngine.hold = !trackEngine.hold
-            }
-
             Item { Layout.fillWidth: true }
         }
 

@@ -526,31 +526,6 @@ Rectangle
 
                 Button
                 {
-                    Layout.preferredWidth: 105
-                    Layout.fillHeight: true
-                    text: qsTr("RE-ROLL")
-                    onClicked: trackManager.reroll()
-
-                    contentItem: Text
-                    {
-                        text: parent.text
-                        color: trackViewRoot.cText
-                        font.bold: true
-                        font.pixelSize: 15
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle
-                    {
-                        radius: 5
-                        color: parent.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn
-                        border.width: 1
-                        border.color: trackViewRoot.cLine
-                    }
-                }
-
-                Button
-                {
                     Layout.preferredWidth: 130
                     Layout.fillHeight: true
                     checkable: true
@@ -827,9 +802,9 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V8_NEXT_LOOK)
-        // What a DJ touches while playing: the colour, the master, and a
-        // flash for the strobes. Everything else runs itself.
+        // =============================================== live controls  (LIVE_V9_HOLD_DJ)
+        // What a DJ touches while playing: colour, MASTER, and four buttons -
+        // CALM, HOLD, NEXT LOOK, FLASH WHITE. Everything else runs itself.
         RowLayout
         {
             id: liveRow
@@ -937,60 +912,38 @@ Rectangle
             }
 
             // ---- calm: panic button. Base group only, one colour, no motion,
-            //      for 16 bars - then back to automatic.
-            Rectangle
+            //      for 16 bars - then back to automatic. Tap again to end it.
+            TrackTile
             {
-                Layout.preferredWidth: trackViewRoot.touchH * 2.2
+                Layout.preferredWidth: trackViewRoot.touchH * 2
                 Layout.fillHeight: true
-                radius: 4
-                color: (trackEngine && trackEngine.calmBarsLeft > 0) ? "#4FA3E3" : "#2E4A63"
-                border.width: 1
-                border.color: "#6FB3F3"
+                label: (trackEngine && trackEngine.calmBarsLeft > 0)
+                       ? qsTr("CALM") + " " + trackEngine.calmBarsLeft : qsTr("CALM")
+                active: trackEngine ? trackEngine.calmBarsLeft > 0 : false
+                activeColor: "#4FA3E3"
+                onTapped: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
+            }
 
-                Text
-                {
-                    anchors.centerIn: parent
-                    text: (trackEngine && trackEngine.calmBarsLeft > 0)
-                          ? qsTr("CALM") + " " + trackEngine.calmBarsLeft
-                          : qsTr("CALM 16")
-                    color: "#EEEEEE"
-                    font.bold: true
-                    font.pixelSize: 16
-                }
-
-                // tap again to end it early
-                MouseArea
-                {
-                    anchors.fill: parent
-                    onClicked: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
-                }
+            // ---- hold: freeze the look - colour, cast, moves - until released
+            TrackTile
+            {
+                Layout.preferredWidth: trackViewRoot.touchH * 2
+                Layout.fillHeight: true
+                label: qsTr("HOLD")
+                active: trackEngine ? trackEngine.hold : false
+                activeColor: "#E3B44F"
+                onTapped: trackEngine.hold = !trackEngine.hold
             }
 
             // ---- next look: a new colour, cast and moves right now - the
             //      DJ's "something else, please"
-            Rectangle
+            TrackTile
             {
                 Layout.preferredWidth: trackViewRoot.touchH * 2.4
                 Layout.fillHeight: true
-                radius: 4
-                color: "#2E4A63"
-                border.width: 1
-                border.color: "#6FB3F3"
-
-                Text
-                {
-                    anchors.centerIn: parent
-                    text: qsTr("NEXT LOOK")
-                    color: "#EEEEEE"
-                    font.bold: true
-                    font.pixelSize: 16
-                }
-
-                MouseArea
-                {
-                    anchors.fill: parent
-                    onClicked: trackEngine.next()
-                }
+                label: qsTr("NEXT LOOK")
+                active: false
+                onTapped: trackEngine.next()
             }
 
             // ---- flash: hold to strobe
@@ -1130,8 +1083,9 @@ Rectangle
             color: trackViewRoot.cPanel
             radius: 4
 
-            // The cast, large: which groups are lit right now, and what the
-            // engine is doing with them.
+            // The cast, large: one fader per group - the DJ's trim on top of
+            // everything the engine does - lit when the group is in the cast,
+            // with a switch to leave it out for the night. (CAST_V2_FADERS)
             Column
             {
                 id: castPanel
@@ -1156,13 +1110,44 @@ Rectangle
                             property int n: trackEngine ? trackEngine.groups.length : 1
                             property bool lit: trackEngine ? trackEngine.cast.indexOf(modelData.key) >= 0 : false
                             property bool off: !modelData.enabled
+                            property real trim: (trackEngine && trackEngine.trims[modelData.key] !== undefined)
+                                                ? trackEngine.trims[modelData.key] : 1.0
                             width: (parent.width - (n - 1) * parent.spacing) / n
                             height: parent.height
                             radius: 6
-                            color: lit ? (modelData.base ? "#2E6FA8" : "#4FA3E3")
-                                       : (off ? "#1A1A1A" : "#242424")
+                            color: off ? "#161616" : "#1E1E1E"
                             border.width: modelData.base ? 2 : 1
                             border.color: lit ? "#9FD3FF" : (modelData.base ? "#4FA3E3" : "#3A3A3A")
+                            clip: true
+
+                            // the fader: the trim fills from the bottom
+                            Rectangle
+                            {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                anchors.margins: 3
+                                height: (parent.height - 6) * (castTile.off ? 0 : castTile.trim)
+                                radius: 4
+                                color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4") : "#2C2C2C"
+                                Behavior on color { ColorAnimation { duration: 150 } }
+                            }
+
+                            // drag anywhere: the trim
+                            MouseArea
+                            {
+                                anchors.fill: parent
+                                enabled: !castTile.off
+                                function apply(y)
+                                {
+                                    var v = 1 - (y - 3) / (height - 6)
+                                    v = Math.max(0, Math.min(1, v))
+                                    if (v > 0.97) v = 1
+                                    if (trackEngine) trackEngine.setGroupTrim(modelData.key, v)
+                                }
+                                onPressed: (mouse) => apply(mouse.y)
+                                onPositionChanged: (mouse) => { if (pressed) apply(mouse.y) }
+                            }
 
                             Column
                             {
@@ -1173,16 +1158,46 @@ Rectangle
                                 {
                                     anchors.horizontalCenter: parent.horizontalCenter
                                     text: modelData.key.toUpperCase()
-                                    color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#7A7A7A")
+                                    color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#8A8A8A")
                                     font.bold: true
                                     font.pixelSize: 18
                                 }
                                 Text
                                 {
                                     anchors.horizontalCenter: parent.horizontalCenter
-                                    text: modelData.base ? qsTr("BASE") : (castTile.off ? qsTr("OFF") : (castTile.lit ? qsTr("ON") : ""))
-                                    color: castTile.lit ? "#E0F0FF" : "#5A5A5A"
+                                    text: castTile.off ? qsTr("OFF")
+                                        : (modelData.base ? qsTr("BASE") + "  " : "") + Math.round(castTile.trim * 100) + "%"
+                                    color: castTile.lit ? "#E0F0FF" : "#6A6A6A"
+                                    font.pixelSize: 13
+                                }
+                            }
+
+                            // the switch: in or out of tonight's show. The base
+                            // (the heads) is always in; SETUP decides which one it is.
+                            Rectangle
+                            {
+                                anchors.top: parent.top
+                                anchors.right: parent.right
+                                anchors.margins: 8
+                                width: 58
+                                height: 30
+                                radius: 15
+                                visible: !modelData.base
+                                color: castTile.off ? "#3A3A3A" : "#7ED07E"
+
+                                Text
+                                {
+                                    anchors.centerIn: parent
+                                    text: castTile.off ? qsTr("OFF") : qsTr("ON")
+                                    color: castTile.off ? "#9A9A9A" : "#102010"
+                                    font.bold: true
                                     font.pixelSize: 12
+                                }
+
+                                MouseArea
+                                {
+                                    anchors.fill: parent
+                                    onClicked: trackEngine.setGroupEnabled(modelData.key, castTile.off)
                                 }
                             }
                         }
@@ -1200,7 +1215,6 @@ Rectangle
                     font.pixelSize: 15
                 }
             }
-
             // The role picker owns setup now: one tap per function decides
             // what it does, and the engine handles the rest.
             // Loaded indirectly so a fault in TrackSetup cannot take the whole

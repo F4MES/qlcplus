@@ -170,6 +170,9 @@ class TrackEngine : public QObject
     Q_PROPERTY(QString colourOverride READ colourOverride WRITE setColourOverride NOTIFY liveChanged)
     Q_PROPERTY(QString currentColour READ currentColour NOTIFY liveChanged)
     Q_PROPERTY(QStringList cast READ cast NOTIFY liveChanged)
+    /** The DJ's fader per group, 0..1, on top of everything the engine does.
+     *  Not remembered between nights. */
+    Q_PROPERTY(QVariantMap trims READ trims NOTIFY liveChanged)
     Q_PROPERTY(qreal master READ master WRITE setMaster NOTIFY liveChanged)
     Q_PROPERTY(bool flashing READ flashing NOTIFY liveChanged)
     Q_PROPERTY(QString report READ report NOTIFY liveChanged)
@@ -214,6 +217,9 @@ public:
     /** ON -> BASE -> OFF -> ON. The base group is always lit; the others
      *  are effects added on top as the evening's energy rises. */
     Q_INVOKABLE void cycleGroup(QString key);
+    QVariantMap trims() const;
+    Q_INVOKABLE qreal groupTrim(QString key) const;
+    Q_INVOKABLE void setGroupTrim(QString key, qreal level);
     Q_INVOKABLE QString baseGroup() const;
 
     QVariantList palette();
@@ -379,6 +385,7 @@ private:
     QSet<QString> m_cast;
     QMap<QString, quint32> m_position;   // sticky position pick per group
     qreal m_master;
+    QMap<QString, qreal> m_groupTrim;     // the DJ's fader per group, 1.0 when untouched
     bool m_flash;
     QString m_lastState;
     QString m_report;

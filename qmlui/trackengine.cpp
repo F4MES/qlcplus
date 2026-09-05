@@ -151,7 +151,7 @@ void TrackEngine::slotPulseTimer()
             Function *func = m_doc->function(m_active.value(slot));
             if (func != nullptr)
                 m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
-                                    qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_master, 1.0)));
+                                    qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_groupTrim.value(key, 1.0) * m_master, 1.0)));
         }
     }
     if (any == false)
@@ -1532,6 +1532,38 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
 
 bool TrackEngine::groupEnabled(QString key) const { return m_groupOff.contains(key) == false; }
 
+QVariantMap TrackEngine::trims() const
+{
+    QVariantMap map;
+    foreach (const QString &key, m_groupOrder)
+        map.insert(key, m_groupTrim.value(key, 1.0));
+    return map;
+}
+
+qreal TrackEngine::groupTrim(QString key) const { return m_groupTrim.value(key, 1.0); }
+
+void TrackEngine::setGroupTrim(QString key, qreal level)
+{
+    level = qBound(0.0, level, 1.0);
+    if (qFuzzyCompare(level + 1.0, m_groupTrim.value(key, 1.0) + 1.0))
+        return;
+    m_groupTrim.insert(key, level);
+
+    // straight onto the lit parts, no waiting for the beat
+    const TrackGroup &g = m_groups.value(key);
+    for (int i = 0; i < g.parts.count(); i++)
+    {
+        QString slot = partSlot(key, i);
+        if (m_active.contains(slot) == false)
+            continue;
+        Function *func = m_doc->function(m_active.value(slot));
+        if (func != nullptr)
+            m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
+                qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(key) * level * m_master, 1.0)));
+    }
+    emit liveChanged();
+}
+
 QString TrackEngine::baseGroup() const
 {
     if (m_base.isEmpty() == false && m_groups.contains(m_base) && m_groupOff.contains(m_base) == false)
@@ -1653,7 +1685,7 @@ void TrackEngine::setMaster(qreal level)
             QString group = hash > 4 ? slot.mid(4, hash - 4) : QString();
             if (func != nullptr)
                 m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
-                    qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(group) * m_master, 1.0)));
+                    qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0)));
         }
     emit liveChanged();
 }
@@ -2234,7 +2266,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the base is the light the room stands on: brighter than the
         // effects in a break, where it is often the only thing lit
         qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0), 1.0);
-        qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_master;
+        qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_groupTrim.value(key, 1.0) * m_master;
         quint32 cf = colourFunction(key, colour);
         if (cf != Function::invalidId())
             run("col:" + key, cf, m_funcs.value(cf).dimmer ? gl : 1.0, 0, hard);
@@ -3111,7 +3143,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     level = qBound(0.0, level, 1.0);
     // the level the beat sets already includes where the breath stands, so
     // an off-beat never bumps the light back up
-    qreal applied = qBound(0.0, level * pulseFactor(group) * m_master, 1.0);
+    qreal applied = qBound(0.0, level * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0);
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
         applied = applied > 0.10 ? 1.0 : 0.0;
