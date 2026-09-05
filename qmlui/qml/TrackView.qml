@@ -830,7 +830,7 @@ Rectangle
             Layout.fillWidth: true
             Layout.preferredHeight: trackViewRoot.touchH * 1.4
             spacing: 10
-            visible: trackManager ? trackManager.roleMode : false
+            visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
             function swatch(name)
             {
@@ -870,18 +870,19 @@ Rectangle
                 {
                     model: trackEngine ? trackEngine.palette : []
 
+                    // lit = locked to this colour. A ring only = this is what
+                    // AUTO happens to be running right now.
                     TrackTile
                     {
                         width: trackViewRoot.touchH * 1.5
                         height: liveRow.height
                         label: modelData.toUpperCase()
                         activeColor: liveRow.swatch(modelData)
-                        active: trackEngine
-                                ? (trackEngine.colourOverride === modelData
-                                   || (trackEngine.colourOverride === ""
-                                       && trackEngine.currentColour === modelData))
-                                : false
-                        border.width: trackEngine && trackEngine.colourOverride === modelData ? 3 : 1
+                        active: trackEngine ? trackEngine.colourOverride === modelData : false
+                        border.width: (trackEngine && trackEngine.colourOverride === ""
+                                       && trackEngine.currentColour === modelData) ? 3 : 1
+                        border.color: (trackEngine && trackEngine.currentColour === modelData)
+                                      ? liveRow.swatch(modelData) : "#555555"
                         onTapped: trackEngine.colourOverride =
                                       (trackEngine.colourOverride === modelData) ? "" : modelData
                     }
@@ -949,10 +950,11 @@ Rectangle
                     font.pixelSize: 16
                 }
 
+                // tap again to end it early
                 MouseArea
                 {
                     anchors.fill: parent
-                    onClicked: trackEngine.calm(16)
+                    onClicked: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
                 }
             }
 
@@ -992,7 +994,8 @@ Rectangle
             color: "#3A2A1A"
             border.width: 1
             border.color: "#E3B44F"
-            visible: trackManager && trackManager.roleMode && warnText.text.length > 0
+            visible: trackManager && trackManager.roleMode && !trackViewRoot.setupOpen
+                     && warnText.text.length > 0
 
             Text
             {
@@ -1024,7 +1027,7 @@ Rectangle
             Layout.preferredHeight: trackViewRoot.touchH
             spacing: 10
             visible: trackManager && trackManager.roleMode && trackEngine
-                     && trackEngine.hazeAvailable
+                     && trackEngine.hazeAvailable && !trackViewRoot.setupOpen
 
             Repeater
             {
@@ -1058,7 +1061,7 @@ Rectangle
                     Text
                     {
                         anchors.centerIn: parent
-                        text: (atmosSlider.isHaze ? qsTr("HAZE") : qsTr("FAN"))
+                        text: (atmosSlider.isHaze ? qsTr("HAZE") : qsTr("FAN SPEED"))
                               + "  " + Math.round(atmosSlider.level * 100) + "%"
                         color: "#EEEEEE"
                         font.bold: true
@@ -1088,7 +1091,7 @@ Rectangle
             Layout.fillWidth: true
             Layout.preferredHeight: 30
             spacing: 6
-            visible: trackManager ? trackManager.roleMode : false
+            visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
             Repeater
             {
@@ -1143,6 +1146,8 @@ Rectangle
             Loader
             {
                 id: setupLoader
+                parent: trackViewRoot        // overlay the whole page
+                z: 100
                 anchors.fill: parent
                 visible: trackViewRoot.setupOpen && trackManager
                          && trackManager.roleMode

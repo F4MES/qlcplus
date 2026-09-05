@@ -1496,7 +1496,8 @@ QStringList TrackEngine::warnings() const { return m_warnings; }
 
 void TrackEngine::calm(int bars)
 {
-    m_calmUntil = m_lastBeat + qMax(1, bars) * 4;
+    // bars <= 0 ends it early
+    m_calmUntil = bars <= 0 ? 0 : m_lastBeat + bars * 4;
     emit liveChanged();
 }
 

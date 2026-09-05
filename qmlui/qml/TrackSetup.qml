@@ -172,6 +172,16 @@ Rectangle
                 active: setupRoot.advancedOpen
                 onTapped: setupRoot.advancedOpen = !setupRoot.advancedOpen
             }
+
+            TrackTile
+            {
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 34
+                label: qsTr("CLOSE")
+                activeColor: "#E36B6B"
+                active: true
+                onTapped: trackViewRoot.setupOpen = false
+            }
         }
 
         // ------------------------------------------------- groups
