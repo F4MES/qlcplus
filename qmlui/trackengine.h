@@ -37,8 +37,10 @@
 #include <QStringList>
 #include <QObject>
 #include <QString>
+#include <QTimer>
 #include <QHash>
 #include <QList>
+#include <QFile>
 #include <QMap>
 #include <QSet>
 
@@ -59,6 +61,7 @@ class Doc;
 #define SETTINGS_ENGINE_ACCENT    QStringLiteral("trackengine/accent")
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
 #define SETTINGS_ENGINE_BASE      QStringLiteral("trackengine/base")
+#define SETTINGS_ENGINE_LOG       QStringLiteral("trackengine/log")
 
 /** Everything the engine needs to know about one function, derived once. */
 struct TrackFuncInfo
@@ -74,6 +77,9 @@ struct TrackFuncInfo
     bool step = false;        // sits inside a chaser or sequence
     bool junk = false;        // blackout / reset / test / copy ...
     bool dimmer = false;      // sets a master dimmer itself (HTP beats the group dimmer)
+    int tier = -1;            // tagged for break (0) / groove (1) / drop (2), or any
+    bool sweep = false;       // continuous movement (EFX / chaser of positions)
+    uint durationMs = 0;      // a chaser's step duration, for tempo matching
 };
 
 /** One fixture group as the engine sees it. */
@@ -106,6 +112,10 @@ class TrackEngine : public QObject
     Q_PROPERTY(qreal master READ master WRITE setMaster NOTIFY liveChanged)
     Q_PROPERTY(bool flashing READ flashing NOTIFY liveChanged)
     Q_PROPERTY(QString report READ report NOTIFY liveChanged)
+
+    Q_PROPERTY(QStringList warnings READ warnings NOTIFY liveChanged)
+    Q_PROPERTY(int calmBarsLeft READ calmBarsLeft NOTIFY liveChanged)
+    Q_PROPERTY(bool logEnabled READ logEnabled WRITE setLogEnabled NOTIFY tableChanged)
 
     Q_PROPERTY(bool hazeAvailable READ hazeAvailable NOTIFY tableChanged)
     Q_PROPERTY(qreal haze READ haze WRITE setHaze NOTIFY liveChanged)
@@ -153,6 +163,15 @@ public:
     Q_INVOKABLE void setFlash(bool pressed);
     QString report() const;
 
+    /** Everything that is not right at the moment: a slider overriding the
+     *  engine, a group without a dimmer ... shown on the Track page. */
+    QStringList warnings() const;
+    /** Panic: base group only, one colour, no motion, for this many bars. */
+    Q_INVOKABLE void calm(int bars);
+    int calmBarsLeft() const;
+    bool logEnabled() const;
+    void setLogEnabled(bool on);
+
     /* ---- atmosphere: the hazer's fan and output, straight from two sliders ---- */
     bool hazeAvailable() const;
     qreal haze() const;
@@ -162,10 +181,13 @@ public:
 
     /* ---- driven by TrackManager ---- */
     void tick(const QString &state, int beat, int secStart, int secEnd,
-              qreal energy, qreal sectionEnergy, int division, bool sectionChanged);
+              qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
+              const QString &nextState, int beatsToNext, qreal bpm);
     void trackLoaded();
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
+    /** AUTO switched off: fade everything out over a bar, then let go. */
+    void release();
     void stopAll();
 
 signals:
@@ -174,6 +196,7 @@ signals:
 
 protected slots:
     void slotDocChanged();
+    void slotFadeTimer();
 
 protected:
     /* table building */
@@ -194,8 +217,16 @@ protected:
     quint32 colourFunction(const QString &group, const QString &colour) const;
     quint32 motionFunction(const QString &group, const QString &colour,
                            const QSet<QString> &cast, int cursor) const;
-    quint32 positionFunction(const QString &group, int cursor) const;
+    quint32 motionFor(const QString &group, const QString &colour,
+                      const QSet<QString> &cast, int cursor, int tier,
+                      qreal bpm, int division) const;
+    quint32 positionFunction(const QString &group, int cursor, int tier) const;
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
+    int tierOf(const QString &text) const;
+    QString accentFor(const QString &colour) const;
+    qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;
+    void checkConflicts(const QSet<QString> &cast);
+    void logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy);
 
     /* running */
     void run(const QString &slot, quint32 fid, qreal level, int division, bool hard);
@@ -238,6 +269,13 @@ private:
     bool m_flash;
     QString m_lastState;
     QString m_report;
+    QStringList m_warnings;
+    int m_effects;            // effect groups this section (locked, hysteresis)
+    int m_lastBeat;
+    int m_calmUntil;          // beat until which the panic look holds
+    QTimer m_fadeTimer;       // keeps fades ticking after a release
+    bool m_logEnabled;
+    QFile m_log;
 
     /* what is running: slot name -> fid, and its attribute override */
     QMap<QString, quint32> m_active;

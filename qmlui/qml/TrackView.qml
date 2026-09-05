@@ -927,6 +927,35 @@ Rectangle
                 }
             }
 
+            // ---- calm: panic button. Base group only, one colour, no motion,
+            //      for 16 bars - then back to automatic.
+            Rectangle
+            {
+                Layout.preferredWidth: trackViewRoot.touchH * 2.2
+                Layout.fillHeight: true
+                radius: 4
+                color: (trackEngine && trackEngine.calmBarsLeft > 0) ? "#4FA3E3" : "#2E4A63"
+                border.width: 1
+                border.color: "#6FB3F3"
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: (trackEngine && trackEngine.calmBarsLeft > 0)
+                          ? qsTr("CALM") + " " + trackEngine.calmBarsLeft
+                          : qsTr("CALM 16")
+                    color: "#EEEEEE"
+                    font.bold: true
+                    font.pixelSize: 16
+                }
+
+                MouseArea
+                {
+                    anchors.fill: parent
+                    onClicked: trackEngine.calm(16)
+                }
+            }
+
             // ---- flash: hold to strobe
             Rectangle
             {
@@ -950,6 +979,39 @@ Rectangle
                     onPressed: trackEngine.setFlash(true)
                     onReleased: trackEngine.setFlash(false)
                     onCanceled: trackEngine.setFlash(false)
+                }
+            }
+        }
+
+        // =============================================== warnings
+        Rectangle
+        {
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? 30 : 0
+            radius: 3
+            color: "#3A2A1A"
+            border.width: 1
+            border.color: "#E3B44F"
+            visible: trackManager && trackManager.roleMode && warnText.text.length > 0
+
+            Text
+            {
+                id: warnText
+                anchors.fill: parent
+                anchors.margins: 6
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+                color: "#FFD27F"
+                font.pixelSize: 13
+                text:
+                {
+                    var parts = []
+                    if (trackManager && trackManager.linkStale)
+                        parts.push(qsTr("BLT link stale - holding the last look"))
+                    if (trackEngine)
+                        for (var i = 0; i < trackEngine.warnings.length; i++)
+                            parts.push(trackEngine.warnings[i])
+                    return parts.join("   ·   ")
                 }
             }
         }

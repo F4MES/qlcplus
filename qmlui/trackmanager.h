@@ -80,6 +80,9 @@ class TrackManager : public QObject
 
     Q_PROPERTY(int listenPort READ listenPort WRITE setListenPort NOTIFY listenPortChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
+    /** No position from BLT for a while although a track was playing:
+     *  the engine holds its last look instead of guessing. */
+    Q_PROPERTY(bool linkStale READ linkStale NOTIFY linkChanged)
 
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
     Q_PROPERTY(int beatCount READ beatCount NOTIFY trackChanged)
@@ -118,6 +121,7 @@ public:
     int listenPort() const;
     void setListenPort(int port);
     bool connected() const;
+    bool linkStale() const;
 
     QString title() const;
     int beatCount() const;
@@ -215,6 +219,7 @@ public:
 signals:
     void listenPortChanged();
     void connectedChanged();
+    void linkChanged();
     void trackChanged();
     void markersChanged();
     void positionChanged();
@@ -247,6 +252,8 @@ protected:
      * should be doing right now and rides the intensities. */
     void runEngine(bool sectionChanged);
     void sectionBounds(int beat, int &start, int &end) const;
+    void nextSection(int beat, QString &state, int &beatsToNext) const;
+    void sendMarkers();
     quint32 pickRole(QString state, int role, int cursor) const;
     void driveRole(int role, quint32 fid, qreal level, int division,
                    bool hard = false);
@@ -309,6 +316,9 @@ private:
     int m_liveBpm;
 
     QTimer m_energyTimer;
+
+    qint64 m_lastPosMs;
+    bool m_linkStale;
 
     /* ---- roles ---- */
     bool m_roleMode;

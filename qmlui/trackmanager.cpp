@@ -24,6 +24,7 @@
 #include "trackmanager.h"
 #include "trackengine.h"
 #include <QQmlContext>
+#include <QDateTime>
 #include "functionparent.h"
 #include "mastertimer.h"
 #include "function.h"
@@ -90,6 +91,8 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     loadSettingsMaps();
     loadRoles();
 
+    m_lastPosMs = 0;
+    m_linkStale = false;
     m_engine = new TrackEngine(m_doc, this);
     if (m_view != nullptr)
         m_view->rootContext()->setContextProperty("trackEngine", m_engine);
@@ -168,6 +171,12 @@ void TrackManager::slotNewConnection()
 
 void TrackManager::slotDisconnected()
 {
+    if (m_playing && m_linkStale == false)
+    {
+        m_linkStale = true;
+        emit linkChanged();
+    }
+
     QTcpSocket *sock = qobject_cast<QTcpSocket *>(sender());
     if (sock == nullptr)
         return;
@@ -276,6 +285,13 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     m_currentBeat = beat;
     m_playing = playing;
     m_trackTimeMs = timeMs;
+
+    m_lastPosMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_linkStale)
+    {
+        m_linkStale = false;
+        emit linkChanged();
+    }
 
     emit positionChanged();
     updateState();
@@ -729,6 +745,16 @@ void TrackManager::saveLooks()
 
 void TrackManager::slotEnergyTick()
 {
+    // watchdog: a playing track that stops sending positions for four
+    // seconds is a broken link, not a pause
+    bool stale = m_playing && m_lastPosMs > 0
+              && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 4000;
+    if (stale != m_linkStale)
+    {
+        m_linkStale = stale;
+        emit linkChanged();
+    }
+
     int bpm = 0;
     if (m_doc != nullptr && m_doc->masterTimer() != nullptr)
         bpm = m_doc->masterTimer()->bpmNumber();
@@ -884,6 +910,7 @@ void TrackManager::moveMarker(int index, int beat)
 
     emit markersChanged();
     updateState();
+    sendMarkers();                       // let BLT remember the correction
 }
 
 void TrackManager::clear()
@@ -1317,6 +1344,10 @@ void TrackManager::runEngine(bool sectionChanged)
     if (m_roleMode == false || m_autoRun == false || m_doc == nullptr || m_engine == nullptr)
         return;
 
+    // the link went quiet mid-track: hold the last look rather than guess
+    if (m_linkStale)
+        return;
+
     if (m_playing == false)
     {
         // nothing playing: the start scene, not darkness
@@ -1336,10 +1367,16 @@ void TrackManager::runEngine(bool sectionChanged)
     int secStart = 1, secEnd = 1;
     sectionBounds(beat, secStart, secEnd);
 
+    // what comes next, so the engine can lean into a drop a bar early
+    QString nextState;
+    int beatsToNext = 0;
+    nextSection(beat, nextState, beatsToNext);
+
     // The engine decides cast, palette, motion and dimmers; we only tell it
     // where in the track we are and how much energy the track has.
     m_engine->tick(state, beat, secStart, secEnd, appliedEnergy(), sectionEnergy(beat),
-                   stateDivision(state), sectionChanged);
+                   stateDivision(state), sectionChanged, nextState, beatsToNext,
+                   m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm);
 
     if (sectionChanged)
         emit stateChanged();
@@ -1429,7 +1466,7 @@ void TrackManager::stopRole(int role)
 void TrackManager::stopAllRoles()
 {
     if (m_engine != nullptr)
-        m_engine->stopAll();
+        m_engine->release();
 
     foreach (int role, m_roleActive.keys())
         stopRole(role);
@@ -1613,4 +1650,54 @@ qreal TrackManager::sectionEnergy(int beat) const
     }
 
     return best;
+}
+
+/*********************************************************************
+ * Look-ahead, link watchdog, marker feedback
+ *********************************************************************/
+
+bool TrackManager::linkStale() const { return m_linkStale; }
+
+void TrackManager::nextSection(int beat, QString &state, int &beatsToNext) const
+{
+    state.clear();
+    beatsToNext = 0;
+    int best = -1;
+    for (int i = 0; i < m_markers.count(); i++)
+    {
+        QVariantMap marker = m_markers.at(i).toMap();
+        int mb = marker.value(QStringLiteral("beat")).toInt();
+        if (mb > beat && (best < 0 || mb < best))
+        {
+            best = mb;
+            state = marker.value(QStringLiteral("type")).toString();
+        }
+    }
+    if (best > 0)
+        beatsToNext = best - beat;
+}
+
+void TrackManager::sendMarkers()
+{
+    // The operator moved a flag. Tell BLT, so the correction is cached with
+    // the track and comes back right the next time it is played.
+    QJsonArray arr;
+    for (int i = 0; i < m_markers.count(); i++)
+    {
+        QVariantMap marker = m_markers.at(i).toMap();
+        QJsonObject mo;
+        mo.insert(QStringLiteral("beat"), marker.value(QStringLiteral("beat")).toInt());
+        mo.insert(QStringLiteral("type"), marker.value(QStringLiteral("type")).toString());
+        mo.insert(QStringLiteral("energy"), marker.value(QStringLiteral("energy"), -1.0).toDouble());
+        arr.append(mo);
+    }
+    QJsonObject obj;
+    obj.insert(QStringLiteral("evt"), QStringLiteral("markers"));
+    obj.insert(QStringLiteral("title"), m_title);
+    obj.insert(QStringLiteral("markers"), arr);
+    QByteArray line = QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n";
+
+    foreach (QTcpSocket *client, m_clients)
+        if (client != nullptr && client->state() == QAbstractSocket::ConnectedState)
+            client->write(line);
 }
