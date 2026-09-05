@@ -1399,9 +1399,14 @@ void TrackManager::runEngine(bool sectionChanged)
         en *= 0.65 + 0.35 * se;
     qreal levelScale = qreal(stateIntensity(state)) / 100.0;
 
+    // what the analysis heard on this very beat (0..1), -1 when BLT did not
+    // send the curves: the pulse follows the kick, hats-only passages sparkle
+    qreal kick = (beat >= 1 && beat - 1 < m_kick.count()) ? m_kick.at(beat - 1).toInt() / 255.0 : -1.0;
+    qreal high = (beat >= 1 && beat - 1 < m_high.count()) ? m_high.at(beat - 1).toInt() / 255.0 : -1.0;
+
     m_engine->tick(state, beat, secStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
-                   m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale);
+                   m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high);
 
     if (sectionChanged)
         emit stateChanged();

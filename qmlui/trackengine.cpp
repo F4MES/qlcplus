@@ -46,6 +46,13 @@
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
+
+/* colours the house does not like: never in the palette, never as an accent,
+ * never generated - even when a scene of that colour exists */
+static bool engineBannedColour(const QString &colour)
+{
+    return colour == QLatin1String("yellow");
+}
 #define ENGINE_HAZE_SCENE     QStringLiteral("TRACK Haze")
 #define ENGINE_FAN_SCENE      QStringLiteral("TRACK Fan")
 
@@ -668,6 +675,8 @@ void TrackEngine::ensureTable()
     while (cit.hasNext())
     {
         cit.next();
+        if (engineBannedColour(cit.key()))
+            continue;
         if (cit.value().count() >= 2)
             m_palette.append(cit.key());
         else
@@ -1921,7 +1930,7 @@ QString TrackEngine::accentFor(const QString &colour) const
         { "uv",      { "white" } },
     };
     foreach (const QString &p, pairs.value(colour))
-        if (m_palette.contains(p))
+        if (m_palette.contains(p) && engineBannedColour(p) == false)
             return p;
     return QString();
 }
@@ -1985,7 +1994,8 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
 
 void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                        qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
-                       const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale)
+                       const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
+                       qreal kick, qreal high)
 {
     if (m_doc == nullptr)
         return;
@@ -2050,6 +2060,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (changeColour || m_colourBar >= 0)
         m_colourBar = holdBar;
 
+    if (engineBannedColour(m_override))
+        m_override.clear();
     if (m_override.isEmpty() == false)
         m_colour = m_override;
     else if (changeColour && m_palette.isEmpty() == false)
@@ -2294,6 +2306,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // fast, the way a drummer fills into the next phrase
         else if (isBreak == false && energy > 0.45 && (bar % 8) == 7 && mv.pattern != ENGINE_PAT_STATIC)
             mv.stepBeats = qMax(1, mv.stepBeats / 2);
+        // a hats-only passage (highs up, no kick) sparkles rather than sits
+        if (high > 0.65 && kick >= 0.0 && kick < 0.35 && mv.pattern == ENGINE_PAT_STATIC
+            && key != base && isCalm == false && still == false && g.fixtures.count() >= 3)
+        {
+            mv.pattern = ENGINE_PAT_SPARKLE;
+            mv.stepBeats = 2;
+        }
         // the DJ's SPEED: half or double everything that steps
         if (m_speed < 0)
             mv.stepBeats *= 2;
@@ -2359,6 +2378,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           || (mv.pulseOn == 2 && (beatInBar == 1 || beatInBar == 3))
                           || (mv.pulseOn == 3 && beatInBar == 0);
             qreal depth = darkGroups.contains(key) ? 0.0 : mv.pulse;
+            // the kick the analysis heard on this beat: no kick, no pulse;
+            // a soft kick, a soft pulse
+            if (kick >= 0.0)
+            {
+                if (kick < 0.20)
+                    pulseBeat = false;
+                depth *= 0.5 + 0.5 * qBound(0.0, kick, 1.0);
+            }
             if (depth > 0.0 && pulseBeat)
                 m_pulseStart.insert(key, m_clock.elapsed());
             if (depth > 0.0 || mv.breatheBars > 0)

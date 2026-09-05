@@ -283,9 +283,13 @@ public:
     void setFan(qreal level);
 
     /* ---- driven by TrackManager ---- */
+    /** kick / high: what the analysis heard on this beat, 0..1, or -1 when
+     *  BLT did not send the curves. The pulse follows the kick; a hats-only
+     *  passage sparkles. */
     void tick(const QString &state, int beat, int secStart, int secEnd,
               qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
-              const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale);
+              const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
+              qreal kick = -1.0, qreal high = -1.0);
     void trackLoaded();
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
