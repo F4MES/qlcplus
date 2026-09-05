@@ -122,6 +122,7 @@ struct TrackMove
     int colourBars = 0;       // accent group: swap palette/accent every N bars (0 = hold)
     bool flashBar = false;    // a hit on the downbeat of every second bar
     bool ownChaser = false;   // run one of the user's chases/EFX instead of a pattern
+    int breatheBars = 0;      // slow sine on the level over this many bars (breaks)
     int phase = 0;            // random start offset into the pattern
 };
 
@@ -345,6 +346,8 @@ private:
     QString m_report;
     QStringList m_warnings;
     QMap<QString, int> m_conflictBeats;   // how long a group has read lit while held dark
+    QMap<quint32, int> m_lastPan;         // last pan reading per head, for the Light Rider check
+    QMap<QString, int> m_headMoveBeats;   // beats in a row a head group moved without us
     int m_effects;            // effect groups this section (locked, hysteresis)
     int m_lastBeat;
     int m_calmUntil;          // beat until which the panic look holds
@@ -354,10 +357,14 @@ private:
 
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group
-    QMap<QString, qreal> m_pulseDepth;     // groups breathing right now, and how deep
+    QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
     QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
+    QMap<QString, int> m_breathe;          // groups on a slow sine, and over how many bars
     QElapsedTimer m_clock;
     qreal m_beatMs;
+    qint64 m_beatStartMs;                  // clock reading of the last beat
+    int m_beatIndex;                       // beats since the section started
+    QString m_lastMoves;                   // what the report said, for the log
     QTimer m_pulseTimer;                   // 40 ms: the breath between two beats
     int m_room;
     bool m_hold;
