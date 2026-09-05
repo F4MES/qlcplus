@@ -84,6 +84,7 @@ class Doc;
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
 #define SETTINGS_ENGINE_BASE      QStringLiteral("trackengine/base")
 #define SETTINGS_ENGINE_LOG       QStringLiteral("trackengine/log")
+#define SETTINGS_ENGINE_STARS     QStringLiteral("trackengine/stars")
 
 /** Everything the engine needs to know about one function, derived once. */
 struct TrackFuncInfo
@@ -101,7 +102,12 @@ struct TrackFuncInfo
     bool dimmer = false;      // sets a master dimmer itself (HTP beats the group dimmer)
     int tier = -1;            // tagged for break (0) / groove (1) / drop (2), or any
     bool sweep = false;       // continuous movement (EFX / chaser of positions)
-    uint durationMs = 0;      // a chaser's step duration, for tempo matching
+    uint durationMs = 0;      // a chaser's step (or an EFX cycle) in ms, 0 = unknown
+    qreal beats = 0.0;        // ... or in beats, when the chaser runs in Beats tempo
+    bool oneShot = false;     // runs once and stops: retriggered on the beat
+    bool generated = false;   // made by the engine (a palette colour the group lacked)
+    int stars = 0;            // energy 1..3: when this may run (0 = not applicable)
+    int starsGuess = 0;       // what the engine would say, from tempo and name
     int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
 };
 
@@ -115,6 +121,7 @@ struct TrackMove
     int pulseOn = 0;          // 0 every beat, 1 beats 1+3, 2 beats 2+4, 3 downbeat only
     int colourBars = 0;       // accent group: swap palette/accent every N bars (0 = hold)
     bool flashBar = false;    // a hit on the downbeat of every second bar
+    bool ownChaser = false;   // run one of the user's chases/EFX instead of a pattern
     int phase = 0;            // random start offset into the pattern
 };
 
@@ -153,6 +160,13 @@ class TrackEngine : public QObject
     Q_PROPERTY(int calmBarsLeft READ calmBarsLeft NOTIFY liveChanged)
     Q_PROPERTY(bool logEnabled READ logEnabled WRITE setLogEnabled NOTIFY tableChanged)
 
+    /** How full the room is: 0 empty, 1 warming up, 2 full, 3 peak. Scales
+     *  the energy the analysis reports, so the same track gets less light at
+     *  22:00 than at 01:00. Not remembered between nights. */
+    Q_PROPERTY(int room READ room WRITE setRoom NOTIFY liveChanged)
+    /** Freeze the look: no colour, cast or move changes until released. */
+    Q_PROPERTY(bool hold READ hold WRITE setHold NOTIFY liveChanged)
+
     Q_PROPERTY(bool hazeAvailable READ hazeAvailable NOTIFY tableChanged)
     Q_PROPERTY(qreal haze READ haze WRITE setHaze NOTIFY liveChanged)
     Q_PROPERTY(qreal fan READ fan WRITE setFan NOTIFY liveChanged)
@@ -169,6 +183,8 @@ public:
     /** Rows: { id, name, path, role, guess, group, colour, hidden }. */
     Q_INVOKABLE QVariantList table();
     Q_INVOKABLE void assignRole(quint32 fid, int role);
+    /** Energy 1..3 for a motion: 1 may run anywhere, 3 only in a full-energy drop. */
+    Q_INVOKABLE void setStars(quint32 fid, int stars);
     Q_INVOKABLE void autoAssign(bool force);
     Q_INVOKABLE void rebuild();
 
@@ -205,6 +221,12 @@ public:
     /** Panic: base group only, one colour, no motion, for this many bars. */
     Q_INVOKABLE void calm(int bars);
     int calmBarsLeft() const;
+    /** New colour, new cast, new moves - now. */
+    Q_INVOKABLE void next();
+    int room() const;
+    void setRoom(int room);
+    bool hold() const;
+    void setHold(bool on);
     bool logEnabled() const;
     void setLogEnabled(bool on);
 
@@ -246,7 +268,11 @@ protected:
     void loadRoles();
     void saveRoles();
     void ensureDimmerScenes();
+    void ensureColourScenes();
     quint32 dimmerChannel(Fixture *fxi) const;
+    int guessStars(const TrackFuncInfo &info) const;
+    qreal stepBeats(const TrackFuncInfo &info, qreal bpm) const;
+    int divisionFor(const TrackFuncInfo &info, qreal bpm, int division) const;
     void ensureAtmosScenes();
     void applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32> > &channels, qreal level);
 
@@ -257,7 +283,7 @@ protected:
                            const QSet<QString> &cast, int cursor) const;
     quint32 motionFor(const QString &group, const QString &colour,
                       const QSet<QString> &cast, int cursor, int tier,
-                      qreal bpm, int division, bool staticOnly) const;
+                      qreal bpm, int division, bool staticOnly, int maxStars) const;
     quint32 positionFunction(const QString &group, int cursor, int tier) const;
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
     int tierOf(const QString &text) const;
@@ -333,6 +359,10 @@ private:
     QElapsedTimer m_clock;
     qreal m_beatMs;
     QTimer m_pulseTimer;                   // 40 ms: the breath between two beats
+    int m_room;
+    bool m_hold;
+    bool m_forceNext;
+    QList<int> m_hitBeats;                 // beats that carried a hit, last 32 beats
 
     /* what is running: slot name -> fid, and its attribute override */
     QMap<QString, quint32> m_active;

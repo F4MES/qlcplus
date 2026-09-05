@@ -827,7 +827,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V4_NO_CAST_ROW)
+        // =============================================== live controls  (LIVE_V5_ROOM_NEXT_HOLD)
         // What a DJ touches while playing: the colour, the master, and a
         // flash for the strobes. Everything else runs itself.
         RowLayout
@@ -990,6 +990,65 @@ Rectangle
                     onReleased: trackEngine.setFlash(false)
                     onCanceled: trackEngine.setFlash(false)
                 }
+            }
+        }
+
+        // =============================================== room / next / hold
+        // ROOM tells the engine how full the floor is - the same track gets
+        // less light at 22:00 than at 01:00. NEXT draws a new look now, HOLD
+        // freezes the current one.
+        RowLayout
+        {
+            id: controlRow
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: trackViewRoot.touchH
+            Layout.maximumHeight: trackViewRoot.touchH
+            spacing: 10
+            visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
+
+            Text
+            {
+                text: qsTr("ROOM")
+                color: "#9A9A9A"
+                font.bold: true
+                font.pixelSize: 13
+            }
+
+            Repeater
+            {
+                model: [ qsTr("EMPTY"), qsTr("WARMING"), qsTr("FULL"), qsTr("PEAK") ]
+
+                TrackTile
+                {
+                    Layout.preferredWidth: trackViewRoot.touchH * 2
+                    Layout.fillHeight: true
+                    label: modelData
+                    active: trackEngine ? trackEngine.room === index : index === 2
+                    activeColor: [ "#5A7A9A", "#4FA3E3", "#7ED07E", "#E3B44F" ][index]
+                    onTapped: trackEngine.room = index
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+
+            TrackTile
+            {
+                Layout.preferredWidth: trackViewRoot.touchH * 2.2
+                Layout.fillHeight: true
+                label: qsTr("NEXT LOOK")
+                active: false
+                onTapped: trackEngine.next()
+            }
+
+            TrackTile
+            {
+                Layout.preferredWidth: trackViewRoot.touchH * 2.2
+                Layout.fillHeight: true
+                label: qsTr("HOLD")
+                active: trackEngine ? trackEngine.hold : false
+                activeColor: "#E3B44F"
+                onTapped: trackEngine.hold = !trackEngine.hold
             }
         }
 

@@ -651,10 +651,11 @@ int TrackManager::stateDivision(QString state) const
     // calm defaults for a minimal style: a chase steps once a beat in the
     // groove, twice a beat in builds and drops, and runs at its own pace
     // (tempo-matched by the engine) in a break
-    int dflt = 1000;
-    if (state == QStringLiteral("break")) dflt = 0;
-    else if (state == QStringLiteral("build")) dflt = 500;
-    else if (state == QStringLiteral("drop")) dflt = 500;
+    // 0 = the function's own tempo, snapped to the beat grid by the
+    // engine (a halftime chase stays halftime, a fast one stays fast);
+    // a value forces one step length on everything
+    int dflt = 0;
+    Q_UNUSED(state)
     return m_stateDivision.value(state, dflt);
 }
 

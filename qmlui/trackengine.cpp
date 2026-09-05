@@ -42,6 +42,7 @@
 
 #define ENGINE_INTENSITY_ATTR 0
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
+#define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_HAZE_SCENE     QStringLiteral("TRACK Haze")
 #define ENGINE_FAN_SCENE      QStringLiteral("TRACK Fan")
 
@@ -71,6 +72,9 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_calmUntil(0)
     , m_logEnabled(true)
     , m_beatMs(500.0)
+    , m_room(2)
+    , m_hold(false)
+    , m_forceNext(false)
 {
     QSettings settings;
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
@@ -541,7 +545,58 @@ void TrackEngine::ensureTable()
 
         info.tier = tierOf(n);
         info.sweep = (t == Function::EFXType);
-        info.durationMs = func->duration();
+
+        // how long one step lasts, in ms or in beats - the chaser's own
+        // tempo, which the engine snaps to the beat instead of overriding
+        info.durationMs = 0;
+        info.beats = 0.0;
+        info.oneShot = false;
+        if (t == Function::ChaserType || t == Function::SequenceType)
+        {
+            Chaser *chaser = qobject_cast<Chaser *>(func);
+            if (chaser != nullptr)
+            {
+                uint sum = 0;
+                int stepCount = 0;
+                bool inBeats = chaser->tempoType() == Function::Beats;
+                if (chaser->durationMode() == Chaser::Common)
+                {
+                    if (chaser->duration() < 600000)
+                    {
+                        sum = chaser->duration();
+                        stepCount = 1;
+                    }
+                }
+                else
+                {
+                    foreach (ChaserStep step, chaser->steps())
+                    {
+                        Function *sf = m_doc->function(step.fid);
+                        uint d = chaser->durationMode() == Chaser::PerStep ? step.duration
+                                                                             : (sf ? sf->duration() : 0);
+                        if (chaser->durationMode() != Chaser::PerStep && sf != nullptr)
+                            inBeats = sf->tempoType() == Function::Beats;
+                        if (d > 0 && d < 600000)
+                        {
+                            sum += d;
+                            stepCount++;
+                        }
+                    }
+                }
+                if (stepCount > 0 && sum > 0)
+                {
+                    if (inBeats)
+                        info.beats = qreal(sum) / qreal(stepCount) / 1000.0;
+                    else
+                        info.durationMs = sum / uint(stepCount);
+                }
+                info.oneShot = chaser->runOrder() == Function::SingleShot;
+            }
+        }
+        else if (t == Function::EFXType && func->duration() < 600000)
+        {
+            info.durationMs = func->duration();
+        }
 
         info.role = old.contains(info.id) ? old.value(info.id).role : -2;   // -2 = not decided yet
         m_funcs.insert(info.id, info);
@@ -549,7 +604,11 @@ void TrackEngine::ensureTable()
 
     // guesses need the groups to exist first
     for (QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.begin(); it != m_funcs.end(); ++it)
+    {
         it.value().guess = classify(it.value());
+        it.value().starsGuess = guessStars(it.value());
+        it.value().stars = it.value().starsGuess;
+    }
 
     loadRoles();
 
@@ -581,11 +640,193 @@ void TrackEngine::ensureTable()
     if (m_palette.count() < 2)
         m_palette.append(singles);
 
+    ensureColourScenes();
     ensureDimmerScenes();
     ensureAtmosScenes();
 
     qDebug() << "[TrackEngine]" << m_groups.count() << "groups," << m_funcs.count()
              << "functions, palette" << m_palette;
+}
+
+int TrackEngine::guessStars(const TrackFuncInfo &info) const
+{
+    // Energy 1..3: how hot the music must be before this may run. Words in
+    // the name first; then the tempo - a step every two beats is calm, one
+    // a beat is the groove, a half beat or a one-shot per beat is a drop.
+    static const QStringList hot  = { "fast", "hard", "high", "drop", "dobbelt", "double", "peak", "hurtig" };
+    static const QStringList cool = { "slow", "low", "calm", "break", "halftime", "half", "langsom", "soft" };
+    QString n = info.name.toLower();
+
+    if (info.type == int(Function::SceneType) || info.type == int(Function::CollectionType))
+        return 1;                                   // a look, not a movement
+    if (hasWord(n, hot))
+        return 3;
+    if (hasWord(n, cool))
+        return 1;
+    if (info.oneShot)
+        return 3;
+    if (info.type == int(Function::EFXType))
+        return 2;
+
+    qreal b = info.beats;
+    if (b <= 0.0 && info.durationMs > 0)
+        b = qreal(info.durationMs) / 470.0;         // ~128 bpm, close enough for a guess
+    if (b <= 0.0)
+        return 2;
+    if (b >= 1.75)
+        return 1;
+    if (b >= 0.75)
+        return 2;
+    return 3;
+}
+
+qreal TrackEngine::stepBeats(const TrackFuncInfo &info, qreal bpm) const
+{
+    if (info.beats > 0.0)
+        return info.beats;
+    if (info.durationMs > 0 && bpm > 0.0)
+        return qreal(info.durationMs) / (60000.0 / bpm);
+    return 0.0;
+}
+
+int TrackEngine::divisionFor(const TrackFuncInfo &info, qreal bpm, int division) const
+{
+    // The SPEED slider, when set, still forces a step length. Otherwise the
+    // function's own tempo is snapped to the beat grid - a quarter, a half,
+    // one, two, four, eight, sixteen beats - so "halftime" stays halftime
+    // and a fast chase stays fast, but both land on the beat.
+    if (division > 0)
+        return division;
+    if (info.oneShot)
+        return 0;                                   // its own time, retriggered on the beat
+    qreal b = stepBeats(info, bpm);
+    if (b <= 0.0)
+        return 0;
+    static const qreal grid[] = { 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 };
+    qreal best = grid[0];
+    qreal bestDist = 99.0;
+    for (int i = 0; i < 7; i++)
+    {
+        qreal dist = qAbs(std::log2(b / grid[i]));
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            best = grid[i];
+        }
+    }
+    return int(best * 1000.0);
+}
+
+void TrackEngine::ensureColourScenes()
+{
+    // A palette colour a group has no scene of is made from its fixtures'
+    // colour channels: hidden, only the RGB(W) values, so it obeys the
+    // group's parts like any other colour. "The same colour on every lamp"
+    // must not fail on a missing scene.
+    struct Swatch { const char *name; int r, g, b, w; };
+    static const Swatch table[] = {
+        { "red", 255, 0, 0, 0 },       { "green", 0, 255, 0, 0 },     { "blue", 0, 0, 255, 0 },
+        { "cyan", 0, 255, 255, 0 },    { "magenta", 255, 0, 255, 0 }, { "yellow", 255, 255, 0, 0 },
+        { "white", 255, 255, 255, 255 }, { "orange", 255, 90, 0, 0 },  { "pink", 255, 60, 120, 0 },
+        { "purple", 140, 0, 255, 0 },  { "amber", 255, 160, 0, 0 },   { "uv", 90, 0, 255, 0 } };
+
+    QMap<QString, quint32> existing;
+    foreach (Function *func, m_doc->functions())
+        if (func != nullptr && func->name().startsWith(ENGINE_COLOUR_PREFIX))
+            existing.insert(func->name().mid(ENGINE_COLOUR_PREFIX.length()), func->id());
+
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+
+        foreach (const QString &colour, m_palette)
+        {
+            bool have = false;
+            for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+                if (it.value().role == ENGINE_ROLE_COLOR && it.value().colour == colour
+                    && it.value().groups.count() == 1 && it.value().groups.contains(key))
+                    have = true;
+            if (have)
+                continue;
+
+            const Swatch *sw = nullptr;
+            for (uint i = 0; i < sizeof(table) / sizeof(table[0]); i++)
+                if (colour == QLatin1String(table[i].name))
+                    sw = &table[i];
+            if (sw == nullptr)
+                continue;
+
+            QList<SceneValue> values;
+            int touched = 0;
+            foreach (quint32 fid, g.fixtures)
+            {
+                Fixture *fxi = m_doc->fixture(fid);
+                if (fxi == nullptr)
+                    continue;
+                quint32 rc = QLCChannel::invalid(), gc = QLCChannel::invalid(),
+                        bc = QLCChannel::invalid(), wc = QLCChannel::invalid();
+                for (quint32 i = 0; i < fxi->channels(); i++)
+                {
+                    const QLCChannel *qch = fxi->channel(i);
+                    if (qch == nullptr || qch->group() != QLCChannel::Intensity)
+                        continue;
+                    if (qch->colour() == QLCChannel::Red && rc == QLCChannel::invalid()) rc = i;
+                    if (qch->colour() == QLCChannel::Green && gc == QLCChannel::invalid()) gc = i;
+                    if (qch->colour() == QLCChannel::Blue && bc == QLCChannel::invalid()) bc = i;
+                    if (qch->colour() == QLCChannel::White && wc == QLCChannel::invalid()) wc = i;
+                }
+                if (rc == QLCChannel::invalid() || gc == QLCChannel::invalid() || bc == QLCChannel::invalid())
+                    continue;
+                values.append(SceneValue(fid, rc, uchar(sw->r)));
+                values.append(SceneValue(fid, gc, uchar(sw->g)));
+                values.append(SceneValue(fid, bc, uchar(sw->b)));
+                if (wc != QLCChannel::invalid())
+                    values.append(SceneValue(fid, wc, uchar(sw->w)));
+                touched++;
+            }
+            if (touched == 0)
+                continue;
+
+            QString name = QString("%1 %2").arg(key).arg(colour);
+            Scene *scene = nullptr;
+            if (existing.contains(name))
+                scene = qobject_cast<Scene *>(m_doc->function(existing.value(name)));
+            if (scene != nullptr)
+            {
+                foreach (SceneValue old, scene->values())
+                    scene->unsetValue(old.fxi, old.channel);
+                foreach (SceneValue sv, values)
+                    scene->setValue(sv);
+            }
+            else
+            {
+                scene = new Scene(m_doc);
+                scene->setName(ENGINE_COLOUR_PREFIX + name);
+                scene->setVisible(false);
+                foreach (SceneValue sv, values)
+                    scene->setValue(sv);
+                if (m_doc->addFunction(scene) == false)
+                {
+                    delete scene;
+                    continue;
+                }
+            }
+
+            TrackFuncInfo info;
+            info.id = scene->id();
+            info.name = scene->name();
+            info.type = int(Function::SceneType);
+            info.role = ENGINE_ROLE_COLOR;
+            info.guess = ENGINE_ROLE_COLOR;
+            info.groups.insert(key);
+            info.colour = colour;
+            info.generated = true;
+            info.stars = 1;
+            info.starsGuess = 1;
+            info.fixtureCount = touched;
+            m_funcs.insert(info.id, info);
+        }
+    }
 }
 
 quint32 TrackEngine::dimmerChannel(Fixture *fxi) const
@@ -789,6 +1030,17 @@ void TrackEngine::loadRoles()
         if (m_funcs.contains(fid))
             m_funcs[fid].role = parts.at(1).toInt();
     }
+
+    QString stars = QSettings().value(SETTINGS_ENGINE_STARS, QString()).toString();
+    foreach (QString entry, stars.split(';', Qt::SkipEmptyParts))
+    {
+        QStringList parts = entry.split(':');
+        if (parts.count() != 2)
+            continue;
+        quint32 fid = parts.at(0).toUInt();
+        if (m_funcs.contains(fid))
+            m_funcs[fid].stars = qBound(1, parts.at(1).toInt(), 3);
+    }
 }
 
 void TrackEngine::saveRoles()
@@ -799,6 +1051,12 @@ void TrackEngine::saveRoles()
             entries << QString("%1:%2").arg(it.key()).arg(it.value().role);
     QSettings().setValue(SETTINGS_ENGINE_ROLES, entries.join(';'));
     QSettings().setValue(SETTINGS_ENGINE_GROUPOFF, QStringList(m_groupOff.values()).join(';'));
+
+    QStringList stars;
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+        if (it.value().stars != it.value().starsGuess && it.value().generated == false)
+            stars << QString("%1:%2").arg(it.key()).arg(it.value().stars);
+    QSettings().setValue(SETTINGS_ENGINE_STARS, stars.join(';'));
 }
 
 void TrackEngine::rebuild()
@@ -826,7 +1084,7 @@ QVariantList TrackEngine::table()
 
     foreach (const TrackFuncInfo &info, rows)
     {
-        bool hidden = info.junk || info.step || info.groups.isEmpty();
+        bool hidden = info.junk || info.step || info.groups.isEmpty() || info.generated;
         if (hidden && m_showAll == false && info.role < 0)
             continue;
 
@@ -842,6 +1100,9 @@ QVariantList TrackEngine::table()
         row.insert("group", groups.join(" + "));
         row.insert("colour", info.colour);
         row.insert("hidden", hidden);
+        row.insert("stars", info.stars);
+        row.insert("starsGuess", info.starsGuess);
+        row.insert("generated", info.generated);
         list.append(row);
     }
     return list;
@@ -856,6 +1117,17 @@ void TrackEngine::assignRole(quint32 fid, int role)
     saveRoles();
     m_dirty = true;            // palette may have changed
     ensureTable();
+    emit tableChanged();
+}
+
+void TrackEngine::setStars(quint32 fid, int stars)
+{
+    ensureTable();
+    if (m_funcs.contains(fid) == false)
+        return;
+    m_funcs[fid].stars = qBound(1, stars, 3);
+    saveRoles();
+    m_moves.clear();
     emit tableChanged();
 }
 
@@ -1100,13 +1372,15 @@ quint32 TrackEngine::motionFunction(const QString &group, const QString &colour,
                                     const QSet<QString> &cast, int cursor) const
 {
     // kept for the header's sake; the engine calls the tiered version below
-    return motionFor(group, colour, cast, cursor, -1, 0.0, 1, false);
+    return motionFor(group, colour, cast, cursor, -1, 0.0, 1, false, 3);
 }
 
 quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
                                const QSet<QString> &cast, int cursor, int tier,
-                               qreal bpm, int division, bool staticOnly) const
+                               qreal bpm, int division, bool staticOnly, int maxStars) const
 {
+    Q_UNUSED(bpm)
+    Q_UNUSED(division)
     QList<TrackFuncInfo *> all = candidates(ENGINE_ROLE_MOTION, group);
     QList<TrackFuncInfo *> ok;
     foreach (TrackFuncInfo *info, all)
@@ -1114,6 +1388,9 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // a static pattern scene is a look and may show in any section; a
         // chase or EFX is movement and belongs to drops and builds
         if (staticOnly && info->type != int(Function::SceneType))
+            continue;
+        // energy stars: a three-star chase waits for a full-energy drop
+        if (qMax(1, info->stars) > maxStars)
             continue;
         // a motion that also lights groups outside the cast is not allowed
         bool inside = true;
@@ -1145,20 +1422,17 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     if (tagged.isEmpty() == false)
         ok = tagged;
 
-    // with no beat division forcing the speed, prefer the chases whose own
-    // step length sits on the beat at this tempo
-    if (division == 0 && bpm > 0.0)
-    {
-        qreal best = 99.0;
-        foreach (TrackFuncInfo *info, ok)
-            best = qMin(best, tempoScore(*info, bpm));
-        QList<TrackFuncInfo *> fit;
-        foreach (TrackFuncInfo *info, ok)
-            if (tempoScore(*info, bpm) <= best + 0.35)
-                fit.append(info);
-        if (fit.isEmpty() == false)
-            ok = fit;
-    }
+    // of what is allowed, the hottest: a drop at full energy takes the
+    // three-star chases, not the one-star ones it could also have had
+    int top = 0;
+    foreach (TrackFuncInfo *info, ok)
+        top = qMax(top, qMax(1, info->stars));
+    QList<TrackFuncInfo *> hot;
+    foreach (TrackFuncInfo *info, ok)
+        if (qMax(1, info->stars) == top)
+            hot.append(info);
+    if (hot.isEmpty() == false)
+        ok = hot;
 
     return ok.at(qAbs(cursor) % ok.count())->id;
 }
@@ -1292,6 +1566,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     tickFades();
     m_lastBeat = beat;
 
+    // the room: the same track is quieter at 22:00 than at 01:00
+    static const qreal roomFactor[4] = { 0.55, 0.80, 1.0, 1.25 };
+    energy = qBound(0.0, energy * roomFactor[qBound(0, m_room, 3)], 1.0);
+
+    // NEXT: treat this beat as a fresh section with a fresh colour
+    bool forceNext = m_forceNext;
+    m_forceNext = false;
+    if (forceNext)
+    {
+        sectionChanged = true;
+        m_moves.clear();
+    }
+
     // a track is playing: the start scene steps aside
     foreach (const QString &slot, m_active.keys())
         if (slot.startsWith("idle:"))
@@ -1324,6 +1611,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         changeColour = (sectionChanged && (isBreak || isDrop)) || holdBar != m_colourBar;
     if (isCalm)
         changeColour = m_colour.isEmpty();
+    if (forceNext)
+        changeColour = true;
+    if (m_hold && m_colour.isEmpty() == false)
+        changeColour = false;
     if (changeColour || m_colourBar >= 0)
         m_colourBar = holdBar;
 
@@ -1353,7 +1644,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
      *      the evening's energy rises. Decided once per section, and never
      *      more than one step from the last section. ---- */
     QRandomGenerator *rng = QRandomGenerator::global();
-    if (sectionChanged)
+    if (sectionChanged && m_hold == false)
     {
         // a random stride, so the rotation of groups, looks and positions
         // does not fall into the same order night after night
@@ -1370,7 +1661,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (brk)  return 0;
         return energy < 0.50 ? 0 : 1;
     };
-    if (sectionChanged || m_lastState.isEmpty())
+    if ((sectionChanged || m_lastState.isEmpty()) && m_hold == false)
     {
         int want = effectsFor(isDrop, isBreak);
         m_effects = qBound(m_effects - 1, want, m_effects + 1);
@@ -1427,8 +1718,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             continue;
 
         bool inCast = castSet.contains(key);
-        bool mayMove = (inCast == false)
-                    || (sectionChanged && (g.lasers ? (isBreak && g.hasDimmer) : true));
+        bool mayMove = m_hold == false
+                    && ((inCast == false)
+                        || (sectionChanged && (g.lasers ? (isBreak && g.hasDimmer) : true)));
         quint32 want = m_position.value(key, Function::invalidId());
         if (want == Function::invalidId() || (mayMove && sectionChanged))
         {
@@ -1443,6 +1735,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         if (want != Function::invalidId())
             run("pos:" + key, want, 1.0, 0, true);
+    }
+
+    /* ---- the blink: one dark beat right before a drop, then everything
+     *      lands on the one. The base stays - the room never goes black. ---- */
+    if (preDrop && beatsToNext == 1 && energy > 0.6 && isCalm == false && m_hold == false)
+    {
+        foreach (const QString &key, castSet)
+            if (key != base)
+                darkGroups.insert(key);
     }
 
     /* ---- levels: the build climbs like a snare roll, not a straight line ---- */
@@ -1467,11 +1768,25 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     /* ---- moves: every group in the cast draws how it moves this section.
      *      Long sections redraw every 16 bars, half the time. ---- */
-    bool redraw = sectionChanged || m_moves.isEmpty()
-               || (bar > 0 && bar % 16 == 0 && beatInBar == 0 && rng->bounded(2) == 0);
+    bool redraw = m_hold == false
+               && (sectionChanged || m_moves.isEmpty()
+                   || (bar > 0 && bar % 16 == 0 && beatInBar == 0 && rng->bounded(2) == 0));
     foreach (const QString &key, castSorted)
-        if (redraw || m_moves.contains(key) == false)
-            m_moves.insert(key, drawMove(key, tier, isBuild, energy, key == base));
+    {
+        if (redraw == false && m_moves.contains(key))
+            continue;
+        TrackMove old = m_moves.value(key);
+        TrackMove fresh = drawMove(key, tier, isBuild, energy, key == base);
+        // not the same pattern twice in a row, if the dice allow
+        if (fresh.pattern != ENGINE_PAT_STATIC && fresh.pattern == old.pattern)
+            fresh = drawMove(key, tier, isBuild, energy, key == base);
+        m_moves.insert(key, fresh);
+    }
+
+    // how hot a chase may be right now: the stars a motion needs
+    int maxStars = isBreak ? 1
+                 : isDrop  ? (energy < 0.30 ? 1 : (energy < 0.65 ? 2 : 3))
+                           : (energy < 0.45 ? 1 : (energy < 0.70 ? 2 : 3));
 
     // this beat's clock: the pulse timer measures its breath against it
     if (bpm > 0.0)
@@ -1497,6 +1812,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         TrackMove mv = m_moves.value(key);
         if (isCalm)
             mv = TrackMove();
+        if (isBuild)
+        {
+            // the roll: steps halve as the build climbs, the pulse deepens
+            mv.stepBeats = qMax(1, mv.stepBeats >> qBound(0, int(prog * 3.0), 2));
+            mv.pulse *= 0.5 + 0.5 * prog;
+        }
 
         QString colour = m_colour;
         if (accentColour.isEmpty() == false && key == accentGroup)
@@ -1518,16 +1839,30 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // motion: real movement (chases, EFX) in drops, the climbing half of
         // a build, and on the base from the groove onward. Static pattern
         // scenes are looks and may show in any section. Never while calm.
-        bool moving = isDrop || (isBuild && prog > 0.5) || (key == base && isBreak == false);
+        // the move drew whether this group runs one of the user's own chases
+        // or EFX (never in a break, only the climbing half of a build); the
+        // base may reach one star higher, it is what carries the room
+        bool moving = mv.ownChaser && isBreak == false && (isBuild == false || prog > 0.5);
+        int stars = qMin(3, maxStars + (key == base ? 1 : 0));
         quint32 mf = Function::invalidId();
         if (isCalm == false)
         {
-            mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division, moving == false);
+            mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division, moving == false, stars);
             if (mf == Function::invalidId() && moving)
-                mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division, true);
+                mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division, true, stars);
         }
         if (mf != Function::invalidId())
-            run("mot:" + key, mf, m_funcs.value(mf).dimmer ? gl : 1.0, division, hard);
+        {
+            const TrackFuncInfo &mi = m_funcs.value(mf);
+            Function *mfunc = m_doc->function(mf);
+            // a one-shot that has finished waits for its beat: every beat in
+            // a drop, every other beat elsewhere
+            bool wait = mi.oneShot && mfunc != nullptr && mfunc->isRunning() == false
+                     && isDrop == false && (beatInBar % 2) != 0
+                     && m_active.value("mot:" + key, Function::invalidId()) == mf;
+            if (wait == false)
+                run("mot:" + key, mf, mi.dimmer ? gl : 1.0, divisionFor(mi, bpm, division), hard);
+        }
         else
             stopSlot("mot:" + key, false);
 
@@ -1564,12 +1899,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_pulseTimer.stop();
 
     /* ---- hits ---- */
+    // the minimal guard: more than eight hits in 32 beats is a strobe show,
+    // not an accent - then only the drop's own landing may flash
+    if (m_hitBeats.isEmpty() == false && m_hitBeats.last() > beat)
+        m_hitBeats.clear();
+    while (m_hitBeats.isEmpty() == false && m_hitBeats.first() < beat - 32)
+        m_hitBeats.removeFirst();
+    bool crowded = m_hitBeats.count() >= 8;
     bool hit = isCalm == false
-            && ((isBuild && prog > 0.82) || (isDrop && bar == 0 && beatInBar < 2) || moveHit);
+            && ((isBuild && prog > 0.82 && crowded == false)
+                || (isDrop && bar == 0 && beatInBar < 2)
+                || (moveHit && crowded == false));
     if (m_flash == false)
     {
         if (hit)
         {
+            m_hitBeats.append(beat);
             quint32 ff = flashFunction(castSet, m_colour);
             if (ff != Function::invalidId())
                 run("flash", ff, 1.0, 0, true);
@@ -1590,14 +1935,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         QString mn = isCalm ? QString() : moveName(m_moves.value(key));
         moveNames << (mn.isEmpty() ? key : QString("%1 %2").arg(key).arg(mn));
     }
-    m_report = QString("%1  |  %2%3  |  %4%5%6")
+    m_report = QString("%1  |  %2%3  |  %4%5%6%7")
         .arg(moveNames.isEmpty() ? (silent ? tr("(silence)") : tr("(no groups)"))
                                  : moveNames.join(" + "))
         .arg(m_colour.isEmpty() ? tr("(no colour)") : m_colour)
         .arg(accentColour.isEmpty() ? QString() : QString(" + %1").arg(accentColour))
         .arg(state)
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
-        .arg(isCalm ? tr("  CALM") : QString());
+        .arg(isCalm ? tr("  CALM") : QString())
+        .arg(m_hold ? tr("  HOLD") : QString());
     emit liveChanged();
 }
 
@@ -1636,6 +1982,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         mv.pattern = rng->bounded(3) == 0 ? ENGINE_PAT_STATIC : ENGINE_PAT_FILL;
         mv.pulse = e < 0.35 ? 0.0 : 0.15 + 0.25 * e;
         mv.pulseOn = pick({ 0, 0, 2 });
+        mv.ownChaser = rng->bounded(2) == 0;
         if (isBase)
         {
             mv.pattern = ENGINE_PAT_STATIC;
@@ -1643,6 +1990,15 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         }
         return mv;
     }
+
+    // the user's own chases and EFX: the base (heads) sweeps most of the
+    // time, effects trade between their chases and the generated patterns
+    if (isBase)
+        mv.ownChaser = rng->bounded(10) < 7;
+    else if (tier == 2)
+        mv.ownChaser = rng->bounded(10) < 6;
+    else
+        mv.ownChaser = e >= 0.35 && rng->bounded(10) < 3;
 
     if (tier == 1)
     {
@@ -1893,6 +2249,34 @@ void TrackEngine::calm(int bars)
     emit liveChanged();
 }
 
+void TrackEngine::next()
+{
+    m_forceNext = true;
+    emit liveChanged();
+}
+
+int TrackEngine::room() const { return m_room; }
+
+void TrackEngine::setRoom(int room)
+{
+    room = qBound(0, room, 3);
+    if (room == m_room)
+        return;
+    m_room = room;
+    m_moves.clear();             // the new energy draws new moves
+    emit liveChanged();
+}
+
+bool TrackEngine::hold() const { return m_hold; }
+
+void TrackEngine::setHold(bool on)
+{
+    if (on == m_hold)
+        return;
+    m_hold = on;
+    emit liveChanged();
+}
+
 int TrackEngine::calmBarsLeft() const
 {
     return qMax(0, (m_calmUntil - m_lastBeat + 3) / 4);
@@ -2002,6 +2386,7 @@ void TrackEngine::trackLoaded()
     m_colourBar = -1;            // hold the colour until the first break or drop
     m_castCursor++;
     m_moves.clear();             // the new track draws its own moves
+    m_hitBeats.clear();
 }
 
 /*********************************************************************

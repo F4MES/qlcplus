@@ -306,6 +306,32 @@ Rectangle
                 }
             }
 
+            Rectangle
+            {
+                Layout.preferredWidth: 100
+                Layout.minimumWidth: 100
+                Layout.maximumWidth: 100
+                Layout.fillHeight: true
+                color: "#1B1B1B"
+                radius: 3
+                border.width: 1
+                border.color: "#E3B44F"
+
+                Text
+                {
+                    anchors.fill: parent
+                    anchors.margins: 3
+                    verticalAlignment: Text.AlignVCenter
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                    text: qsTr("energy: 1 any, 2 groove, 3 drop only")
+                    color: setupRoot.cDim
+                    font.pixelSize: 9
+                }
+            }
+
             Item { Layout.preferredWidth: 60; Layout.minimumWidth: 60 }
         }
 
@@ -353,6 +379,7 @@ Rectangle
                 radius: 3
 
                 property int rowRole: modelData.role
+                property int rowStars: modelData.stars
                 property var rowId: modelData.id
 
                 RowLayout
@@ -411,6 +438,41 @@ Rectangle
                             activeColor: setupRoot.roleColor(index)
                             onTapped: trackEngine.assignRole(funcRow.rowId, index)
                         }
+                    }
+
+                    // energy stars: when a motion may run. Guessed from its
+                    // tempo and name; tap to overrule.
+                    Row
+                    {
+                        Layout.preferredWidth: 100
+                        Layout.minimumWidth: 100
+                        Layout.maximumWidth: 100
+                        Layout.fillHeight: true
+                        spacing: 2
+                        visible: funcRow.rowRole === 1
+
+                        Repeater
+                        {
+                            model: 3
+
+                            TrackTile
+                            {
+                                width: 32
+                                height: parent.height
+                                label: "★"
+                                active: index < funcRow.rowStars
+                                activeColor: "#E3B44F"
+                                onTapped: trackEngine.setStars(funcRow.rowId, index + 1)
+                            }
+                        }
+                    }
+
+                    Item
+                    {
+                        Layout.preferredWidth: 100
+                        Layout.minimumWidth: 100
+                        Layout.maximumWidth: 100
+                        visible: funcRow.rowRole !== 1
                     }
 
                     TrackTile
