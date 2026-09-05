@@ -200,7 +200,8 @@ Rectangle
 
             Text
             {
-                Layout.preferredWidth: 70
+                Layout.preferredWidth: 96
+                Layout.minimumWidth: 96
                 text: qsTr("GROUPS") + "\n" + qsTr("tap: on / base / off")
                 lineHeight: 0.9
                 color: setupRoot.cDim
@@ -270,9 +271,9 @@ Rectangle
             Layout.fillHeight: false
             Layout.preferredHeight: 28
             Layout.maximumHeight: 28
-            spacing: 6
+            spacing: 4
 
-            Item { Layout.preferredWidth: 330 }
+            Item { Layout.fillWidth: true }
 
             Repeater
             {
@@ -280,7 +281,9 @@ Rectangle
 
                 Rectangle
                 {
-                    Layout.fillWidth: true
+                    Layout.preferredWidth: 110
+                    Layout.minimumWidth: 110
+                    Layout.maximumWidth: 110
                     Layout.fillHeight: true
                     color: "#1B1B1B"
                     radius: 3
@@ -290,18 +293,20 @@ Rectangle
                     Text
                     {
                         anchors.fill: parent
-                        anchors.margins: 4
+                        anchors.margins: 3
                         verticalAlignment: Text.AlignVCenter
                         horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 2
                         elide: Text.ElideRight
                         text: trackEngine ? trackEngine.roleHint(index) : ""
                         color: setupRoot.cDim
-                        font.pixelSize: 10
+                        font.pixelSize: 9
                     }
                 }
             }
 
-            Item { Layout.preferredWidth: 56 }
+            Item { Layout.preferredWidth: 60; Layout.minimumWidth: 60 }
         }
 
         // ------------------------------------------------- function rows
@@ -367,7 +372,8 @@ Rectangle
 
                     ColumnLayout
                     {
-                        Layout.preferredWidth: 310
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
                         spacing: 0
 
                         Text
@@ -393,9 +399,12 @@ Rectangle
                     {
                         model: trackEngine ? trackEngine.roleCount : 0
 
+                        // fixed width: a finger-sized target whatever the name column does
                         TrackTile
                         {
-                            Layout.fillWidth: true
+                            Layout.preferredWidth: 110
+                            Layout.minimumWidth: 110
+                            Layout.maximumWidth: 110
                             Layout.fillHeight: true
                             label: setupRoot.roleShort(index)
                             active: funcRow.rowRole === index
@@ -407,6 +416,8 @@ Rectangle
                     TrackTile
                     {
                         Layout.preferredWidth: 52
+                        Layout.minimumWidth: 52
+                        Layout.maximumWidth: 52
                         Layout.fillHeight: true
                         label: "–"
                         active: funcRow.rowRole < 0

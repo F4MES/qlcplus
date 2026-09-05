@@ -482,7 +482,9 @@ void TrackEngine::ensureTable()
         if (info.colour.isEmpty())
             info.colour = colourOf(info.name);          // case-sensitive suffix rule
 
-        foreach (quint32 fid, fixturesOf(func, 0))
+        QSet<quint32> touched = fixturesOf(func, 0);
+        info.fixtureCount = touched.count();
+        foreach (quint32 fid, touched)
         {
             QString key = groupOfFixture(fid);
             if (key.isEmpty() == false)
@@ -1036,10 +1038,15 @@ quint32 TrackEngine::colourFunction(const QString &group, const QString &colour)
 {
     QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_COLOR, group);
 
-    // exactly this group, exactly this colour
+    // exactly this group, exactly this colour - and of those, the one that
+    // lights the most fixtures ("LaserCyan", not "1onCYAN")
+    TrackFuncInfo *best = nullptr;
     foreach (TrackFuncInfo *info, list)
-        if (info->groups.count() == 1 && info->colour == colour)
-            return info->id;
+        if (info->groups.count() == 1 && info->colour == colour
+            && (best == nullptr || info->fixtureCount > best->fixtureCount))
+            best = info;
+    if (best != nullptr)
+        return best->id;
     // anything of this colour that includes the group (a collection)
     foreach (TrackFuncInfo *info, list)
         if (info->colour == colour)
@@ -1055,17 +1062,21 @@ quint32 TrackEngine::motionFunction(const QString &group, const QString &colour,
                                     const QSet<QString> &cast, int cursor) const
 {
     // kept for the header's sake; the engine calls the tiered version below
-    return motionFor(group, colour, cast, cursor, -1, 0.0, 1);
+    return motionFor(group, colour, cast, cursor, -1, 0.0, 1, false);
 }
 
 quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
                                const QSet<QString> &cast, int cursor, int tier,
-                               qreal bpm, int division) const
+                               qreal bpm, int division, bool staticOnly) const
 {
     QList<TrackFuncInfo *> all = candidates(ENGINE_ROLE_MOTION, group);
     QList<TrackFuncInfo *> ok;
     foreach (TrackFuncInfo *info, all)
     {
+        // a static pattern scene is a look and may show in any section; a
+        // chase or EFX is movement and belongs to drops and builds
+        if (staticOnly && info->type != int(Function::SceneType))
+            continue;
         // a motion that also lights groups outside the cast is not allowed
         bool inside = true;
         foreach (const QString &g, info->groups)
@@ -1078,6 +1089,15 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     }
     if (ok.isEmpty())
         return Function::invalidId();
+
+    // the pattern made in this colour beats the colourless one, which would
+    // otherwise overwrite the palette with its own colour channel
+    QList<TrackFuncInfo *> exact;
+    foreach (TrackFuncInfo *info, ok)
+        if (info->colour == colour)
+            exact.append(info);
+    if (exact.isEmpty() == false)
+        ok = exact;
 
     // this tier's motions first
     QList<TrackFuncInfo *> tagged;
@@ -1428,22 +1448,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         else
             stopSlot("col:" + key, false);
 
-        // motion: the base moves from the groove onward; effects only in
-        // drops and the climbing half of a build. Never while isCalm.
-        bool wantMotion = isCalm == false
-                       && (isDrop || (isBuild && prog > 0.5) || (key == base && isBreak == false));
-        if (wantMotion)
+        // motion: real movement (chases, EFX) in drops, the climbing half of
+        // a build, and on the base from the groove onward. Static pattern
+        // scenes are looks and may show in any section. Never while calm.
+        bool moving = isDrop || (isBuild && prog > 0.5) || (key == base && isBreak == false);
+        quint32 mf = Function::invalidId();
+        if (isCalm == false)
         {
-            quint32 mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division);
-            if (mf != Function::invalidId())
-                run("mot:" + key, mf, m_funcs.value(mf).dimmer ? gl : 1.0, division, hard);
-            else
-                stopSlot("mot:" + key, false);
+            mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division, moving == false);
+            if (mf == Function::invalidId() && moving)
+                mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division, true);
         }
+        if (mf != Function::invalidId())
+            run("mot:" + key, mf, m_funcs.value(mf).dimmer ? gl : 1.0, division, hard);
         else
-        {
             stopSlot("mot:" + key, false);
-        }
 
         if (g.hasDimmer)
             setDimmer(key, darkGroups.contains(key) ? 0.0 : level);
@@ -1496,9 +1515,14 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        if (g.hasDimmer == false || castSet.contains(key) || m_groupOff.contains(key))
+        if (g.hasDimmer == false || castSet.contains(key) || m_groupOff.contains(key)
+            || m_fadeAttr.contains(g.dimmerScene) || m_flash)
+        {
+            m_conflictBeats.remove(key);
             continue;
+        }
 
+        bool lit = false;
         foreach (quint32 fid, g.fixtures)
         {
             Fixture *fxi = m_doc->fixture(fid);
@@ -1513,10 +1537,17 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
             int addr = int(fxi->address() + ch);
             if (values != nullptr && addr < int(values->size()) && uchar(values->at(addr)) > 10)
             {
-                found << tr("%1 is lit from elsewhere (a slider?)").arg(key);
+                lit = true;
                 break;
             }
         }
+
+        // a fading dimmer or a flash hit reads as lit for a moment; only a
+        // level that stays for two bars is somebody else's hand
+        int beats = lit ? m_conflictBeats.value(key, 0) + 1 : 0;
+        m_conflictBeats.insert(key, beats);
+        if (beats >= 8)
+            found << tr("%1 is lit from elsewhere (a slider?)").arg(key);
     }
 
     foreach (const QString &key, m_groupOrder)

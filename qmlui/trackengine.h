@@ -81,6 +81,7 @@ struct TrackFuncInfo
     int tier = -1;            // tagged for break (0) / groove (1) / drop (2), or any
     bool sweep = false;       // continuous movement (EFX / chaser of positions)
     uint durationMs = 0;      // a chaser's step duration, for tempo matching
+    int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
 };
 
 /** One fixture group as the engine sees it. */
@@ -221,7 +222,7 @@ protected:
                            const QSet<QString> &cast, int cursor) const;
     quint32 motionFor(const QString &group, const QString &colour,
                       const QSet<QString> &cast, int cursor, int tier,
-                      qreal bpm, int division) const;
+                      qreal bpm, int division, bool staticOnly) const;
     quint32 positionFunction(const QString &group, int cursor, int tier) const;
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
     int tierOf(const QString &text) const;
@@ -273,6 +274,7 @@ private:
     QString m_lastState;
     QString m_report;
     QStringList m_warnings;
+    QMap<QString, int> m_conflictBeats;   // how long a group has read lit while held dark
     int m_effects;            // effect groups this section (locked, hysteresis)
     int m_lastBeat;
     int m_calmUntil;          // beat until which the panic look holds
