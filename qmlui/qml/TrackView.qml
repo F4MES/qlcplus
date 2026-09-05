@@ -827,7 +827,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls
+        // =============================================== live controls  (LIVE_V4_NO_CAST_ROW)
         // What a DJ touches while playing: the colour, the master, and a
         // flash for the strobes. Everything else runs itself.
         RowLayout
@@ -1095,44 +1095,6 @@ Rectangle
             }
         }
 
-        // =============================================== cast
-        RowLayout
-        {
-            Layout.fillWidth: true
-            Layout.fillHeight: false
-            Layout.preferredHeight: 30
-            Layout.maximumHeight: 30
-            spacing: 6
-            visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
-
-            Repeater
-            {
-                model: trackEngine ? trackEngine.groups : []
-
-                Rectangle
-                {
-                    id: castTile
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    radius: 3
-                    property bool lit: trackEngine ? trackEngine.cast.indexOf(modelData.key) >= 0 : false
-                    color: lit ? "#4FA3E3" : "#242424"
-                    border.width: 1
-                    border.color: lit ? "#7FC3FF" : "#3A3A3A"
-
-                    Text
-                    {
-                        anchors.centerIn: parent
-                        text: modelData.key.toUpperCase()
-                              + (modelData.enabled ? "" : "  (off)")
-                        color: castTile.lit ? "#101010" : "#6A6A6A"
-                        font.bold: castTile.lit
-                        font.pixelSize: 12
-                    }
-                }
-            }
-        }
-
         // =============================================== SETUP / filler
         Rectangle
         {
@@ -1141,14 +1103,75 @@ Rectangle
             color: trackViewRoot.cPanel
             radius: 4
 
-            Text
+            // The cast, large: which groups are lit right now, and what the
+            // engine is doing with them.
+            Column
             {
-                anchors.centerIn: parent
+                id: castPanel
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
                 visible: !trackViewRoot.setupOpen
-                text: qsTr("Lights are running themselves. "
-                           + "Press SETUP to change what each look does.")
-                color: "#5A5A5A"
-                font.pixelSize: 15
+
+                Row
+                {
+                    width: parent.width
+                    height: parent.height - statusLine.height - parent.spacing
+                    spacing: 8
+
+                    Repeater
+                    {
+                        model: trackEngine ? trackEngine.groups : []
+
+                        Rectangle
+                        {
+                            id: castTile
+                            property int n: trackEngine ? trackEngine.groups.length : 1
+                            property bool lit: trackEngine ? trackEngine.cast.indexOf(modelData.key) >= 0 : false
+                            property bool off: !modelData.enabled
+                            width: (parent.width - (n - 1) * parent.spacing) / n
+                            height: parent.height
+                            radius: 6
+                            color: lit ? (modelData.base ? "#2E6FA8" : "#4FA3E3")
+                                       : (off ? "#1A1A1A" : "#242424")
+                            border.width: modelData.base ? 2 : 1
+                            border.color: lit ? "#9FD3FF" : (modelData.base ? "#4FA3E3" : "#3A3A3A")
+
+                            Column
+                            {
+                                anchors.centerIn: parent
+                                spacing: 4
+
+                                Text
+                                {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: modelData.key.toUpperCase()
+                                    color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#7A7A7A")
+                                    font.bold: true
+                                    font.pixelSize: 18
+                                }
+                                Text
+                                {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: modelData.base ? qsTr("BASE") : (castTile.off ? qsTr("OFF") : (castTile.lit ? qsTr("ON") : ""))
+                                    color: castTile.lit ? "#E0F0FF" : "#5A5A5A"
+                                    font.pixelSize: 12
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text
+                {
+                    id: statusLine
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                    text: trackEngine ? trackEngine.report : ""
+                    color: "#9A9A9A"
+                    font.pixelSize: 15
+                }
             }
 
             // The role picker owns setup now: one tap per function decides
