@@ -1477,7 +1477,7 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
                 continue;
             const QByteArray *values = universes.at(uni)->postGMValues();
             int addr = int(fxi->address() + ch);
-            if (values != nullptr && addr < values->count() && uchar(values->at(addr)) > 10)
+            if (values != nullptr && addr < int(values->size()) && uchar(values->at(addr)) > 10)
             {
                 found << tr("%1 is lit from elsewhere (a slider?)").arg(key);
                 break;
