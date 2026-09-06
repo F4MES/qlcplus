@@ -218,7 +218,7 @@ bool TrackEngine::hasWord(const QString &text, const QStringList &words) const
         if (w.length() <= 3)
         {
             // short words must stand alone, so "up" does not match "group"
-            QRegularExpression re(QStringLiteral("(^|[^a-z\\x{00e6}\\x{00f8}\\x{00e5}])%1([^a-z\\x{00e6}\\x{00f8}\\x{00e5}]|$)").arg(w));
+            QRegularExpression re(QStringLiteral("(^|[^a-z\x{00e6}\x{00f8}\x{00e5}])%1([^a-z\x{00e6}\x{00f8}\x{00e5}]|$)").arg(w));
             if (re.match(text).hasMatch())
                 return true;
         }
@@ -2576,8 +2576,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0), 1.0);
         qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_groupTrim.value(key, 1.0) * m_master;
         quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
+        // colour scenes swap hard: a soft fade left the old colour adding up
+        // with the new one on RGB fixtures for a bar - a blend nobody asked for
         if (cf != Function::invalidId())
-            run("col:" + key, cf, m_funcs.value(cf).dimmer ? gl : 1.0, 0, hard);
+            run("col:" + key, cf, m_funcs.value(cf).dimmer ? gl : 1.0, 0, true);
         else
             stopSlot("col:" + key, false);
 
