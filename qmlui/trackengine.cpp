@@ -106,6 +106,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_hold(false)
     , m_startScene(false)
     , m_startLevel(1.0)       // MASTER is the brightness, nothing else
+    , m_startColour(false)
     , m_forceNext(false)
 {
     QSettings settings;
@@ -2170,6 +2171,7 @@ void TrackEngine::setColourOverride(QString colour)
     if (colour == m_override)
         return;
     m_override = colour;
+    m_startColour = false;               // a tile the DJ tapped is theirs
     if (colour.isEmpty() == false)
         m_colour = colour;
     else if (engineBannedColour(m_colour))
@@ -4107,11 +4109,29 @@ void TrackEngine::setStartScene(bool on)
     m_startScene = on;
     if (on)
     {
+        // it has to stand in some colour: red unless the DJ has already
+        // picked one - and the tile lights up, so it is clear which it is
+        if (m_override.isEmpty())
+        {
+            QString want = m_palette.contains(QStringLiteral("red"))
+                           ? QStringLiteral("red")
+                           : (m_palette.isEmpty() ? QString() : m_palette.first());
+            if (want.isEmpty() == false)
+            {
+                m_override = want;
+                m_startColour = true;
+            }
+        }
         stopAll();
         startLook();
     }
     else
     {
+        if (m_startColour)
+        {
+            m_override.clear();          // ours, not the DJ's: hand it back to AUTO
+            m_startColour = false;
+        }
         foreach (const QString &slot, m_active.keys())
             stopSlot(slot, false);
         m_cast.clear();

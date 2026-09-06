@@ -529,7 +529,8 @@ private:
     QSet<QString> m_flashHeld;             // strobe groups the generated flash lit
     bool m_hold;
     bool m_startScene;        // the opening picture is held by hand
-    qreal m_startLevel;       // how bright it stands
+    qreal m_startLevel;       // a trim on the opening picture
+    bool m_startColour;       // the opening picture chose the colour, not the DJ
     bool m_forceNext;
     QList<int> m_hitBeats;                 // beats that carried a hit, last 32 beats
 
