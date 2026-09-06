@@ -105,7 +105,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_fullAuto(false)
     , m_hold(false)
     , m_startScene(false)
-    , m_startLevel(0.5)
+    , m_startLevel(1.0)       // MASTER is the brightness, nothing else
     , m_forceNext(false)
 {
     QSettings settings;
@@ -4196,9 +4196,9 @@ void TrackEngine::startLook()
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();
-    m_report = tr("(start scene)  |  %1  |  %2 %%")
+    m_report = tr("(start scene)  |  %1  |  master %2 %%")
                .arg(colour.isEmpty() ? tr("(no colour)") : colour)
-               .arg(int(m_startLevel * 100));
+               .arg(int(m_master * 100));
     emit liveChanged();
 }
 

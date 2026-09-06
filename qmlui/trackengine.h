@@ -315,8 +315,8 @@ public:
      *  lit in one colour, no motion. Follows the colour tiles, MASTER and the
      *  cast faders live. */
     void startLook();
-    /** How bright the opening picture stands, 0..1 (the cast faders and
-     *  MASTER ride on top). */
+    /** A trim on the opening picture, 1.0 by default: MASTER and the cast
+     *  faders are what the operator turns. */
     Q_PROPERTY(qreal startLevel READ startLevel WRITE setStartLevel NOTIFY liveChanged)
     qreal startLevel() const;
     void setStartLevel(qreal level);
