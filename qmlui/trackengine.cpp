@@ -27,6 +27,7 @@
 #include <cmath>
 
 #include "trackengine.h"
+#include "trackmanager.h"          // the trackmanager/* settings keys
 #include "inputoutputmap.h"
 #include "functionparent.h"
 #include "universe.h"
@@ -144,10 +145,40 @@ void TrackEngine::slotFadeTimer()
 
 void TrackEngine::slotDocChanged()
 {
+    // a new project hands out its function ids from scratch: everything we
+    // hold points at something else now
     m_dirty = true;
     m_position.clear();
     m_moves.clear();
     m_sweep.clear();
+    m_sweepShown.clear();
+    m_sweepFunc.clear();
+    m_splitScenes.clear();
+    m_zoomScenes.clear();
+    m_zoom.clear();
+    m_active.clear();
+    m_activeAttr.clear();
+    m_activeLevel.clear();
+    m_activeOut.clear();
+    m_fadeAttr.clear();
+    m_fadeLevel.clear();
+    m_liveMove.clear();
+    m_patterned.clear();
+    m_flashHeld.clear();
+    m_cast.clear();
+    m_pulseDepth.clear();
+    m_pulseStart.clear();
+    m_breathe.clear();
+    m_texture.clear();
+    m_moveHistory.clear();
+    m_sweepHistory.clear();
+    m_conflictBeats.clear();
+    m_lastPan.clear();
+    m_headMoveBeats.clear();
+    m_hitBeats.clear();
+    m_accentPick.clear();
+    m_pulseTimer.stop();
+    m_fadeTimer.stop();
     emit tableChanged();
 }
 
@@ -377,8 +408,10 @@ QSet<quint32> TrackEngine::fixturesOf(Function *func, int depth) const
         if (efx != nullptr)
         {
             foreach (EFXFixture *ef, efx->fixtures())
+            {
                 if (ef != nullptr)
                     out.insert(ef->head().fxi);
+            }
         }
         break;
     }
@@ -429,8 +462,10 @@ int TrackEngine::classify(const TrackFuncInfo &info) const
 
     bool laserOnly = true;
     foreach (const QString &g, info.groups)
+    {
         if (m_groups.contains(g) == false || m_groups.value(g).lasers == false)
             laserOnly = false;
+    }
 
     if (hasWord(n, idleWords))
         return ENGINE_ROLE_IDLE;
@@ -972,8 +1007,10 @@ quint32 TrackEngine::splitColourFunction(const QString &group, const QString &a,
     QString name = ENGINE_COLOUR_PREFIX + QString("%1 %2+%3").arg(group).arg(a).arg(b);
     Scene *scene = nullptr;
     foreach (Function *func, m_doc->functions())
+    {
         if (func != nullptr && func->name() == name)
             scene = qobject_cast<Scene *>(func);
+    }
     if (scene != nullptr)
     {
         foreach (SceneValue old, scene->values())
@@ -1035,8 +1072,10 @@ void TrackEngine::ensurePositionScenes()
 
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
+    {
         if (func != nullptr && func->name().startsWith(ENGINE_POS_PREFIX))
             existing.insert(func->name().mid(ENGINE_POS_PREFIX.length()), func->id());
+    }
 
     foreach (const QString &key, m_groupOrder)
     {
@@ -1148,8 +1187,10 @@ void TrackEngine::ensureZoomScenes()
 
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
+    {
         if (func != nullptr && func->name().startsWith(ENGINE_ZOOM_PREFIX))
             existing.insert(func->name().mid(ENGINE_ZOOM_PREFIX.length()), func->id());
+    }
 
     m_zoomScenes.clear();
     foreach (const QString &key, m_groupOrder)
@@ -1219,8 +1260,10 @@ void TrackEngine::ensureSweeps()
     // and puts the heads in it.
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
+    {
         if (func != nullptr && func->type() == Function::EFXType && func->name().startsWith(ENGINE_EFX_PREFIX))
             existing.insert(func->name().mid(ENGINE_EFX_PREFIX.length()), func->id());
+    }
 
     m_sweepFunc.clear();
     foreach (const QString &key, m_groupOrder)
@@ -1363,8 +1406,10 @@ void TrackEngine::ensureColourScenes()
 
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
+    {
         if (func != nullptr && func->name().startsWith(ENGINE_COLOUR_PREFIX))
             existing.insert(func->name().mid(ENGINE_COLOUR_PREFIX.length()), func->id());
+    }
 
     foreach (const QString &key, m_groupOrder)
     {
@@ -1537,8 +1582,10 @@ void TrackEngine::ensureDimmerScenes()
     // all of its parts, a chase across the group is the parts in turn.
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
+    {
         if (func != nullptr && func->name().startsWith(ENGINE_DIMMER_PREFIX))
             existing.insert(func->name().mid(ENGINE_DIMMER_PREFIX.length()), func->id());
+    }
 
     for (QMap<QString, TrackGroup>::iterator it = m_groups.begin(); it != m_groups.end(); ++it)
     {
@@ -1551,10 +1598,7 @@ void TrackEngine::ensureDimmerScenes()
             Fixture *fxi = m_doc->fixture(g.fixtures.at(i));
             quint32 ch = fxi == nullptr ? QLCChannel::invalid() : dimmerChannel(fxi);
             if (ch == QLCChannel::invalid())
-            {
-                g.parts.append(Function::invalidId());
-                continue;
-            }
+                continue;            // no dimmer: not a part, or the pattern goes dark on its step
             SceneValue sv(fxi->id(), ch, 255);
             QString name = QString("%1 #%2").arg(g.key).arg(i + 1);
 
@@ -1565,8 +1609,10 @@ void TrackEngine::ensureDimmerScenes()
             {
                 // the fixture behind this part may have changed: hold only it
                 foreach (SceneValue old, scene->values())
+                {
                     if (old.fxi != sv.fxi || old.channel != sv.channel)
                         scene->unsetValue(old.fxi, old.channel);
+                }
                 scene->setValue(sv);
             }
             else
@@ -1702,7 +1748,11 @@ void TrackEngine::loadRoles()
             continue;
         quint32 fid = parts.at(0).toUInt();
         if (m_funcs.contains(fid))
-            m_funcs[fid].role = parts.at(1).toInt();
+        {
+            int r = parts.at(1).toInt();
+            if (r >= -1 && r < ENGINE_ROLE_COUNT)     // a file from another show
+                m_funcs[fid].role = r;
+        }
     }
 
     QString stars = QSettings().value(SETTINGS_ENGINE_STARS, QString()).toString();
@@ -1903,9 +1953,11 @@ QString TrackEngine::baseGroup() const
         return m_base;
     // automatic: the moving heads, if there are any with a colour to show
     foreach (const QString &key, m_groupOrder)
+    {
         if (m_groups.value(key).heads && m_groupOff.contains(key) == false
             && candidates(ENGINE_ROLE_COLOR, key).isEmpty() == false)
             return key;
+    }
     return QString();
 }
 
@@ -1955,11 +2007,16 @@ void TrackEngine::setFullAuto(bool on)
     QSettings().setValue(SETTINGS_ENGINE_FULLAUTO, m_fullAuto);
     // whatever runs now may be a function that is no longer allowed
     foreach (const QString &slot, m_active.keys())
+    {
         if (slot.startsWith("idle:") == false)
             stopSlot(slot, false);
+    }
     m_position.clear();
     m_moves.clear();
     m_dirty = true;
+    // the soft stops are stepped down by the fade timer, and no beat may come
+    if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
+        m_fadeTimer.start();
     emit tableChanged();
     emit liveChanged();
 }
@@ -1987,11 +2044,16 @@ QString TrackEngine::colourOverride() const { return m_override; }
 
 void TrackEngine::setColourOverride(QString colour)
 {
+    // the house rule holds for the palette tiles too
+    if (engineBannedColour(colour))
+        colour.clear();
     if (colour == m_override)
         return;
     m_override = colour;
     if (colour.isEmpty() == false)
         m_colour = colour;
+    else if (engineBannedColour(m_colour))
+        m_colour = m_palette.isEmpty() ? QString() : m_palette.first();
     emit liveChanged();
 }
 
@@ -2008,12 +2070,13 @@ qreal TrackEngine::master() const { return m_master; }
 void TrackEngine::setMaster(qreal level)
 {
     level = qBound(0.0, level, 1.0);
-    if (qFuzzyCompare(level, m_master))
+    if (qFuzzyCompare(level + 1.0, m_master + 1.0))
         return;
     m_master = level;
 
     // re-apply to whatever is lit right now, where the breath stands
     foreach (const QString &slot, m_active.keys())
+    {
         if (slot.startsWith("dim:"))
         {
             Function *func = m_doc->function(m_active.value(slot));
@@ -2026,6 +2089,7 @@ void TrackEngine::setMaster(qreal level)
                 m_activeOut.insert(slot, out);
             }
         }
+    }
     emit liveChanged();
 }
 
@@ -2125,14 +2189,32 @@ QString TrackEngine::importSettings()
     {
         if (key.startsWith(QStringLiteral("trackengine/")) == false && key.startsWith(QStringLiteral("trackmanager/")) == false)
             continue;
-        settings.setValue(key, obj.value(key).toVariant());
+        QVariant v = obj.value(key).toVariant();
+        if (v.isValid() == false)
+            continue;                      // a null in the file would read back as 0
+        if (key == SETTINGS_TRACK_PORT && (v.toInt() <= 0 || v.toInt() > 65535))
+            continue;
+        if (key == SETTINGS_TRACK_TRIM && (v.toInt() < 0 || v.toInt() > 200))
+            continue;
+        if ((key == SETTINGS_TRACK_BPMLOW || key == SETTINGS_TRACK_BPMHIGH)
+            && (v.toInt() <= 0 || v.toInt() > 300))
+            continue;
+        if (key == SETTINGS_ENGINE_HOLDBARS)
+            v = qBound(4, v.toInt(), 128);
+        settings.setValue(key, v);
         n++;
     }
     // take them on board: roles, stars and options are read in ensureTable
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
-    m_fullAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
+    m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
+    bool wantAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
+    if (wantAuto != m_fullAuto)
+    {
+        m_fullAuto = !wantAuto;            // let the setter do its teardown
+        setFullAuto(wantAuto);
+    }
     m_groupOff.clear();
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString()).toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
@@ -2153,8 +2235,10 @@ void TrackEngine::setSpeed(int speed)
     m_speed = speed;
     // running chases keep their old step until restarted: restart them
     foreach (const QString &slot, m_active.keys())
+    {
         if (slot.startsWith("mot:"))
             stopSlot(slot, true);
+    }
     emit liveChanged();
 }
 
@@ -2171,13 +2255,18 @@ void TrackEngine::setFlash(bool pressed)
         ensureTable();
         // the manual flash is the strobes in WHITE, whatever the cast and
         // the palette are doing
-        QSet<QString> strobeGroups;
+        QSet<QString> strobeGroups, allOn;
         foreach (const QString &key, m_groupOrder)
+        {
+            if (m_groupOff.contains(key))
+                continue;
+            allOn.insert(key);
             if (m_groups.value(key).strobes)
                 strobeGroups.insert(key);
+        }
         quint32 fid = flashFunction(strobeGroups, "white");
         if (fid == Function::invalidId())
-            fid = flashFunction(QSet<QString>(m_groupOrder.begin(), m_groupOrder.end()), "white");
+            fid = flashFunction(allOn, "white");
         if (fid != Function::invalidId())
             run("flash", fid, 1.0, 0, true);
         else
@@ -2225,20 +2314,26 @@ quint32 TrackEngine::colourFunction(const QString &group, const QString &colour)
     // lights the most fixtures ("LaserCyan", not "1onCYAN")
     TrackFuncInfo *best = nullptr;
     foreach (TrackFuncInfo *info, list)
+    {
         if (info->groups.count() == 1 && info->colour == colour
             && (best == nullptr || info->fixtureCount > best->fixtureCount
                 || (info->fixtureCount == best->fixtureCount && best->generated && info->generated == false)))
             best = info;
+    }
     if (best != nullptr)
         return best->id;
     // anything of this colour that includes the group (a collection)
     foreach (TrackFuncInfo *info, list)
+    {
         if (info->colour == colour)
             return info->id;
+    }
     // a colourless look for this group (the group has no named colours)
     foreach (TrackFuncInfo *info, list)
+    {
         if (info->groups.count() == 1 && info->colour.isEmpty())
             return info->id;
+    }
     return Function::invalidId();
 }
 
@@ -2269,8 +2364,10 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // a motion that also lights groups outside the cast is not allowed
         bool inside = true;
         foreach (const QString &g, info->groups)
-            if (cast.contains(g) == false)
-                inside = false;
+        {
+                if (cast.contains(g) == false)
+                    inside = false;
+        }
         if (inside == false)
             continue;
         if (info->colour.isEmpty() || info->colour == colour)
@@ -2283,16 +2380,20 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // otherwise overwrite the palette with its own colour channel
     QList<TrackFuncInfo *> exact;
     foreach (TrackFuncInfo *info, ok)
+    {
         if (info->colour == colour)
             exact.append(info);
+    }
     if (exact.isEmpty() == false)
         ok = exact;
 
     // this tier's motions first
     QList<TrackFuncInfo *> tagged;
     foreach (TrackFuncInfo *info, ok)
+    {
         if (info->tier == tier)
             tagged.append(info);
+    }
     if (tagged.isEmpty() == false)
         ok = tagged;
 
@@ -2303,8 +2404,10 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         top = qMax(top, qMax(1, info->stars));
     QList<TrackFuncInfo *> hot;
     foreach (TrackFuncInfo *info, ok)
+    {
         if (qMax(1, info->stars) == top)
             hot.append(info);
+    }
     if (hot.isEmpty() == false)
         ok = hot;
 
@@ -2375,8 +2478,10 @@ QString TrackEngine::accentFor(const QString &colour) const
     // drop would be a habit, not a choice
     QStringList have;
     foreach (const QString &p, pairs.value(colour))
+    {
         if (m_palette.contains(p) && engineBannedColour(p) == false && p != colour)
             have << p;
+    }
     if (have.isEmpty())
         return QString();
     return have.at(int(QRandomGenerator::global()->bounded(have.count())));
@@ -2403,8 +2508,10 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
     {
         bool inside = info->groups.isEmpty() == false;
         foreach (const QString &g, info->groups)
-            if (cast.contains(g) == false)
-                inside = false;
+        {
+                if (cast.contains(g) == false)
+                    inside = false;
+        }
         if (inside)
             ok.append(info);
     }
@@ -2415,8 +2522,10 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
     // then this colour anywhere, then white, then anything
     auto pick = [&ok, this](std::function<bool(TrackFuncInfo *)> test) -> quint32 {
         foreach (TrackFuncInfo *info, ok)
+        {
             if (test(info))
                 return info->id;
+        }
         return Function::invalidId();
     };
     auto onStrobes = [this](TrackFuncInfo *i) {
@@ -2472,8 +2581,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     // a track is playing: the start scene steps aside
     foreach (const QString &slot, m_active.keys())
+    {
         if (slot.startsWith("idle:"))
             stopSlot(slot, false);
+    }
 
     bool isBreak = (state == QStringLiteral("break"));
     bool isBuild = (state == QStringLiteral("build"));
@@ -2595,8 +2706,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     QStringList pool;
     foreach (const QString &key, eligible)
+    {
         if (key != base)
             pool.append(key);
+    }
 
     QSet<QString> castSet;
     if (silent == false)
@@ -2610,8 +2723,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if ((isDrop || preDrop) && effects > 0 && isCalm == false && hold == false)
         {
             foreach (const QString &key, pool)
+            {
                 if (m_groups.value(key).strobes && castSet.contains(key) == false && castSet.count() <= 3)
                     castSet.insert(key);
+            }
         }
         while (castSet.count() > 3)
         {
@@ -2630,82 +2745,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         accentColour = m_accentPick;
     }
 
-    /* ---- positions: sticky, tiered, only changed in the dark for lasers ---- */
-    QSet<QString> darkGroups;
-    foreach (const QString &key, m_groupOrder)
-    {
-        const TrackGroup &g = m_groups.value(key);
-        if (candidates(ENGINE_ROLE_POSITION, key).isEmpty())
-            continue;
-
-        bool inCast = castSet.contains(key);
-        // lasers move only in a dark beat at a break; heads move at break or
-        // drop starts, and half the time at other section changes - every
-        // section would be restless
-        bool mayMove = hold == false
-                    && ((inCast == false)
-                        || (sectionChanged && (g.lasers ? (isBreak && g.hasDimmer)
-                                                        : (isBreak || isDrop || rng->bounded(2) == 0))));
-        quint32 want = m_position.value(key, Function::invalidId());
-        if (want == Function::invalidId() || (mayMove && sectionChanged))
-        {
-            quint32 np = positionFunction(key, m_castCursor, tier);
-            if (np != want && (mayMove || want == Function::invalidId()))
-            {
-                if (inCast && g.lasers)
-                    darkGroups.insert(key);
-                want = np;
-                m_position.insert(key, want);
-                m_headMoveBeats.insert(key, -8);     // our own move: grace before the Light Rider check
-            }
-        }
-        // heads without a sweep of the user's (or in FULL AUTO): walk through
-        // the positions every four bars in the groove, every two in a drop -
-        // the pan/tilt speed channel turns each step into a slow sweep
-        if (g.heads && inCast && hold == false && isBreak == false && m_moves.value(key).ownChaser
-            && (m_fullAuto || candidates(ENGINE_ROLE_MOTION, key).isEmpty())
-            && beatInBar == 0 && bar > 0 && (bar % qMax(1, (isDrop ? 2 : 4) * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1))) == 0)
-        {
-            quint32 np = positionFunction(key, m_castCursor + bar, -1);
-            if (np != Function::invalidId() && np != want)
-            {
-                want = np;
-                m_position.insert(key, want);
-                m_headMoveBeats.insert(key, -8);
-            }
-        }
-        if (want != Function::invalidId())
-            run("pos:" + key, want, 1.0, 0, true);
-    }
-
-    /* ---- the blink: one dark beat right before a drop, then everything
-     *      lands on the one. The base stays - the room never goes black. ---- */
-    if (preDrop && beatsToNext == 1 && energy > 0.5 && isCalm == false && hold == false)
-    {
-        foreach (const QString &key, castSet)
-            if (key != base)
-                darkGroups.insert(key);
-    }
-
-    /* ---- levels: the build climbs like a snare roll, not a straight line ---- */
-    qreal tierLevel = isBreak ? 0.35
-                    : isBuild ? (0.40 + 0.60 * prog * prog)
-                    : isDrop  ? 1.0
-                              : 0.70;
-    if (preDrop)
-        tierLevel = qMax(tierLevel, 0.60);
-    if (isCalm)
-        tierLevel = qMin(tierLevel, 0.55);
-    // the section's LEVEL slider is a brightness trim only; the energy dial
-    // decides how many effects join, never how bright the base is
-    qreal level = tierLevel * (0.5 + 0.5 * qBound(0.0, energy, 1.0)) * qBound(0.0, levelScale, 1.0);
-
     bool hard = sectionChanged && isDrop;
     QStringList castSorted = castSet.values();
     castSorted.sort();
     QString accentGroup;
     foreach (const QString &key, castSorted)
-        if (key != base) accentGroup = key;      // the last effect group takes the accent
+    {
+        if (key != base)
+            accentGroup = key;                   // the last effect group takes the accent
+    }
 
     /* ---- the drop's character: one draw that leans every group's dice
      *      the same way, so a drop is one idea and the next drop another.
@@ -2770,6 +2818,87 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         m_texture.insert(key, tex);
     }
+
+    /* ---- positions: sticky, tiered, only changed in the dark for lasers ---- */
+    QSet<QString> darkGroups;
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (candidates(ENGINE_ROLE_POSITION, key).isEmpty())
+            continue;
+        if (m_groupOff.contains(key))
+        {
+            // switched off by hand: not even an aim (a position scene may
+            // carry a shutter or a dimmer of its own)
+            if (m_active.contains("pos:" + key))
+                stopSlot("pos:" + key, true);
+            m_position.remove(key);
+            continue;
+        }
+
+        bool inCast = castSet.contains(key);
+        // lasers move only in a dark beat at a break; heads move at break or
+        // drop starts, and half the time at other section changes - every
+        // section would be restless
+        bool mayMove = hold == false
+                    && ((inCast == false)
+                        || (sectionChanged && (g.lasers ? (isBreak && g.hasDimmer)
+                                                        : (isBreak || isDrop || rng->bounded(2) == 0))));
+        quint32 want = m_position.value(key, Function::invalidId());
+        if (want == Function::invalidId() || (mayMove && sectionChanged))
+        {
+            quint32 np = positionFunction(key, m_castCursor, tier);
+            if (np != want && (mayMove || want == Function::invalidId()))
+            {
+                if (inCast && g.lasers)
+                    darkGroups.insert(key);
+                want = np;
+                m_position.insert(key, want);
+                m_headMoveBeats.insert(key, -8);     // our own move: grace before the Light Rider check
+            }
+        }
+        // heads without a sweep of the user's (or in FULL AUTO): walk through
+        // the positions every four bars in the groove, every two in a drop -
+        // the pan/tilt speed channel turns each step into a slow sweep
+        if (g.heads && inCast && hold == false && isBreak == false && m_moves.value(key).ownChaser
+            && (m_fullAuto || candidates(ENGINE_ROLE_MOTION, key).isEmpty())
+            && beatInBar == 0 && bar > 0 && (bar % qMax(1, (isDrop ? 2 : 4) * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1))) == 0)
+        {
+            quint32 np = positionFunction(key, m_castCursor + bar, -1);
+            if (np != Function::invalidId() && np != want)
+            {
+                want = np;
+                m_position.insert(key, want);
+                m_headMoveBeats.insert(key, -8);
+            }
+        }
+        if (want != Function::invalidId())
+            run("pos:" + key, want, 1.0, 0, true);
+    }
+
+    /* ---- the blink: one dark beat right before a drop, then everything
+     *      lands on the one. The base stays - the room never goes black. ---- */
+    if (preDrop && beatsToNext == 1 && energy > 0.5 && isCalm == false && hold == false)
+    {
+        foreach (const QString &key, castSet)
+        {
+            if (key != base)
+                darkGroups.insert(key);
+        }
+    }
+
+    /* ---- levels: the build climbs like a snare roll, not a straight line ---- */
+    qreal tierLevel = isBreak ? 0.35
+                    : isBuild ? (0.40 + 0.60 * prog * prog)
+                    : isDrop  ? 1.0
+                              : 0.70;
+    if (preDrop)
+        tierLevel = qMax(tierLevel, 0.60);
+    if (isCalm)
+        tierLevel = qMin(tierLevel, 0.55);
+    // the section's LEVEL slider is a brightness trim only; the energy dial
+    // decides how many effects join, never how bright the base is
+    qreal level = tierLevel * (0.5 + 0.5 * qBound(0.0, energy, 1.0)) * qBound(0.0, levelScale, 1.0);
 
     // how hot a chase may be right now: the stars a motion needs. Drawn once
     // per section from ramps of the energy, not read off a step
@@ -2934,7 +3063,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         // a hats-only passage (highs up, no kick) sparkles rather than sits
         if (high > 0.65 && kick >= 0.0 && kick < 0.35 && mv.pattern == ENGINE_PAT_STATIC
-            && key != base && isCalm == false && still == false && g.fixtures.count() >= 3)
+            && key != base && isCalm == false && still == false && g.parts.count() >= 3)
         {
             mv.pattern = ENGINE_PAT_SPARKLE;
             mv.stepBeats = 2;
@@ -3258,7 +3387,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     }
     if (g.strobes)
         mv.colourBars = 0;
-    if (g.fixtures.count() < 2)
+    if (g.parts.count() < 2)
         mv.pattern = ENGINE_PAT_STATIC;                  // nothing to run across
     return mv;
 }
@@ -3607,8 +3736,10 @@ QString TrackEngine::sweepName(const TrackSweep &sw) const
 void TrackEngine::stopSweeps()
 {
     foreach (const QString &slot, m_active.keys())
+    {
         if (slot.startsWith("efx:"))
             stopSlot(slot, true);
+    }
     m_sweep.clear();
     m_sweepShown.clear();
 }
@@ -3619,6 +3750,8 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     // dimmer is being driven by something else - usually a Group Dimmer
     // slider on the Virtual Console. HTP hides that; say it out loud.
     QStringList found;
+    if (m_palette.isEmpty())
+        found << tr("no colours found - the engine needs colour scenes, or RGB fixtures to make them from");
     QList<Universe *> universes = m_doc->inputOutputMap()->universes();
 
     foreach (const QString &key, m_groupOrder)
@@ -3626,8 +3759,10 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
         const TrackGroup &g = m_groups.value(key);
         bool fading = false;
         foreach (quint32 part, g.parts)
-            if (m_fadeAttr.contains(part))
-                fading = true;
+        {
+                if (m_fadeAttr.contains(part))
+                    fading = true;
+        }
         if (g.hasDimmer == false || castSet.contains(key) || m_groupOff.contains(key)
             || fading || m_flash)
         {
@@ -3664,8 +3799,11 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     }
 
     foreach (const QString &key, m_groupOrder)
-        if (m_groups.value(key).hasDimmer == false && m_groupOff.contains(key) == false)
+    {
+        if (m_groups.value(key).hasDimmer == false && m_groupOff.contains(key) == false
+            && castSet.contains(key))
             found << tr("%1 has no master dimmer - on/off only").arg(key);
+    }
 
     // a group the engine cannot make colours for (an animation laser) and
     // that lacks a palette colour will sit dark whenever that colour runs
@@ -3676,8 +3814,10 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
             continue;
         QStringList missing;
         foreach (const QString &colour, m_palette)
-            if (colourFunction(key, colour) == Function::invalidId())
-                missing << colour;
+        {
+                if (colourFunction(key, colour) == Function::invalidId())
+                    missing << colour;
+        }
         if (missing.isEmpty() == false)
             found << tr("%1 has no scene for %2").arg(key).arg(missing.join(", "));
     }
@@ -3908,8 +4048,10 @@ void TrackEngine::release()
     // the beam lit.
     stopSweeps();
     foreach (const QString &slot, m_active.keys())
+    {
         if (slot.startsWith("pos:") == false)
             stopSlot(slot, false);
+    }
     m_cast.clear();
     m_lastState.clear();
     m_flash = false;
@@ -4013,8 +4155,17 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
         Function *func = m_doc->function(fid);
+        if (func == nullptr)
+        {
+            // the function is gone (deleted, or the project was replaced)
+            m_active.remove(slot);
+            m_activeAttr.remove(slot);
+            m_activeLevel.remove(slot);
+            m_activeOut.remove(slot);
+            return;
+        }
         int attr = m_activeAttr.value(slot, -1);
-        if (func != nullptr && (func->isRunning() == false || func->stopped()))
+        if (func->isRunning() == false || func->stopped())
         {
             // someone stopped it from the Virtual Console (or we did, this
             // very tick): it is still ours, so bring it back rather than

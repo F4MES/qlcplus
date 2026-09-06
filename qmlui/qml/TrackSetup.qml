@@ -78,14 +78,6 @@ Rectangle
         return "#3A3A3A"
     }
 
-    Component.onCompleted:
-    {
-        // guess anything not placed yet, so the page works on a project it
-        // has never seen
-        if (trackEngine)
-            trackEngine.autoAssign(false)
-    }
-
     // every function with its role, fetched when the table really changes -
     // not on every keystroke in the search box (it marshals the whole project)
     property var allRows: []
@@ -93,7 +85,15 @@ Rectangle
     {
         allRows = trackEngine ? trackEngine.table() : []
     }
-    Component.onCompleted: reloadRows()
+
+    Component.onCompleted:
+    {
+        // guess anything not placed yet, so the page works on a project it
+        // has never seen
+        if (trackEngine)
+            trackEngine.autoAssign(false)
+        reloadRows()
+    }
 
     Connections
     {
