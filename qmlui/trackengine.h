@@ -308,10 +308,20 @@ public:
     /** Everything that is not right at the moment: a slider overriding the
      *  engine, a group without a dimmer ... shown on the Track page. */
     QStringList warnings() const;
-    /** Panic: base group only, one colour, no motion, for this many bars. */
+    /** The evening's opening picture, held by hand. */
     bool startScene() const;
     void setStartScene(bool on);
+    /** Draw the opening picture: the IDLE functions for the aim, every group
+     *  lit in one colour, no motion. Follows the colour tiles, MASTER and the
+     *  cast faders live. */
+    void startLook();
+    /** How bright the opening picture stands, 0..1 (the cast faders and
+     *  MASTER ride on top). */
+    Q_PROPERTY(qreal startLevel READ startLevel WRITE setStartLevel NOTIFY liveChanged)
+    qreal startLevel() const;
+    void setStartLevel(qreal level);
 
+    /** Panic: base group only, one colour, no motion, for this many bars. */
     Q_INVOKABLE void calm(int bars);
     int calmBarsLeft() const;
     /** New colour, new cast, new moves - now. */
@@ -519,6 +529,7 @@ private:
     QSet<QString> m_flashHeld;             // strobe groups the generated flash lit
     bool m_hold;
     bool m_startScene;        // the opening picture is held by hand
+    qreal m_startLevel;       // how bright it stands
     bool m_forceNext;
     QList<int> m_hitBeats;                 // beats that carried a hit, last 32 beats
 

@@ -105,6 +105,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_fullAuto(false)
     , m_hold(false)
     , m_startScene(false)
+    , m_startLevel(0.5)
     , m_forceNext(false)
 {
     QSettings settings;
@@ -2021,6 +2022,8 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
 {
     if (enable) m_groupOff.remove(key); else m_groupOff.insert(key);
     saveRoles();
+    if (m_startScene)
+        startLook();                     // the opening picture follows the switches
     emit tableChanged();
 }
 
@@ -2058,6 +2061,9 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
             m_activeOut.insert(slot, out);
         }
     }
+    // a colour scene that carries its own dimmer is not a part: redraw
+    if (m_startScene)
+        startLook();
     emit liveChanged();
 }
 
@@ -2168,7 +2174,10 @@ void TrackEngine::setColourOverride(QString colour)
         m_colour = colour;
     else if (engineBannedColour(m_colour))
         m_colour = m_palette.isEmpty() ? QString() : m_palette.first();
-    emit liveChanged();
+    if (m_startScene)
+        startLook();                     // the opening picture follows the tiles
+    else
+        emit liveChanged();
 }
 
 QString TrackEngine::currentColour() const { return m_colour; }
@@ -2204,6 +2213,8 @@ void TrackEngine::setMaster(qreal level)
             }
         }
     }
+    if (m_startScene)
+        startLook();                     // colour scenes carry the level too
     emit liveChanged();
 }
 
@@ -4096,22 +4107,98 @@ void TrackEngine::setStartScene(bool on)
     m_startScene = on;
     if (on)
     {
-        // everything the engine drives goes; the start scene stands alone
         stopAll();
-        idle();
-        m_report = tr("(start scene)");
+        startLook();
     }
     else
     {
         foreach (const QString &slot, m_active.keys())
-        {
-            if (slot.startsWith("idle:"))
-                stopSlot(slot, false);
-        }
+            stopSlot(slot, false);
+        m_cast.clear();
         if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
             m_fadeTimer.start();
         m_report = tr("(stopped)");
+        emit liveChanged();
     }
+}
+
+qreal TrackEngine::startLevel() const { return m_startLevel; }
+
+void TrackEngine::setStartLevel(qreal level)
+{
+    level = qBound(0.0, level, 1.0);
+    if (qFuzzyCompare(level + 1.0, m_startLevel + 1.0))
+        return;
+    m_startLevel = level;
+    if (m_startScene)
+        startLook();
+    else
+        emit liveChanged();
+}
+
+void TrackEngine::startLook()
+{
+    // The evening's opening picture: the IDLE functions hold the aim (the
+    // START scene from the rider carries pan/tilt/zoom only), and the engine
+    // lights every group that is on, in one colour, standing still. The
+    // colour tiles, MASTER and the cast faders all work on it.
+    if (m_doc == nullptr)
+        return;
+    ensureTable();
+    tickFades();
+    stopSweeps();
+
+    QString colour = m_override.isEmpty() ? m_colour : m_override;
+    if (engineBannedColour(colour))
+        colour.clear();
+    if (colour.isEmpty() || m_palette.contains(colour) == false)
+        colour = m_palette.isEmpty() ? QString() : m_palette.first();
+    m_colour = colour;
+
+    QList<TrackFuncInfo *> idles = candidates(ENGINE_ROLE_IDLE, QString());
+    QSet<QString> lit;
+
+    // the aim, from the start scene(s)
+    foreach (TrackFuncInfo *info, idles)
+        run("idle:" + QString::number(info->id), info->id,
+            info->dimmer ? m_startLevel * m_master : 1.0, 0, false);
+
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (m_groupOff.contains(key) || g.strobes)
+        {
+            stopSlot("col:" + key, false);
+            for (int i = 0; i < g.parts.count(); i++)
+                stopSlot(partSlot(key, i), false);
+            continue;
+        }
+        quint32 cf = colourFunction(key, colour);
+        if (cf != Function::invalidId())
+        {
+            run("col:" + key, cf, m_funcs.value(cf).dimmer ? m_startLevel * m_master : 1.0, 0, false);
+            lit.insert(key);
+        }
+        else
+            stopSlot("col:" + key, false);
+        if (g.hasDimmer)
+        {
+            setDimmer(key, m_startLevel);      // the cast faders and MASTER ride on this
+            lit.insert(key);
+        }
+    }
+
+    // no beats while the room eats: keep the fades moving on the timer
+    if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
+        m_fadeTimer.start();
+
+    m_cast = lit;
+    m_pulseDepth.clear();
+    m_breathe.clear();
+    m_pulseTimer.stop();
+    m_report = tr("(start scene)  |  %1  |  %2 %%")
+               .arg(colour.isEmpty() ? tr("(no colour)") : colour)
+               .arg(int(m_startLevel * 100));
     emit liveChanged();
 }
 
