@@ -184,6 +184,12 @@ void TrackManager::slotNewConnection()
 
 void TrackManager::slotDisconnected()
 {
+    if (m_playing && m_linkStale == false)
+    {
+        m_linkStale = true;
+        emit linkChanged();
+    }
+
     QTcpSocket *sock = qobject_cast<QTcpSocket *>(sender());
     if (sock == nullptr)
         return;
