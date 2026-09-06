@@ -363,7 +363,7 @@ protected:
     void ensureColourScenes();
     void ensurePositionScenes();
     void ensureSweeps();
-    TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads) const;
+    TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads, bool laser) const;
     void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm);
     QString sweepName(const TrackSweep &sweep) const;
     void stopSweeps();

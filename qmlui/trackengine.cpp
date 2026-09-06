@@ -1096,7 +1096,9 @@ void TrackEngine::ensureSweeps()
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        if (g.heads == false || g.lasers || g.patternDevice)
+        // heads always; lasers too, but their figure is pan-only and small,
+        // and it runs in FULL AUTO only (their aim stays the user's)
+        if (g.lasers == false && (g.heads == false || g.patternDevice))
             continue;
 
         EFX *efx = nullptr;
@@ -2594,7 +2596,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool userMoves = mf != Function::invalidId() && m_funcs.value(mf).type != int(Function::SceneType);
         bool aimed = m_active.contains("pos:" + key);
         bool wanted = castSet.contains(key) && aimed && userMoves == false && darkGroups.contains(key) == false
-                   && hold == false && isCalm == false && still == false && m_blackout == false;
+                   && hold == false && isCalm == false && still == false && m_blackout == false
+                   && (g.lasers == false || m_fullAuto);
         if (wanted == false)
         {
             if (m_active.contains(slot))
@@ -2608,9 +2611,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (fresh)
         {
             TrackSweep old = m_sweep.value(key);
-            TrackSweep sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count());
+            TrackSweep sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count(), g.lasers);
             if (sw.shape >= 0 && sw.shape == old.shape && rng->bounded(3) > 0)
-                sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count());
+                sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count(), g.lasers);
             m_sweep.insert(key, sw);
         }
         applySweep(key, m_sweep.value(key), bpm);
@@ -3084,7 +3087,7 @@ QString TrackEngine::moveName(const TrackMove &move) const
  *********************************************************************/
 
 
-TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy, int heads) const
+TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy, int heads, bool laser) const
 {
     // The heads' figure for a section. The energy decides whether they move
     // at all, how big and how fast; the dice pick the shape and how the
@@ -3151,6 +3154,19 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         else if (rel == 2) sw.spread = 2;
         else if (rel == 3) sw.mirror = true;
         else if (rel == 4) sw.fan = 360 / heads;
+    }
+
+    // lasers: sideways only, never lifted off the aim the user gave them,
+    // small, and never faster than a bar
+    if (laser)
+    {
+        sw.shape = (sw.shape == int(EFX::Lissajous) || sw.shape == int(EFX::Square)) ? int(EFX::Line) : sw.shape;
+        sw.height = 0;
+        sw.width = qBound(4, sw.width / 2, 36);
+        sw.rotation = 0;
+        sw.beats = qMax(4, sw.beats);
+        if (tier < 2 && chance(0.5))
+            sw.shape = -1;
     }
     return sw;
 }
