@@ -917,6 +917,11 @@ void TrackManager::setAutoRun(bool enable)
         return;
     m_autoRun = enable;
 
+    // the evening's opening picture is a hand-held look: switching the
+    // show on ends it
+    if (m_autoRun && m_engine != nullptr)
+        m_engine->setStartScene(false);
+
     if (m_autoRun) applyLook();
     else stopLook();
 

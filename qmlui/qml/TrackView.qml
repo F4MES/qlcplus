@@ -839,39 +839,71 @@ Rectangle
                     }
                 }
 
+                // the evening's opening picture: the START scene on its
+                // own, engine standing still. Switching the show on
+                // takes it off again
                 Button
                 {
-                    Layout.preferredWidth: 130
+                    Layout.preferredWidth: 150
                     Layout.fillHeight: true
-                    checked: trackManager ? trackManager.autoRun : false
-                    text: checked ? qsTr("AUTO ON") : qsTr("AUTO OFF")
-                    onClicked: trackManager.autoRun = !checked
+                    visible: trackManager ? trackManager.roleMode : false
+                    checked: trackEngine ? trackEngine.startScene : false
+                    text: qsTr("START SCENE")
+                    onClicked: if (trackEngine) trackEngine.startScene = !checked
 
                     contentItem: Text
                     {
                         text: parent.text
-                        color: parent.checked ? "#000000" : trackViewRoot.cText
+                        color: parent.checked ? "#101010" : trackViewRoot.cText
                         font.bold: true
-                        font.pixelSize: 16
+                        font.pixelSize: 15
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle
                     {
                         radius: 5
-                        color: parent.checked ? "#3FBF3F" : trackViewRoot.cBtn
-                        border.width: 1
-                        border.color: trackViewRoot.cLine
+                        color: parent.checked ? "#E3B44F" : trackViewRoot.cBtn
+                        border.width: parent.checked ? 3 : 1
+                        border.color: parent.checked ? "#E3B44F" : trackViewRoot.cLine
+                    }
+                }
+
+                // the show switch: the biggest thing in the row, red
+                // when the engine is not running, green when it is
+                Button
+                {
+                    Layout.preferredWidth: 210
+                    Layout.fillHeight: true
+                    checked: trackManager ? trackManager.autoRun : false
+                    text: checked ? qsTr("SHOW ON") : qsTr("SHOW OFF")
+                    onClicked: trackManager.autoRun = !checked
+
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: parent.checked ? "#0A2A0A" : "#FFC8C8"
+                        font.bold: true
+                        font.pixelSize: 22
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle
+                    {
+                        radius: 5
+                        color: parent.checked ? "#3FBF3F" : "#4A1E1E"
+                        border.width: 3
+                        border.color: parent.checked ? "#9BE89B" : "#B03030"
                     }
                 }
             }
         }
 
-        // =============================================== live controls  (LIVE_V17_TOUCH)
+        // =============================================== live controls  (LIVE_V18_START)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
-        // colour, and four buttons: CALM, HOLD, NEXT LOOK, FLASH WHITE.
+        // colour, and the buttons: CALM, HOLD, NEXT LOOK, BLACKOUT, FLASH.
         RowLayout
         {
             id: dialsRow
@@ -1160,6 +1192,18 @@ Rectangle
                 onTapped: trackEngine.next()
             }
 
+            // ---- blackout: a toggle. Everything at zero; the engine keeps
+            //      following the track underneath, so the lights come back on
+            //      the right look.
+            TrackTile
+            {
+                Layout.preferredWidth: trackViewRoot.touchH * 2.2
+                Layout.fillHeight: true
+                label: qsTr("BLACKOUT")
+                active: trackEngine ? trackEngine.blackout : false
+                activeColor: "#B03030"
+                onTapped: trackEngine.blackout = !trackEngine.blackout
+            }
             // ---- flash: hold to strobe
             Rectangle
             {
@@ -1186,18 +1230,6 @@ Rectangle
                 }
             }
 
-            // ---- blackout: a toggle. Everything at zero; the engine keeps
-            //      following the track underneath, so the lights come back on
-            //      the right look.
-            TrackTile
-            {
-                Layout.preferredWidth: trackViewRoot.touchH * 2.2
-                Layout.fillHeight: true
-                label: qsTr("BLACKOUT")
-                active: trackEngine ? trackEngine.blackout : false
-                activeColor: "#B03030"
-                onTapped: trackEngine.blackout = !trackEngine.blackout
-            }
         }
 
         // =============================================== warnings

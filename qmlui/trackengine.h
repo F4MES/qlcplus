@@ -234,6 +234,11 @@ class TrackEngine : public QObject
     /** Let the clock move the ENERGY slider through the night. A hand on
      *  the slider turns it off. */
     Q_PROPERTY(bool roomAuto READ roomAuto WRITE setRoomAuto NOTIFY liveChanged)
+    /** The evening's opening picture: the IDLE functions (the START scene)
+     *  held on their own, with the engine standing still. Switching AUTO on
+     *  takes it off again. */
+    Q_PROPERTY(bool startScene READ startScene WRITE setStartScene NOTIFY liveChanged)
+
     /** Freeze the look: no colour, cast or move changes until released. */
     Q_PROPERTY(bool hold READ hold WRITE setHold NOTIFY liveChanged)
 
@@ -304,6 +309,9 @@ public:
      *  engine, a group without a dimmer ... shown on the Track page. */
     QStringList warnings() const;
     /** Panic: base group only, one colour, no motion, for this many bars. */
+    bool startScene() const;
+    void setStartScene(bool on);
+
     Q_INVOKABLE void calm(int bars);
     int calmBarsLeft() const;
     /** New colour, new cast, new moves - now. */
@@ -510,6 +518,7 @@ private:
     bool m_fullAuto;
     QSet<QString> m_flashHeld;             // strobe groups the generated flash lit
     bool m_hold;
+    bool m_startScene;        // the opening picture is held by hand
     bool m_forceNext;
     QList<int> m_hitBeats;                 // beats that carried a hit, last 32 beats
 

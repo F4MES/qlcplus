@@ -104,6 +104,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_roomSent(-1)
     , m_fullAuto(false)
     , m_hold(false)
+    , m_startScene(false)
     , m_forceNext(false)
 {
     QSettings settings;
@@ -2668,6 +2669,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 {
     if (m_doc == nullptr)
         return;
+    if (m_startScene)            // the opening picture is up: nothing else runs
+        return;
     ensureTable();
     tickFades();
     m_lastBeat = beat;
@@ -4082,6 +4085,34 @@ int TrackEngine::roomByClock() const
     if (minutes >= 23 * 60 || minutes < 30)
         return 2;                                    // 23:00 - 00:30 full
     return 3;                                        // 00:30 - 05:00 peak
+}
+
+bool TrackEngine::startScene() const { return m_startScene; }
+
+void TrackEngine::setStartScene(bool on)
+{
+    if (on == m_startScene)
+        return;
+    m_startScene = on;
+    if (on)
+    {
+        // everything the engine drives goes; the start scene stands alone
+        stopAll();
+        idle();
+        m_report = tr("(start scene)");
+    }
+    else
+    {
+        foreach (const QString &slot, m_active.keys())
+        {
+            if (slot.startsWith("idle:"))
+                stopSlot(slot, false);
+        }
+        if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
+            m_fadeTimer.start();
+        m_report = tr("(stopped)");
+    }
+    emit liveChanged();
 }
 
 bool TrackEngine::hold() const { return m_hold; }
