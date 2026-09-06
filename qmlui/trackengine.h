@@ -127,6 +127,29 @@ struct TrackMove
     int phase = 0;            // random start offset into the pattern
 };
 
+/** A figure for a group of moving heads: a hidden EFX run RELATIVE to the
+ *  aimed position, so it rides on whatever position scene holds the heads.
+ *  Drawn per section from the energy, like the moves. */
+struct TrackSweep
+{
+    int shape = -1;           // EFX::Algorithm, -1 = none: the heads hold their aim
+    int width = 0;            // pan reach, 0..127
+    int height = 0;           // tilt reach, 0..127
+    int rotation = 0;         // degrees
+    int beats = 8;            // one figure per this many beats
+    int spread = 0;           // 0 in unison, 1 a wave across the heads, 2 one after another
+    bool mirror = false;      // every second head runs the figure backwards
+    int fan = 0;              // start offset per head, degrees (0 = all at the same point)
+    int fx = 2;               // lissajous frequencies
+    int fy = 3;
+    bool operator==(const TrackSweep &o) const
+    {
+        return shape == o.shape && width == o.width && height == o.height && rotation == o.rotation
+            && beats == o.beats && spread == o.spread && mirror == o.mirror && fan == o.fan
+            && fx == o.fx && fy == o.fy;
+    }
+};
+
 /** One fixture group as the engine sees it. */
 struct TrackGroup
 {
@@ -339,6 +362,11 @@ protected:
     void learnGroups();
     void ensureColourScenes();
     void ensurePositionScenes();
+    void ensureSweeps();
+    TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads) const;
+    void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm);
+    QString sweepName(const TrackSweep &sweep) const;
+    void stopSweeps();
     bool userAllowed(const TrackFuncInfo &info) const;
     void genFlash(bool on);
     quint32 dimmerChannel(Fixture *fxi) const;
@@ -440,6 +468,9 @@ private:
 
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group
+    QMap<QString, quint32> m_sweepFunc;    // head group -> its hidden relative EFX
+    QMap<QString, TrackSweep> m_sweep;     // this section's figure per head group
+    QMap<QString, TrackSweep> m_sweepShown; // what the EFX is configured to right now
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
     QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
     QMap<QString, int> m_breathe;          // groups on a slow sine, and over how many bars

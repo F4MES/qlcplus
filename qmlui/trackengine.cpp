@@ -22,6 +22,7 @@
 #include <QDateTime>
 #include <QTime>
 #include <QTextStream>
+#include <QPair>
 #include <QDir>
 #include <cmath>
 
@@ -48,6 +49,7 @@
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
+#define ENGINE_EFX_PREFIX     QStringLiteral("TRACK EFX: ")
 
 /* colours the house does not like: never in the palette, never as an accent,
  * never generated - even when a scene of that colour exists */
@@ -143,6 +145,7 @@ void TrackEngine::slotDocChanged()
     m_dirty = true;
     m_position.clear();
     m_moves.clear();
+    m_sweep.clear();
     emit tableChanged();
 }
 
@@ -694,6 +697,7 @@ void TrackEngine::ensureTable()
 
     ensureColourScenes();
     ensurePositionScenes();
+    ensureSweeps();
     ensureDimmerScenes();
     ensureAtmosScenes();
 
@@ -1073,6 +1077,80 @@ void TrackEngine::ensurePositionScenes()
             info.fixtureCount = n;
             m_funcs.insert(info.id, info);
         }
+    }
+}
+
+void TrackEngine::ensureSweeps()
+{
+    // One hidden EFX per group of moving heads, run RELATIVE to the aimed
+    // position: whatever position scene holds the heads, the figure the
+    // engine draws for a section rides on top of it. Shape, size, tempo and
+    // how the heads relate are set on the fly - this only makes the function
+    // and puts the heads in it.
+    QMap<QString, quint32> existing;
+    foreach (Function *func, m_doc->functions())
+        if (func != nullptr && func->type() == Function::EFXType && func->name().startsWith(ENGINE_EFX_PREFIX))
+            existing.insert(func->name().mid(ENGINE_EFX_PREFIX.length()), func->id());
+
+    m_sweepFunc.clear();
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.heads == false || g.lasers || g.patternDevice)
+            continue;
+
+        EFX *efx = nullptr;
+        if (existing.contains(key))
+            efx = qobject_cast<EFX *>(m_doc->function(existing.value(key)));
+        if (efx == nullptr)
+        {
+            efx = new EFX(m_doc);
+            efx->setName(ENGINE_EFX_PREFIX + key);
+            efx->setVisible(false);
+            if (m_doc->addFunction(efx) == false)
+            {
+                delete efx;
+                continue;
+            }
+        }
+        m_sweepFunc.insert(key, efx->id());
+        if (efx->isRunning())
+            continue;                       // the heads are changed at rest only
+
+        // the heads it drives: every pan/tilt head of every fixture in the group
+        QList<QPair<quint32, int> > want;
+        foreach (quint32 fid, g.fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr)
+                continue;
+            for (int hd = 0; hd < fxi->heads(); hd++)
+            {
+                if (fxi->channelNumber(QLCChannel::Pan, QLCChannel::MSB, hd) == QLCChannel::invalid()
+                    && fxi->channelNumber(QLCChannel::Tilt, QLCChannel::MSB, hd) == QLCChannel::invalid())
+                    continue;
+                want.append(qMakePair(fid, hd));
+            }
+        }
+        QList<QPair<quint32, int> > have;
+        foreach (EFXFixture *ef, efx->fixtures())
+            have.append(qMakePair(ef->head().fxi, ef->head().head));
+        if (have != want)
+        {
+            QList<EFXFixture *> olds = efx->fixtures();
+            foreach (EFXFixture *ef, olds)
+            {
+                efx->removeFixture(ef);
+                delete ef;
+            }
+            for (int i = 0; i < want.count(); i++)
+                efx->addFixture(want.at(i).first, want.at(i).second);
+        }
+        efx->setIsRelative(true);
+        efx->setXOffset(127);
+        efx->setYOffset(127);
+        efx->setFadeInSpeed(0);
+        efx->setFadeOutSpeed(0);
     }
 }
 
@@ -2232,6 +2310,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         sectionChanged = true;
         m_moves.clear();
+        m_sweep.clear();
     }
 
     // a track is playing: the start scene steps aside
@@ -2503,6 +2582,40 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     int maxStars = isBreak ? 1 : m_starCeil;
 
+    /* ---- sweeps: the heads draw a figure around their aim - circle, eight,
+     *      line, leaf, lissajous... - sized and paced by the energy, redrawn
+     *      with the moves. A relative EFX: it needs a running aim under it,
+     *      and it steps aside while a sweep of the user's own runs. ---- */
+    foreach (const QString &key, m_sweepFunc.keys())
+    {
+        const TrackGroup &g = m_groups.value(key);
+        QString slot = "efx:" + key;
+        quint32 mf = m_active.value("mot:" + key, Function::invalidId());
+        bool userMoves = mf != Function::invalidId() && m_funcs.value(mf).type != int(Function::SceneType);
+        bool aimed = m_active.contains("pos:" + key);
+        bool wanted = castSet.contains(key) && aimed && userMoves == false && darkGroups.contains(key) == false
+                   && hold == false && isCalm == false && still == false && m_blackout == false;
+        if (wanted == false)
+        {
+            if (m_active.contains(slot))
+                stopSlot(slot, true);
+            m_sweep.remove(key);
+            continue;
+        }
+        // the build tightens its figure past the middle
+        bool fresh = redraw || m_sweep.contains(key) == false
+                  || (isBuild && prog > 0.5 && beatInBar == 0 && m_sweep.value(key).beats > 4);
+        if (fresh)
+        {
+            TrackSweep old = m_sweep.value(key);
+            TrackSweep sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count());
+            if (sw.shape >= 0 && sw.shape == old.shape && rng->bounded(3) > 0)
+                sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count());
+            m_sweep.insert(key, sw);
+        }
+        applySweep(key, m_sweep.value(key), bpm);
+    }
+
     // this beat's clock: the pulse timer measures its breath against it
     if (bpm > 0.0)
         m_beatMs = 60000.0 / bpm;
@@ -2692,6 +2805,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     foreach (const QString &key, castSorted)
     {
         QString mn = isCalm ? QString() : moveName(m_moves.value(key));
+        if (m_active.contains("efx:" + key))
+            mn = (mn.isEmpty() ? QString() : mn + " ") + sweepName(m_sweep.value(key));
         moveNames << (mn.isEmpty() ? key : QString("%1 %2").arg(key).arg(mn));
     }
     m_lastMoves = moveNames.join(" + ");
@@ -2968,6 +3083,155 @@ QString TrackEngine::moveName(const TrackMove &move) const
  * Warnings, calm, log
  *********************************************************************/
 
+
+TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy, int heads) const
+{
+    // The heads' figure for a section. The energy decides whether they move
+    // at all, how big and how fast; the dice pick the shape and how the
+    // heads relate to each other, so no two sections look alike.
+    TrackSweep sw;
+    QRandomGenerator *rng = QRandomGenerator::global();
+    auto pick = [rng](const QList<int> &opts) { return opts.at(int(rng->bounded(opts.count()))); };
+    auto chance = [rng](qreal p) { return rng->bounded(1000) < int(qBound(0.0, p, 1.0) * 1000.0); };
+    qreal e = qBound(0.0, energy, 1.0);
+
+    // move at all? a break mostly rests, a drop nearly always moves
+    qreal moveP = tier == 0 ? 0.20 + 0.30 * e : (tier == 2 ? 0.85 + 0.15 * e : 0.40 + 0.50 * e);
+    if (build)
+        moveP = 0.50 + 0.50 * prog;
+    if (chance(moveP) == false)
+        return sw;
+
+    // the shape: a gentle few at rest, the whole menu when it is hot
+    QList<int> shapes;
+    shapes << int(EFX::Circle) << int(EFX::Line) << int(EFX::Eight);
+    if (tier > 0 && (e > 0.30 || tier == 2))
+        shapes << int(EFX::Leaf) << int(EFX::Diamond) << int(EFX::Line2) << int(EFX::Circle);
+    if (tier > 0 && (e > 0.55 || tier == 2))
+        shapes << int(EFX::Lissajous) << int(EFX::Square) << int(EFX::Lissajous) << int(EFX::Eight);
+    sw.shape = pick(shapes);
+    if (sw.shape == int(EFX::Lissajous))
+    {
+        sw.fx = pick(QList<int>() << 1 << 2 << 3);
+        sw.fy = pick(QList<int>() << 2 << 3 << 4);
+        if (sw.fx == sw.fy)
+            sw.fy++;
+    }
+
+    // size: the energy sets the ceiling, the dice the figure. Tilt has less
+    // room than pan, and a break barely stirs
+    qreal reach = tier == 0 ? 22.0 : (tier == 2 ? 50.0 + 70.0 * e : 28.0 + 45.0 * e);
+    if (build)
+        reach = 30.0 + 60.0 * prog;
+    qreal size = reach * (0.5 + 0.5 * rng->generateDouble());
+    sw.width = qBound(6, int(size), 127);
+    sw.height = qBound(4, int(size * (0.35 + 0.65 * rng->generateDouble())), 127);
+    if (sw.shape == int(EFX::Line) || sw.shape == int(EFX::Line2))
+        sw.rotation = pick(QList<int>() << 0 << 0 << 90 << 30 << 150 << 60 << 120);
+    else
+        sw.rotation = chance(0.4) ? int(rng->bounded(360)) : 0;
+
+    // tempo: beats per figure - in time with the music, faster when hot
+    if (tier == 0)
+        sw.beats = pick(QList<int>() << 16 << 32 << 32);
+    else if (tier == 2)
+        sw.beats = e > 0.6 ? pick(QList<int>() << 2 << 4 << 4 << 8) : pick(QList<int>() << 4 << 8 << 8 << 16);
+    else
+        sw.beats = e > 0.5 ? pick(QList<int>() << 4 << 8 << 8 << 16) : pick(QList<int>() << 8 << 16 << 16 << 32);
+    if (build)
+        sw.beats = prog > 0.5 ? pick(QList<int>() << 2 << 4 << 4) : pick(QList<int>() << 8 << 8 << 16);
+
+    // how the heads relate: in unison, as a wave, one after another,
+    // mirrored, or fanned out around the figure
+    if (heads >= 2)
+    {
+        int rel = tier == 2 ? pick(QList<int>() << 0 << 1 << 1 << 2 << 3 << 4)
+                            : pick(QList<int>() << 0 << 0 << 1 << 3 << 4);
+        if (rel == 1)      sw.spread = 1;
+        else if (rel == 2) sw.spread = 2;
+        else if (rel == 3) sw.mirror = true;
+        else if (rel == 4) sw.fan = 360 / heads;
+    }
+    return sw;
+}
+
+void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal bpm)
+{
+    quint32 fid = m_sweepFunc.value(group, Function::invalidId());
+    EFX *efx = m_doc ? qobject_cast<EFX *>(m_doc->function(fid)) : nullptr;
+    if (efx == nullptr)
+        return;
+    QString slot = "efx:" + group;
+    if (sw.shape < 0)
+    {
+        if (m_active.contains(slot))
+            stopSlot(slot, true);
+        return;
+    }
+
+    // the EFX counts milliseconds, the music beats: one figure = beats x the
+    // DJ's beat, halved or doubled by the SPEED tiles
+    qreal beatMs = bpm > 0.0 ? 60000.0 / bpm : 468.75;
+    int beats = sw.beats;
+    if (m_speed < 0)
+        beats *= 2;
+    else if (m_speed > 0)
+        beats = qMax(1, beats / 2);
+    uint ms = uint(qMax(250.0, beats * beatMs));
+
+    bool running = m_active.contains(slot) && m_active.value(slot) == fid;
+    if (running && m_sweepShown.value(group) == sw)
+    {
+        // the pitch fader drifts the clock: keep the figure on the beat
+        if (qAbs(int(efx->duration()) - int(ms)) > int(ms / 50))
+            efx->setDuration(ms);
+        return;
+    }
+    if (running)
+        stopSlot(slot, true);
+
+    efx->setAlgorithm(EFX::Algorithm(sw.shape));
+    efx->setWidth(sw.width);
+    efx->setHeight(sw.height);
+    efx->setRotation(sw.rotation);
+    efx->setXOffset(127);
+    efx->setYOffset(127);
+    efx->setIsRelative(true);
+    efx->setXFrequency(sw.fx);
+    efx->setYFrequency(sw.fy);
+    efx->setPropagationMode(sw.spread == 1 ? EFX::Asymmetric : (sw.spread == 2 ? EFX::Serial : EFX::Parallel));
+    efx->setRunOrder(Function::Loop);
+    efx->setDirection(Function::Forward);
+    efx->setDuration(ms);
+    int i = 0;
+    foreach (EFXFixture *ef, efx->fixtures())
+    {
+        ef->setDirection((sw.mirror && (i % 2) == 1) ? Function::Backward : Function::Forward);
+        ef->setStartOffset((sw.fan * i) % 360);
+        i++;
+    }
+    m_sweepShown.insert(group, sw);
+    run(slot, fid, 1.0, 0, true);
+}
+
+QString TrackEngine::sweepName(const TrackSweep &sw) const
+{
+    if (sw.shape < 0)
+        return QString();
+    QString shape = EFX::algorithmToString(EFX::Algorithm(sw.shape)).toLower();
+    QString rel = sw.spread == 1 ? "~" : (sw.spread == 2 ? ">" : (sw.mirror ? "><" : (sw.fan ? "*" : "")));
+    return QString("(%1%2 %3 %4b)").arg(shape).arg(rel).arg(sw.width).arg(sw.beats);
+}
+
+void TrackEngine::stopSweeps()
+{
+    foreach (const QString &slot, m_active.keys())
+        if (slot.startsWith("efx:"))
+            stopSlot(slot, true);
+    m_sweep.clear();
+    m_sweepShown.clear();
+}
+
 void TrackEngine::checkConflicts(const QSet<QString> &castSet)
 {
     // A group the engine holds at zero that still shows light on its master
@@ -3047,7 +3311,8 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
             continue;
 
         quint32 mf = m_active.value("mot:" + key, Function::invalidId());
-        bool ourSweep = mf != Function::invalidId() && m_funcs.value(mf).type != int(Function::SceneType);
+        bool ourSweep = (mf != Function::invalidId() && m_funcs.value(mf).type != int(Function::SceneType))
+                     || m_active.contains("efx:" + key);
         bool moved = false;
         foreach (quint32 fid, g.fixtures)
         {
@@ -3255,6 +3520,7 @@ void TrackEngine::release()
     // and let the dimmers fall back to the sliders. Positions stay where they
     // are - stopping a laser position is a move, and a slider may still have
     // the beam lit.
+    stopSweeps();
     foreach (const QString &slot, m_active.keys())
         if (slot.startsWith("pos:") == false)
             stopSlot(slot, false);
@@ -3285,6 +3551,7 @@ void TrackEngine::idle()
     bool holdBase = list.isEmpty() && base.isEmpty() == false && m_groupOff.contains(base) == false;
 
     // everything from the track goes; the start scene(s) come on
+    stopSweeps();
     foreach (const QString &slot, m_active.keys())
     {
         if (slot.startsWith("idle:"))
@@ -3333,6 +3600,7 @@ void TrackEngine::trackLoaded()
     m_colourSince = -1;
     m_castCursor++;
     m_moves.clear();             // the new track draws its own moves
+    m_sweep.clear();
     m_hitBeats.clear();
     m_starCeil = 0;
 }
@@ -3561,6 +3829,8 @@ void TrackEngine::stopAll()
     m_position.clear();
     m_lastState.clear();
     m_moves.clear();
+    m_sweep.clear();
+    m_sweepShown.clear();
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();
