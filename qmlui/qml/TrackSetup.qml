@@ -33,7 +33,6 @@ Rectangle
     property bool advancedOpen: false
     property bool cacheOpen: false
     property string ioMessage: ""
-    property int refresh: 0
 
     function roleColor(role)
     {
@@ -87,16 +86,24 @@ Rectangle
             trackEngine.autoAssign(false)
     }
 
+    // every function with its role, fetched when the table really changes -
+    // not on every keystroke in the search box (it marshals the whole project)
+    property var allRows: []
+    function reloadRows()
+    {
+        allRows = trackEngine ? trackEngine.table() : []
+    }
+    Component.onCompleted: reloadRows()
+
     Connections
     {
         target: trackEngine
         function onTableChanged()
         {
-            // the list model is rebuilt from the table; a rebuilt model puts
-            // the ListView back at the top, so remember where the finger was
+            // a rebuilt model puts the ListView back at the top, so remember
+            // where the finger was
             var y = funcList.contentY
-            setupRoot.refresh++
-            funcList.contentY = y
+            setupRoot.reloadRows()
             Qt.callLater(function() { funcList.contentY = Math.min(y, Math.max(0, funcList.contentHeight - funcList.height)) })
         }
     }
@@ -168,7 +175,7 @@ Rectangle
                 Layout.preferredHeight: 34
                 label: qsTr("SHOW ALL")
                 active: trackEngine ? trackEngine.showAll : false
-                onTapped: trackEngine.showAll = !trackEngine.showAll
+                onTapped: if (trackEngine) trackEngine.showAll = !trackEngine.showAll
             }
 
             TrackTile
@@ -188,7 +195,7 @@ Rectangle
                 label: qsTr("FULL AUTO")
                 active: trackEngine ? trackEngine.fullAuto : false
                 activeColor: "#E3B44F"
-                onTapped: trackEngine.fullAuto = !trackEngine.fullAuto
+                onTapped: if (trackEngine) trackEngine.fullAuto = !trackEngine.fullAuto
             }
 
             TrackTile
@@ -249,15 +256,18 @@ Rectangle
                 RowLayout
                 {
                     Layout.fillWidth: true
+                    Layout.fillHeight: false
                     Layout.preferredHeight: 30
+                    Layout.maximumHeight: 30
                     spacing: 8
 
                     Text
                     {
                         Layout.fillWidth: true
-                        text: trackManager
-                              ? qsTr("%1 tracks in BLT's cache - MANUAL ones are your corrections and never re-analysed").arg(trackManager.cacheList.length)
-                              : ""
+                        text: !trackManager ? ""
+                              : (trackManager.connected === false
+                                 ? qsTr("Beat Link Trigger is not connected - the cache lives there")
+                                 : qsTr("%1 tracks in BLT's cache - MANUAL ones are your corrections and never re-analysed").arg(trackManager.cacheList.length))
                         color: setupRoot.cDim
                         font.pixelSize: 12
                         elide: Text.ElideRight
@@ -366,11 +376,8 @@ Rectangle
 
             Repeater
             {
-                model:
-                {
-                    setupRoot.refresh
-                    return trackEngine ? trackEngine.groups : []
-                }
+                // the property's own NOTIFY is tableChanged: no extra trigger
+                model: trackEngine ? trackEngine.groups : []
 
                 Rectangle
                 {
@@ -378,7 +385,7 @@ Rectangle
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: 3
-                    color: modelData.base ? "#2A3F55" : (modelData.enabled ? "#333333" : "#1F1F1F")
+                    color: (modelData && modelData.base) ? "#2A3F55" : ((modelData && modelData.enabled) ? "#333333" : "#1F1F1F")
                     border.width: modelData.base ? 2 : 1
                     border.color: modelData.base ? "#4FA3E3" : (modelData.enabled ? "#666666" : "#333333")
 
@@ -504,11 +511,7 @@ Rectangle
 
             model:
             {
-                setupRoot.refresh
-                if (!trackEngine)
-                    return []
-
-                var all = trackEngine.table()
+                var all = setupRoot.allRows
                 if (setupRoot.filter === "")
                     return all
 
@@ -530,12 +533,13 @@ Rectangle
                 id: funcRow
                 width: funcList.width
                 height: 44
-                color: modelData.hidden ? "#181818" : "#1F1F1F"
+                color: (modelData && modelData.hidden) ? "#181818" : "#1F1F1F"
                 radius: 3
 
-                property int rowRole: modelData.role
-                property int rowStars: modelData.stars
-                property var rowId: modelData.id
+                // a model reset can re-evaluate these while the row is gone
+                property int rowRole: modelData ? modelData.role : -1
+                property int rowStars: modelData ? modelData.stars : 0
+                property var rowId: modelData ? modelData.id : 0
 
                 RowLayout
                 {
@@ -591,7 +595,7 @@ Rectangle
                             label: setupRoot.roleShort(index)
                             active: funcRow.rowRole === index
                             activeColor: setupRoot.roleColor(index)
-                            onTapped: trackEngine.assignRole(funcRow.rowId, index)
+                            onTapped: if (trackEngine) trackEngine.assignRole(funcRow.rowId, index)
                         }
                     }
 
@@ -617,7 +621,7 @@ Rectangle
                                 label: "★"
                                 active: index < funcRow.rowStars
                                 activeColor: "#E3B44F"
-                                onTapped: trackEngine.setStars(funcRow.rowId, index + 1)
+                                onTapped: if (trackEngine) trackEngine.setStars(funcRow.rowId, index + 1)
                             }
                         }
                     }
@@ -638,7 +642,7 @@ Rectangle
                         Layout.fillHeight: true
                         label: "–"
                         active: funcRow.rowRole < 0
-                        onTapped: trackEngine.assignRole(funcRow.rowId, -1)
+                        onTapped: if (trackEngine) trackEngine.assignRole(funcRow.rowId, -1)
                     }
                 }
             }
@@ -671,7 +675,7 @@ Rectangle
                     label: modelData + qsTr(" bars")
                     active: trackEngine ? trackEngine.holdBars === modelData : false
                     activeColor: "#4FA3E3"
-                    onTapped: trackEngine.holdBars = modelData
+                    onTapped: if (trackEngine) trackEngine.holdBars = modelData
                 }
             }
 
@@ -684,7 +688,7 @@ Rectangle
                 label: qsTr("Accent colour in drops")
                 active: trackEngine ? trackEngine.accent : false
                 activeColor: "#7ED07E"
-                onTapped: trackEngine.accent = !trackEngine.accent
+                onTapped: if (trackEngine) trackEngine.accent = !trackEngine.accent
             }
 
             Item { Layout.preferredWidth: 20 }
@@ -696,9 +700,9 @@ Rectangle
                 Layout.preferredWidth: 180
                 Layout.preferredHeight: 34
                 label: qsTr("ENERGY by clock")
-                active: trackEngine ? trackEngine.roomAuto : true
+                active: trackEngine ? trackEngine.roomAuto : false
                 activeColor: "#7ED07E"
-                onTapped: trackEngine.roomAuto = !trackEngine.roomAuto
+                onTapped: if (trackEngine) trackEngine.roomAuto = !trackEngine.roomAuto
             }
 
             Item { Layout.preferredWidth: 20 }
@@ -709,14 +713,14 @@ Rectangle
                 Layout.preferredWidth: 110
                 Layout.preferredHeight: 34
                 label: qsTr("EXPORT")
-                onTapped: setupRoot.ioMessage = trackEngine.exportSettings()
+                onTapped: if (trackEngine) setupRoot.ioMessage = trackEngine.exportSettings()
             }
             TrackTile
             {
                 Layout.preferredWidth: 110
                 Layout.preferredHeight: 34
                 label: qsTr("IMPORT")
-                onTapped: setupRoot.ioMessage = trackEngine.importSettings()
+                onTapped: if (trackEngine) setupRoot.ioMessage = trackEngine.importSettings()
             }
 
             Text

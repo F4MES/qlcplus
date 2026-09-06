@@ -1750,8 +1750,11 @@ QVariantList TrackEngine::table()
         bool ha = a.junk || a.step || a.groups.isEmpty();
         bool hb = b.junk || b.step || b.groups.isEmpty();
         if (ha != hb) return hb;                 // the usable looks first
-        QString ga = a.groups.isEmpty() ? QString() : *a.groups.constBegin();
-        QString gb = b.groups.isEmpty() ? QString() : *b.groups.constBegin();
+        // the same group name the row shows: a QSet iterates in hash order
+        QStringList la = a.groups.values(); la.sort();
+        QStringList lb = b.groups.values(); lb.sort();
+        QString ga = la.isEmpty() ? QString() : la.first();
+        QString gb = lb.isEmpty() ? QString() : lb.first();
         if (ga != gb) return ga < gb;
         return a.name.toLower() < b.name.toLower();
     });
@@ -1909,19 +1912,22 @@ QString TrackEngine::baseGroup() const
 void TrackEngine::cycleGroup(QString key)
 {
     ensureTable();
+    // ON -> BASE -> OFF -> ON. The base may also be picked automatically when
+    // none is set; the first tap on that one pins it, so the cycle carries on
+    // from there instead of flipping between BASE and OFF forever
     if (m_groupOff.contains(key))
     {
         m_groupOff.remove(key);                 // OFF -> ON
         if (m_base == key) m_base.clear();
     }
-    else if (baseGroup() == key)
+    else if (m_base == key)
     {
         m_groupOff.insert(key);                 // BASE -> OFF
-        if (m_base == key) m_base.clear();
+        m_base.clear();
     }
     else
     {
-        m_base = key;                           // ON -> BASE
+        m_base = key;                           // ON (or the automatic base) -> BASE
     }
     QSettings().setValue(SETTINGS_ENGINE_BASE, m_base);
     saveRoles();
