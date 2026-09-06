@@ -269,12 +269,6 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     QJsonArray kickArr = obj.value(QStringLiteral("kick")).toArray();
     for (int i = 0; i < kickArr.count(); i++) m_kick.append(kickArr.at(i).toInt());
 
-    // hand-made flags are the truth; a fresh analysis gets the second pass,
-    // and what it changed goes back to BLT's cache (as automatic)
-    m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
-    if (m_markersManual == false && refineMarkers())
-        sendMarkers(false);
-
     m_markers.clear();
     QJsonArray mk = obj.value(QStringLiteral("markers")).toArray();
     for (int i = 0; i < mk.count(); i++)
@@ -288,10 +282,18 @@ void TrackManager::handleTrack(const QJsonObject &obj)
         m_markers.append(marker);
     }
 
+    // hand-made flags are the truth; a fresh analysis gets the second pass,
+    // run once the flags are in, and what it changed goes back to BLT's
+    // cache (as automatic)
+    m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
+    if (m_markersManual == false && refineMarkers())
+        sendMarkers(false);
+
     m_currentBeat = 0;
     m_trackTimeMs = 0;
     m_movePick = Function::invalidId();    // a new track picks afresh
     m_undo.clear();
+    m_lastMoveIndex = -1;
     if (m_nextTitle == m_title)
         m_nextTitle.clear();
     if (m_engine != nullptr)
@@ -312,19 +314,19 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     bool playing = obj.value(QStringLiteral("playing")).toBool(true);
     int timeMs = obj.value(QStringLiteral("time")).toInt();
 
-    if (beat == m_currentBeat && playing == m_playing && timeMs == m_trackTimeMs)
-        return;
-
-    m_currentBeat = beat;
-    m_playing = playing;
-    m_trackTimeMs = timeMs;
-
+    // the link is alive, even when it repeats itself
     m_lastPosMs = QDateTime::currentMSecsSinceEpoch();
     if (m_linkStale)
     {
         m_linkStale = false;
         emit linkChanged();
     }
+    if (beat == m_currentBeat && playing == m_playing && timeMs == m_trackTimeMs)
+        return;
+
+    m_currentBeat = beat;
+    m_playing = playing;
+    m_trackTimeMs = timeMs;
 
     emit positionChanged();
     updateState();
@@ -782,8 +784,9 @@ void TrackManager::slotEnergyTick()
 {
     // watchdog: a playing track that stops sending positions for four
     // seconds is a broken link, not a pause
-    bool stale = m_playing && m_lastPosMs > 0
-              && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 4000;
+    // no client at all is a broken link right away
+    bool stale = m_playing && ((m_lastPosMs > 0
+              && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 4000) || m_clients.isEmpty());
     if (stale != m_linkStale)
     {
         m_linkStale = stale;
@@ -962,6 +965,16 @@ void TrackManager::moveMarker(int index, int beat)
     m_lastMoveIndex = index;
     m_lastMoveMs = nowMs;
     marker.insert(QStringLiteral("beat"), beat);
+    // two flags on one bar make no sense: the one already there goes
+    for (int i = m_markers.count() - 1; i >= 0; i--)
+    {
+        if (i == index || m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt() != beat)
+            continue;
+        m_markers.removeAt(i);
+        if (i < index)
+            index--;
+        m_lastMoveIndex = index;
+    }
     m_markers.replace(index, marker);
 
     emit markersChanged();
@@ -1362,7 +1375,7 @@ bool TrackManager::roleEnabled(QString state, int role) const
 void TrackManager::sectionBounds(int beat, int &start, int &end) const
 {
     start = 1;
-    end = m_beatCount > 0 ? m_beatCount : beat + 64;
+    end = m_beatCount > 0 ? m_beatCount + 1 : beat + 64;     // exclusive, like a flag's beat
 
     for (int i = 0; i < m_markers.count(); i++)
     {
@@ -1988,6 +2001,7 @@ void TrackManager::setMarkerType(int index, QString type)
 void TrackManager::markersEdited()
 {
     m_markersManual = true;
+    m_lastMoveIndex = -1;                // the next drag is its own undo step
     emit markersChanged();
     updateState();
     if (m_autoRun && m_roleMode)
@@ -2062,6 +2076,7 @@ void TrackManager::undoMarkers()
     settings.setValue(SETTINGS_TRACK_DROPKICK, m_dropKick);
     settings.setValue(SETTINGS_TRACK_BREAKKICK, m_breakKick);
     m_markersManual = true;
+    m_lastMoveIndex = -1;
     emit markersChanged();
     updateState();
     if (m_autoRun && m_roleMode)

@@ -91,8 +91,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_starCeil(0)
     , m_lastBeat(0)
     , m_calmUntil(0)
-    , m_dropStyle(0)
     , m_logEnabled(true)
+    , m_dropStyle(0)
     , m_beatMs(500.0)
     , m_beatStartMs(0)
     , m_beatIndex(0)
@@ -159,6 +159,9 @@ void TrackEngine::slotPulseTimer()
     qint64 now = m_clock.elapsed();
     foreach (const QString &key, m_cast)
     {
+        // a held flash is full: nothing steps or pulses under it
+        if (m_flashHeld.contains(key))
+            continue;
         // eighths and sixteenths: the pattern steps between the beats
         TrackMove mv = m_liveMove.value(key);
         if (mv.subSteps > 1 && m_patterned.value(key, false) && m_beatMs > 0.0)
@@ -237,7 +240,7 @@ bool TrackEngine::hasWord(const QString &text, const QStringList &words) const
         if (w.length() <= 3)
         {
             // short words must stand alone, so "up" does not match "group"
-            QRegularExpression re(QStringLiteral("(^|[^a-z\x{00e6}\x{00f8}\x{00e5}])%1([^a-z\x{00e6}\x{00f8}\x{00e5}]|$)").arg(w));
+            QRegularExpression re(QStringLiteral("(^|[^a-z\\x{00e6}\\x{00f8}\\x{00e5}])%1([^a-z\\x{00e6}\\x{00f8}\\x{00e5}]|$)").arg(w));
             if (re.match(text).hasMatch())
                 return true;
         }
@@ -2025,6 +2028,14 @@ void TrackEngine::setBlackout(bool on)
             level = qBound(0.0, level * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0);
         }
         m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, m_blackout ? 0.0 : level));
+        m_activeOut.insert(slot, m_blackout ? 0.0 : level);
+    }
+    // and onto what is fading out
+    foreach (quint32 fid, m_fadeAttr.keys())
+    {
+        Function *func = m_doc->function(fid);
+        if (func != nullptr)
+            func->adjustAttribute(m_blackout ? 0.0 : m_fadeLevel.value(fid, 0.0), m_fadeAttr.value(fid));
     }
     emit liveChanged();
 }
@@ -2462,7 +2473,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     int beatInBar = (beat - secStart) % 4;
 
     // the drop is one bar away: pull the cast in now so the hit lands lit
-    bool preDrop = isDrop == false && nextState == QStringLiteral("drop")
+    bool preDrop = isDrop == false && m_mixing == false && hold == false
+                && nextState == QStringLiteral("drop")
                 && beatsToNext > 0 && beatsToNext <= 4;
 
     /* ---- palette: one colour, changed rarely. A fresh track keeps the colour
@@ -2552,8 +2564,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     m_lastState = state;
 
     int effects = m_effects;
-    if (preDrop)
-        effects = qMax(effects, effectsFor(true, false));
+    if (preDrop)     // no dice here: four beats of joining and leaving would flicker
+        effects = qMax(effects, int(qRound(2.0 * qBound(0.0, (energy - 0.15) / 0.65, 1.0))));
     if (isCalm || still)
         effects = 0;
     if (base.isEmpty())
@@ -2573,7 +2585,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         for (int i = 0; i < qMin(effects, n); i++)
             castSet.insert(pool.at((m_castCursor + i) % n));
         // strobes carry a drop; swap one in when the energy allows effects
-        if ((isDrop || preDrop) && effects > 0 && isCalm == false)
+        if ((isDrop || preDrop) && effects > 0 && isCalm == false && hold == false)
         {
             foreach (const QString &key, pool)
                 if (m_groups.value(key).strobes && castSet.contains(key) == false && castSet.count() <= 3)
@@ -2764,8 +2776,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         quint32 mf = m_active.value("mot:" + key, Function::invalidId());
         bool userMoves = mf != Function::invalidId() && m_funcs.value(mf).type != int(Function::SceneType);
         bool aimed = m_active.contains("pos:" + key);
+        // HOLD freezes the figure rather than stopping it; STILL, CALM and a
+        // blackout do stop it
         bool wanted = castSet.contains(key) && aimed && userMoves == false && darkGroups.contains(key) == false
-                   && hold == false && isCalm == false && still == false && m_blackout == false
+                   && isCalm == false && still == false && m_blackout == false
                    && (g.lasers == false || m_fullAuto);
         if (wanted == false)
         {
@@ -2812,9 +2826,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             continue;
         }
         int want = m_zoom.value(key, -1);
-        bool pickZoom = want < 0 || (redraw && hold == false) || (isDrop && bar == 1 && beatInBar == 0)
-                     || (isBuild && beatInBar == 0 && ((prog > 0.5 && want != 0) || (prog <= 0.5 && want == 0)));
-        if (isDrop && bar == 0)
+        bool pickZoom = want < 0 || (hold == false && (redraw
+                     || (isDrop && bar == 1 && beatInBar == 0)
+                     || (isBuild && beatInBar == 0 && ((prog > 0.5 && want != 0) || (prog <= 0.5 && want == 0)))));
+        if (isDrop && bar == 0 && hold == false)
             want = 2;                                        // the landing: everything wide
         else if (pickZoom)
         {
@@ -2856,10 +2871,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
         if (inCast == false)
         {
-            stopSlot("col:" + key, false);
+            // lasers cut hard: their aim may change now, and a beam that is
+            // still fading would swing while lit
+            stopSlot("col:" + key, g.lasers);
             stopSlot("mot:" + key, false);
             for (int i = 0; i < g.parts.count(); i++)
-                stopSlot(partSlot(key, i), false);       // fades out over a bar
+                stopSlot(partSlot(key, i), g.lasers);    // effects fade out over a bar
             m_pulseDepth.remove(key);
             m_breathe.remove(key);
             continue;
@@ -2895,9 +2912,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         // the DJ's SPEED: half or double everything that steps
         if (m_speed < 0)
-            mv.stepBeats *= 2;
+        {
+            if (mv.subSteps > 1) mv.subSteps /= 2;
+            else mv.stepBeats *= 2;
+        }
         else if (m_speed > 0)
-            mv.stepBeats = qMax(1, mv.stepBeats / 2);
+        {
+            if (mv.stepBeats > 1) mv.stepBeats = qMax(1, mv.stepBeats / 2);
+            else if (mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_FILL) mv.subSteps = qMin(4, mv.subSteps * 2);
+        }
 
         QString colour = m_colour;
         quint32 splitScene = Function::invalidId();
@@ -2991,7 +3014,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           && (mf == Function::invalidId() || m_funcs.value(mf).dimmer == false);
             m_patterned.insert(key, patterned);
             m_liveMove.insert(key, mv);                  // the shaped move, for the sub-beat steps
-            applyMove(key, darkGroups.contains(key) ? 0.0 : groupLevel, beat, secStart, prog, mv, patterned);
+            if ((m_flash && m_flashHeld.contains(key)) == false)
+                applyMove(key, darkGroups.contains(key) ? 0.0 : groupLevel, beat, secStart, prog, mv, patterned);
             if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1)
                 moveHit = true;
         }
@@ -3051,7 +3075,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                  : moveNames.join(" + "))
         .arg(m_colour.isEmpty() ? tr("(no colour)") : m_colour)
         .arg(accentColour.isEmpty() ? QString() : QString(" + %1").arg(accentColour))
-        .arg(state + (isDrop && m_dropStyle > 0 ? (QString(" ") + QChar(0xb7) + QString(" %1")).arg(m_dropStyle == 1 ? tr("hard") : (m_dropStyle == 2 ? tr("wide") : tr("tight"))) : QString())
+        .arg(state + (isDrop && m_dropStyle > 0 ? QString(" %1 %2").arg(QChar(0xb7)).arg(m_dropStyle == 1 ? tr("hard") : (m_dropStyle == 2 ? tr("wide") : tr("tight"))) : QString())
              + (landing ? tr(" landing") : (turnaround ? tr(" turn") : QString())))
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
         .arg(isCalm ? tr("  CALM") : QString())
@@ -3097,6 +3121,9 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         }
         else if (e > 0.2)
             mv.breatheBars = pick({ 2, 4, 4 });
+        mv.texture = 0.15;
+        if (g.fixtures.count() < 2)
+            mv.pattern = ENGINE_PAT_STATIC;
         return mv;
     }
 
@@ -3511,8 +3538,8 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             efx->setDuration(ms);
         return;
     }
-    if (running)
-        stopSlot(slot, true);
+    // reconfigured live: a stop and a start in the same tick would leave the
+    // EFX stopped (stop() only asks; the timer thread does it later)
 
     // no figure but a jitter: a figure of size zero is a still point off the aim
     efx->setAlgorithm(sw.shape < 0 ? EFX::Circle : EFX::Algorithm(sw.shape));
@@ -3927,6 +3954,9 @@ void TrackEngine::trackLoaded()
     m_moves.clear();             // the new track draws its own moves
     m_sweep.clear();
     m_dropStyle = 0;
+    // CALM counts beats of this track: carry only what is left of it
+    m_calmUntil = m_calmUntil > m_lastBeat ? m_calmUntil - m_lastBeat : 0;
+    m_lastBeat = 0;
     m_hitBeats.clear();
     m_starCeil = 0;
 }
@@ -3950,15 +3980,17 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     {
         Function *func = m_doc->function(fid);
         int attr = m_activeAttr.value(slot, -1);
-        if (func != nullptr && func->isRunning() == false)
+        if (func != nullptr && (func->isRunning() == false || func->stopped()))
         {
-            // someone stopped it from the Virtual Console: it is still ours,
-            // so bring it back rather than adjusting a dead function forever
+            // someone stopped it from the Virtual Console (or we did, this
+            // very tick): it is still ours, so bring it back rather than
+            // adjusting a dead function forever
             startFunction(func, division);
             if (attr >= 0)
                 func->releaseAttributeOverride(attr);
             attr = func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out);
             m_activeAttr.insert(slot, attr);
+            m_activeOut.insert(slot, out);
         }
         else if (func != nullptr)
         {
@@ -3983,11 +4015,12 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         func->releaseAttributeOverride(m_fadeAttr.take(fid));
         m_fadeLevel.remove(fid);
     }
-    else if (func->isRunning() == false)
+    else if (func->isRunning() == false || func->stopped())
         startFunction(func, division);
 
     m_active.insert(slot, fid);
     m_activeLevel.insert(slot, level);
+    m_activeOut.insert(slot, out);
     m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
 }
 
@@ -4015,7 +4048,10 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
     int attr = m_activeAttr.value(slot, -1);
     m_active.remove(slot);
     m_activeAttr.remove(slot);
-    qreal level = m_activeLevel.take(slot);
+    m_activeLevel.remove(slot);
+    // the fade starts from what the light actually showed - trim, master,
+    // pulse and blackout included - never from the bare level
+    qreal level = m_activeOut.take(slot);
 
     Function *func = m_doc->function(fid);
     if (func == nullptr)
@@ -4064,7 +4100,7 @@ void TrackEngine::tickFades()
         }
         else
         {
-            func->adjustAttribute(level, attr);
+            func->adjustAttribute(m_blackout ? 0.0 : level, attr);
             m_fadeLevel.insert(fid, level);
         }
     }
@@ -4102,7 +4138,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     {
         Function *func = m_doc->function(fid);
         int attr = m_activeAttr.value(slot, -1);
-        if (func != nullptr && func->isRunning() == false)
+        if (func != nullptr && (func->isRunning() == false || func->stopped()))
         {
             func->start(m_doc->masterTimer(), FunctionParent::master());
             if (attr >= 0)
@@ -4113,6 +4149,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
         else if (func != nullptr)
             m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, applied));
         m_activeLevel.insert(slot, level);
+        m_activeOut.insert(slot, applied);
         return;
     }
 
@@ -4127,11 +4164,12 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
         func->releaseAttributeOverride(m_fadeAttr.take(fid));
         m_fadeLevel.remove(fid);
     }
-    else if (func->isRunning() == false)
+    else if (func->isRunning() == false || func->stopped())
         func->start(m_doc->masterTimer(), FunctionParent::master());
 
     m_active.insert(slot, fid);
     m_activeLevel.insert(slot, level);
+    m_activeOut.insert(slot, applied);
     m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, applied));
 }
 

@@ -508,6 +508,7 @@ private:
     QMap<QString, quint32> m_active;
     QMap<QString, int> m_activeAttr;
     QMap<QString, qreal> m_activeLevel;
+    QMap<QString, qreal> m_activeOut;      // what was actually written (pulse, trim, master, blackout applied)
     QMap<quint32, int> m_fadeAttr;
     QMap<quint32, qreal> m_fadeLevel;
 };
