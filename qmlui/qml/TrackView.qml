@@ -96,7 +96,7 @@ Rectangle
     Connections
     {
         target: trackManager
-        function onTrackChanged() { wfCanvas.requestPaint() }
+        function onTrackChanged() { wfArea.release(); wfCanvas.requestPaint() }
         function onMarkersChanged() { wfCanvas.requestPaint() }
         function onPositionChanged() { wfCanvas.requestPaint() }
     }
@@ -116,8 +116,11 @@ Rectangle
             trackViewRoot.zoomCenter =
                 Math.max(1, Math.min(trackViewRoot.beatCount,
                                      trackViewRoot.zoomCenter + dir * step))
-            trackManager.moveMarker(trackViewRoot.dragIndex,
-                                    wfArea.beatAt(trackViewRoot.dragX) + trackViewRoot.dragOffset)
+            var want = wfArea.beatAt(trackViewRoot.dragX) + trackViewRoot.dragOffset
+            var before = trackManager.markers.length
+            trackManager.moveMarker(trackViewRoot.dragIndex, want)
+            if (trackManager.markers.length !== before)
+                wfArea.reindex(want)
             wfCanvas.requestPaint()
         }
     }
@@ -144,7 +147,7 @@ Rectangle
             //      of this section tinted in the running colour, and a countdown
             //      to the next section. A finger on a flag selects it (drag to
             //      move it); the tools at the bottom left add, retype and delete.
-            //      (WF_OVERLAY_V5)
+            //      (WF_OVERLAY_V6)
             Canvas
             {
                 id: wfOverlay
@@ -260,9 +263,10 @@ Rectangle
                         }
                     }
 
-                    // the played part of this section, tinted in the running colour
+                    // the played part of this section, tinted in the running
+                    // colour - and the countdown, which is shown colour or not
                     var cur = trackManager.currentBeat
-                    if (cur > 0 && trackEngine && trackEngine.currentColour !== "")
+                    if (cur > 0)
                     {
                         var secStart = 1
                         var secEnd = total + 1
@@ -272,10 +276,12 @@ Rectangle
                             if (sorted[s].beat <= cur) secStart = sorted[s].beat
                             else { secEnd = sorted[s].beat; next = sorted[s]; break }
                         }
-                        var swatch = liveRow.swatch(trackEngine.currentColour)
-                        var c = Qt.color(swatch)
-                        ctx.fillStyle = Qt.rgba(c.r, c.g, c.b, 0.10)
-                        ctx.fillRect(beatX(secStart, first, count), 7, beatX(cur, first, count) - beatX(secStart, first, count), h - 7)
+                        if (trackEngine && trackEngine.currentColour !== "")
+                        {
+                            var c = Qt.color(liveRow.swatch(trackEngine.currentColour))
+                            ctx.fillStyle = Qt.rgba(c.r, c.g, c.b, 0.10)
+                            ctx.fillRect(beatX(secStart, first, count), 7, beatX(cur, first, count) - beatX(secStart, first, count), h - 7)
+                        }
 
                         // the countdown to the next section, in bars
                         if (next && trackManager.playing)
@@ -303,7 +309,12 @@ Rectangle
                     function onTrackChanged() { wfOverlay.selected = -1; wfOverlay.requestPaint() }
                     function onMarkersChanged()
                     {
-                        if (wfOverlay.selected >= trackManager.markers.length) wfOverlay.selected = -1
+                        // the list may have shrunk or been reordered: an index
+                        // that is still in range can point at another flag now.
+                        // Our own drag keeps its selection, everything else drops it
+                        if (wfOverlay.selected >= trackManager.markers.length
+                            || trackViewRoot.dragIndex < 0)
+                            wfOverlay.selected = -1
                         wfOverlay.requestPaint()
                     }
                     function onPositionChanged() { wfOverlay.requestPaint() }
@@ -324,70 +335,82 @@ Rectangle
             // ---- flag tools: a flag on the bar the track is at, the selected
             //      flag retyped or deleted. What the operator sets is the truth -
             //      it goes to BLT's cache as manual and teaches the second pass.
-            Row
+            Item
             {
                 anchors.left: parent.left
                 anchors.bottom: parent.bottom
                 anchors.margins: 8
-                spacing: 6
+                width: flagTools.width
+                height: flagTools.height
                 z: 3
                 visible: trackManager && trackManager.beatCount > 0 && trackManager.roleMode
 
-                Repeater
+                // a press that misses a tile must not reach the waveform
+                // underneath and clear the selection the tiles depend on
+                MouseArea { anchors.fill: parent }
+
+                Row
                 {
-                    model: [ "break", "build", "drop" ]
+                    id: flagTools
+                    spacing: 6
+
+                    Repeater
+                    {
+                        model: [ "break", "build", "drop" ]
+                        TrackTile
+                        {
+                            width: 88
+                            height: 34
+                            label: "+ " + modelData.toUpperCase()
+                            activeColor: trackViewRoot.markerColor(modelData)
+                            active: true                  // in its section colour, like the SECTION row
+                            opacity: 0.85
+                            onTapped: trackManager.addMarker(trackManager.currentBeat > 0 ? trackManager.currentBeat : 1, modelData)
+                        }
+                    }
+
+                    Item { width: 12; height: 1 }
+
+                    TrackTile
+                    {
+                        width: 96
+                        height: 34
+                        label: qsTr("RETYPE")
+                        visible: wfOverlay.selected >= 0
+                        opacity: 0.9
+                        onTapped:
+                        {
+                            var mk = trackManager.markers[wfOverlay.selected]
+                            if (mk === undefined) { wfOverlay.selected = -1; return }
+                            var order = [ "normal", "break", "build", "drop" ]
+                            var next = order[(order.indexOf(mk.type) + 1) % order.length]
+                            trackManager.setMarkerType(wfOverlay.selected, next)
+                        }
+                    }
+
+                    TrackTile
+                    {
+                        width: 96
+                        height: 34
+                        label: qsTr("DELETE")
+                        visible: wfOverlay.selected >= 0
+                        activeColor: "#E36B6B"
+                        active: true
+                        onTapped: { var i = wfOverlay.selected; wfOverlay.selected = -1; trackManager.removeMarker(i) }
+                    }
+
+                    Item { width: 12; height: 1 }
+
+                    // one step back - the flag and the lesson it taught
                     TrackTile
                     {
                         width: 88
                         height: 34
-                        label: "+ " + modelData.toUpperCase()
-                        activeColor: trackViewRoot.markerColor(modelData)
-                        active: true                  // in its section colour, like the SECTION row
-                        opacity: 0.85
-                        onTapped: trackManager.addMarker(trackManager.currentBeat > 0 ? trackManager.currentBeat : 1, modelData)
+                        label: qsTr("UNDO")
+                        visible: trackManager ? trackManager.canUndoMarkers : false
+                        opacity: 0.9
+                        onTapped: { wfOverlay.selected = -1; trackManager.undoMarkers() }
                     }
-                }
-
-                Item { width: 12; height: 1 }
-
-                TrackTile
-                {
-                    width: 96
-                    height: 34
-                    label: qsTr("RETYPE")
-                    visible: wfOverlay.selected >= 0
-                    opacity: 0.9
-                    onTapped:
-                    {
-                        var mk = trackManager.markers[wfOverlay.selected]
-                        var order = [ "normal", "break", "build", "drop" ]
-                        var next = order[(order.indexOf(mk.type) + 1) % order.length]
-                        trackManager.setMarkerType(wfOverlay.selected, next)
-                    }
-                }
-
-                TrackTile
-                {
-                    width: 96
-                    height: 34
-                    label: qsTr("DELETE")
-                    visible: wfOverlay.selected >= 0
-                    activeColor: "#E36B6B"
-                    active: true
-                    onTapped: { var i = wfOverlay.selected; wfOverlay.selected = -1; trackManager.removeMarker(i) }
-                }
-
-                Item { width: 12; height: 1 }
-
-                // one step back - the flag and the lesson it taught
-                TrackTile
-                {
-                    width: 88
-                    height: 34
-                    label: qsTr("UNDO")
-                    visible: trackManager ? trackManager.canUndoMarkers : false
-                    opacity: 0.9
-                    onTapped: { wfOverlay.selected = -1; trackManager.undoMarkers() }
                 }
             }
 
@@ -476,7 +499,7 @@ Rectangle
                     }
 
                     var cb = trackViewRoot.currentBeat
-                    if (cb > 0 && cb >= vf && cb <= vf + vc)
+                    if (cb > 0 && cb >= vf && cb < vf + vc)     // the view ends one beat before
                     {
                         var ph = xOf(cb)
                         ctx.strokeStyle = "#FFFFFF"
@@ -501,6 +524,7 @@ Rectangle
             {
                 id: wfArea
                 anchors.fill: parent
+                anchors.margins: 1          // the canvases are inset by one: pick where we draw
                 enabled: trackViewRoot.beatCount > 0
 
                 // A finger on a flag: press = select it (RETYPE / DELETE appear),
@@ -535,6 +559,23 @@ Rectangle
                     }
                 }
 
+                // moveMarker may drop the flag we land on: everyone's index
+                // shifts, so find the dragged flag again by the beat we asked for
+                function reindex(wantBeat)
+                {
+                    var mk = trackManager.markers
+                    var best = -1, bd = 1e9
+                    for (var i = 0; i < mk.length; i++)
+                    {
+                        var d = Math.abs(mk[i].beat - wantBeat)
+                        if (d < bd) { bd = d; best = i }
+                    }
+                    pressIndex = best
+                    trackViewRoot.dragIndex = best
+                    if (typeof wfOverlay !== "undefined")
+                        wfOverlay.selected = best
+                }
+
                 onPositionChanged: function (mouse)
                 {
                     if (pressIndex < 0) return
@@ -550,7 +591,11 @@ Rectangle
                         trackViewRoot.dragOffset = mk.beat - beatAt(mouse.x)
                     }
                     trackViewRoot.dragX = mouse.x
-                    trackManager.moveMarker(trackViewRoot.dragIndex, beatAt(mouse.x) + trackViewRoot.dragOffset)
+                    var want = beatAt(mouse.x) + trackViewRoot.dragOffset
+                    var before = trackManager.markers.length
+                    trackManager.moveMarker(trackViewRoot.dragIndex, want)
+                    if (trackManager.markers.length !== before)
+                        reindex(want)
 
                     var edge = width * 0.08
                     panTimer.dir = mouse.x < edge ? -1 : (mouse.x > width - edge ? 1 : 0)
@@ -738,7 +783,8 @@ Rectangle
                     {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        checkable: true
+                        // not checkable: a click would write 'checked' and
+                        // break the binding, leaving two sections lit
                         checked: trackManager ? trackManager.overrideState === modelData : false
                         onClicked: trackManager.overrideState =
                                    (trackManager.overrideState === modelData) ? "" : modelData
@@ -797,10 +843,9 @@ Rectangle
                 {
                     Layout.preferredWidth: 130
                     Layout.fillHeight: true
-                    checkable: true
                     checked: trackManager ? trackManager.autoRun : false
                     text: checked ? qsTr("AUTO ON") : qsTr("AUTO OFF")
-                    onClicked: trackManager.autoRun = checked
+                    onClicked: trackManager.autoRun = !checked
 
                     contentItem: Text
                     {
@@ -822,7 +867,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V16_NEXT)
+        // =============================================== live controls  (LIVE_V17_TOUCH)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -864,7 +909,7 @@ Rectangle
                 Text
                 {
                     anchors.centerIn: parent
-                    text: qsTr("ENERGY") + "  " + (trackManager ? trackManager.energyTrim : 50) + "%"
+                    text: qsTr("ENERGY") + "  " + (trackManager ? Math.min(100, trackManager.energyTrim) : 50) + "%"
                     color: "#EEEEEE"
                     font.bold: true
                     font.pixelSize: 15
@@ -875,7 +920,9 @@ Rectangle
                     anchors.fill: parent
                     function apply(x)
                     {
-                        var v = Math.round(Math.max(0, Math.min(1, x / width)) * 100)
+                        // the fill is inset three pixels: read the finger the same
+                        // way, or full is unreachable at the right edge
+                        var v = Math.round(Math.max(0, Math.min(1, (x - 3) / (width - 6))) * 100)
                         if (trackManager) trackManager.energyTrim = v
                     }
                     onPressed: (mouse) => apply(mouse.x)
@@ -947,7 +994,7 @@ Rectangle
                 MouseArea
                 {
                     anchors.fill: parent
-                    function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, x / width)) }
+                    function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
                     onPressed: (mouse) => apply(mouse.x)
                     onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
                 }
@@ -1243,7 +1290,7 @@ Rectangle
                         anchors.fill: parent
                         function apply(x)
                         {
-                            var v = Math.max(0, Math.min(1, x / width))
+                            var v = Math.max(0, Math.min(1, (x - 3) / (width - 6)))
                             if (v < 0.03) v = 0
                             if (atmosSlider.isHaze) trackEngine.haze = v
                             else trackEngine.fan = v
@@ -1450,6 +1497,10 @@ Rectangle
                     font.pixelSize: 13
                     text:
                     {
+                        // only when the Loader really failed: this used to
+                        // compile TrackSetup on every page load
+                        if (setupLoader.status !== Loader.Error)
+                            return ""
                         var c = Qt.createComponent("qrc:/TrackSetup.qml")
                         return "TrackSetup.qml failed to load:\n\n"
                                + (c.status === Component.Error
