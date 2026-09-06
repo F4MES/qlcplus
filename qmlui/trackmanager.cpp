@@ -184,18 +184,19 @@ void TrackManager::slotNewConnection()
 
 void TrackManager::slotDisconnected()
 {
-    if (m_playing && m_linkStale == false)
-    {
-        m_linkStale = true;
-        emit linkChanged();
-    }
-
     QTcpSocket *sock = qobject_cast<QTcpSocket *>(sender());
     if (sock == nullptr)
         return;
     m_clients.removeAll(sock);
     m_buffers.remove(sock);
     sock->deleteLater();
+
+    // only the last client leaving is a broken link
+    if (m_playing && m_clients.isEmpty() && m_linkStale == false)
+    {
+        m_linkStale = true;
+        emit linkChanged();
+    }
     emit connectedChanged();
 }
 
@@ -205,22 +206,27 @@ void TrackManager::slotReadyRead()
     if (sock == nullptr)
         return;
 
-    QByteArray buf = m_buffers.value(sock);
+    // out of the hash while we parse: handling a line may add or drop
+    // a client, and that would move the buffers under us
+    QByteArray buf = m_buffers.take(sock);
     buf.append(sock->readAll());
+    if (buf.size() > 8 * 1024 * 1024)          // a client with no newlines
+        buf.clear();
 
-    int idx;
-    while ((idx = buf.indexOf('\n')) >= 0)
+    // walk it once and cut it once: a packet of many lines otherwise
+    // moves the rest of the buffer per line
+    int start = 0, idx;
+    while ((idx = buf.indexOf('\n', start)) >= 0)
     {
-        QByteArray line = buf.left(idx).trimmed();
-        buf.remove(0, idx + 1);
+        QByteArray line = buf.mid(start, idx - start).trimmed();
+        start = idx + 1;
         if (line.isEmpty() == false)
             handleLine(line);
     }
-
-    if (buf.size() > 8 * 1024 * 1024)
-        buf.clear();
-
-    m_buffers.insert(sock, buf);
+    if (start > 0)
+        buf.remove(0, start);
+    if (m_clients.contains(sock))
+        m_buffers.insert(sock, buf);
 }
 
 /*********************************************************************
@@ -294,6 +300,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     m_movePick = Function::invalidId();    // a new track picks afresh
     m_undo.clear();
     m_lastMoveIndex = -1;
+    m_lastEngineBeat = -1;
+    m_lastSecStart = -1;
+    m_lastSecEnd = -1;
     if (m_nextTitle == m_title)
         m_nextTitle.clear();
     if (m_engine != nullptr)
@@ -469,6 +478,8 @@ void TrackManager::applyLook()
             func->start(m_doc->masterTimer(), FunctionParent::master());
         }
 
+        if (m_runningFunctions.contains(fid))
+            continue;                        // one override per function, not per slot
         m_runningFunctions.append(fid);
         m_runningAttrIds.insert(fid,
             func->requestAttributeOverride(TRACK_INTENSITY_ATTR, appliedEnergy()));
@@ -855,8 +866,9 @@ void TrackManager::setEnergyTrim(int percent)
     if (percent == m_energyTrim || percent < 0 || percent > 200)
         return;
     m_energyTrim = percent;
-    // a hand on the slider takes ROOM off the clock
-    if (m_engine != nullptr && percent != m_engine->roomPercent())
+    // a hand on the slider takes ROOM off the clock - except when the
+    // clock itself is what moved it (announceRoom sets roomPercent first)
+    if (m_engine != nullptr && m_engine->roomAuto() && percent != m_engine->roomPercent())
         m_engine->setRoomAuto(false);
     QSettings().setValue(SETTINGS_TRACK_TRIM, m_energyTrim);
     emit energyChanged();
@@ -1415,10 +1427,6 @@ void TrackManager::runEngine(bool sectionChanged)
     if (m_roleMode == false || m_autoRun == false || m_doc == nullptr || m_engine == nullptr)
         return;
 
-    // the link went quiet mid-track: hold the last look rather than guess
-    if (m_linkStale)
-        return;
-
     if (m_playing == false)
     {
         // nothing playing: the start scene, not darkness
@@ -1426,6 +1434,11 @@ void TrackManager::runEngine(bool sectionChanged)
         m_lastEngineBeat = -1;
         return;
     }
+
+    // the link went quiet mid-track: hold the last look rather than guess
+    // (checked after the pause, so a paused track still reaches idle)
+    if (m_linkStale)
+        return;
 
     int beat = m_currentBeat;
     if (beat <= 0)
@@ -1435,18 +1448,31 @@ void TrackManager::runEngine(bool sectionChanged)
     m_lastEngineBeat = beat;
 
     QString state = currentState();
+    // the state was picked on a quantised beat: the bounds, the
+    // look-ahead and the section energy must use the same one, or the
+    // engine is told about a section it is not in
+    int stateBeat = beat;
+    if (m_quantize > 1)
+        stateBeat = ((beat - 1) / m_quantize) * m_quantize + 1;
     int secStart = 1, secEnd = 1;
-    sectionBounds(beat, secStart, secEnd);
+    sectionBounds(stateBeat, secStart, secEnd);
+
+    // a jump to a cue, or two flags of the same type in a row: the state
+    // string does not change but the section does
+    if (secStart != m_lastSecStart || secEnd != m_lastSecEnd)
+        sectionChanged = true;
+    m_lastSecStart = secStart;
+    m_lastSecEnd = secEnd;
 
     // what comes next, so the engine can lean into a drop a bar early
     QString nextState;
     int beatsToNext = 0;
-    nextSection(beat, nextState, beatsToNext);
+    nextSection(stateBeat, nextState, beatsToNext);
 
     // Energy = BPM dial x how loud this section is. The section's LEVEL slider
     // goes in separately as a brightness trim, so it cannot change how many
     // effects join.
-    qreal se = sectionEnergy(beat);
+    qreal se = sectionEnergy(stateBeat);
     qreal en = energy();
     if (se >= 0.0)
         en *= 0.65 + 0.35 * se;

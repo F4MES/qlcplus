@@ -276,9 +276,13 @@ QString TrackEngine::colourOf(const QString &text) const
     };
 
     for (int i = 0; i < table.count(); i++)
+    {
         foreach (const QString &w, table.at(i).second)
+        {
             if (t.contains(w))
                 return table.at(i).first;
+        }
+    }
 
     // the two that are too short to trust inside other words
     if (hasWord(t, QStringList() << "uv")) return "uv";
@@ -696,8 +700,10 @@ void TrackEngine::ensureTable()
         {
             const QMap<quint32, QMap<QString, uchar> > &chans = g.colourValue.value(fid);
             for (QMap<quint32, QMap<QString, uchar> >::const_iterator cit = chans.constBegin(); cit != chans.constEnd(); ++cit)
+            {
                 foreach (const QString &col, cit.value().keys())
                     coverage[col].insert(g.key);
+            }
         }
     }
 

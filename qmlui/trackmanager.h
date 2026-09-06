@@ -393,6 +393,8 @@ private:
     int m_colorCursor;
     int m_lastColorBar;
     int m_lastEngineBeat;
+    int m_lastSecStart;                   // the section the engine was last told about
+    int m_lastSecEnd;
 
     /* The movement pick is sticky: it only changes when a break starts,
      * inside a one-beat dark gap. Never at a drop, never mid-section. */
