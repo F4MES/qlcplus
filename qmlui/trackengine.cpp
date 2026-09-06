@@ -50,6 +50,8 @@
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
+#define ENGINE_HOME_PREFIX    QStringLiteral("TRACK Home: ")
+#define ENGINE_HOMEB_PREFIX   QStringLiteral("TRACK Home B: ")
 #define ENGINE_EFX_PREFIX     QStringLiteral("TRACK EFX: ")
 #define ENGINE_ZOOM_PREFIX    QStringLiteral("TRACK Zoom: ")
 
@@ -759,6 +761,7 @@ void TrackEngine::ensureTable()
         m_palette.append(singles);
 
     ensureColourScenes();
+    learnHome();
     ensurePositionScenes();
     ensureSweeps();
     ensureZoomScenes();
@@ -1035,6 +1038,82 @@ quint32 TrackEngine::splitColourFunction(const QString &group, const QString &a,
     return scene->id();
 }
 
+void TrackEngine::learnHome()
+{
+    // 'TRACK Home: <group>' and 'TRACK Home B: <group>' are written by
+    // lr_import.py from the operator's Light Rider show: the pan/tilt each
+    // head really points at. Without them the engine can only guess that the
+    // middle of the range is the middle of the room, which is wrong on any
+    // rig where the heads hang turned differently.
+    QMap<QString, quint32> homeId, homeBId;              // group -> scene
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func == nullptr || func->type() != Function::SceneType)
+            continue;
+        QString n = func->name();
+        if (n.startsWith(ENGINE_HOMEB_PREFIX))
+            homeBId.insert(n.mid(ENGINE_HOMEB_PREFIX.length()), func->id());
+        else if (n.startsWith(ENGINE_HOME_PREFIX))
+            homeId.insert(n.mid(ENGINE_HOME_PREFIX.length()), func->id());
+    }
+
+    foreach (const QString &key, m_groupOrder)
+    {
+        TrackGroup &g = m_groups[key];
+        g.home.clear();
+        g.homeB.clear();
+        if (homeId.contains(key) == false && homeBId.contains(key) == false)
+            continue;
+
+        for (int pass = 0; pass < 2; pass++)
+        {
+            // an id of zero is a real function: only a scene we actually found
+            quint32 fid = pass == 0 ? homeId.value(key, Function::invalidId())
+                                    : homeBId.value(key, Function::invalidId());
+            if (fid == Function::invalidId())
+                continue;
+            Scene *scene = qobject_cast<Scene *>(m_doc->function(fid));
+            if (scene == nullptr)
+                continue;
+            QMap<quint32, QPair<int, int> > aim;          // fixture -> pan, tilt
+            QSet<quint32> gotPan, gotTilt;
+            foreach (SceneValue sv, scene->values())
+            {
+                Fixture *fxi = m_doc->fixture(sv.fxi);
+                const QLCChannel *qch = fxi ? fxi->channel(sv.channel) : nullptr;
+                if (qch == nullptr)
+                    continue;
+                bool isPan = qch->preset() == QLCChannel::PositionPan
+                          || (qch->group() == QLCChannel::Pan && qch->controlByte() == QLCChannel::MSB);
+                bool isTilt = qch->preset() == QLCChannel::PositionTilt
+                           || (qch->group() == QLCChannel::Tilt && qch->controlByte() == QLCChannel::MSB);
+                if (isPan)
+                {
+                    aim[sv.fxi].first = int(sv.value);
+                    gotPan.insert(sv.fxi);
+                }
+                else if (isTilt)
+                {
+                    aim[sv.fxi].second = int(sv.value);
+                    gotTilt.insert(sv.fxi);
+                }
+            }
+            foreach (quint32 fxid, aim.keys())
+            {
+                // half an aim is no aim
+                if (g.fixtures.contains(fxid) == false
+                    || gotPan.contains(fxid) == false || gotTilt.contains(fxid) == false)
+                    continue;
+                QPoint p(aim.value(fxid).first, aim.value(fxid).second);
+                if (pass == 0)
+                    g.home.insert(fxid, p);
+                else
+                    g.homeB.insert(fxid, p);
+            }
+        }
+    }
+}
+
 void TrackEngine::ensurePositionScenes()
 {
     // Positions for every group of RGB moving heads, made from the pan/tilt
@@ -1120,10 +1199,44 @@ void TrackEngine::ensurePositionScenes()
                 if (pan == QLCChannel::invalid() || tilt == QLCChannel::invalid())
                     continue;
                 qreal off = i - mid;
-                int panVal = qBound(0, int(qRound(128.0 + defs[d].slope * off + defs[d].panOff
-                                                  + (defs[d].split ? (off < 0 ? -defs[d].split : defs[d].split) : 0))), 255);
-                int tiltVal = qBound(80, int(qRound(defs[d].tilt + ((i % 2) ? defs[d].zig : -defs[d].zig) / 2.0
-                                                    + defs[d].tiltSlope * off)), 176);
+                // where this head lives. With a learned home the whole set is
+                // built around the operator's own aim; without one the middle
+                // of the range has to do
+                bool learned = g.home.contains(fxi->id());
+                QPoint aim = g.home.value(fxi->id(), QPoint(128, 128));
+                // the direction the operator already moves this head in: the
+                // line from its home to its second aim, kept short. Half of it
+                // is as far as a generated position ever goes
+                QPoint away = (learned && g.homeB.contains(fxi->id()))
+                              ? g.homeB.value(fxi->id()) - aim : QPoint(0, 0);
+                if (qAbs(away.x()) > 60) away.setX(away.x() > 0 ? 60 : -60);
+                if (qAbs(away.y()) > 60) away.setY(away.y() > 0 ? 60 : -60);
+
+                // the definition's tilt (80..176 around 128) becomes 'how far
+                // along that safe line', so a head that hangs upside down or
+                // sideways still ends up pointing where the operator points it
+                qreal along = (defs[d].tilt - 128.0) / 48.0;          // -1 .. +1
+                qreal dPan = 0.5 * along * away.x() + defs[d].slope * off + defs[d].panOff
+                           + (defs[d].split ? (off < 0 ? -defs[d].split : defs[d].split) : 0);
+                qreal dTilt = 0.5 * along * away.y()
+                            + ((i % 2) ? defs[d].zig : -defs[d].zig) / 2.0
+                            + defs[d].tiltSlope * off
+                            + (away.isNull() ? (defs[d].tilt - 128.0) : 0.0);
+                // never far from where the operator points this head: a
+                // generated position is a variation on their aim, not a new one
+                dPan = qBound(-45.0, dPan, 45.0);
+                dTilt = qBound(-32.0, dTilt, 32.0);
+                // a head whose aim sits near the end of its travel would just
+                // stand at the stop: send it the other way instead, so every
+                // head in the group actually moves
+                if (aim.x() + dPan < 4.0 || aim.x() + dPan > 251.0)
+                    dPan = -dPan;
+                if (aim.y() + dTilt < 4.0 || aim.y() + dTilt > 251.0)
+                    dTilt = -dTilt;
+                int panVal = qBound(0, int(qRound(aim.x() + dPan)), 255);
+                int tiltVal = qBound(0, int(qRound(aim.y() + dTilt)), 255);
+                if (learned == false)
+                    tiltVal = qBound(80, tiltVal, 176);   // no aim learned: stay in the floor cone
                 values.append(SceneValue(fxi->id(), pan, uchar(panVal)));
                 values.append(SceneValue(fxi->id(), tilt, uchar(tiltVal)));
                 if (panF != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), panF, 0));

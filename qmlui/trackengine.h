@@ -44,6 +44,7 @@
 
 #include <QElapsedTimer>
 #include <QVariantList>
+#include <QPoint>
 #include <QStringList>
 #include <QVector>
 #include <QObject>
@@ -174,6 +175,13 @@ struct TrackGroup
     QMap<quint32, QMap<quint32, QMap<QString, uchar> > > colourValue;  // fixture -> channel -> colour -> value
     QMap<quint32, QMap<quint32, uchar> > baseValue;                     // fixture -> channel -> value
     bool perEye = false;          // several per-eye colour channels: two colours on one lamp
+    /* where these heads really point, learned from 'TRACK Home: <group>' and
+     * 'TRACK Home B: <group>' scenes (lr_import.py writes them from a Light
+     * Rider show). home is the aim the operator lives in; the line home->homeB
+     * is a direction the operator has already used, so it is safe to move
+     * along. Empty: the engine falls back to the middle of the range. */
+    QMap<quint32, QPoint> home;    // fixture -> pan/tilt of its home aim
+    QMap<quint32, QPoint> homeB;   // fixture -> a second aim of the operator's
     bool generatable() const { return patternDevice == false && (rgb || colourValue.isEmpty() == false); }
 };
 
@@ -365,6 +373,7 @@ protected:
     void ensureDimmerScenes();
     void learnGroups();
     void ensureColourScenes();
+    void learnHome();
     void ensurePositionScenes();
     void ensureSweeps();
     void ensureZoomScenes();
