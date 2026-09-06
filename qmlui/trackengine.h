@@ -319,7 +319,7 @@ public:
     void setLogEnabled(bool on);
 
     /* ---- atmosphere: the hazer's fan and output, straight from two sliders ---- */
-    bool hazeAvailable() const;
+    bool hazeAvailable();
     qreal haze() const;
     void setHaze(qreal level);
     qreal fan() const;

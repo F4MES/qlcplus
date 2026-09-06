@@ -187,8 +187,11 @@ void TrackEngine::slotPulseTimer()
                 continue;
             Function *func = m_doc->function(m_active.value(slot));
             if (func != nullptr)
-                m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
-                                    m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_groupTrim.value(key, 1.0) * m_master, 1.0)));
+            {
+                qreal out = m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_groupTrim.value(key, 1.0) * m_master, 1.0);
+                m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
+                m_activeOut.insert(slot, out);
+            }
         }
     }
     if (any == false)
@@ -1032,7 +1035,7 @@ void TrackEngine::ensurePositionScenes()
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        if (g.heads == false || g.rgb == false || g.patternDevice)
+        if (g.heads == false || g.patternDevice)
             continue;
 
         int n = g.fixtures.count();
@@ -1636,8 +1639,9 @@ void TrackEngine::ensureAtmosScenes()
     ensure(ENGINE_FAN_SCENE, m_fanScene, m_fanChannels);
 }
 
-bool TrackEngine::hazeAvailable() const
+bool TrackEngine::hazeAvailable()
 {
+    ensureTable();
     return m_hazeChannels.isEmpty() == false || m_fanChannels.isEmpty() == false;
 }
 
@@ -1875,8 +1879,11 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
             continue;
         Function *func = m_doc->function(m_active.value(slot));
         if (func != nullptr)
-            m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
-                m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(key) * level * m_master, 1.0)));
+        {
+            qreal out = m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(key) * level * m_master, 1.0);
+            m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
+            m_activeOut.insert(slot, out);
+        }
     }
     emit liveChanged();
 }
@@ -2001,8 +2008,11 @@ void TrackEngine::setMaster(qreal level)
             int hash = slot.lastIndexOf('#');
             QString group = hash > 4 ? slot.mid(4, hash - 4) : QString();
             if (func != nullptr)
-                m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR,
-                    m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0)));
+            {
+                qreal out = m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0);
+                m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
+                m_activeOut.insert(slot, out);
+            }
         }
     emit liveChanged();
 }
@@ -2790,7 +2800,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         // the build tightens its figure past the middle
         bool fresh = redraw || m_sweep.contains(key) == false
-                  || (isBuild && prog > 0.5 && beatInBar == 0 && m_sweep.value(key).beats > 4);
+                  || (isBuild && prog > 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0 && m_sweep.value(key).beats > 4);
         if (fresh)
         {
             QList<int> history = m_sweepHistory.value(key);
@@ -2852,9 +2862,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                    && (isDrop || (tier == 1 && energy > 0.5));
     bool landing = isDrop && bar == 0 && isCalm == false;
     if (turnaround && phraseBar == 7 && beatInBar == 3 && energy > 0.6 && ((bar / 8) % 2) == 0)
+    {
         foreach (const QString &key, castSet)
+        {
             if (key != base)
                 darkGroups.insert(key);
+        }
+    }
 
     // this beat's clock: the pulse timer measures its breath against it
     if (bpm > 0.0)
@@ -2871,6 +2885,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
         if (inCast == false)
         {
+            // a held FLASH keeps its parts, in the cast or not
+            if (m_flashHeld.contains(key))
+                continue;
             // lasers cut hard: their aim may change now, and a beam that is
             // still fading would swing while lit
             stopSlot("col:" + key, g.lasers);
@@ -3833,13 +3850,16 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     if (m_logEnabled == false)
         return;
 
+    // one file per date: a desk that runs past midnight starts a new one
+    QString today = QDate::currentDate().toString("yyyyMMdd");
+    if (m_log.isOpen() && m_log.fileName().contains(today) == false)
+        m_log.close();
     if (m_log.isOpen() == false)
     {
         QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
                       + QDir::separator() + "QLC+";
         QDir().mkpath(dir);
-        m_log.setFileName(dir + QDir::separator() + "tracklog-"
-                          + QDate::currentDate().toString("yyyyMMdd") + ".csv");
+        m_log.setFileName(dir + QDir::separator() + "tracklog-" + today + ".csv");
         bool fresh = m_log.exists() == false || m_log.size() == 0;
         if (m_log.open(QIODevice::Append | QIODevice::Text) == false)
         {
@@ -3864,6 +3884,8 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         << QString::number(sectionEnergy, 'f', 2) << ','
         << QString::number(m_master, 'f', 2) << ','
         << QString(m_lastMoves).replace(',', ';') << '\n';
+    out.flush();
+    m_log.flush();                       // the report script reads while we play
 }
 
 void TrackEngine::release()
@@ -3998,6 +4020,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
             // is single-override) or a fresh one if a stop reset them - so it
             // heals a stale ID where adjustAttribute would fail silently
             m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
+            m_activeOut.insert(slot, out);
         }
         m_activeLevel.insert(slot, level);
         return;
