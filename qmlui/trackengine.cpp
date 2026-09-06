@@ -50,6 +50,7 @@
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
 #define ENGINE_EFX_PREFIX     QStringLiteral("TRACK EFX: ")
+#define ENGINE_ZOOM_PREFIX    QStringLiteral("TRACK Zoom: ")
 
 /* colours the house does not like: never in the palette, never as an accent,
  * never generated - even when a scene of that colour exists */
@@ -90,6 +91,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_starCeil(0)
     , m_lastBeat(0)
     , m_calmUntil(0)
+    , m_dropStyle(0)
     , m_logEnabled(true)
     , m_beatMs(500.0)
     , m_beatStartMs(0)
@@ -154,8 +156,22 @@ void TrackEngine::slotPulseTimer()
     // between two beats: let every breathing group's dimmers fall back from
     // the level the beat set, so the light pumps with the kick
     bool any = false;
+    qint64 now = m_clock.elapsed();
     foreach (const QString &key, m_cast)
     {
+        // eighths and sixteenths: the pattern steps between the beats
+        TrackMove mv = m_liveMove.value(key);
+        if (mv.subSteps > 1 && m_patterned.value(key, false) && m_beatMs > 0.0)
+        {
+            any = true;
+            qreal within = qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999);
+            int step = m_beatIndex * mv.subSteps + int(within * mv.subSteps) + mv.phase;
+            QVector<qreal> mask = patternMask(key, mv, step, 1.0);
+            qreal level = m_moveLevel.value(key, 0.0);
+            for (int i = 0; i < mask.count(); i++)
+                setPart(key, i, level * mask.at(i));
+            continue;
+        }
         if (m_pulseDepth.value(key, 0.0) <= 0.0 && m_breathe.value(key, 0) <= 0)
             continue;
         any = true;
@@ -698,6 +714,7 @@ void TrackEngine::ensureTable()
     ensureColourScenes();
     ensurePositionScenes();
     ensureSweeps();
+    ensureZoomScenes();
     ensureDimmerScenes();
     ensureAtmosScenes();
 
@@ -971,14 +988,38 @@ quint32 TrackEngine::splitColourFunction(const QString &group, const QString &a,
 
 void TrackEngine::ensurePositionScenes()
 {
-    // Five positions for every group of RGB moving heads, made from the
-    // pan/tilt/zoom channels: centre, fan, cross, high, low. The numbers are
-    // the ones the rig was aimed with; a chase through them is the heads'
-    // movement when no EFX of the user's is wanted.
-    struct PosDef { const char *name; qreal slope; int tilt; int zoom; };
+    // Positions for every group of RGB moving heads, made from the pan/tilt
+    // channels. slope fans the pan out per head (negative crosses them),
+    // panOff shifts them all, split sends the two halves apart, zig
+    // alternates the tilt head by head, tiltSlope tilts across the row.
+    // Zoom is its own move now (ensureZoomScenes). Names carry the tier
+    // words the picker reads: center/low = break, fan = groove,
+    // cross/high/wide = drop; the rest go anywhere.
+    struct PosDef { const char *name; qreal slope; int tilt; int panOff; int split; int zig; qreal tiltSlope; };
+    // The heads hang upside down from the ceiling: tilt 128 is straight
+    // down at the floor, and every position stays within about 55 degrees
+    // of that - the light belongs on the floor and the room, not the ceiling.
     static const PosDef defs[] = {
-        { "Center", 0.0, 128, 90 }, { "Fan", 14.0, 128, 170 }, { "Cross", -18.0, 112, 120 },
-        { "High", 6.0, 70, 200 },   { "Low", 10.0, 180, 60 } };
+        { "Center",      0.0, 128,   0,  0,  0, 0.0 },
+        { "Fan",        14.0, 128,   0,  0,  0, 0.0 },
+        { "Wide Fan",   26.0, 130,   0,  0,  0, 0.0 },
+        { "Cross",     -18.0, 112,   0,  0,  0, 0.0 },
+        { "Tight Cross",-8.0, 120,   0,  0,  0, 0.0 },
+        { "High",        6.0,  84,   0,  0,  0, 0.0 },
+        { "Low",        10.0, 172,   0,  0,  0, 0.0 },
+        { "Left",        4.0, 124, -40,  0,  0, 0.0 },
+        { "Right",       4.0, 124,  40,  0,  0, 0.0 },
+        { "Zigzag",      8.0, 124,   0,  0, 28, 0.0 },
+        { "Wave",        8.0, 116,   0,  0,  0, 9.0 },
+        { "Floor",       0.0, 138,   0,  0,  0, 0.0 },
+        { "Converge",  -26.0,  98,   0,  0,  0, 0.0 },
+        { "Split",       0.0, 124,   0, 36,  0, 0.0 },
+        { "Fan High",   18.0,  88,   0,  0,  0, 0.0 },
+        { "Fan Low",    14.0, 164,   0,  0,  0, 0.0 },
+        { "Cross Low", -18.0, 150,   0,  0,  0, 0.0 },
+        { "Wall",        0.0,  96,   0,  0,  0, 0.0 },
+        { "Cross Zig", -14.0, 118,   0,  0, 22, 0.0 },
+        { "Wide Wave",  22.0, 124,   0,  0,  0, -8.0 } };
 
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
@@ -1027,13 +1068,18 @@ void TrackEngine::ensurePositionScenes()
                 }
                 if (pan == QLCChannel::invalid() || tilt == QLCChannel::invalid())
                     continue;
-                int panVal = qBound(0, int(qRound(128.0 + defs[d].slope * (i - mid))), 255);
+                qreal off = i - mid;
+                int panVal = qBound(0, int(qRound(128.0 + defs[d].slope * off + defs[d].panOff
+                                                  + (defs[d].split ? (off < 0 ? -defs[d].split : defs[d].split) : 0))), 255);
+                int tiltVal = qBound(80, int(qRound(defs[d].tilt + ((i % 2) ? defs[d].zig : -defs[d].zig) / 2.0
+                                                    + defs[d].tiltSlope * off)), 176);
                 values.append(SceneValue(fxi->id(), pan, uchar(panVal)));
-                values.append(SceneValue(fxi->id(), tilt, uchar(defs[d].tilt)));
+                values.append(SceneValue(fxi->id(), tilt, uchar(tiltVal)));
                 if (panF != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), panF, 0));
                 if (tiltF != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), tiltF, 0));
                 if (speed != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), speed, uchar(speedFastSlow ? 60 : 195)));
-                if (zoom != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), zoom, uchar(zoomSmallBig ? defs[d].zoom : 255 - defs[d].zoom)));
+                Q_UNUSED(zoom)
+                Q_UNUSED(zoomSmallBig)
             }
             if (values.isEmpty())
                 continue;
@@ -1077,6 +1123,78 @@ void TrackEngine::ensurePositionScenes()
             info.fixtureCount = n;
             m_funcs.insert(info.id, info);
         }
+    }
+}
+
+void TrackEngine::ensureZoomScenes()
+{
+    // Three hidden zoom scenes per group of moving heads - narrow, mid,
+    // wide - so the beam is a move of its own: tight beams for big figures
+    // in a drop, a wide wash in a break, wide for a bar when a drop lands.
+    static const char *names[3] = { "Narrow", "Mid", "Wide" };
+    static const int levels[3] = { 40, 130, 225 };
+
+    QMap<QString, quint32> existing;
+    foreach (Function *func, m_doc->functions())
+        if (func != nullptr && func->name().startsWith(ENGINE_ZOOM_PREFIX))
+            existing.insert(func->name().mid(ENGINE_ZOOM_PREFIX.length()), func->id());
+
+    m_zoomScenes.clear();
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.heads == false || g.patternDevice)
+            continue;
+        QList<quint32> ids;
+        for (int z = 0; z < 3; z++)
+        {
+            QList<SceneValue> values;
+            foreach (quint32 fid, g.fixtures)
+            {
+                Fixture *fxi = m_doc->fixture(fid);
+                if (fxi == nullptr)
+                    continue;
+                for (quint32 ch = 0; ch < fxi->channels(); ch++)
+                {
+                    const QLCChannel *qch = fxi->channel(ch);
+                    if (qch == nullptr)
+                        continue;
+                    if (qch->preset() == QLCChannel::BeamZoomSmallBig)
+                        values.append(SceneValue(fid, ch, uchar(levels[z])));
+                    else if (qch->preset() == QLCChannel::BeamZoomBigSmall)
+                        values.append(SceneValue(fid, ch, uchar(255 - levels[z])));
+                }
+            }
+            if (values.isEmpty())
+                break;
+            QString name = QString("%1 %2").arg(key).arg(QLatin1String(names[z]));
+            Scene *scene = nullptr;
+            if (existing.contains(name))
+                scene = qobject_cast<Scene *>(m_doc->function(existing.value(name)));
+            if (scene != nullptr)
+            {
+                foreach (SceneValue old, scene->values())
+                    scene->unsetValue(old.fxi, old.channel);
+                foreach (SceneValue sv, values)
+                    scene->setValue(sv);
+            }
+            else
+            {
+                scene = new Scene(m_doc);
+                scene->setName(ENGINE_ZOOM_PREFIX + name);
+                scene->setVisible(false);
+                foreach (SceneValue sv, values)
+                    scene->setValue(sv);
+                if (m_doc->addFunction(scene) == false)
+                {
+                    delete scene;
+                    break;
+                }
+            }
+            ids.append(scene->id());
+        }
+        if (ids.count() == 3)
+            m_zoomScenes.insert(key, ids);
     }
 }
 
@@ -2196,8 +2314,12 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         if (info->tier == tier) tagged.append(info);
         else if (info->tier < 0) plain.append(info);
     }
-    const QList<TrackFuncInfo *> &pick = tagged.isEmpty() ? (plain.isEmpty() ? safe : plain) : tagged;
-    return pick.at(qAbs(cursor) % pick.count())->id;
+    // the tier's own looks count double, the untagged ones join the pool:
+    // twenty positions are only a variety if they all get their turn
+    QList<TrackFuncInfo *> pool = tagged + tagged + plain;
+    if (pool.isEmpty())
+        pool = safe;
+    return pool.at(qAbs(cursor) % pool.count())->id;
 }
 
 QString TrackEngine::accentFor(const QString &colour) const
@@ -2551,8 +2673,26 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     foreach (const QString &key, castSorted)
         if (key != base) accentGroup = key;      // the last effect group takes the accent
 
+    /* ---- the drop's character: one draw that leans every group's dice
+     *      the same way, so a drop is one idea and the next drop another.
+     *      hard = strobing, sparkling, fast; wide = full, slow trades, big
+     *      figures; tight = chases and lines ---- */
+    if (isDrop && (sectionChanged || m_dropStyle == 0) && hold == false)
+    {
+        QList<int> styles = { 2, 3, 2, 3, 0 };
+        if (energy > 0.45)
+            styles << 1 << 1;
+        if (energy > 0.7)
+            styles << 1;
+        m_dropStyle = styles.at(int(rng->bounded(styles.count())));
+    }
+    else if (isDrop == false)
+        m_dropStyle = 0;
+
     /* ---- moves: every group in the cast draws how it moves this section.
-     *      Long sections redraw every 16 bars, half the time. ---- */
+     *      Long sections redraw every 16 bars, half the time. A pattern the
+     *      group ran in its last two sections is not drawn again if the
+     *      dice can help it. ---- */
     bool redraw = hold == false
                && (sectionChanged || m_moves.isEmpty()
                    || (bar > 0 && bar % 16 == 0 && beatInBar == 0 && rng->bounded(2) == 0));
@@ -2560,12 +2700,41 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         if (redraw == false && m_moves.contains(key))
             continue;
-        TrackMove old = m_moves.value(key);
+        QList<int> history = m_moveHistory.value(key);
         TrackMove fresh = drawMove(key, tier, isBuild, energy, key == base);
-        // not the same pattern twice in a row, if the dice allow
-        if (fresh.pattern != ENGINE_PAT_STATIC && fresh.pattern == old.pattern)
+        for (int attempt = 0; attempt < 4 && fresh.pattern != ENGINE_PAT_STATIC && history.contains(fresh.pattern); attempt++)
             fresh = drawMove(key, tier, isBuild, energy, key == base);
         m_moves.insert(key, fresh);
+        if (fresh.pattern != ENGINE_PAT_STATIC)
+        {
+            history.append(fresh.pattern);
+            while (history.count() > 2)
+                history.removeFirst();
+            m_moveHistory.insert(key, history);
+        }
+    }
+
+    /* ---- texture: the lit fixtures of a group sit at slightly different
+     *      levels and drift a little every bar - a flat group looks like a
+     *      photo, this looks like light ---- */
+    foreach (const QString &key, castSorted)
+    {
+        int n = m_groups.value(key).parts.count();
+        if (n < 2)
+            continue;
+        QVector<qreal> tex = m_texture.value(key);
+        if (tex.count() != n)
+        {
+            tex.resize(n);
+            for (int i = 0; i < n; i++)
+                tex[i] = rng->generateDouble();
+        }
+        else if (beatInBar == 0)
+        {
+            for (int i = 0; i < n; i++)
+                tex[i] = qBound(0.0, tex.at(i) + (rng->generateDouble() - 0.5) * 0.25, 1.0);
+        }
+        m_texture.insert(key, tex);
     }
 
     // how hot a chase may be right now: the stars a motion needs. Drawn once
@@ -2610,14 +2779,67 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                   || (isBuild && prog > 0.5 && beatInBar == 0 && m_sweep.value(key).beats > 4);
         if (fresh)
         {
-            TrackSweep old = m_sweep.value(key);
+            QList<int> history = m_sweepHistory.value(key);
             TrackSweep sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count(), g.lasers);
-            if (sw.shape >= 0 && sw.shape == old.shape && rng->bounded(3) > 0)
+            for (int attempt = 0; attempt < 4 && sw.shape >= 0 && history.contains(sw.shape); attempt++)
                 sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count(), g.lasers);
             m_sweep.insert(key, sw);
+            if (sw.shape >= 0)
+            {
+                history.append(sw.shape);
+                while (history.count() > 2)
+                    history.removeFirst();
+                m_sweepHistory.insert(key, history);
+            }
         }
         applySweep(key, m_sweep.value(key), bpm);
     }
+
+    /* ---- zoom: a move of its own on the heads. Wide in a break, mid in
+     *      the groove, by the drop's character in a drop, tightening through
+     *      a build - and wide for the first bar when a drop lands ---- */
+    foreach (const QString &key, m_zoomScenes.keys())
+    {
+        QString slot = "zoom:" + key;
+        quint32 posId = m_active.value("pos:" + key, Function::invalidId());
+        // only over our own positions: a position of the user's may set its own zoom
+        bool ours = posId != Function::invalidId() && m_funcs.value(posId).generated;
+        if (castSet.contains(key) == false || ours == false || m_blackout)
+        {
+            if (m_active.contains(slot))
+                stopSlot(slot, true);
+            m_zoom.remove(key);
+            continue;
+        }
+        int want = m_zoom.value(key, -1);
+        bool pickZoom = want < 0 || (redraw && hold == false) || (isDrop && bar == 1 && beatInBar == 0)
+                     || (isBuild && beatInBar == 0 && ((prog > 0.5 && want != 0) || (prog <= 0.5 && want == 0)));
+        if (isDrop && bar == 0)
+            want = 2;                                        // the landing: everything wide
+        else if (pickZoom)
+        {
+            if (isBreak)       want = rng->bounded(4) == 0 ? 1 : 2;
+            else if (isBuild)  want = prog > 0.5 ? 0 : 1;
+            else if (isDrop)   want = m_dropStyle == 2 ? 2 : (m_dropStyle == 3 ? 0 : (m_dropStyle == 1 ? int(rng->bounded(2)) : int(rng->bounded(3))));
+            else               want = rng->bounded(3) == 0 ? 2 : 1;
+        }
+        m_zoom.insert(key, want);
+        run(slot, m_zoomScenes.value(key).at(qBound(0, want, 2)), 1.0, 0, true);
+    }
+
+    /* ---- the phrase: bars 7 and 8 of every eight turn around - the
+     *      effects halve their step, and on a hot night the last beat goes
+     *      dark every other phrase, so the one after lands. Bar 1 of a
+     *      drop is the landing: every effect lit and still for a bar. ---- */
+    int phraseBar = bar % 8;
+    bool turnaround = hold == false && isCalm == false && still == false && bar >= 6
+                   && (phraseBar == 6 || phraseBar == 7)
+                   && (isDrop || (tier == 1 && energy > 0.5));
+    bool landing = isDrop && bar == 0 && isCalm == false;
+    if (turnaround && phraseBar == 7 && beatInBar == 3 && energy > 0.6 && ((bar / 8) % 2) == 0)
+        foreach (const QString &key, castSet)
+            if (key != base)
+                darkGroups.insert(key);
 
     // this beat's clock: the pulse timer measures its breath against it
     if (bpm > 0.0)
@@ -2652,10 +2874,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mv.stepBeats = qMax(1, mv.stepBeats >> qBound(0, int(prog * 3.0), 2));
             mv.pulse *= 0.5 + 0.5 * prog;
         }
-        // the turnaround: the last bar of an eight-bar phrase moves twice as
-        // fast, the way a drummer fills into the next phrase
-        else if (isBreak == false && energy > 0.45 && (bar % 8) == 7 && mv.pattern != ENGINE_PAT_STATIC)
-            mv.stepBeats = qMax(1, mv.stepBeats / 2);
+        // the turnaround: bars 7-8 of an eight-bar phrase move twice as
+        // fast, the way a drummer fills into the next phrase - down to
+        // eighths and sixteenths when it is hot. The landing bar stands still
+        else if (key != base && landing)
+            mv.pattern = ENGINE_PAT_STATIC;
+        else if (key != base && turnaround && mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_FILL)
+        {
+            if (mv.stepBeats > 1)
+                mv.stepBeats = qMax(1, mv.stepBeats / 2);
+            else if (mv.subSteps < 4 && energy > 0.55)
+                mv.subSteps *= 2;
+        }
         // a hats-only passage (highs up, no kick) sparkles rather than sits
         if (high > 0.65 && kick >= 0.0 && kick < 0.35 && mv.pattern == ENGINE_PAT_STATIC
             && key != base && isCalm == false && still == false && g.fixtures.count() >= 3)
@@ -2748,7 +2978,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
             if (depth > 0.0 && pulseBeat)
                 m_pulseStart.insert(key, m_clock.elapsed());
-            if (depth > 0.0 || mv.breatheBars > 0)
+            if (depth > 0.0 || mv.breatheBars > 0 || mv.subSteps > 1)
                 anyPulse = true;
             m_pulseDepth.insert(key, depth);
             m_breathe.insert(key, darkGroups.contains(key) ? 0 : mv.breatheBars);
@@ -2759,6 +2989,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             bool patterned = (mf == Function::invalidId() || m_funcs.value(mf).type == int(Function::SceneType))
                           && (cf == Function::invalidId() || m_funcs.value(cf).dimmer == false)
                           && (mf == Function::invalidId() || m_funcs.value(mf).dimmer == false);
+            m_patterned.insert(key, patterned);
+            m_liveMove.insert(key, mv);                  // the shaped move, for the sub-beat steps
             applyMove(key, darkGroups.contains(key) ? 0.0 : groupLevel, beat, secStart, prog, mv, patterned);
             if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1)
                 moveHit = true;
@@ -2819,7 +3051,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                  : moveNames.join(" + "))
         .arg(m_colour.isEmpty() ? tr("(no colour)") : m_colour)
         .arg(accentColour.isEmpty() ? QString() : QString(" + %1").arg(accentColour))
-        .arg(state)
+        .arg(state + (isDrop && m_dropStyle > 0 ? (QString(" ") + QChar(0xb7) + QString(" %1")).arg(m_dropStyle == 1 ? tr("hard") : (m_dropStyle == 2 ? tr("wide") : tr("tight"))) : QString())
+             + (landing ? tr(" landing") : (turnaround ? tr(" turn") : QString())))
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
         .arg(isCalm ? tr("  CALM") : QString())
         .arg(QString(m_hold ? tr("  HOLD") : QString()) + (still ? tr("  STILL") : QString())
@@ -2921,21 +3154,40 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     }
     else
     {
-        // drop: always moving; how fast, how deep, how wild follows the energy
+        // drop: always moving; how fast, how deep, how wild follows the
+        // energy - and the drop's character leans the menu
         qreal wild = ramp(e, 0.20, 0.90);
         QList<int> menu = { ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES, ENGINE_PAT_STATIC };
         if (chance(ramp(e, 0.15, 0.60)))
             menu << ENGINE_PAT_CHASE << ENGINE_PAT_PINGPONG;
         if (chance(ramp(e, 0.55, 0.95)))
             menu << ENGINE_PAT_SPARKLE << ENGINE_PAT_CHASE;
+        if (m_dropStyle == 1)       menu << ENGINE_PAT_SPARKLE << ENGINE_PAT_SPARKLE << ENGINE_PAT_ODDEVEN;
+        else if (m_dropStyle == 2)  menu << ENGINE_PAT_STATIC << ENGINE_PAT_HALVES << ENGINE_PAT_STATIC;
+        else if (m_dropStyle == 3)  menu << ENGINE_PAT_CHASE << ENGINE_PAT_PINGPONG << ENGINE_PAT_CHASE;
         mv.pattern = pick(menu);
         mv.stepBeats = chance(wild) ? pick({ 1, 1, 2 }) : pick({ 2, 4 });
+        if (m_dropStyle == 2)
+            mv.stepBeats = qMax(mv.stepBeats, 2);
+        if (m_dropStyle == 3)
+            mv.stepBeats = 1;
+        // eighths and sixteenths: the fast patterns run between the beats
+        // when it is hot - what makes a drop roll instead of tick
+        bool fast = mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG
+                 || mv.pattern == ENGINE_PAT_ODDEVEN || mv.pattern == ENGINE_PAT_SPARKLE;
+        if (fast && mv.stepBeats == 1 && chance((m_dropStyle == 2 ? 0.2 : 0.6) * ramp(e, 0.45, 0.95)))
+            mv.subSteps = m_dropStyle == 1 ? pick({ 2, 4, 4 }) : pick({ 2, 2, 4 });
         mv.pulse = 0.25 + 0.40 * wild * (0.7 + 0.3 * rng->bounded(1000) / 1000.0);
+        if (m_dropStyle == 2)
+            mv.pulse *= 0.6;
         mv.pulseOn = chance(0.7) ? 0 : pick({ 1, 2 });
-        if (chance(0.5 * ramp(e, 0.30, 0.90)))
+        if (chance((m_dropStyle == 2 ? 0.8 : 0.5) * ramp(e, 0.30, 0.90)))
             mv.colourBars = pick({ 1, 2, 4 });
-        mv.flashBar = chance(0.35 * ramp(e, 0.55, 0.95));
+        mv.flashBar = chance((m_dropStyle == 1 ? 0.7 : 0.35) * ramp(e, 0.55, 0.95));
     }
+
+    // texture: the groove and the break spread the lit fixtures a little
+    mv.texture = tier == 1 ? 0.25 : (tier == 0 ? 0.15 : 0.0);
 
     if (isBase)
     {
@@ -2943,6 +3195,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         if (mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_ODDEVEN && mv.pattern != ENGINE_PAT_HALVES)
             mv.pattern = ENGINE_PAT_HALVES;
         mv.stepBeats = qMax(mv.stepBeats, tier == 2 ? 2 : 4);
+        mv.subSteps = 1;
         mv.pulse = qMin(mv.pulse, 0.30);
         mv.colourBars = 0;
         mv.flashBar = false;
@@ -2962,13 +3215,30 @@ void TrackEngine::applyMove(const QString &group, qreal level, int beat, int sec
     if (n == 0)
         return;
 
-    int pattern = patterned ? move.pattern : ENGINE_PAT_STATIC;
-    int step = (beat - secStart) / qMax(1, move.stepBeats) + move.phase;
+    m_moveLevel.insert(group, level);
+    // the step on the beat; the sub-beat steps come from the pulse timer
+    int step = move.subSteps > 1 ? (beat - secStart) * move.subSteps + move.phase
+                                 : (beat - secStart) / qMax(1, move.stepBeats) + move.phase;
+    TrackMove eff = move;
+    if (patterned == false)
+        eff.pattern = ENGINE_PAT_STATIC;
+    QVector<qreal> mask = patternMask(group, eff, step, prog);
+    for (int i = 0; i < n; i++)
+        setPart(group, i, level * mask.at(i));
+}
+
+QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &move, int step, qreal prog) const
+{
+    const TrackGroup &g = m_groups.value(group);
+    int n = g.parts.count();
+    int pattern = move.pattern;
     // the unlit fixtures of a pattern: dark on effects, dim on the base,
     // which must never look switched off
     qreal dim = g.heads ? 0.35 : (pattern == ENGINE_PAT_CHASE || pattern == ENGINE_PAT_PINGPONG ? 0.0 : 0.15);
 
     QVector<qreal> mask(n, 1.0);
+    if (n == 0)
+        return mask;
     switch (pattern)
     {
         case ENGINE_PAT_CHASE:
@@ -3029,8 +3299,16 @@ void TrackEngine::applyMove(const QString &group, qreal level, int beat, int sec
         break;
     }
 
-    for (int i = 0; i < n; i++)
-        setPart(group, i, level * mask.at(i));
+    // texture: the lit ones sit at slightly different levels
+    if (move.texture > 0.0)
+    {
+        QVector<qreal> tex = m_texture.value(group);
+        if (tex.count() == n)
+            for (int i = 0; i < n; i++)
+                if (mask.at(i) >= 1.0)
+                    mask[i] = 1.0 - move.texture * (1.0 - tex.at(i));
+    }
+    return mask;
 }
 
 QString TrackEngine::partSlot(const QString &group, int index) const
@@ -3070,7 +3348,8 @@ QString TrackEngine::moveName(const TrackMove &move) const
     static const char *names[ENGINE_PAT_COUNT] = { "", "chase", "pingpong", "odd/even", "halves", "sparkle", "fill" };
     QString s;
     if (move.pattern > 0 && move.pattern < ENGINE_PAT_COUNT)
-        s = QString("%1/%2").arg(names[move.pattern]).arg(move.stepBeats);
+        s = move.subSteps > 1 ? QString("%1/1:%2").arg(names[move.pattern]).arg(move.subSteps)
+                              : QString("%1/%2").arg(names[move.pattern]).arg(move.stepBeats);
     if (move.pulse > 0.0)
         s += QString(s.isEmpty() ? "pulse %1" : " pulse %1").arg(int(move.pulse * 100));
     if (move.breatheBars > 0)
@@ -3097,6 +3376,11 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     auto pick = [rng](const QList<int> &opts) { return opts.at(int(rng->bounded(opts.count()))); };
     auto chance = [rng](qreal p) { return rng->bounded(1000) < int(qBound(0.0, p, 1.0) * 1000.0); };
     qreal e = qBound(0.0, energy, 1.0);
+
+    // aim jitter: every section aims a little off the position, so two
+    // sections on the same position do not look the same. Lasers sideways only
+    sw.dx = int(rng->bounded(laser ? 13 : 25)) - (laser ? 6 : 12);
+    sw.dy = laser ? 0 : int(rng->bounded(17)) - 8;
 
     // move at all? a break mostly rests, a drop nearly always moves
     qreal moveP = tier == 0 ? 0.20 + 0.30 * e : (tier == 2 ? 0.85 + 0.15 * e : 0.40 + 0.50 * e);
@@ -3127,8 +3411,10 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     if (build)
         reach = 30.0 + 60.0 * prog;
     qreal size = reach * (0.5 + 0.5 * rng->generateDouble());
+    // pan has the whole room, tilt has the floor: the heads hang from the
+    // ceiling and a figure must not climb the walls
     sw.width = qBound(6, int(size), 127);
-    sw.height = qBound(4, int(size * (0.35 + 0.65 * rng->generateDouble())), 127);
+    sw.height = qBound(4, int(size * (0.35 + 0.65 * rng->generateDouble())), 28);
     if (sw.shape == int(EFX::Line) || sw.shape == int(EFX::Line2))
         sw.rotation = pick(QList<int>() << 0 << 0 << 90 << 30 << 150 << 60 << 120);
     else
@@ -3156,6 +3442,28 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         else if (rel == 4) sw.fan = 360 / heads;
     }
 
+    // the drop's character: hard = big and fast, wide = big and slow,
+    // tight = small quick lines and eights
+    if (tier == 2 && m_dropStyle == 1)
+    {
+        sw.width = qBound(6, int(sw.width * 1.3), 127);
+        sw.beats = qMin(sw.beats, 4);
+    }
+    else if (tier == 2 && m_dropStyle == 2)
+    {
+        sw.width = qBound(6, int(sw.width * 1.3), 127);
+        sw.height = qBound(4, int(sw.height * 1.3), 28);
+        sw.beats = qMax(sw.beats, 8);
+    }
+    else if (tier == 2 && m_dropStyle == 3)
+    {
+        if (sw.shape != int(EFX::Line) && sw.shape != int(EFX::Eight) && sw.shape != int(EFX::Line2))
+            sw.shape = chance(0.5) ? int(EFX::Line) : int(EFX::Eight);
+        sw.width = qBound(6, int(sw.width * 0.6), 60);
+        sw.height = qBound(4, int(sw.height * 0.6), 28);
+        sw.beats = qMin(sw.beats, 4);
+    }
+
     // lasers: sideways only, never lifted off the aim the user gave them,
     // small, and never faster than a bar
     if (laser)
@@ -3178,7 +3486,7 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     if (efx == nullptr)
         return;
     QString slot = "efx:" + group;
-    if (sw.shape < 0)
+    if (sw.shape < 0 && sw.dx == 0 && sw.dy == 0)
     {
         if (m_active.contains(slot))
             stopSlot(slot, true);
@@ -3206,12 +3514,13 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     if (running)
         stopSlot(slot, true);
 
-    efx->setAlgorithm(EFX::Algorithm(sw.shape));
-    efx->setWidth(sw.width);
-    efx->setHeight(sw.height);
+    // no figure but a jitter: a figure of size zero is a still point off the aim
+    efx->setAlgorithm(sw.shape < 0 ? EFX::Circle : EFX::Algorithm(sw.shape));
+    efx->setWidth(sw.shape < 0 ? 0 : sw.width);
+    efx->setHeight(sw.shape < 0 ? 0 : sw.height);
     efx->setRotation(sw.rotation);
-    efx->setXOffset(127);
-    efx->setYOffset(127);
+    efx->setXOffset(qBound(0, 127 + sw.dx, 255));
+    efx->setYOffset(qBound(0, 127 + sw.dy, 255));
     efx->setIsRelative(true);
     efx->setXFrequency(sw.fx);
     efx->setYFrequency(sw.fy);
@@ -3617,6 +3926,7 @@ void TrackEngine::trackLoaded()
     m_castCursor++;
     m_moves.clear();             // the new track draws its own moves
     m_sweep.clear();
+    m_dropStyle = 0;
     m_hitBeats.clear();
     m_starCeil = 0;
 }
@@ -3847,6 +4157,11 @@ void TrackEngine::stopAll()
     m_moves.clear();
     m_sweep.clear();
     m_sweepShown.clear();
+    m_moveHistory.clear();
+    m_sweepHistory.clear();
+    m_liveMove.clear();
+    m_zoom.clear();
+    m_dropStyle = 0;
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();

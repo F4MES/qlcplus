@@ -125,6 +125,8 @@ struct TrackMove
     bool ownChaser = false;   // run one of the user's chases/EFX instead of a pattern
     int breatheBars = 0;      // slow sine on the level over this many bars (breaks)
     int phase = 0;            // random start offset into the pattern
+    int subSteps = 1;         // pattern steps per beat: 1, 2 = eighths, 4 = sixteenths (stepBeats 1 only)
+    qreal texture = 0.0;      // per-fixture level spread among the lit ones, 0..0.3 - a flat group looks static
 };
 
 /** A figure for a group of moving heads: a hidden EFX run RELATIVE to the
@@ -142,11 +144,13 @@ struct TrackSweep
     int fan = 0;              // start offset per head, degrees (0 = all at the same point)
     int fx = 2;               // lissajous frequencies
     int fy = 3;
+    int dx = 0;               // aim jitter: the figure's centre off the aimed position, pan / tilt
+    int dy = 0;
     bool operator==(const TrackSweep &o) const
     {
         return shape == o.shape && width == o.width && height == o.height && rotation == o.rotation
             && beats == o.beats && spread == o.spread && mirror == o.mirror && fan == o.fan
-            && fx == o.fx && fy == o.fy;
+            && fx == o.fx && fy == o.fy && dx == o.dx && dy == o.dy;
     }
 };
 
@@ -363,6 +367,8 @@ protected:
     void ensureColourScenes();
     void ensurePositionScenes();
     void ensureSweeps();
+    void ensureZoomScenes();
+    QVector<qreal> patternMask(const QString &group, const TrackMove &move, int step, qreal prog) const;
     TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads, bool laser) const;
     void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm);
     QString sweepName(const TrackSweep &sweep) const;
@@ -471,6 +477,15 @@ private:
     QMap<QString, quint32> m_sweepFunc;    // head group -> its hidden relative EFX
     QMap<QString, TrackSweep> m_sweep;     // this section's figure per head group
     QMap<QString, TrackSweep> m_sweepShown; // what the EFX is configured to right now
+    QMap<QString, QList<int> > m_moveHistory;   // the last patterns per group - not again
+    QMap<QString, QList<int> > m_sweepHistory;  // the last figures per head group
+    QMap<QString, TrackMove> m_liveMove;   // the move as shaped for this beat (build, turnaround)
+    QMap<QString, qreal> m_moveLevel;      // the level applyMove last gave a group (sub-beat steps)
+    QMap<QString, bool> m_patterned;       // whether that group's pattern is live (sub-beat steps)
+    QMap<QString, QVector<qreal> > m_texture;  // per-fixture spread, drifting slowly
+    QMap<QString, QList<quint32> > m_zoomScenes; // head group -> narrow, mid, wide
+    QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
+    int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
     QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
     QMap<QString, int> m_breathe;          // groups on a slow sine, and over how many bars
