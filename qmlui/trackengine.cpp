@@ -567,14 +567,35 @@ void TrackEngine::ensureTable()
     }
 
     /* ---- functions ---- */
+    // A scene that blends instead of adding is a modifier, not a look: the
+    // Light Rider page's colour masks filter what is already on, and its
+    // GATE SHUT drives every channel to zero. Neither one, and nothing built
+    // out of them, may end up in the table the auto mode picks from.
+    QSet<quint32> modifiers;
+    foreach (Function *func, m_doc->functions())
+        if (func != nullptr && func->blendMode() != Universe::NormalBlend)
+            modifiers.insert(func->id());
+
     QSet<quint32> steps;
+    QSet<quint32> usesModifier;
     foreach (Function *func, m_doc->functions())
     {
         Chaser *chaser = qobject_cast<Chaser *>(func);
         if (chaser != nullptr)
         {
             foreach (ChaserStep step, chaser->steps())
+            {
                 steps.insert(step.fid);
+                if (modifiers.contains(step.fid))
+                    usesModifier.insert(func->id());
+            }
+        }
+        Collection *coll = qobject_cast<Collection *>(func);
+        if (coll != nullptr)
+        {
+            foreach (quint32 fid, coll->functions())
+                if (modifiers.contains(fid))
+                    usesModifier.insert(func->id());
         }
     }
 
@@ -591,6 +612,16 @@ void TrackEngine::ensureTable()
             continue;
         if (func->name().startsWith(ENGINE_DIMMER_PREFIX)
             || func->name() == ENGINE_HAZE_SCENE || func->name() == ENGINE_FAN_SCENE)
+            continue;
+        // A scene that blends instead of adding is a modifier, not a look.
+        // The Light Rider page's mask scenes gate what is already on, and its
+        // GATE SHUT drives every channel to zero - picked up as a colour by
+        // the table below, one of those would filter, or black out, the whole
+        // room in the middle of full auto.
+        if (func->blendMode() != Universe::NormalBlend
+            || usesModifier.contains(func->id()))
+            continue;
+        if (func->path(true).startsWith(QStringLiteral("Light Rider/System")))
             continue;
 
         Function::Type t = func->type();
