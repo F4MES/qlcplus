@@ -111,10 +111,10 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
 {
     QSettings settings;
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
-    m_fadeTimer.setInterval(250);
+    m_fadeTimer.setInterval(20);       // 50 a second: a fade, not a staircase
     connect(&m_fadeTimer, SIGNAL(timeout()), this, SLOT(slotFadeTimer()));
     m_clock.start();
-    m_pulseTimer.setInterval(40);
+    m_pulseTimer.setInterval(20);      // the breath is a slow sine: 25 Hz showed
     connect(&m_pulseTimer, SIGNAL(timeout()), this, SLOT(slotPulseTimer()));
     // MASTER is deliberately not restored: a night that starts at 40 %
     // because someone dimmed last time is worse than one that starts bright
@@ -1644,7 +1644,25 @@ void TrackEngine::ensureColourScenes()
                 }
 
                 bool coloured = false;
-                if (sw != nullptr && rc != QLCChannel::invalid() && gc != QLCChannel::invalid() && bc != QLCChannel::invalid())
+                bool isWhite = colour == QStringLiteral("white");
+                if (isWhite && wc != QLCChannel::invalid())
+                {
+                    // a real white channel: use it alone. R+G+B on top only
+                    // makes it colder and dirtier.
+                    values.append(SceneValue(fid, wc, uchar(255)));
+                    if (rc != QLCChannel::invalid()) values.append(SceneValue(fid, rc, uchar(0)));
+                    if (gc != QLCChannel::invalid()) values.append(SceneValue(fid, gc, uchar(0)));
+                    if (bc != QLCChannel::invalid()) values.append(SceneValue(fid, bc, uchar(0)));
+                    coloured = true;
+                }
+                else if (isWhite && g.colourValue.contains(fid) == false)
+                {
+                    // no white channel and nothing learned from a scene of the
+                    // operator's: this fixture sits the white out rather than
+                    // faking one by driving red, green and blue to full
+                    continue;
+                }
+                else if (sw != nullptr && rc != QLCChannel::invalid() && gc != QLCChannel::invalid() && bc != QLCChannel::invalid())
                 {
                     values.append(SceneValue(fid, rc, uchar(sw->r)));
                     values.append(SceneValue(fid, gc, uchar(sw->g)));
@@ -2128,24 +2146,9 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
         return;
     m_groupTrim.insert(key, level);
 
-    // straight onto the lit parts, no waiting for the beat
-    const TrackGroup &g = m_groups.value(key);
-    for (int i = 0; i < g.parts.count(); i++)
-    {
-        QString slot = partSlot(key, i);
-        if (m_active.contains(slot) == false)
-            continue;
-        Function *func = m_doc->function(m_active.value(slot));
-        if (func != nullptr)
-        {
-            qreal out = m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(key) * level * m_master, 1.0);
-            m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
-            m_activeOut.insert(slot, out);
-        }
-    }
-    // a colour scene that carries its own dimmer is not a part: redraw
-    if (m_startScene)
-        startLook();
+    // straight onto everything that is lit for this group - the dimmer parts
+    // and the colour scene alike - without waiting for the beat
+    reapplyLevels();
     emit liveChanged();
 }
 
@@ -2280,24 +2283,10 @@ void TrackEngine::setMaster(qreal level)
         return;
     m_master = level;
 
-    // re-apply to whatever is lit right now, where the breath stands
-    foreach (const QString &slot, m_active.keys())
-    {
-        if (slot.startsWith("dim:"))
-        {
-            Function *func = m_doc->function(m_active.value(slot));
-            int hash = slot.lastIndexOf('#');
-            QString group = hash > 4 ? slot.mid(4, hash - 4) : QString();
-            if (func != nullptr)
-            {
-                qreal out = m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0);
-                m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
-                m_activeOut.insert(slot, out);
-            }
-        }
-    }
-    if (m_startScene)
-        startLook();                     // colour scenes carry the level too
+    // everything that is lit, not just the hidden dimmer scenes: a group whose
+    // colour scene carries the intensity, or that has no dimmer channel at
+    // all, used to ignore this fader until the next beat - or for ever
+    reapplyLevels();
     emit liveChanged();
 }
 
@@ -3330,11 +3319,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // effects in a break, where it is often the only thing lit
         qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0), 1.0);
         qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_groupTrim.value(key, 1.0) * m_master;
+        // run() puts MASTER and the trim on for us now, so the colour scene
+        // gets the bare level - or the two would multiply
+        qreal glBase = darkGroups.contains(key) ? 0.0 : groupLevel;
         quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
         // colour scenes swap hard: a soft fade left the old colour adding up
         // with the new one on RGB fixtures for a bar - a blend nobody asked for
         if (cf != Function::invalidId())
-            run("col:" + key, cf, m_funcs.value(cf).dimmer ? gl : 1.0, 0, true);
+            run("col:" + key, cf, m_funcs.value(cf).dimmer ? glBase : 1.0, 0, true);
         else
             stopSlot("col:" + key, false);
 
@@ -3424,7 +3416,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_hitBeats.clear();
     while (m_hitBeats.isEmpty() == false && m_hitBeats.first() < beat - 32)
         m_hitBeats.removeFirst();
-    bool crowded = m_hitBeats.count() >= 8;
+    // five in thirty-two beats, and never two within four: an accent has to
+    // be rare enough to read as one
+    bool crowded = m_hitBeats.count() >= 5
+                || (m_hitBeats.isEmpty() == false && beat - m_hitBeats.last() < 4);
     bool hit = isCalm == false && still == false && m_mixing == false
             && ((isBuild && prog > 0.82 && crowded == false)
                 || (isDrop && bar == 0 && beatInBar < 2)
@@ -3491,6 +3486,9 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     const TrackGroup &g = m_groups.value(group);
     qreal e = qBound(0.0, energy, 1.0);
     mv.phase = int(rng->bounded(8));
+    // a strobe group is loud enough on the beat: no sixteenths, no eighths,
+    // and never a step shorter than half a bar
+    const bool tame = g.strobes;
 
     // a pattern device has no intensity to pulse or chase: its own pattern
     // scenes are its movement, and it runs them most of the time
@@ -3619,8 +3617,16 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         mv.colourBars = 0;
         mv.flashBar = false;
     }
-    if (g.strobes)
+    if (tame)
+    {
+        // a strobe group is loud enough on the beat. Sixteenths on six strobes
+        // is not an accent, it is a strobe show - and it was one.
+        mv.subSteps = 1;
+        mv.stepBeats = qMax(2, mv.stepBeats);
+        mv.pulse = qMin(mv.pulse, 0.25);
+        mv.flashBar = false;
         mv.colourBars = 0;
+    }
     if (g.parts.count() < 2)
         mv.pattern = ENGINE_PAT_STATIC;                  // nothing to run across
     return mv;
@@ -3733,6 +3739,62 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
 QString TrackEngine::partSlot(const QString &group, int index) const
 {
     return QString("dim:%1#%2").arg(group).arg(index);
+}
+
+QString TrackEngine::slotGroup(const QString &slot) const
+{
+    int colon = slot.indexOf(':');
+    if (colon < 0)
+        return QString();
+    QString rest = slot.mid(colon + 1);
+    if (slot.startsWith(QStringLiteral("dim:")))
+    {
+        int hash = rest.lastIndexOf('#');
+        if (hash > 0)
+            rest = rest.left(hash);
+    }
+    return m_groups.contains(rest) ? rest : QString();
+}
+
+qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
+{
+    // MASTER and the group trim belong on whatever actually carries the light.
+    // The dimmer scenes get them in setPart(); a colour scene gets them here,
+    // but only when it is the thing holding the intensity - otherwise the two
+    // would multiply and MASTER would square itself.
+    if (slot.startsWith(QStringLiteral("col:")) == false
+        && slot.startsWith(QStringLiteral("idle:")) == false)
+        return 1.0;
+    QString group = slotGroup(slot);
+    const TrackGroup &g = m_groups.value(group);
+    bool carries = m_funcs.value(fid).dimmer || g.hasDimmer == false || g.parts.isEmpty();
+    if (carries == false)
+        return 1.0;
+    return m_master * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
+}
+
+void TrackEngine::reapplyLevels()
+{
+    // a fader moved: straight onto everything that is lit, without waiting
+    // for the next beat to come round
+    if (m_doc == nullptr)
+        return;
+    foreach (const QString &slot, m_active.keys())
+    {
+        quint32 fid = m_active.value(slot);
+        Function *func = m_doc->function(fid);
+        if (func == nullptr)
+            continue;
+        QString group = slotGroup(slot);
+        qreal out = m_activeLevel.value(slot, 1.0);
+        if (slot.startsWith(QStringLiteral("dim:")))
+            out *= pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master;
+        else
+            out *= slotScale(slot, fid);
+        out = m_blackout ? 0.0 : qBound(0.0, out, 1.0);
+        m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
+        m_activeOut.insert(slot, out);
+    }
 }
 
 qreal TrackEngine::pulseFactor(const QString &group) const
@@ -4250,11 +4312,11 @@ void TrackEngine::setStartScene(bool on)
     }
     else
     {
-        if (m_startColour)
-        {
-            m_override.clear();          // ours, not the DJ's: hand it back to AUTO
-            m_startColour = false;
-        }
+        // The start picture's colour never outlives the start picture. It used
+        // to, whenever the DJ tapped a tile while it was up: that cleared the
+        // "this lock is ours" mark, and nothing ever unlocked it again.
+        m_override.clear();
+        m_startColour = false;
         foreach (const QString &slot, m_active.keys())
             stopSlot(slot, false);
         m_cast.clear();
@@ -4304,7 +4366,7 @@ void TrackEngine::startLook()
     // the aim, from the start scene(s)
     foreach (TrackFuncInfo *info, idles)
         run("idle:" + QString::number(info->id), info->id,
-            info->dimmer ? m_startLevel * m_master : 1.0, 0, false);
+            info->dimmer ? m_startLevel : 1.0, 0, false);
 
     foreach (const QString &key, m_groupOrder)
     {
@@ -4319,7 +4381,7 @@ void TrackEngine::startLook()
         quint32 cf = colourFunction(key, colour);
         if (cf != Function::invalidId())
         {
-            run("col:" + key, cf, m_funcs.value(cf).dimmer ? m_startLevel * m_master : 1.0, 0, false);
+            run("col:" + key, cf, m_funcs.value(cf).dimmer ? m_startLevel : 1.0, 0, false);
             lit.insert(key);
         }
         else
@@ -4483,7 +4545,7 @@ void TrackEngine::idle()
         QString colour = m_colour.isEmpty() ? (m_palette.isEmpty() ? QString() : m_palette.first()) : m_colour;
         quint32 cf = colourFunction(base, colour);
         if (cf != Function::invalidId())
-            run("col:" + base, cf, m_funcs.value(cf).dimmer ? 0.35 * m_master : 1.0, 0, false);
+            run("col:" + base, cf, m_funcs.value(cf).dimmer ? 0.35 : 1.0, 0, false);
         if (m_groups.value(base).hasDimmer)
             setDimmer(base, 0.35);
         m_cast.clear();
@@ -4531,7 +4593,8 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     }
 
     level = qBound(0.0, level, 1.0);
-    qreal out = m_blackout ? 0.0 : level;        // a blackout: the function runs, at nothing
+    // a blackout: the function runs, at nothing
+    qreal out = m_blackout ? 0.0 : qBound(0.0, level * slotScale(slot, fid), 1.0);
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
@@ -4647,7 +4710,10 @@ void TrackEngine::tickFades()
     if (m_fadeAttr.isEmpty())
         return;
 
-    const qreal step = 0.25;                 // one bar from full to silent
+    // 20 ms x 0.02 = one second from full to silent, in fifty steps. It used
+    // to be four steps of a quarter, 250 ms apart, which is what "the fades
+    // chop" was: you could count them.
+    const qreal step = 0.02;
     foreach (quint32 fid, m_fadeAttr.keys())
     {
         Function *func = m_doc->function(fid);

@@ -441,6 +441,9 @@ protected:
                    const TrackMove &move, bool patterned);
     void setPart(const QString &group, int index, qreal level);
     QString partSlot(const QString &group, int index) const;
+    QString slotGroup(const QString &slot) const;
+    qreal slotScale(const QString &slot, quint32 fid) const;
+    void reapplyLevels();
     qreal pulseFactor(const QString &group) const;
     QString moveName(const TrackMove &move) const;
 
