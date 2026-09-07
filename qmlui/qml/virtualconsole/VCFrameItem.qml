@@ -85,11 +85,9 @@ VCWidgetItem
             {
                 height: parent.height
                 //radius: 3
-                gradient: Gradient
-                {
-                    GradientStop { position: 0; color: isSolo ? "#BC0A0A" : "#666666" }
-                    GradientStop { position: 1; color: isSolo ? "#370303" : "#000000" }
-                }
+                // a flat header bar: dark for a frame, dark red for a solo
+                // frame, so it is clear which one only runs one thing
+                color: isSolo ? UISettings.vcSoloHeader : UISettings.vcPanelHeader
                 Layout.fillWidth: true
 
                 Text

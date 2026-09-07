@@ -21,6 +21,7 @@
 #include <QXmlStreamWriter>
 #include <QQmlEngine>
 #include <qmath.h>
+#include <QtMath>
 
 #include "treemodelitem.h"
 #include "fixturemanager.h"
@@ -1476,13 +1477,19 @@ void VCSlider::applyFunctionMovement()
     qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
     pos = CLAMP(pos, qreal(0.0), qreal(1.0));
 
-    int size = int(qRound(pos * 255.0));
-    const qreal minMs = 100.0;
+    int size = int(qRound(pos * 127.0));   // EFX clamps at 127
+    // SPEED_CURVE_V2: a fader that is usable for movement. The bottom still
+    // holds the fixtures still; above that the cycle time falls from twenty
+    // seconds to a sixth of a second along a curve, so the speeds anyone
+    // actually wants are spread over the whole travel instead of crammed
+    // into the last centimetre.
+    const qreal slowMs = 20000.0;   // longest cycle, just off the bottom
+    const qreal fastMs = 150.0;     // shortest cycle, at the top
     uint duration;
     if (pos <= qreal(0.0))
-        duration = Function::infiniteSpeed();
+        duration = Function::infiniteSpeed();   // stand still at the bottom
     else
-        duration = uint(qRound(minMs / pos));
+        duration = uint(qRound(slowMs * qPow(fastMs / slowMs, pos)));
 
     foreach (quint32 fid, m_speedFunctions)
     {
@@ -1535,7 +1542,7 @@ void VCSlider::applyFunctionSize()
     qreal span = high - low;
     qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
     pos = CLAMP(pos, qreal(0.0), qreal(1.0));
-    int size = int(qRound(pos * 255.0));
+    int size = int(qRound(pos * 127.0));   // EFX clamps at 127
 
     foreach (quint32 fid, m_speedFunctions)
     {
@@ -1564,12 +1571,18 @@ void VCSlider::applyFunctionSpeed()
     qreal pos = (span > 0) ? (qreal(value()) - low) / span : 0.0;
     pos = CLAMP(pos, qreal(0.0), qreal(1.0));
 
-    const qreal minMs = 100.0;      // shortest duration = fastest, at the top
+    // SPEED_CURVE_V2: a fader that is usable for movement. The bottom still
+    // holds the fixtures still; above that the cycle time falls from twenty
+    // seconds to a sixth of a second along a curve, so the speeds anyone
+    // actually wants are spread over the whole travel instead of crammed
+    // into the last centimetre.
+    const qreal slowMs = 20000.0;   // longest cycle, just off the bottom
+    const qreal fastMs = 150.0;     // shortest cycle, at the top
     uint duration;
     if (pos <= qreal(0.0))
         duration = Function::infiniteSpeed();   // stand still at the bottom
     else
-        duration = uint(qRound(minMs / pos));
+        duration = uint(qRound(slowMs * qPow(fastMs / slowMs, pos)));
 
     foreach (quint32 fid, m_speedFunctions)
     {

@@ -37,7 +37,7 @@ Slider
     property Gradient handleGradientHover: defaultGradientHover
     property color trackColor: defaultTrackColor
 
-    property color defaultTrackColor: "#38b0ff"
+    property color defaultTrackColor: UISettings.vcBarFill
     property Gradient defaultGradient:
         Gradient
         {
@@ -58,27 +58,46 @@ Slider
             GradientStop { position: 1.0; color: "#ccc" }
         }
 
+    // A bar that fills from the bottom, with a lit top edge - the Track
+    // page's language. The old groove was a thin blue line with grey painted
+    // over the unused part, which reads backwards on a dark desk.
     background:
         Rectangle
         {
             y: slider.leftPadding
             x: slider.topPadding + slider.availableWidth / 2 - width / 2
-            //implicitWidth: 5
             implicitHeight: slider.height
-            width: 5
+            width: Math.min(slider.availableWidth,
+                            Math.max(10, Math.min(slider.width * 0.55, UISettings.iconSizeMedium * 0.5)))
             height: slider.availableHeight
-            radius: 2
-            color: trackColor
+            radius: UISettings.vcRadius - 1
+            color: UISettings.vcBarBg
+            border.width: 1
+            border.color: UISettings.vcTileBorder
 
             Rectangle
             {
-                width: parent.width
-                height: slider.visualPosition * parent.height
-                color: "#bdbebf"
-                radius: 2
+                x: 1
+                width: parent.width - 2
+                y: 1 + slider.visualPosition * (parent.height - 2)
+                height: parent.height - 2 - slider.visualPosition * (parent.height - 2)
+                radius: parent.radius
+                color: trackColor
+
+                // the lit top edge: where the level is, seen from across a room
+                Rectangle
+                {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 2
+                    color: UISettings.vcBarEdge
+                    visible: parent.height > 3
+                }
             }
         }
 
+    // A flat grip, wide enough for a thumb, brighter while it is held
     handle:
         Rectangle
         {
@@ -86,9 +105,18 @@ Slider
             x: slider.topPadding + slider.availableWidth / 2 - width / 2
             implicitHeight: Math.min(slider.width, UISettings.iconSizeDefault * 0.75)
             implicitWidth: Math.min(UISettings.iconSizeDefault, slider.width)
-            gradient: pressed ? handleGradientHover : handleGradient
-            border.color: "#5c5c5c"
-            border.width: 1
-            radius: 4
+            color: slider.pressed ? UISettings.vcTilePressed : UISettings.vcTileBg
+            border.color: slider.pressed ? UISettings.vcBarEdge : UISettings.vcTileBorder
+            border.width: slider.pressed ? 2 : 1
+            radius: UISettings.vcRadius - 1
+
+            // a line across the grip, so the exact level is readable
+            Rectangle
+            {
+                anchors.centerIn: parent
+                width: parent.width - 8
+                height: 2
+                color: UISettings.vcBarEdge
+            }
         }
 }

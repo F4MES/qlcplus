@@ -60,6 +60,48 @@ QtObject
     property color toolbarSelectionMain: "#12B4FF"
     property color toolbarSelectionSub:  "yellow"
 
+    /* Virtual Console, in the Track page's language: flat dark tiles, a
+       bright edge when something is on, a bar that fills from the bottom
+       with a lit top. Every VC widget reads from here, so this is the one
+       place to change the look. */
+    property color vcTileBg:         "#2A2A2A"
+    property color vcTileBorder:     "#555555"
+    property color vcTilePressed:    "#3F3F3F"
+    property color vcTileActive:     "#7ED07E"
+    property color vcTileMonitoring: "#E3B44F"
+    property color vcTileIdleEdge:   "#5A5A5A"
+    property color vcTileText:       "#EEEEEE"
+    property color vcPanelBg:        "#161616"
+    property color vcPanelHeader:    "#232323"
+    property color vcSoloHeader:     "#4A1E1E"
+    property color vcBarBg:          "#1B1B1B"
+    property color vcBarFill:        "#4FA3E3"
+    property color vcBarEdge:        "#9BD3FF"
+    property int   vcRadius:         5
+
+    /** The Track page's lettering, built from a widget's own font so the
+        operator's family and size still count. QML refuses an item that sets
+        both 'font:' and 'font.bold:', so the whole font is made here. */
+    function vcFont(src, upper)
+    {
+        var spec = { bold: true,
+                     capitalization: upper ? Font.AllUppercase : Font.MixedCase }
+        if (src)
+        {
+            spec.family = src.family
+            spec.italic = src.italic
+            if (src.pixelSize > 0)
+                spec.pixelSize = src.pixelSize
+            else
+                spec.pointSize = src.pointSize
+        }
+        else
+        {
+            spec.family = robotoFontName
+        }
+        return Qt.font(spec)
+    }
+
     /* Sizes */
     property int  textSizeDefault:  screenPixelDensity * scalingFactor * 4.5
     property real iconSizeDefault:  screenPixelDensity * scalingFactor * 10 // more or less the size of a finger

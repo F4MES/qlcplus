@@ -29,16 +29,16 @@ VCWidgetItem
 
     property int btnState: buttonObj ? buttonObj.state : VCButton.Inactive
     property int btnAction: buttonObj ? buttonObj.actionType : VCButton.Toggle
-    property string activeColor: buttonObj.flashOverrides || buttonObj.flashForceLTP ? "#FF0000" : "#00FF00"
+    // green when a look is on, red when the button overrides or forces
+    // LTP. Guarded: this used to throw on every load while buttonObj was null
+    property string activeColor: buttonObj && (buttonObj.flashOverrides || buttonObj.flashForceLTP)
+                                 ? "#FF6B6B" : UISettings.vcTileActive
 
-    radius: 4
-    border.width: 0
-
-    gradient: Gradient
-    {
-        GradientStop { position: 0 ; color: Qt.lighter(buttonRoot.color, 1.3) }
-        GradientStop { position: 1 ; color: buttonRoot.color }
-    }
+    // A flat tile, like the Track page: no gradient, a thin edge, and the
+    // widget's own colour kept as the fill so the operator's choices stand.
+    radius: UISettings.vcRadius
+    border.width: 1
+    border.color: UISettings.vcTileBorder
 
     function checkActionType()
     {
@@ -77,9 +77,14 @@ VCWidgetItem
         width: parent.width - 2
         height: parent.height - 2
         color: "transparent"
-        border.width: screenPixelDensity * UISettings.scalingFactor * 0.8
-        border.color: btnState === VCButton.Active ? activeColor : btnState === VCButton.Monitoring ? "orange" : "#A0A0A0"
-        radius: 3
+        // on = a bright edge all the way round, off = a quiet one. Nothing
+        // else moves, so a wall of buttons reads at a glance
+        border.width: btnState === VCButton.Inactive
+                      ? 1 : screenPixelDensity * UISettings.scalingFactor * 1.1
+        border.color: btnState === VCButton.Active ? activeColor
+                      : btnState === VCButton.Monitoring ? UISettings.vcTileMonitoring
+                      : UISettings.vcTileIdleEdge
+        radius: UISettings.vcRadius - 1
 
         Rectangle
         {
@@ -107,13 +112,16 @@ VCWidgetItem
                 z: 2
                 width: parent.width - 4
                 height: parent.height
-                font: buttonObj ? buttonObj.font : Qt.font({ family: UISettings.robotoFontName })
+                // one font, built in one place: QML refuses a file that sets
+                // both 'font:' and 'font.bold:' on the same item
+                font: UISettings.vcFont(buttonObj ? buttonObj.font : null, true)
                 text: buttonObj ? buttonObj.caption : ""
                 verticalAlignment: Text.AlignVCenter
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
-                lineHeight: 0.8
-                color: buttonObj ? buttonObj.foregroundColor : "#111"
+                lineHeight: 0.9
+                elide: Text.ElideRight
+                color: buttonObj ? buttonObj.foregroundColor : UISettings.vcTileText
             }
 
             Image
@@ -131,9 +139,24 @@ VCWidgetItem
         }
     }
 
-    MouseArea
+    // a finger on the tile is seen at once, whatever the function does next
+    property bool tileHeld: false
+
+    Rectangle
     {
         anchors.fill: parent
+        radius: UISettings.vcRadius
+        color: "white"
+        opacity: buttonRoot.tileHeld ? 0.16 : 0
+        visible: opacity > 0
+        z: 5
+    }
+
+    MouseArea
+    {
+        id: btnMouse
+        anchors.fill: parent
+        onPressedChanged: buttonRoot.tileHeld = pressed
         enabled: buttonObj && !buttonObj.isDisabled
         onClicked:
         {
@@ -177,6 +200,7 @@ VCWidgetItem
 
         onPressed:
         {
+            buttonRoot.tileHeld = true          // the tile lights under the finger
             if (virtualConsole.editMode)
                 return;
 
@@ -185,6 +209,7 @@ VCWidgetItem
         }
         onReleased:
         {
+            buttonRoot.tileHeld = false
             if (virtualConsole.editMode)
                 return;
 

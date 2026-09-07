@@ -106,10 +106,10 @@ VCWidgetItem
         {
             Layout.alignment: Qt.AlignHCenter
             height: UISettings.listItemHeight
-            font: sliderObj ? sliderObj.font : Qt.font({ family: UISettings.robotoFontName })
+            font: UISettings.vcFont(sliderObj ? sliderObj.font : null, false)
             text: sliderObj ? (sliderObj.valueDisplayStyle === VCSlider.DMXValue ?
                                sliderValue : Math.round((sliderValue * 100.0) / 255.0) + "%") : sliderValue
-            color: sliderObj ? sliderObj.foregroundColor : "white"
+            color: sliderObj ? sliderObj.foregroundColor : UISettings.vcTileText
         }
 
         // the central fader
@@ -125,11 +125,11 @@ VCWidgetItem
             from: sliderObj ? sliderObj.rangeLowLimit : 0
             to: sliderObj ? sliderObj.rangeHighLimit : 255
             value: sliderValue
-            handleGradient: (sliderMode === VCSlider.Submaster || sliderMode === VCSlider.Speed) ? submasterHandleGradient :
-                            (sliderMode === VCSlider.GrandMaster ? grandMasterHandleGradient : defaultGradient)
-            handleGradientHover: (sliderMode === VCSlider.Submaster || sliderMode === VCSlider.Speed) ? submasterHandleGradientHover :
-                                 (sliderMode === VCSlider.GrandMaster ? grandMasterHandleGradientHover : defaultGradientHover)
-            trackColor: (sliderMode === VCSlider.Submaster || sliderMode === VCSlider.Speed) ? "#77DD73" : defaultTrackColor
+            // the mode is told by the colour of the bar, not by the grip:
+            // green for a submaster or a tempo nudge, red for the grand
+            // master, blue for a level
+            trackColor: (sliderMode === VCSlider.Submaster || sliderMode === VCSlider.Speed) ? "#7ED07E" :
+                        (sliderMode === VCSlider.GrandMaster ? "#E36B6B" : UISettings.vcBarFill)
 
             onMoved: if (sliderObj) sliderObj.value = valueAt(position)
 
@@ -163,9 +163,9 @@ VCWidgetItem
             //width: sliderRoot.width
             Layout.fillWidth: true
             height: UISettings.listItemHeight
-            font: sliderObj ? sliderObj.font : Qt.font({ family: UISettings.robotoFontName })
+            font: UISettings.vcFont(sliderObj ? sliderObj.font : null, true)
             text: sliderObj ? sliderObj.caption : ""
-            color: sliderObj ? sliderObj.foregroundColor : "white"
+            color: sliderObj ? sliderObj.foregroundColor : UISettings.vcTileText
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap
 
