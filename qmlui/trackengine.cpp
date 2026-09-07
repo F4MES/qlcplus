@@ -1273,16 +1273,21 @@ void TrackEngine::ensurePositionScenes()
                 // along that safe line', so a head that hangs upside down or
                 // sideways still ends up pointing where the operator points it
                 qreal along = (defs[d].tilt - 128.0) / 48.0;          // -1 .. +1
+                // the heads hang upside down over the floor: going further
+                // down is free, going up is not. A quarter of the way is
+                // enough to shape a look without lighting the ceiling.
+                if (along < 0.0)
+                    along *= 0.30;
                 qreal dPan = 0.5 * along * away.x() + defs[d].slope * off + defs[d].panOff
                            + (defs[d].split ? (off < 0 ? -defs[d].split : defs[d].split) : 0);
                 qreal dTilt = 0.5 * along * away.y()
                             + ((i % 2) ? defs[d].zig : -defs[d].zig) / 2.0
                             + defs[d].tiltSlope * off
-                            + (away.isNull() ? (defs[d].tilt - 128.0) : 0.0);
+                            + (away.isNull() ? (defs[d].tilt - 128.0) * (defs[d].tilt < 128 ? 0.30 : 1.0) : 0.0);
                 // never far from where the operator points this head: a
                 // generated position is a variation on their aim, not a new one
                 dPan = qBound(-45.0, dPan, 45.0);
-                dTilt = qBound(-32.0, dTilt, 32.0);
+                dTilt = qBound(-18.0, dTilt, 26.0);   // and more room downwards than up
                 // a head whose aim sits near the end of its travel would just
                 // stand at the stop: send it the other way instead, so every
                 // head in the group actually moves
@@ -2507,6 +2512,28 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
     return out;
 }
 
+bool TrackEngine::lightsGroup(quint32 fid, const QString &group) const
+{
+    // Does this scene actually put light on this group? A scene named for a
+    // colour that sets nothing here - the wrong fixtures, or all zeroes -
+    // used to be picked anyway, and the group simply went black. That is what
+    // "cyan does not work, it is just black" was.
+    Scene *scene = qobject_cast<Scene *>(m_doc ? m_doc->function(fid) : nullptr);
+    if (scene == nullptr)
+        return true;                     // a chase or an EFX: cannot tell from here
+    const TrackGroup &g = m_groups.value(group);
+    foreach (SceneValue sv, scene->values())
+    {
+        if (sv.value == 0 || g.fixtures.contains(sv.fxi) == false)
+            continue;
+        Fixture *fxi = m_doc->fixture(sv.fxi);
+        const QLCChannel *ch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
+        if (ch != nullptr && ch->group() == QLCChannel::Intensity)
+            return true;
+    }
+    return false;
+}
+
 quint32 TrackEngine::colourFunction(const QString &group, const QString &colour) const
 {
     QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_COLOR, group);
@@ -2517,6 +2544,7 @@ quint32 TrackEngine::colourFunction(const QString &group, const QString &colour)
     foreach (TrackFuncInfo *info, list)
     {
         if (info->groups.count() == 1 && info->colour == colour
+            && lightsGroup(info->id, group)
             && (best == nullptr || info->fixtureCount > best->fixtureCount
                 || (info->fixtureCount == best->fixtureCount && best->generated && info->generated == false)))
             best = info;
@@ -2526,7 +2554,7 @@ quint32 TrackEngine::colourFunction(const QString &group, const QString &colour)
     // anything of this colour that includes the group (a collection)
     foreach (TrackFuncInfo *info, list)
     {
-        if (info->colour == colour)
+        if (info->colour == colour && lightsGroup(info->id, group))
             return info->id;
     }
     // a colourless look for this group (the group has no named colours)
@@ -2853,9 +2881,28 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_colour = m_override;
     else if (changeColour && m_palette.isEmpty() == false)
     {
-        if (m_colour.isEmpty() == false)
-            m_colourCursor++;
-        m_colour = m_palette.at(m_colourCursor % m_palette.count());
+        // Drawn, not counted through. Round-robin means the same order every
+        // night, and white sat in the rotation like a colour - it is not one,
+        // it is a punctuation mark. It comes up about one change in six now,
+        // and the flash still reaches for it whenever it likes.
+        m_colourCursor++;
+        QStringList pool;
+        bool allowWhite = rng->bounded(6) == 0;
+        foreach (const QString &c, m_palette)
+        {
+            if (c == m_colour)
+                continue;
+            if (allowWhite == false && c == QStringLiteral("white"))
+                continue;
+            pool.append(c);
+        }
+        if (pool.isEmpty())
+            foreach (const QString &c, m_palette)
+                if (c != m_colour)
+                    pool.append(c);
+        if (pool.isEmpty())
+            pool = m_palette;
+        m_colour = pool.at(int(rng->bounded(pool.count())));
     }
     else if (m_colour.isEmpty() && m_palette.isEmpty() == false)
         m_colour = m_palette.first();
@@ -3903,14 +3950,17 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         sw.rotation = chance(0.4) ? int(rng->bounded(360)) : 0;
 
     // tempo: beats per figure - in time with the music, faster when hot
+    // Twice as long a figure everywhere as this used to be: nothing in this
+    // room is supposed to look hurried. Four beats at 128 bpm is under two
+    // seconds for a whole circle, and that is now the fastest there is.
     if (tier == 0)
-        sw.beats = pick(QList<int>() << 16 << 32 << 32);
+        sw.beats = pick(QList<int>() << 32 << 48 << 64);
     else if (tier == 2)
-        sw.beats = e > 0.6 ? pick(QList<int>() << 2 << 4 << 4 << 8) : pick(QList<int>() << 4 << 8 << 8 << 16);
+        sw.beats = e > 0.6 ? pick(QList<int>() << 4 << 8 << 8 << 16) : pick(QList<int>() << 8 << 16 << 16 << 32);
     else
-        sw.beats = e > 0.5 ? pick(QList<int>() << 4 << 8 << 8 << 16) : pick(QList<int>() << 8 << 16 << 16 << 32);
+        sw.beats = e > 0.5 ? pick(QList<int>() << 8 << 16 << 16 << 32) : pick(QList<int>() << 16 << 32 << 32 << 48);
     if (build)
-        sw.beats = prog > 0.5 ? pick(QList<int>() << 2 << 4 << 4) : pick(QList<int>() << 8 << 8 << 16);
+        sw.beats = prog > 0.5 ? pick(QList<int>() << 4 << 8 << 8) : pick(QList<int>() << 16 << 16 << 32);
 
     // how the heads relate: in unison, as a wave, one after another,
     // mirrored, or fanned out around the figure
@@ -3929,7 +3979,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     if (tier == 2 && m_dropStyle == 1)
     {
         sw.width = qBound(6, int(sw.width * 1.3), 127);
-        sw.beats = qMin(sw.beats, 4);
+        sw.beats = qMax(8, sw.beats);
     }
     else if (tier == 2 && m_dropStyle == 2)
     {
@@ -3942,19 +3992,31 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         if (sw.shape != int(EFX::Line) && sw.shape != int(EFX::Eight) && sw.shape != int(EFX::Line2))
             sw.shape = chance(0.5) ? int(EFX::Line) : int(EFX::Eight);
         sw.width = qBound(6, int(sw.width * 0.6), 60);
-        sw.height = qBound(4, int(sw.height * 0.6), 28);
-        sw.beats = qMin(sw.beats, 4);
+        sw.height = qBound(10, int(sw.height * 0.6), 28);
+        sw.beats = qMax(8, sw.beats);
     }
 
     // lasers: sideways only, never lifted off the aim the user gave them,
     // small, and never faster than a bar
     if (laser)
     {
+        // The bars hang in a row on the wall and shoot through the room when
+        // they point up. So: stay around the middle of the travel, spread the
+        // bars out rather than swinging them, and only let a drop throw them
+        // wide - and only now and then.
         sw.shape = (sw.shape == int(EFX::Lissajous) || sw.shape == int(EFX::Square)) ? int(EFX::Line) : sw.shape;
         sw.height = 0;
-        sw.width = qBound(4, sw.width / 2, 36);
         sw.rotation = 0;
-        sw.beats = qMax(4, sw.beats);
+        // once in a while on a drop they may take the whole wall: from the
+        // middle, a width of 60-110 reaches out towards both end stops
+        bool wide = tier == 2 && chance(0.20);
+        sw.width = wide ? 60 + int(rng->bounded(50)) : qBound(4, sw.width / 3, 18);
+        sw.beats = qMax(wide ? 16 : 16, sw.beats);
+        sw.dx = int(rng->bounded(9)) - 4;          // barely off the aim
+        // one after another along the wall reads far better than all five
+        // swinging together
+        if (sw.spread == 0 && sw.fan == 0 && heads >= 2 && chance(0.7))
+            sw.fan = 360 / qMax(2, heads);
         if (tier < 2 && chance(0.5))
             sw.shape = -1;
     }
@@ -4485,7 +4547,13 @@ void TrackEngine::release()
     stopSweeps();
     foreach (const QString &slot, m_active.keys())
     {
-        if (slot.startsWith("pos:") == false)
+        // A static aim stays: stopping a laser position is a move in itself,
+        // and a slider may still have the beam lit. An aim that MOVES - an
+        // EFX or a chase on the bars, which is what a laser "position" often
+        // is - has to go, or the bars sweep on after the show is stopped.
+        bool stillAim = slot.startsWith("pos:")
+                     && m_funcs.value(m_active.value(slot)).type == int(Function::SceneType);
+        if (stillAim == false)
             stopSlot(slot, false);
     }
     m_cast.clear();
