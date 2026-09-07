@@ -3534,6 +3534,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     TrackMove mv;
     QRandomGenerator *rng = QRandomGenerator::global();
     auto pick = [rng](const QList<int> &opts) { return opts.at(int(rng->bounded(opts.count()))); };
+    auto chance = [rng](qreal p) { return rng->bounded(1000) < int(qBound(0.0, p, 1.0) * 1000.0); };
     const TrackGroup &g = m_groups.value(group);
     qreal e = qBound(0.0, energy, 1.0);
     mv.phase = int(rng->bounded(8));
@@ -3606,7 +3607,6 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     // threshold. Every chance and depth is a ramp of the energy, so 55 % and
     // 65 % look different, and 100 % is everything at once.
     auto ramp = [](qreal x, qreal from, qreal to) { return qBound(0.0, (x - from) / (to - from), 1.0); };
-    auto chance = [rng](qreal p) { return rng->bounded(1000) < int(p * 1000.0); };
 
     if (tier == 1)
     {
