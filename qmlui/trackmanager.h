@@ -291,7 +291,7 @@ protected:
     void sendMarkers(bool manual = true);
     /** The second pass over a fresh analysis. True when it changed anything. */
     bool refineMarkers();
-    qreal kickMean(int fromBeat, int count) const;
+    qreal kickMean(int fromBeat, int count, bool needHalf = true) const;
     void markersEdited();
     void pushUndo();
     void sendEvent(const QJsonObject &obj);

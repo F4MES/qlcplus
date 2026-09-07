@@ -141,13 +141,32 @@ Rectangle
             border.width: 1
             border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cLine
 
+            // ---- flag tools: a flag on the bar the track is at, the selected
+            //      flag retyped or deleted. What the operator sets is the truth -
+            //      it goes to BLT's cache as manual and teaches the second pass.
+            Item
+            {
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.margins: 8
+                width: flagTools.width
+                height: flagTools.height
+                z: 3
+                visible: trackManager && trackManager.beatCount > 0 && trackManager.roleMode
+
+                // a press that misses a tile must not reach the waveform
+                // underneath and clear the selection the tiles depend on
+                MouseArea { anchors.fill: parent }
+
+                }
+
             // ---- what the analysis and the engine see, drawn over the
             //      waveform: bass as a warm floor, highs as a cool line, kicks
             //      as ticks, section bands with their energy, the played part
             //      of this section tinted in the running colour, and a countdown
             //      to the next section. A finger on a flag selects it (drag to
             //      move it); the tools at the bottom left add, retype and delete.
-            //      (WF_OVERLAY_V6)
+            //      (WF_OVERLAY_V7)
             Canvas
             {
                 id: wfOverlay
@@ -309,11 +328,11 @@ Rectangle
                     function onTrackChanged() { wfOverlay.selected = -1; wfOverlay.requestPaint() }
                     function onMarkersChanged()
                     {
-                        // the list may have shrunk or been reordered: an index
-                        // that is still in range can point at another flag now.
-                        // Our own drag keeps its selection, everything else drops it
-                        if (wfOverlay.selected >= trackManager.markers.length
-                            || trackViewRoot.dragIndex < 0)
+                        // only drop the selection when the flag is actually
+                        // gone. Dropping it on every change meant RETYPE
+                        // deselected the flag it had just retyped, so the
+                        // four-way cycle could never get past one step.
+                        if (wfOverlay.selected >= trackManager.markers.length)
                             wfOverlay.selected = -1
                         wfOverlay.requestPaint()
                     }
@@ -376,8 +395,11 @@ Rectangle
                         width: 96
                         height: 34
                         label: qsTr("RETYPE")
-                        visible: wfOverlay.selected >= 0
-                        opacity: 0.9
+                        // greyed rather than hidden: hiding these re-flowed the
+                        // row and slid UNDO in under the finger that had just
+                        // tapped RETYPE
+                        enabled: wfOverlay.selected >= 0
+                        opacity: enabled ? 0.9 : 0.25
                         onTapped:
                         {
                             var mk = trackManager.markers[wfOverlay.selected]
@@ -393,9 +415,13 @@ Rectangle
                         width: 96
                         height: 34
                         label: qsTr("DELETE")
-                        visible: wfOverlay.selected >= 0
+                        // greyed rather than hidden: hiding these re-flowed the
+                        // row and slid UNDO in under the finger that had just
+                        // tapped RETYPE
+                        enabled: wfOverlay.selected >= 0
+                        opacity: enabled ? 0.9 : 0.25
                         activeColor: "#E36B6B"
-                        active: true
+                        active: wfOverlay.selected >= 0
                         onTapped: { var i = wfOverlay.selected; wfOverlay.selected = -1; trackManager.removeMarker(i) }
                     }
 
@@ -899,7 +925,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V18_START)
+        // =============================================== live controls  (LIVE_V19_START)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -912,7 +938,7 @@ Rectangle
             Layout.preferredHeight: trackViewRoot.touchH * 1.25
             Layout.maximumHeight: trackViewRoot.touchH * 1.25
             spacing: 10
-            visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
+            visible: (trackManager && trackEngine) ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
             // ---- energy: 0..100 %, the one dial. No words on it: the DJ
             //      hears what it does
@@ -941,7 +967,7 @@ Rectangle
                 Text
                 {
                     anchors.centerIn: parent
-                    text: qsTr("ENERGY") + "  " + (trackManager ? Math.min(100, trackManager.energyTrim) : 50) + "%"
+                    text: qsTr("ENERGY") + "  " + (trackManager ? Math.round(Math.min(100, trackManager.energyTrim)) : 50) + "%"
                     color: "#EEEEEE"
                     font.bold: true
                     font.pixelSize: 15
@@ -1043,7 +1069,7 @@ Rectangle
             Layout.preferredHeight: trackViewRoot.touchH * 1.3
             Layout.maximumHeight: trackViewRoot.touchH * 1.3
             spacing: 10
-            visible: trackManager ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
+            visible: (trackManager && trackEngine) ? (trackManager.roleMode && !trackViewRoot.setupOpen) : false
 
             function swatch(name)
             {
@@ -1348,7 +1374,7 @@ Rectangle
             // everything the engine does - lit when the group is in the cast,
             // with a switch to leave it out for the night. Reads as a fader
             // without arrows: a scale on the sides, a bright edge on the level,
-            // and the level line follows the finger. (CAST_V6_NO_STATUS)
+            // and the level line follows the finger. (CAST_V7_SWITCH_GUARD)
             Column
             {
                 id: castPanel
@@ -1430,6 +1456,17 @@ Rectangle
                                 id: castArea
                                 anchors.fill: parent
                                 enabled: !castTile.off
+                                // keep clear of the ON/OFF switch in the top
+                                // right: it is 56x30 with a 5 px margin, and a
+                                // finger that lands just beside it used to fall
+                                // through to here - which reads as "y near the
+                                // top", i.e. this group's trim slammed to full
+                                // in the middle of a track
+                                property bool hasSwitch: modelData && !modelData.base
+                                function onSwitch(x, y)
+                                {
+                                    return hasSwitch && x > width - 74 && y < 48
+                                }
                                 function apply(y)
                                 {
                                     var v = 1 - (y - 3) / (height - 6)
@@ -1437,8 +1474,12 @@ Rectangle
                                     if (v > 0.97) v = 1
                                     if (trackEngine) trackEngine.setGroupTrim(modelData.key, v)
                                 }
-                                onPressed: (mouse) => apply(mouse.y)
-                                onPositionChanged: (mouse) => { if (pressed) apply(mouse.y) }
+                                onPressed: (mouse) => { if (!onSwitch(mouse.x, mouse.y)) apply(mouse.y) }
+                                onPositionChanged: (mouse) =>
+                                {
+                                    if (pressed && !onSwitch(mouse.x, mouse.y))
+                                        apply(mouse.y)
+                                }
                             }
 
                             Column

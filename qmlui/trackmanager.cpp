@@ -1835,7 +1835,7 @@ void TrackManager::sendMarkers(bool manual)
  * break's silence, for THIS room's music.
  *********************************************************************/
 
-qreal TrackManager::kickMean(int fromBeat, int count) const
+qreal TrackManager::kickMean(int fromBeat, int count, bool needHalf) const
 {
     // mean kick 0..1 over [fromBeat, fromBeat + count), -1 without a curve
     if (m_kick.isEmpty())
@@ -1849,7 +1849,9 @@ qreal TrackManager::kickMean(int fromBeat, int count) const
         sum += m_kick.at(b - 1).toInt() / 255.0;
         n++;
     }
-    return n > 0 ? sum / n : -1.0;
+    // half the window has to be there. A short curve used to average over
+    // the one or two beats that were in range and invent a drop at the tail
+    return n > 0 && (needHalf == false || n * 2 >= count) ? sum / n : -1.0;
 }
 
 static int tmSnapBar(int beat)
@@ -1866,28 +1868,39 @@ bool TrackManager::refineMarkers()
 
     struct Flag { int beat; QString type; qreal energy; };
     QList<Flag> flags;
+    bool changed = false;
     for (int i = 0; i < m_markers.count(); i++)
     {
         QVariantMap mk = m_markers.at(i).toMap();
         Flag f;
-        f.beat = tmSnapBar(mk.value(QStringLiteral("beat")).toInt());
+        // snapping rounds up, so the last flag can land past the end -
+        // nextSection() then reports a section that never arrives
+        f.beat = qBound(1, tmSnapBar(mk.value(QStringLiteral("beat")).toInt()), m_beatCount);
         f.type = mk.value(QStringLiteral("type")).toString();
         f.energy = mk.value(QStringLiteral("energy"), -1.0).toDouble();
         if (f.type.isEmpty())
+        {
+            // only the rewrite at the end makes this stick, and that is
+            // skipped when nothing else changed
             f.type = QStringLiteral("normal");
+            changed = true;
+        }
         flags.append(f);
     }
     std::sort(flags.begin(), flags.end(), [](const Flag &a, const Flag &b) { return a.beat < b.beat; });
 
-    bool changed = false;
-    QStringList notes;
+    QStringList notes;                  // changed now lives above the loop
 
     // 1. sections shorter than four bars are noise: the later flag goes,
     //    unless it is a drop landing after a build (that is the point)
     for (int i = 1; i < flags.count(); i++)
     {
+        // the drop-after-build exemption needs the drop to be somewhere
+        // else: two flags on the same beat make a section of zero length
         if (flags.at(i).beat - flags.at(i - 1).beat < 16
-            && !(flags.at(i).type == QStringLiteral("drop") && flags.at(i - 1).type == QStringLiteral("build")))
+            && !(flags.at(i).beat > flags.at(i - 1).beat
+                 && flags.at(i).type == QStringLiteral("drop")
+                 && flags.at(i - 1).type == QStringLiteral("build")))
         {
             notes << QString("merged %1@%2").arg(flags.at(i).type).arg(flags.at(i).beat);
             flags.removeAt(i);
@@ -1944,7 +1957,8 @@ bool TrackManager::refineMarkers()
             start -= 4;
         bool hasBreak = false;
         foreach (const Flag &f, flags)
-            if (f.beat >= start - 8 && f.beat < b && f.type != QStringLiteral("normal"))
+            if (f.beat == start                    // anything already there
+                || (f.beat >= start - 8 && f.beat < b && f.type != QStringLiteral("normal")))
                 hasBreak = true;
         if (hasBreak == false && start < b)
         {
@@ -2054,7 +2068,8 @@ void TrackManager::learnFromFlag(const QString &type, int beat, bool added)
     // The operator is the teacher. A drop they add at a soft kick lowers
     // what the second pass demands of a drop; a drop they delete at a hard
     // kick raises it. Breaks the other way round. Small steps, remembered.
-    qreal k = kickMean(beat, 8);
+    // whatever is in range: a flag two bars from the end still teaches us
+    qreal k = kickMean(beat, 8, false);
     if (k < 0.0)
         return;
     const qreal rate = 0.2;
@@ -2094,6 +2109,10 @@ void TrackManager::pushUndo()
     snap.insert(QStringLiteral("markers"), m_markers);
     snap.insert(QStringLiteral("drop"), m_dropKick);
     snap.insert(QStringLiteral("break"), m_breakKick);
+    // and whether this was a hand-made set at all: undoing the one edit that
+    // made it manual has to make it automatic again, or BLT caches it as a
+    // correction and the second pass never runs for this track again
+    snap.insert(QStringLiteral("manual"), m_markersManual);
     m_undo.append(snap);
     while (m_undo.count() > 30)
         m_undo.removeFirst();
@@ -2112,7 +2131,7 @@ void TrackManager::undoMarkers()
     QSettings settings;
     settings.setValue(SETTINGS_TRACK_DROPKICK, m_dropKick);
     settings.setValue(SETTINGS_TRACK_BREAKKICK, m_breakKick);
-    m_markersManual = true;
+    m_markersManual = snap.value(QStringLiteral("manual"), true).toBool();
     m_lastMoveIndex = -1;
     emit markersChanged();
     updateState();
@@ -2121,7 +2140,7 @@ void TrackManager::undoMarkers()
         m_lastEngineBeat = -1;
         runEngine(true);
     }
-    sendMarkers(true);
+    sendMarkers(m_markersManual);
 }
 
 void TrackManager::sendEvent(const QJsonObject &obj)
@@ -2207,7 +2226,10 @@ void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
             m_nextMarkers.append(marker);
         }
         if (m_nextTitle == m_title)
+        {
             m_nextTitle.clear();         // it is this track, not the next
+            m_nextMarkers.clear();       // ... so these are not its flags either
+        }
         emit mixChanged();
     }
     else if (evt == QStringLiteral("cache"))
