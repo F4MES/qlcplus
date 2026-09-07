@@ -1497,7 +1497,7 @@ void TrackEngine::ensureSweeps()
     }
 }
 
-bool TrackEngine::userAllowed(const TrackFuncInfo &info) const
+bool TrackEngine::userAllowed(const TrackFuncInfo &info, const QString &group) const
 {
     // In FULL AUTO the user's functions step aside wherever the engine can
     // make its own: only pattern devices keep theirs, and laser positions
@@ -1506,6 +1506,23 @@ bool TrackEngine::userAllowed(const TrackFuncInfo &info) const
         return true;
     if (info.groups.isEmpty())
         return true;
+
+    // The group we are picking FOR decides. This used to walk every group the
+    // function touches and allow it as soon as one of them could not be
+    // generated for - so a chase tagged with the heads and the strobes stayed
+    // allowed on the heads, became their motion, and the engine's own figures
+    // never ran at all. A whole night of one chase.
+    if (group.isEmpty() == false)
+    {
+        const TrackGroup &tg = m_groups.value(group);
+        if (tg.generatable() == false)
+            return true;
+        if (info.role == ENGINE_ROLE_POSITION && tg.lasers)
+            return true;
+        return false;
+    }
+
+    // no group asked for: allowed if it is allowed anywhere
     foreach (const QString &g, info.groups)
     {
         const TrackGroup &tg = m_groups.value(g);
@@ -2481,7 +2498,7 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             continue;
         if (m_doc->function(info.id) == nullptr)
             continue;
-        if (userAllowed(info) == false)
+        if (userAllowed(info, group) == false)
             continue;
         out.append(const_cast<TrackFuncInfo *>(&info));
     }
@@ -2967,7 +2984,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
      *      dice can help it. ---- */
     bool redraw = hold == false
                && (sectionChanged || m_moves.isEmpty()
-                   || (bar > 0 && bar % 16 == 0 && beatInBar == 0 && rng->bounded(2) == 0));
+                   || (bar > 0 && bar % 8 == 0 && beatInBar == 0 && rng->bounded(3) > 0));
     foreach (const QString &key, castSorted)
     {
         if (redraw == false && m_moves.contains(key))
@@ -3050,11 +3067,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // heads without a sweep of the user's (or in FULL AUTO): walk through
         // the positions every four bars in the groove, every two in a drop -
         // the pan/tilt speed channel turns each step into a slow sweep
-        if (g.heads && inCast && hold == false && isBreak == false && m_moves.value(key).ownChaser
-            && (m_fullAuto || candidates(ENGINE_ROLE_MOTION, key).isEmpty())
-            && beatInBar == 0 && bar > 0 && (bar % qMax(1, (isDrop ? 2 : 4) * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1))) == 0)
+        int walkBars = qMax(1, (isDrop ? 2 : 4) * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1));
+        if (g.heads && inCast && hold == false && isBreak == false
+            && (m_fullAuto || (m_moves.value(key).ownChaser
+                               && candidates(ENGINE_ROLE_MOTION, key).isEmpty()))
+            && beatInBar == 0 && bar > 0 && (bar % walkBars) == 0)
         {
-            quint32 np = positionFunction(key, m_castCursor + bar, -1);
+            // one step per walk, through the tier's own pool
+            quint32 np = positionFunction(key, m_castCursor + bar / walkBars, tier);
             if (np != Function::invalidId() && np != want)
             {
                 want = np;
@@ -3527,6 +3547,8 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
                 menu << ENGINE_PAT_CHASE << ENGINE_PAT_PINGPONG;
             mv.pattern = pick(menu);
             mv.stepBeats = chance(quick) ? pick({ 2, 4 }) : pick({ 4, 8 });
+            if (mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG)
+                mv.stepBeats = qMin(mv.stepBeats, 4);   // these go to hard black
         }
         else if (isBase)
             mv.breatheBars = 4;                      // still, but alive
@@ -3768,7 +3790,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     sw.dy = laser ? 0 : int(rng->bounded(17)) - 8;
 
     // move at all? a break mostly rests, a drop nearly always moves
-    qreal moveP = tier == 0 ? 0.20 + 0.30 * e : (tier == 2 ? 0.85 + 0.15 * e : 0.40 + 0.50 * e);
+    qreal moveP = tier == 0 ? 0.35 + 0.35 * e : (tier == 2 ? 0.90 + 0.10 * e : 0.75 + 0.25 * e);
     if (build)
         moveP = 0.50 + 0.50 * prog;
     if (chance(moveP) == false)
@@ -3792,14 +3814,15 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
 
     // size: the energy sets the ceiling, the dice the figure. Tilt has less
     // room than pan, and a break barely stirs
-    qreal reach = tier == 0 ? 22.0 : (tier == 2 ? 50.0 + 70.0 * e : 28.0 + 45.0 * e);
+    qreal reach = tier == 0 ? 14.0 : (tier == 2 ? 24.0 + 18.0 * e : 16.0 + 14.0 * e);
     if (build)
-        reach = 30.0 + 60.0 * prog;
+        reach = 18.0 + 26.0 * prog;
     qreal size = reach * (0.5 + 0.5 * rng->generateDouble());
     // pan has the whole room, tilt has the floor: the heads hang from the
     // ceiling and a figure must not climb the walls
     sw.width = qBound(6, int(size), 127);
-    sw.height = qBound(4, int(size * (0.35 + 0.65 * rng->generateDouble())), 28);
+    // 4 units of tilt is eight degrees - a circle that reads as a flat line
+    sw.height = qBound(10, int(size * (0.45 + 0.55 * rng->generateDouble())), 28);
     if (sw.shape == int(EFX::Line) || sw.shape == int(EFX::Line2))
         sw.rotation = pick(QList<int>() << 0 << 0 << 90 << 30 << 150 << 60 << 120);
     else
@@ -3888,7 +3911,8 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         beats = qMax(1, beats / 2);
     uint ms = uint(qMax(250.0, beats * beatMs));
 
-    bool running = m_active.contains(slot) && m_active.value(slot) == fid;
+    bool running = m_active.contains(slot) && m_active.value(slot) == fid
+                && efx->isRunning() && efx->stopped() == false;
     if (running && m_sweepShown.value(group) == sw)
     {
         // the pitch fader drifts the clock: keep the figure on the beat
@@ -4067,6 +4091,8 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
         m_headMoveBeats.insert(key, beats);
         if (beats >= 6)
             found << tr("%1 is moved from elsewhere (Light Rider?)").arg(key);
+        if (g.heads && candidates(ENGINE_ROLE_POSITION, key).isEmpty())
+            found << tr("%1 has no position scene - the heads cannot move").arg(key);
     }
 
     m_warnings = found;

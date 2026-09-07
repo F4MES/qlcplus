@@ -400,7 +400,7 @@ protected:
     void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm);
     QString sweepName(const TrackSweep &sweep) const;
     void stopSweeps();
-    bool userAllowed(const TrackFuncInfo &info) const;
+    bool userAllowed(const TrackFuncInfo &info, const QString &group = QString()) const;
     void genFlash(bool on);
     quint32 dimmerChannel(Fixture *fxi) const;
     int guessStars(const TrackFuncInfo &info) const;
