@@ -67,8 +67,7 @@ Slider
             y: slider.leftPadding
             x: slider.topPadding + slider.availableWidth / 2 - width / 2
             implicitHeight: slider.height
-            width: Math.min(slider.availableWidth,
-                            Math.max(10, Math.min(slider.width * 0.55, UISettings.iconSizeMedium * 0.5)))
+            width: slider.availableWidth
             height: slider.availableHeight
             radius: UISettings.vcRadius - 1
             color: UISettings.vcBarBg
@@ -97,26 +96,16 @@ Slider
             }
         }
 
-    // A flat grip, wide enough for a thumb, brighter while it is held
+    // No grip: the Track page draws a line where the level is and lets
+    // the filled body do the rest. Dragging anywhere on the fader still works.
     handle:
         Rectangle
         {
             y: slider.leftPadding + slider.visualPosition * (slider.availableHeight - height)
-            x: slider.topPadding + slider.availableWidth / 2 - width / 2
-            implicitHeight: Math.min(slider.width, UISettings.iconSizeDefault * 0.75)
-            implicitWidth: Math.min(UISettings.iconSizeDefault, slider.width)
-            color: slider.pressed ? UISettings.vcTilePressed : UISettings.vcTileBg
-            border.color: slider.pressed ? UISettings.vcBarEdge : UISettings.vcTileBorder
-            border.width: slider.pressed ? 2 : 1
-            radius: UISettings.vcRadius - 1
-
-            // a line across the grip, so the exact level is readable
-            Rectangle
-            {
-                anchors.centerIn: parent
-                width: parent.width - 8
-                height: 2
-                color: UISettings.vcBarEdge
-            }
+            x: slider.topPadding
+            implicitWidth: slider.availableWidth
+            implicitHeight: Math.max(3, slider.height * 0.012)
+            color: slider.pressed ? "#FFFFFF" : UISettings.vcBarEdge
+            radius: 1
         }
 }

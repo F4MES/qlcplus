@@ -34,11 +34,26 @@ VCWidgetItem
     property string activeColor: buttonObj && (buttonObj.flashOverrides || buttonObj.flashForceLTP)
                                  ? "#FF6B6B" : UISettings.vcTileActive
 
-    // A flat tile, like the Track page: no gradient, a thin edge, and the
-    // widget's own colour kept as the fill so the operator's choices stand.
+    // TRACKTILE_LOOK: a Track page tile. Flat, and it knows how bright
+    // its own colour is, so the lettering on top can be read either way.
     radius: UISettings.vcRadius
     border.width: 1
     border.color: UISettings.vcTileBorder
+
+    property real tileLuma: 0.299 * color.r + 0.587 * color.g + 0.114 * color.b
+
+    /** The lettering colour the operator picked, unless it is so close to the
+        tile that it cannot be read - WHITE on white, YELLOW on yellow - in
+        which case black or white, whichever stands out. */
+    function readableText(wanted)
+    {
+        if (!wanted || wanted.r === undefined)
+            return wanted
+        var lum = 0.299 * wanted.r + 0.587 * wanted.g + 0.114 * wanted.b
+        if (Math.abs(lum - tileLuma) > 0.35)
+            return wanted
+        return tileLuma > 0.55 ? "#101010" : "#FFFFFF"
+    }
 
     function checkActionType()
     {
@@ -77,11 +92,13 @@ VCWidgetItem
         width: parent.width - 2
         height: parent.height - 2
         color: "transparent"
-        // on = a bright edge all the way round, off = a quiet one. Nothing
-        // else moves, so a wall of buttons reads at a glance
+        // off: a quiet edge. on: the tile's own colour, lightened - the
+        // same move a Track tile makes when it goes active.
         border.width: btnState === VCButton.Inactive
                       ? 1 : screenPixelDensity * UISettings.scalingFactor * 1.1
-        border.color: btnState === VCButton.Active ? activeColor
+        border.color: btnState === VCButton.Active
+                      ? (buttonObj && (buttonObj.flashOverrides || buttonObj.flashForceLTP)
+                         ? "#FF6B6B" : Qt.lighter(buttonRoot.color, 1.5))
                       : btnState === VCButton.Monitoring ? UISettings.vcTileMonitoring
                       : UISettings.vcTileIdleEdge
         radius: UISettings.vcRadius - 1
@@ -121,7 +138,10 @@ VCWidgetItem
                 wrapMode: Text.Wrap
                 lineHeight: 0.9
                 elide: Text.ElideRight
-                color: buttonObj ? buttonObj.foregroundColor : UISettings.vcTileText
+                // the widget's own lettering colour, unless it is too close
+                // to the tile to read - then black or white, whichever wins
+                color: buttonRoot.readableText(buttonObj ? buttonObj.foregroundColor
+                                                        : UISettings.vcTileText)
             }
 
             Image
