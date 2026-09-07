@@ -2897,9 +2897,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             pool.append(c);
         }
         if (pool.isEmpty())
+        {
             foreach (const QString &c, m_palette)
+            {
                 if (c != m_colour)
                     pool.append(c);
+            }
+        }
         if (pool.isEmpty())
             pool = m_palette;
         m_colour = pool.at(int(rng->bounded(pool.count())));
