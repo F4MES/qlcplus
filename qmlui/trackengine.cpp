@@ -1260,34 +1260,34 @@ void TrackEngine::ensurePositionScenes()
                 // built around the operator's own aim; without one the middle
                 // of the range has to do
                 bool learned = g.home.contains(fxi->id());
-                QPoint aim = g.home.value(fxi->id(), QPoint(128, 128));
-                // the direction the operator already moves this head in: the
-                // line from its home to its second aim, kept short. Half of it
-                // is as far as a generated position ever goes
-                QPoint away = (learned && g.homeB.contains(fxi->id()))
-                              ? g.homeB.value(fxi->id()) - aim : QPoint(0, 0);
-                if (qAbs(away.x()) > 60) away.setX(away.x() > 0 ? 60 : -60);
-                if (qAbs(away.y()) > 60) away.setY(away.y() > 0 ? 60 : -60);
+                // STRAIGHT DOWN is the reference. Every head hangs exactly
+                // upside down from the ceiling, so the middle of the tilt
+                // range is the floor beneath it - whatever way the body is
+                // turned on its clamp, and whatever the rider's own aims were.
+                // (Those were the median of a set of static busking looks:
+                // a point, not a home. Half of them pointed at the ceiling,
+                // and every generated position was built around that.)
+                // Pan keeps its learned value only as the direction a lean
+                // goes in; straight down, pan does not matter at all.
+                QPoint aim = QPoint(learned ? g.home.value(fxi->id()).x() : 128, 128);
 
-                // the definition's tilt (80..176 around 128) becomes 'how far
-                // along that safe line', so a head that hangs upside down or
-                // sideways still ends up pointing where the operator points it
-                qreal along = (defs[d].tilt - 128.0) / 48.0;          // -1 .. +1
-                // the heads hang upside down over the floor: going further
-                // down is free, going up is not. A quarter of the way is
-                // enough to shape a look without lighting the ceiling.
-                if (along < 0.0)
-                    along *= 0.30;
-                qreal dPan = 0.5 * along * away.x() + defs[d].slope * off + defs[d].panOff
+                // the definition's tilt, 80..176 around straight down, is how
+                // far the beam leans out; pan fans the heads apart across the
+                // group. Both signs of the lean go out across the floor - one
+                // the way the head is turned, one the other way - so neither
+                // is 'up' and neither is damped.
+                qreal dPan = defs[d].slope * off + defs[d].panOff
                            + (defs[d].split ? (off < 0 ? -defs[d].split : defs[d].split) : 0);
-                qreal dTilt = 0.5 * along * away.y()
+                qreal dTilt = (defs[d].tilt - 128.0)
                             + ((i % 2) ? defs[d].zig : -defs[d].zig) / 2.0
-                            + defs[d].tiltSlope * off
-                            + (away.isNull() ? (defs[d].tilt - 128.0) * (defs[d].tilt < 128 ? 0.30 : 1.0) : 0.0);
-                // never far from where the operator points this head: a
-                // generated position is a variation on their aim, not a new one
+                            + defs[d].tiltSlope * off;
+                // the fan, not a new aim: a head never swings more than this
+                // far from the way it is turned
                 dPan = qBound(-45.0, dPan, 45.0);
-                dTilt = qBound(-18.0, dTilt, 26.0);   // and more room downwards than up
+                // the floor cone: 48 units is about 50 degrees off vertical,
+                // which is as far out as this ceiling lets a beam go before it
+                // is on a wall rather than on the room
+                dTilt = qBound(-48.0, dTilt, 48.0);
                 // a head whose aim sits near the end of its travel would just
                 // stand at the stop: send it the other way instead, so every
                 // head in the group actually moves
@@ -1297,8 +1297,7 @@ void TrackEngine::ensurePositionScenes()
                     dTilt = -dTilt;
                 int panVal = qBound(0, int(qRound(aim.x() + dPan)), 255);
                 int tiltVal = qBound(0, int(qRound(aim.y() + dTilt)), 255);
-                if (learned == false)
-                    tiltVal = qBound(80, tiltVal, 176);   // no aim learned: stay in the floor cone
+                tiltVal = qBound(80, tiltVal, 176);       // always inside the floor cone
                 values.append(SceneValue(fxi->id(), pan, uchar(panVal)));
                 values.append(SceneValue(fxi->id(), tilt, uchar(tiltVal)));
                 if (panF != QLCChannel::invalid()) values.append(SceneValue(fxi->id(), panF, 0));
