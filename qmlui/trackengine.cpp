@@ -56,6 +56,9 @@
 #define ENGINE_ZOOM_PREFIX    QStringLiteral("TRACK Zoom: ")
 #define ENGINE_STROBE_PREFIX  QStringLiteral("TRACK Strobe: ")
 #define ENGINE_OFF_PREFIX     QStringLiteral("TRACK Off: ")
+// How many strobe rates ensureStrobeScenes() builds per group. driveStrobe()
+// draws an index in this range, so the two must never disagree.
+#define ENGINE_STROBE_RATES   6
 
 /* colours the house does not like: never in the palette, never as an accent,
  * never generated - even when a scene of that colour exists */
@@ -1815,8 +1818,15 @@ void TrackEngine::ensureStrobeScenes()
     // it is the thing that was missing. One hidden scene per group per rate;
     // it sets the shutter and NOTHING else, so the colour and the level
     // underneath still decide what the strobe looks like.
-    static const qreal rates[] = { 0.22, 0.45, 0.72, 0.95 };
+    // Where in the shutter channel's strobe band these sit. NOT the whole
+    // band: an LED at the top of it flickers so fast it reads as a slightly
+    // dim steady light rather than a strobe, and the bottom is a slow
+    // heartbeat that fights the beat. Everything usable is in the upper
+    // middle, so all six rates live between 68 % and 90 % and the engine
+    // picks among them rather than climbing to the ceiling.
+    static const qreal rates[] = { 0.68, 0.72, 0.77, 0.81, 0.86, 0.90 };
     const int rateCount = int(sizeof(rates) / sizeof(rates[0]));
+    Q_ASSERT(rateCount == ENGINE_STROBE_RATES);
 
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
@@ -2041,6 +2051,7 @@ void TrackEngine::applyGroupOff()
 void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy, bool isDrop,
                               bool isBuild, qreal prog, int bar, int beatInBar, bool quiet)
 {
+    const int rateCount = ENGINE_STROBE_RATES;
     // When the hardware strobe comes on, how fast it runs, and who joins in.
     // Blinking a dimmer is a pulse; THIS is a strobe, and it is deliberately
     // rare below three-quarters of the fader and everywhere at the top.
@@ -2063,31 +2074,37 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     else if (beat > m_strobeUntil)
     {
         int want = -1, beats = 2;
+        // Which rate is mostly a DRAW, not a function of the energy: every one
+        // of them is inside the usable band, so what the energy buys is how
+        // often the strobe comes and how long it stays, not how fast it runs.
+        // Drawing it means two bursts in a row are never quite the same.
+        int drawn = int(rng->bounded(rateCount));
         // The riser starts earlier in the build the higher the fader is: at a
         // quarter it only arrives in the last eighth, at the top it runs the
-        // last third of the build and climbs all four rates.
+        // last third of the build - and there it does climb, because a riser
+        // that speeds up is the whole point of a riser.
         qreal riserFrom = 0.90 - 0.30 * w;
         if (isBuild && prog > riserFrom && e > 0.18)
         {
             qreal into = qBound(0.0, (prog - riserFrom) / qMax(0.02, 1.0 - riserFrom), 1.0);
-            want = int(qRound(into * (1.0 + 2.0 * w)));  // 0..1 low, 0..3 at the top
+            want = int(qRound(into * qreal(rateCount - 1)));
             beats = 1;
         }
         else if (isDrop && bar == 0 && beatInBar == 0 && e > 0.25)
         {
-            want = int(qRound(3.0 * w));                 // the drop lands
+            want = drawn;                                // the drop lands
             beats = 1 + int(qRound(2.0 * w));
         }
         else if (isDrop && w > 0.0 && beatInBar == 0 && roll(0.05 + 0.70 * w))
         {
-            want = int(qRound(3.0 * w));                 // and again, more and more of it
+            want = drawn;                                // and again, more of it
             beats = 1 + int(qRound(3.0 * w));
         }
         else if (isDrop == false && isBuild == false && w > 0.0
                  && (bar % qMax(2, 10 - int(qRound(8.0 * w)))) == 0
                  && beatInBar == 3 && roll(0.10 + 0.50 * w))
         {
-            want = int(qRound(2.0 * w));                 // a groove gets a taste
+            want = drawn;                                // a groove gets a taste
             beats = 1;
         }
         if (want >= 0)
@@ -2118,7 +2135,9 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         }
         // int(): QList::count() is qsizetype under Qt 6 and qBound would
         // not deduce a common type
-        int r = qBound(0, g.strobes ? m_strobeRate : qMax(0, m_strobeRate - 1),
+        // everyone but the strobe group runs a notch slower, so the strobes
+        // still lead when the whole rig joins in at the top of the fader
+        int r = qBound(0, g.strobes ? m_strobeRate : qMax(0, m_strobeRate - 2),
                        int(ids.count()) - 1);
         if (ids.at(r) == Function::invalidId())
         {
