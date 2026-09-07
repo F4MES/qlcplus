@@ -577,32 +577,43 @@ void TrackEngine::ensureTable()
     // Light Rider page's colour masks filter what is already on, and its
     // GATE SHUT drives every channel to zero. Neither one, and nothing built
     // out of them, may end up in the table the auto mode picks from.
+    // Mask cuts what is already on and Subtractive takes from it; Additive
+    // only adds, which is a perfectly good accent step and stays allowed.
     QSet<quint32> modifiers;
     foreach (Function *func, m_doc->functions())
-        if (func != nullptr && func->blendMode() != Universe::NormalBlend)
+        if (func != nullptr && (func->blendMode() == Universe::MaskBlend
+                                || func->blendMode() == Universe::SubtractiveBlend))
             modifiers.insert(func->id());
 
     QSet<quint32> steps;
     QSet<quint32> usesModifier;
-    foreach (Function *func, m_doc->functions())
+    for (int pass = 0; pass < 4; pass++)
     {
-        Chaser *chaser = qobject_cast<Chaser *>(func);
-        if (chaser != nullptr)
+        int before = usesModifier.count();
+        foreach (Function *func, m_doc->functions())
         {
-            foreach (ChaserStep step, chaser->steps())
+            Chaser *chaser = qobject_cast<Chaser *>(func);
+            if (chaser != nullptr)
             {
-                steps.insert(step.fid);
-                if (modifiers.contains(step.fid))
-                    usesModifier.insert(func->id());
+                foreach (ChaserStep step, chaser->steps())
+                {
+                    if (pass == 0)
+                        steps.insert(step.fid);
+                    if (modifiers.contains(step.fid) || usesModifier.contains(step.fid))
+                        usesModifier.insert(func->id());
+                }
+            }
+            Collection *coll = qobject_cast<Collection *>(func);
+            if (coll != nullptr)
+            {
+                foreach (quint32 fid, coll->functions())
+                    if (modifiers.contains(fid) || usesModifier.contains(fid))
+                        usesModifier.insert(func->id());
             }
         }
-        Collection *coll = qobject_cast<Collection *>(func);
-        if (coll != nullptr)
-        {
-            foreach (quint32 fid, coll->functions())
-                if (modifiers.contains(fid))
-                    usesModifier.insert(func->id());
-        }
+        // a collection of a chaser of a mask scene: keep going until it settles
+        if (usesModifier.count() == before)
+            break;
     }
 
     static const QStringList junkWords = { "blackout", "reset", "new scene", "new chaser",
@@ -611,6 +622,7 @@ void TrackEngine::ensureTable()
 
     QHash<quint32, TrackFuncInfo> old = m_funcs;
     m_funcs.clear();
+    m_blendSkipped.clear();
 
     foreach (Function *func, m_doc->functions())
     {
@@ -624,9 +636,12 @@ void TrackEngine::ensureTable()
         // GATE SHUT drives every channel to zero - picked up as a colour by
         // the table below, one of those would filter, or black out, the whole
         // room in the middle of full auto.
-        if (func->blendMode() != Universe::NormalBlend
-            || usesModifier.contains(func->id()))
+        if (modifiers.contains(func->id()) || usesModifier.contains(func->id()))
+        {
+            if (modifiers.contains(func->id()) == false)
+                m_blendSkipped.insert(func->name());
             continue;
+        }
         if (func->path(true).startsWith(QStringLiteral("Light Rider/System")))
             continue;
 
@@ -1869,8 +1884,8 @@ void TrackEngine::applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32
     // would land: the hazer sits off with the slider up.
     if (value > 0 && (scene->isRunning() == false || scene->stopped()))
         scene->start(m_doc->masterTimer(), FunctionParent::master());
-    else if (value == 0 && scene->isRunning())
-        scene->stop(FunctionParent::master());
+    else if (value == 0 && scene->stopped() == false)
+        scene->stop(FunctionParent::master());   // ... and the same the other way
 }
 
 void TrackEngine::setHaze(qreal level)
@@ -3937,6 +3952,9 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     QStringList found;
     if (m_palette.isEmpty())
         found << tr("no colours found - the engine needs colour scenes, or RGB fixtures to make them from");
+    if (m_blendSkipped.isEmpty() == false)
+        found << tr("not used, built on a mask scene: %1")
+                 .arg(QStringList(m_blendSkipped.values()).join(", "));
     QList<Universe *> universes = m_doc->inputOutputMap()->universes();
 
     foreach (const QString &key, m_groupOrder)
@@ -4143,6 +4161,7 @@ void TrackEngine::announceRoom()
     // the room never got past "warming" all night.
     m_room = p < 45 ? 0 : (p < 65 ? 1 : (p < 82 ? 2 : 3));
     emit roomChanged(p);
+    emit liveChanged();      // 'room' notifies on this one, and it moves now
 }
 
 int TrackEngine::roomByClock() const
@@ -4395,10 +4414,12 @@ void TrackEngine::idle()
     {
         if (slot.startsWith("idle:"))
             continue;
-        // positions stay, exactly as in release(): stopping a laser position
-        // is a move in itself, and a start scene started after this one wins
-        // the aim anyway
-        if (slot.startsWith("pos:"))
+        // our own aims stay, as in release(): stopping a laser position is a
+        // move in itself, and a start scene started after this one wins the
+        // aim anyway. A position of the OPERATOR'S may carry a shutter or a
+        // dimmer of its own, and that would sit at full through the pause.
+        if (slot.startsWith("pos:")
+            && m_funcs.value(m_active.value(slot)).generated)
             continue;
         if (holdBase && (slot == "col:" + base || slot.startsWith("dim:" + base + "#")))
             continue;

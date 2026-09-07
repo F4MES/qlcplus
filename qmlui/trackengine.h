@@ -501,6 +501,7 @@ private:
 
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group
+    QSet<QString> m_blendSkipped;         // functions left out for building on a mask
     QMap<QString, quint32> m_sweepFunc;    // head group -> its hidden relative EFX
     QMap<QString, TrackSweep> m_sweep;     // this section's figure per head group
     QMap<QString, TrackSweep> m_sweepShown; // what the EFX is configured to right now

@@ -407,13 +407,18 @@ Rectangle
                 Rectangle
                 {
                     id: groupTile
+                    // the model is rebuilt on every tableChanged, and a
+                    // delegate can evaluate its bindings while modelData is
+                    // already gone: read it once, through a stand-in
+                    property var g: modelData ? modelData
+                                  : ({ key: "", base: false, enabled: false,
+                                       fixtures: 0, colours: 0, motions: 0, dimmer: false })
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: 3
-                    color: (modelData && modelData.base) ? "#2A3F55" : ((modelData && modelData.enabled) ? "#333333" : "#1F1F1F")
-                    border.width: (modelData && modelData.base) ? 2 : 1
-                    border.color: (modelData && modelData.base) ? "#4FA3E3"
-                                  : ((modelData && modelData.enabled) ? "#666666" : "#333333")
+                    color: g.base ? "#2A3F55" : (g.enabled ? "#333333" : "#1F1F1F")
+                    border.width: g.base ? 2 : 1
+                    border.color: g.base ? "#4FA3E3" : (g.enabled ? "#666666" : "#333333")
 
                     Column
                     {
@@ -423,20 +428,20 @@ Rectangle
                         Text
                         {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: modelData.key
-                                  + (modelData.base ? "  · BASE" : (modelData.enabled ? "" : "  · OFF"))
-                            color: modelData.enabled ? setupRoot.cText : "#666666"
+                            text: groupTile.g.key
+                                  + (groupTile.g.base ? "  · BASE" : (groupTile.g.enabled ? "" : "  · OFF"))
+                            color: groupTile.g.enabled ? setupRoot.cText : "#666666"
                             font.bold: true
                             font.pixelSize: 12
                         }
                         Text
                         {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: modelData.fixtures + " fx · "
-                                  + modelData.colours + " col · "
-                                  + modelData.motions + " mot · "
-                                  + (modelData.dimmer ? qsTr("dimmer") : qsTr("NO DIMMER"))
-                            color: modelData.dimmer ? setupRoot.cDim : "#E36B6B"
+                            text: groupTile.g.fixtures + " fx · "
+                                  + groupTile.g.colours + " col · "
+                                  + groupTile.g.motions + " mot · "
+                                  + (groupTile.g.dimmer ? qsTr("dimmer") : qsTr("NO DIMMER"))
+                            color: groupTile.g.dimmer ? setupRoot.cDim : "#E36B6B"
                             font.pixelSize: 10
                         }
                     }
@@ -446,7 +451,7 @@ Rectangle
                     MouseArea
                     {
                         anchors.fill: parent
-                        onClicked: trackEngine.cycleGroup(modelData.key)
+                        onClicked: if (trackEngine && groupTile.g.key) trackEngine.cycleGroup(groupTile.g.key)
                     }
                 }
             }
