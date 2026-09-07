@@ -436,7 +436,8 @@ protected:
     void setDimmer(const QString &group, qreal level);
 
     /* generated motion */
-    TrackMove drawMove(const QString &group, int tier, bool build, qreal energy, bool isBase) const;
+    TrackMove drawMove(const QString &group, int tier, bool build, qreal energy, bool isBase,
+                       qreal prog = 0.0) const;
     void applyMove(const QString &group, qreal level, int beat, int secStart, qreal prog,
                    const TrackMove &move, bool patterned);
     void setPart(const QString &group, int index, qreal level);
@@ -496,6 +497,7 @@ private:
     QMap<quint32, int> m_lastPan;         // last pan reading per head, for the Light Rider check
     QMap<QString, int> m_headMoveBeats;   // beats in a row a head group moved without us
     int m_effects;            // effect groups this section (locked, hysteresis)
+    int m_effectsBefore;      // what the section before a build had
     int m_starCeil;           // hottest star allowed this section (drawn from the energy)
     int m_lastBeat;
     int m_calmUntil;          // beat until which the panic look holds

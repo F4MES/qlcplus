@@ -91,6 +91,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_speed(0)
     , m_flash(false)
     , m_effects(0)
+    , m_effectsBefore(0)
     , m_starCeil(0)
     , m_lastBeat(0)
     , m_calmUntil(0)
@@ -2939,24 +2940,37 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // how many effect groups join the base: a ramp of the energy, with the
     // fraction decided by dice once per section - 55 % and 65 % differ
     auto effectsFor = [&energy, rng](bool drop, bool brk) {
+        // a break used to empty the room down to the base. Late in the night
+        // it keeps one group as well - quieter than a groove, not dark.
         if (brk)
-            return 0;
-        qreal want = drop ? 2.0 * qBound(0.0, (energy - 0.15) / 0.65, 1.0)
-                          : 1.0 * qBound(0.0, (energy - 0.30) / 0.45, 1.0);
+            return energy > 0.45 && rng->bounded(3) > 0 ? 1 : 0;
+        // The top of the ENERGY fader has to mean something: at full it is
+        // three groups on a drop and two in a groove, not two and one.
+        qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.15) / 0.75, 1.0)
+                          : 2.0 * qBound(0.0, (energy - 0.25) / 0.65, 1.0);
         int whole = int(want);
         qreal frac = want - whole;
         return whole + (rng->bounded(1000) < int(frac * 1000.0) ? 1 : 0);
     };
     if ((sectionChanged || m_lastState.isEmpty()) && hold == false)
     {
+        m_effectsBefore = m_effects;
         int want = effectsFor(isDrop, isBreak);
         m_effects = qBound(m_effects - 1, want, m_effects + 1);
     }
     m_lastState = state;
 
     int effects = m_effects;
+    // a build is the room filling up: it never has fewer groups than the
+    // section before it, and past the middle it reaches for one more
+    if (isBuild)
+    {
+        effects = qMax(effects, m_effectsBefore);
+        if (prog > 0.5 && energy > 0.30)
+            effects = qMax(effects, m_effectsBefore + 1);
+    }
     if (preDrop)     // no dice here: four beats of joining and leaving would flicker
-        effects = qMax(effects, int(qRound(2.0 * qBound(0.0, (energy - 0.15) / 0.65, 1.0))));
+        effects = qMax(effects, int(qRound(3.0 * qBound(0.0, (energy - 0.15) / 0.75, 1.0))));
     if (isCalm || still)
         effects = 0;
     if (base.isEmpty())
@@ -3041,9 +3055,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (redraw == false && m_moves.contains(key))
             continue;
         QList<int> history = m_moveHistory.value(key);
-        TrackMove fresh = drawMove(key, tier, isBuild, energy, key == base);
+        TrackMove fresh = drawMove(key, tier, isBuild, energy, key == base, prog);
         for (int attempt = 0; attempt < 4 && fresh.pattern != ENGINE_PAT_STATIC && history.contains(fresh.pattern); attempt++)
-            fresh = drawMove(key, tier, isBuild, energy, key == base);
+            fresh = drawMove(key, tier, isBuild, energy, key == base, prog);
         m_moves.insert(key, fresh);
         if (fresh.pattern != ENGINE_PAT_STATIC)
         {
@@ -3149,7 +3163,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
 
     /* ---- levels: the build climbs like a snare roll, not a straight line ---- */
-    qreal tierLevel = isBreak ? 0.35
+    qreal tierLevel = isBreak ? 0.55
                     : isBuild ? (0.40 + 0.60 * prog * prog)
                     : isDrop  ? 1.0
                               : 0.70;
@@ -3466,10 +3480,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_hitBeats.clear();
     while (m_hitBeats.isEmpty() == false && m_hitBeats.first() < beat - 32)
         m_hitBeats.removeFirst();
-    // five in thirty-two beats, and never two within four: an accent has to
-    // be rare enough to read as one
-    bool crowded = m_hitBeats.count() >= 5
-                || (m_hitBeats.isEmpty() == false && beat - m_hitBeats.last() < 4);
+    // How often an accent may land is the energy's job: three in thirty-two
+    // beats when the room is quiet, ten when it is not, and never two on top
+    // of each other. Quiet nights stay calm; a full fader gets a real show.
+    int hitCeil = 3 + int(qRound(7.0 * qBound(0.0, (energy - 0.30) / 0.60, 1.0)));
+    int hitGap = energy > 0.75 ? 2 : 4;
+    bool crowded = m_hitBeats.count() >= hitCeil
+                || (m_hitBeats.isEmpty() == false && beat - m_hitBeats.last() < hitGap);
     bool hit = isCalm == false && still == false && m_mixing == false
             && ((isBuild && prog > 0.82 && crowded == false)
                 || (isDrop && bar == 0 && beatInBar < 2)
@@ -3524,7 +3541,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
  * Generated motion
  *********************************************************************/
 
-TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qreal energy, bool isBase) const
+TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qreal energy, bool isBase, qreal prog) const
 {
     // The menu grows with the energy. Low: a static look, nothing else.
     // Middle: colour trades and a soft pulse. High: everything, fast.
@@ -3537,15 +3554,44 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     const TrackGroup &g = m_groups.value(group);
     qreal e = qBound(0.0, energy, 1.0);
     mv.phase = int(rng->bounded(8));
-    // a strobe group is loud enough on the beat: no sixteenths, no eighths,
-    // and never a step shorter than half a bar
-    const bool tame = g.strobes;
 
     // a pattern device has no intensity to pulse or chase: its own pattern
     // scenes are its movement, and it runs them most of the time
     if (g.patternDevice)
     {
         mv.ownChaser = tier > 0 && rng->bounded(10) < 8;
+        return mv;
+    }
+
+    // A strobe is not a light source, it is a rhythm instrument. It belongs
+    // ON the beat and dark between the beats - standing lit with a wobble on
+    // top is what made them read as ugly floodlights. So: a deep pulse (full
+    // on the beat, gone well before the next one), a still picture underneath
+    // so nothing fights the blink, and the energy decides how often it lands.
+    if (g.strobes)
+    {
+        mv.pattern = e > 0.60 && g.parts.count() >= 2
+                   ? pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_STATIC })
+                   : ENGINE_PAT_STATIC;
+        mv.stepBeats = 4;
+        mv.subSteps = 1;
+        mv.breatheBars = 0;
+        mv.texture = 0.0;
+        mv.colourBars = 0;
+        mv.ownChaser = false;
+        // near-total at the bottom of the fader, total at the top: either way
+        // there is nothing between the blinks
+        mv.pulse = 0.85 + 0.15 * e;
+        // the downbeat while the room is quiet, the backbeat in between,
+        // every beat once it is going. A build hands them over to the beat as
+        // it runs out; a break gets the downbeat and nothing else.
+        if (tier == 0)
+            mv.pulseOn = 3;
+        else if (build)
+            mv.pulseOn = prog > 0.60 ? 0 : 1;
+        else
+            mv.pulseOn = e < 0.35 ? 3 : (e < 0.60 ? pick({ 1, 2 }) : 0);
+        mv.flashBar = tier == 2 && e > 0.75 && chance(0.4);
         return mv;
     }
 
@@ -3581,14 +3627,21 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     if (build)
     {
         // the fill grows with the build; the pulse comes in on the offbeats
-        mv.pattern = rng->bounded(3) == 0 ? ENGINE_PAT_STATIC : ENGINE_PAT_FILL;
-        mv.pulse = e < 0.35 ? 0.0 : 0.15 + 0.25 * e;
+        mv.pattern = ENGINE_PAT_FILL;
+        // the pulse arrives with the build rather than waiting for the energy
+        mv.pulse = 0.10 + 0.30 * prog;
         mv.pulseOn = pick({ 0, 0, 2 });
         mv.ownChaser = rng->bounded(2) == 0;
         if (isBase)
         {
-            mv.pattern = ENGINE_PAT_STATIC;
-            mv.pulse = qMin(mv.pulse, 0.25);
+            // the base carries the build: a fill that grows across the heads,
+            // stepping faster as the section runs out. It used to be pinned
+            // to STATIC, which left the build as a slow brightness ramp on a
+            // still picture - and the base is usually the only group lit.
+            mv.pattern = ENGINE_PAT_FILL;
+            mv.stepBeats = prog > 0.6 ? 1 : 2;
+            mv.subSteps = 1;
+            mv.pulse = qMin(mv.pulse, 0.30);
         }
         return mv;
     }
@@ -3678,16 +3731,6 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         mv.pulse = qMin(mv.pulse, 0.30);
         mv.colourBars = 0;
         mv.flashBar = false;
-    }
-    if (tame)
-    {
-        // a strobe group is loud enough on the beat. Sixteenths on six strobes
-        // is not an accent, it is a strobe show - and it was one.
-        mv.subSteps = 1;
-        mv.stepBeats = qMax(2, mv.stepBeats);
-        mv.pulse = qMin(mv.pulse, 0.25);
-        mv.flashBar = false;
-        mv.colourBars = 0;
     }
     if (g.parts.count() < 2)
         mv.pattern = ENGINE_PAT_STATIC;                  // nothing to run across
@@ -3869,7 +3912,10 @@ qreal TrackEngine::pulseFactor(const QString &group) const
     qreal depth = m_pulseDepth.value(group, 0.0);
     if (depth > 0.0 && m_pulseStart.contains(group))
     {
-        qreal tau = qMax(40.0, m_beatMs * 0.25);
+        // A quarter of a beat is a kick - right for a wash, far too soft for
+        // a strobe, which has to be lit and dark again inside a tenth of one.
+        qreal tau = m_groups.value(group).strobes ? qMax(20.0, m_beatMs * 0.09)
+                                                  : qMax(40.0, m_beatMs * 0.25);
         qreal t = qreal(now - m_pulseStart.value(group));
         factor *= (1.0 - depth) + depth * std::exp(-t / tau);
     }
@@ -3926,9 +3972,12 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     sw.dy = laser ? 0 : int(rng->bounded(17)) - 8;
 
     // move at all? a break mostly rests, a drop nearly always moves
-    qreal moveP = tier == 0 ? 0.35 + 0.35 * e : (tier == 2 ? 0.90 + 0.10 * e : 0.75 + 0.25 * e);
+    // A break and a build were the two places a figure was least likely to be
+    // drawn - and they are exactly where a still rig is noticed. Both are now
+    // near-certain; a break just gets a very slow one.
+    qreal moveP = tier == 0 ? 0.80 + 0.20 * e : (tier == 2 ? 0.90 + 0.10 * e : 0.85 + 0.15 * e);
     if (build)
-        moveP = 0.50 + 0.50 * prog;
+        moveP = 0.90 + 0.10 * prog;
     if (chance(moveP) == false)
         return sw;
 
@@ -3950,7 +3999,9 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
 
     // size: the energy sets the ceiling, the dice the figure. Tilt has less
     // room than pan, and a break barely stirs
-    qreal reach = tier == 0 ? 14.0 : (tier == 2 ? 24.0 + 18.0 * e : 16.0 + 14.0 * e);
+    // a break's figure is wide enough to see but takes half a minute to walk
+    // it; that is the whole point of a break
+    qreal reach = tier == 0 ? 20.0 : (tier == 2 ? 24.0 + 18.0 * e : 16.0 + 14.0 * e);
     if (build)
         reach = 18.0 + 26.0 * prog;
     qreal size = reach * (0.5 + 0.5 * rng->generateDouble());
@@ -4019,21 +4070,33 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // they point up. So: stay around the middle of the travel, spread the
         // bars out rather than swinging them, and only let a drop throw them
         // wide - and only now and then.
-        sw.shape = (sw.shape == int(EFX::Lissajous) || sw.shape == int(EFX::Square)) ? int(EFX::Line) : sw.shape;
-        sw.height = 0;
+        // A laser bar has ONE axis - tilt - and no pan at all. The figure
+        // therefore has to live on the Y amplitude; width was driving an axis
+        // these fixtures do not have, so every laser figure was a no-op.
+        // Line gives x == y, and rotateAndScale sends the tilt output to
+        // YOffset + y * height when the rotation is zero. So: Line, rotation
+        // 0, and the amplitude on HEIGHT. (Rotation 90 cancels the height
+        // term entirely - that is the same standing-still bug, reversed.)
+        sw.shape = int(EFX::Line);
         sw.rotation = 0;
-        // once in a while on a drop they may take the whole wall: from the
-        // middle, a width of 60-110 reaches out towards both end stops
+        sw.width = 0;
+        // The mirrors are delicate: everything here is slow and small. Around
+        // the middle of the travel normally; on a drop, now and then, they may
+        // take the whole wall - still slowly.
         bool wide = tier == 2 && chance(0.20);
-        sw.width = wide ? 60 + int(rng->bounded(50)) : qBound(4, sw.width / 3, 18);
-        sw.beats = qMax(wide ? 16 : 16, sw.beats);
-        sw.dx = int(rng->bounded(9)) - 4;          // barely off the aim
-        // one after another along the wall reads far better than all five
-        // swinging together
-        if (sw.spread == 0 && sw.fan == 0 && heads >= 2 && chance(0.7))
+        sw.height = wide ? 40 + int(rng->bounded(30)) : 8 + int(rng->bounded(11));
+        sw.beats = qMax(wide ? 32 : 24, sw.beats);
+        sw.dx = 0;
+        sw.dy = int(rng->bounded(9)) - 4;          // barely off the aim
+        // one after another along the wall, always: five bars swinging in
+        // unison is the one thing that never looks good
+        if (heads >= 2)
+        {
+            sw.spread = 1;                         // a wave down the row
             sw.fan = 360 / qMax(2, heads);
-        if (tier < 2 && chance(0.5))
-            sw.shape = -1;
+        }
+        if (tier == 0 && chance(0.35))
+            sw.shape = -1;                         // a break may leave them still
     }
     return sw;
 }
@@ -4448,7 +4511,9 @@ void TrackEngine::startLook()
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        if (m_groupOff.contains(key) || g.strobes)
+        // the strobes and the lasers stay out of the opening picture: it is
+        // the light people eat under, not a show
+        if (m_groupOff.contains(key) || g.strobes || g.lasers)
         {
             stopSlot("col:" + key, false);
             for (int i = 0; i < g.parts.count(); i++)
