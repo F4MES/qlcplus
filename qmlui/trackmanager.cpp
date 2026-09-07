@@ -128,10 +128,14 @@ TrackManager::~TrackManager()
 
 QStringList TrackManager::stateNames()
 {
+    // intro and outro come from rekordbox' phrase analysis; the
+    // engine runs them as quiet breaks at the ends of a track
     return QStringList() << QStringLiteral("normal")
                          << QStringLiteral("break")
                          << QStringLiteral("build")
-                         << QStringLiteral("drop");
+                         << QStringLiteral("drop")
+                         << QStringLiteral("intro")
+                         << QStringLiteral("outro");
 }
 
 int TrackManager::slotCount() const { return TRACK_SLOT_COUNT; }
