@@ -128,6 +128,7 @@ struct TrackMove
     int phase = 0;            // random start offset into the pattern
     int subSteps = 1;         // pattern steps per beat: 1, 2 = eighths, 4 = sixteenths (stepBeats 1 only)
     qreal texture = 0.0;      // per-fixture level spread among the lit ones, 0..0.3 - a flat group looks static
+    bool bare = false;        // strobes: blink one at a time with nothing lit behind them
 };
 
 /** A figure for a group of moving heads: a hidden EFX run RELATIVE to the
@@ -392,6 +393,8 @@ protected:
     void learnGroups();
     void ensureColourScenes();
     void ensureStrobeScenes();
+    void ensureOffScenes();
+    void applyGroupOff();
     void driveStrobe(const QSet<QString> &cast, int beat, qreal energy, bool isDrop, bool isBuild,
                      qreal prog, int bar, int beatInBar, bool quiet);
     void learnHome();
@@ -523,6 +526,7 @@ private:
     QMap<QString, QList<quint32> > m_zoomScenes; // head group -> narrow, mid, wide
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight
+    QHash<QString, quint32> m_offScenes;              // group -> the scene that forces it to zero
     QHash<QString, QList<quint32> > m_strobeScenes;   // group -> a scene per rate, slow to fast
     int m_strobeUntil;        // the beat the burst ends on (-1: not strobing)
     int m_strobeRate;         // which of the rates is up

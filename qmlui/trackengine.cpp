@@ -55,6 +55,7 @@
 #define ENGINE_EFX_PREFIX     QStringLiteral("TRACK EFX: ")
 #define ENGINE_ZOOM_PREFIX    QStringLiteral("TRACK Zoom: ")
 #define ENGINE_STROBE_PREFIX  QStringLiteral("TRACK Strobe: ")
+#define ENGINE_OFF_PREFIX     QStringLiteral("TRACK Off: ")
 
 /* colours the house does not like: never in the palette, never as an accent,
  * never generated - even when a scene of that colour exists */
@@ -165,6 +166,7 @@ void TrackEngine::slotDocChanged()
     m_splitScenes.clear();
     m_zoomScenes.clear();
     m_strobeScenes.clear();
+    m_offScenes.clear();
     m_strobeUntil = -1;
     m_strobeRate = 0;
     m_zoom.clear();
@@ -639,6 +641,7 @@ void TrackEngine::ensureTable()
             continue;
         if (func->name().startsWith(ENGINE_DIMMER_PREFIX)
             || func->name().startsWith(ENGINE_STROBE_PREFIX)
+            || func->name().startsWith(ENGINE_OFF_PREFIX)
             || func->name() == ENGINE_HAZE_SCENE || func->name() == ENGINE_FAN_SCENE)
             continue;
         // A scene that blends instead of adding is a modifier, not a look.
@@ -827,6 +830,7 @@ void TrackEngine::ensureTable()
 
     ensureColourScenes();
     ensureStrobeScenes();
+    ensureOffScenes();
     learnHome();
     ensurePositionScenes();
     ensureSweeps();
@@ -953,28 +957,37 @@ void TrackEngine::learnGroups()
                 g.patternDevice = true;
         }
 
-        // the user's colour scenes of exactly this group
+        // EVERY colour scene of the operator's that puts a value on this
+        // group - not only the ones that drive nothing else. A whole-room
+        // look is still them telling us what "red" means on these fixtures,
+        // and for a lamp whose colour sits on a single mixing channel it is
+        // usually the only place it is written down anywhere.
         QMap<quint32, QMap<quint32, QList<uchar> > > seen;             // fixture -> channel -> values
         QMap<quint32, QMap<quint32, QMap<QString, uchar> > > byColour;  // fixture -> channel -> colour -> value
-        int scenes = 0;
+        QSet<QString> coloursSeen;
         for (QHash<quint32, TrackFuncInfo>::const_iterator fit = m_funcs.constBegin(); fit != m_funcs.constEnd(); ++fit)
         {
             const TrackFuncInfo &info = fit.value();
             if (info.role != ENGINE_ROLE_COLOR || info.generated || info.colour.isEmpty()
                 || info.type != int(Function::SceneType)
-                || info.groups.count() != 1 || info.groups.contains(g.key) == false)
+                || info.groups.contains(g.key) == false)
                 continue;
             Scene *scene = qobject_cast<Scene *>(m_doc->function(info.id));
             if (scene == nullptr)
                 continue;
-            scenes++;
+            bool touched = false;
             foreach (SceneValue sv, scene->values())
             {
+                if (g.fixtures.contains(sv.fxi) == false)
+                    continue;              // the rest of a whole-room look is not ours
                 seen[sv.fxi][sv.channel].append(sv.value);
                 byColour[sv.fxi][sv.channel].insert(info.colour, sv.value);
+                touched = true;
             }
+            if (touched)
+                coloursSeen.insert(info.colour);
         }
-        if (scenes < 2)
+        if (coloursSeen.count() < 2)
             continue;
 
         foreach (quint32 fid, g.fixtures)
@@ -994,14 +1007,29 @@ void TrackEngine::learnGroups()
                 if (qch->group() == QLCChannel::Intensity && qch->colour() != QLCChannel::NoColour)
                     continue;                                   // the colour itself
 
-                bool constant = vals.count() == scenes;
+                // A whole-room look does not set every fixture, so counting
+                // against the number of scenes no longer works: a channel is
+                // "the base" when every scene that writes it writes the same
+                // value, and it is a colour channel when at least two DIFFERENT
+                // colours write it differently. One sample proves nothing.
+                int coloursHere = byColour.value(fid).value(ch).count();
+                bool constant = true;
                 for (int i = 1; i < vals.count() && constant; i++)
                     if (vals.at(i) != vals.first())
                         constant = false;
 
-                if (constant)
+                // Two different COLOURS agreeing, not two scenes: three red
+                // room looks are one colour's opinion, not a constant. And
+                // pan, tilt and speed never belong in a colour scene - a
+                // whole-room look carries them now that we read those, and
+                // baking an aim into every colour would fight the positions.
+                if (constant && coloursHere >= 2
+                    && qch->group() != QLCChannel::Pan
+                    && qch->group() != QLCChannel::Tilt
+                    && qch->group() != QLCChannel::Speed)
                     g.baseValue[fid].insert(ch, vals.first());
-                else if (qch->group() != QLCChannel::Pan && qch->group() != QLCChannel::Tilt)
+                else if (constant == false && coloursHere >= 2
+                         && qch->group() != QLCChannel::Pan && qch->group() != QLCChannel::Tilt)
                     g.colourValue[fid].insert(ch, byColour.value(fid).value(ch));
             }
         }
@@ -1673,9 +1701,11 @@ void TrackEngine::ensureColourScenes()
                 bool isWhite = colour == QStringLiteral("white");
                 if (isWhite && wc != QLCChannel::invalid())
                 {
-                    // a real white channel: use it alone. R+G+B on top only
+                    // A real white channel: use it alone. R+G+B on top only
                     // makes it colder and dirtier.
-                    values.append(SceneValue(fid, wc, uchar(255)));
+                    // And on a strobe it is capped: those three lamps at a
+                    // full white channel are painful to stand in front of.
+                    values.append(SceneValue(fid, wc, uchar(g.strobes ? 153 : 255)));
                     if (rc != QLCChannel::invalid()) values.append(SceneValue(fid, rc, uchar(0)));
                     if (gc != QLCChannel::invalid()) values.append(SceneValue(fid, gc, uchar(0)));
                     if (bc != QLCChannel::invalid()) values.append(SceneValue(fid, bc, uchar(0)));
@@ -1893,6 +1923,118 @@ void TrackEngine::ensureStrobeScenes()
         }
         if (ids.isEmpty() == false)
             m_strobeScenes.insert(key, ids);
+    }
+}
+
+void TrackEngine::ensureOffScenes()
+{
+    // Switching a group OFF has to switch the whole group off, not just the
+    // parts the engine happens to be driving. An animation laser's light
+    // lives on its effect channels, a laser bar's on a colour channel, and a
+    // scene of the operator's - or a whole-room look running for a DIFFERENT
+    // group - can be holding any of them up. So: one scene per group that
+    // sets every channel to zero and blends with Replace, which writes the
+    // exact value AFTER the ordinary playback layer.
+    // It beats scenes, chasers and EFX. It does NOT beat a Virtual Console
+    // slider, a flash button or Simple Desk: those carry an explicit fader
+    // priority that sorts after us on purpose, and a hand on a fader should
+    // win.
+    //
+    // Pan, tilt and the speed channels are left alone on purpose: an off
+    // group should go dark where it stands, not swing to a corner first.
+    QMap<QString, quint32> existing;
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func != nullptr && func->name().startsWith(ENGINE_OFF_PREFIX))
+            existing.insert(func->name().mid(ENGINE_OFF_PREFIX.length()), func->id());
+    }
+
+    m_offScenes.clear();
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        QList<SceneValue> values;
+        foreach (quint32 fid, g.fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr)
+                continue;
+            for (quint32 i = 0; i < fxi->channels(); i++)
+            {
+                const QLCChannel *qch = fxi->channel(i);
+                if (qch == nullptr)
+                    continue;
+                if (qch->group() == QLCChannel::Pan || qch->group() == QLCChannel::Tilt
+                    || qch->group() == QLCChannel::Speed)
+                    continue;
+                values.append(SceneValue(fid, i, uchar(0)));
+            }
+        }
+        if (values.isEmpty())
+            continue;
+
+        Scene *scene = nullptr;
+        if (existing.contains(key))
+            scene = qobject_cast<Scene *>(m_doc->function(existing.value(key)));
+        if (scene != nullptr)
+        {
+            scene->setVisible(false);
+            foreach (SceneValue old, scene->values())
+                scene->unsetValue(old.fxi, old.channel);
+            foreach (SceneValue sv, values)
+                scene->setValue(sv);
+        }
+        else
+        {
+            scene = new Scene(m_doc);
+            scene->setName(ENGINE_OFF_PREFIX + key);
+            scene->setVisible(false);
+            foreach (SceneValue sv, values)
+                scene->setValue(sv);
+            if (m_doc->addFunction(scene) == false)
+            {
+                delete scene;
+                continue;
+            }
+        }
+        scene->setBlendMode(Universe::ReplaceBlend);
+        m_offScenes.insert(key, scene->id());
+    }
+}
+
+void TrackEngine::applyGroupOff()
+{
+    // called from the tick and the moment the switch is thrown, so the group
+    // goes out under the operator's finger rather than on the next beat
+    if (m_doc == nullptr)
+        return;
+    foreach (const QString &key, m_groupOrder)
+    {
+        QString slot = "off:" + key;
+        quint32 fid = m_offScenes.value(key, Function::invalidId());
+        if (m_groupOff.contains(key) && fid != Function::invalidId())
+        {
+            run(slot, fid, 1.0, 0, true);
+            continue;
+        }
+        if (m_active.contains(slot))
+            stopSlot(slot, true);
+        // slotDocChanged() empties m_active without stopping anything, so a
+        // mask can be running with nobody holding its slot. Switching the
+        // group back on would then never turn it off again and the group
+        // would stay dark for the rest of the night.
+        Function *func = fid != Function::invalidId() ? m_doc->function(fid) : nullptr;
+        if (func != nullptr && func->isRunning())
+            func->stop(FunctionParent::master());
+    }
+
+    // a mask left over from a group that has been renamed or deleted
+    foreach (const QString &slot, m_active.keys())
+    {
+        if (slot.startsWith("off:") == false)
+            continue;
+        if (m_groupOff.contains(slot.mid(4)) == false)
+            stopSlot(slot, true);
     }
 }
 
@@ -2152,7 +2294,14 @@ void TrackEngine::applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32
 
     uchar value = uchar(qRound(qBound(0.0, level, 1.0) * 255.0));
     for (int i = 0; i < channels.count(); i++)
-        scene->setValue(channels.at(i).first, channels.at(i).second, value);
+    {
+        // checkHTP = FALSE. Scene::setValue pushes the new value into the
+        // running fader with add(), and add() keeps whichever value is higher
+        // - so the hazer went up and never came down again. replace() is what
+        // a live slider needs, and that is what the third argument picks.
+        scene->setValue(SceneValue(channels.at(i).first, channels.at(i).second, value),
+                        false, false);
+    }
 
     // stop() is deferred to the MasterTimer thread, so a scene that has just
     // been told to stop still says it is running. Push the slider back up
@@ -2355,6 +2504,25 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
 {
     if (enable) m_groupOff.remove(key); else m_groupOff.insert(key);
     saveRoles();
+    // right now, not on the next beat - and stop whatever of ours is on it
+    if (m_doc != nullptr)
+    {
+        ensureTable();
+        if (enable == false)
+        {
+            foreach (const QString &slot, m_active.keys())
+            {
+                if (slot.startsWith("off:"))
+                    continue;                    // that one is the mask itself
+                if (slot.endsWith(":" + key) || slot == "col:" + key || slot == "mot:" + key)
+                    stopSlot(slot, true);
+            }
+            const TrackGroup &g = m_groups.value(key);
+            for (int i = 0; i < g.parts.count(); i++)
+                stopSlot(partSlot(key, i), true);
+        }
+        applyGroupOff();
+    }
     if (m_startScene)
         startLook();                     // the opening picture follows the switches
     emit tableChanged();
@@ -3166,15 +3334,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
 
     QString base = baseGroup();
-    bool silent = sectionEnergy >= 0.0 && sectionEnergy < 0.12;
+    // "silent" is meant for the gap between tracks, not for a quiet passage.
+    // At 0.12 it caught every break in the set and emptied the cast, which
+    // is exactly the "in breaks the light just goes out" report. And the
+    // base is now outside it altogether: the room is never black while a
+    // track is playing.
+    bool silent = sectionEnergy >= 0.0 && sectionEnergy < 0.04;
 
     // how many effect groups join the base: a ramp of the energy, with the
     // fraction decided by dice once per section - 55 % and 65 % differ
     auto effectsFor = [&energy, rng](bool drop, bool brk) {
         // a break used to empty the room down to the base. Late in the night
         // it keeps one group as well - quieter than a groove, not dark.
+        // A break is a quiet section, not an empty one. It always keeps one
+        // group besides the base, and from half a fader upwards it keeps two -
+        // so the ENERGY slider is felt in a break as well, which it was not.
         if (brk)
-            return energy > 0.45 && rng->bounded(3) > 0 ? 1 : 0;
+            return 1 + (energy > 0.50 && rng->bounded(3) > 0 ? 1 : 0);
         // The top of the ENERGY fader has to mean something: at full it is
         // three groups on a drop and two in a groove, not two and one.
         // four groups on a drop at the stop, three in a groove: the fader's
@@ -3218,10 +3394,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
 
     QSet<QString> castSet;
+    // the base is in the cast whatever happens - the light the room stands on
+    if (base.isEmpty() == false)
+        castSet.insert(base);
     if (silent == false)
     {
-        if (base.isEmpty() == false)
-            castSet.insert(base);
         int n = pool.count();
         for (int i = 0; i < qMin(effects, n); i++)
             castSet.insert(pool.at((m_castCursor + i) % n));
@@ -3397,17 +3574,25 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
 
     /* ---- levels: the build climbs like a snare roll, not a straight line ---- */
-    qreal tierLevel = isBreak ? 0.55
-                    : isBuild ? (0.40 + 0.60 * prog * prog)
+    // The build used to start at 0.40 and only reach 0.55 at the halfway
+    // mark - below the groove it came out of, so it read as the light going
+    // DOWN. It starts at the groove's level now and climbs from there.
+    // Every tier is also opened up by the energy: at a full fader a break is
+    // as bright as a groove used to be, and a groove is nearly a drop.
+    qreal eNow = qBound(0.0, energy, 1.0);
+    qreal tierLevel = isBreak ? (0.45 + 0.35 * eNow)
+                    : isBuild ? (0.65 + 0.35 * prog * prog + 0.15 * eNow)
                     : isDrop  ? 1.0
-                              : 0.70;
+                              : (0.60 + 0.35 * eNow);
     if (preDrop)
         tierLevel = qMax(tierLevel, 0.60);
     if (isCalm)
         tierLevel = qMin(tierLevel, 0.55);
-    // the section's LEVEL slider is a brightness trim only; the energy dial
-    // decides how many effects join, never how bright the base is
-    qreal level = tierLevel * (0.5 + 0.5 * qBound(0.0, energy, 1.0)) * qBound(0.0, levelScale, 1.0);
+    // The energy is already inside tierLevel above, per section type; here it
+    // only keeps a very quiet room from running at full. The LEVEL slider is
+    // a straight brightness trim.
+    qreal level = qBound(0.0, tierLevel, 1.0) * (0.72 + 0.28 * eNow)
+                * qBound(0.0, levelScale, 1.0);
 
     // how hot a chase may be right now: the stars a motion needs. Drawn once
     // per section from ramps of the energy, not read off a step
@@ -3707,6 +3892,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // that has just dropped out sitting at full for a beat
     m_cast = castSet;
 
+    applyGroupOff();
     driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, bar, beatInBar,
                 isCalm || still || m_mixing || m_flash || m_blackout);
 
@@ -3801,6 +3987,13 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     if (g.patternDevice)
     {
         mv.ownChaser = tier > 0 && rng->bounded(10) < 8;
+        // An animation laser drawing the same pattern for a whole section is
+        // wallpaper. Its master dimmer gets a deep pulse so the pattern
+        // arrives in bursts on the beat instead of standing there.
+        mv.pulse = 0.55 + 0.40 * e;
+        mv.pulseOn = tier == 0 ? 3 : (e < 0.40 ? 3 : (e < 0.70 ? pick({ 1, 2 }) : 0));
+        mv.breatheBars = 0;
+        mv.texture = 0.0;
         return mv;
     }
 
@@ -3811,10 +4004,22 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     // so nothing fights the blink, and the energy decides how often it lands.
     if (g.strobes)
     {
-        mv.pattern = e > 0.60 && g.parts.count() >= 2
-                   ? pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_STATIC })
-                   : ENGINE_PAT_STATIC;
-        mv.stepBeats = 4;
+        // Not always a picture behind them. Four times in ten the group runs
+        // one lamp at a time with nothing lit in between - a blink walking
+        // down the row rather than a lit bank that flickers.
+        mv.bare = g.parts.count() >= 2 && chance(0.40);
+        if (mv.bare)
+        {
+            mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG, ENGINE_PAT_CHASE });
+            mv.stepBeats = 1;
+        }
+        else
+        {
+            mv.pattern = e > 0.60 && g.parts.count() >= 2
+                       ? pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_STATIC })
+                       : ENGINE_PAT_STATIC;
+            mv.stepBeats = 4;
+        }
         mv.subSteps = 1;
         mv.breatheBars = 0;
         mv.texture = 0.0;
@@ -3831,7 +4036,9 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         else if (build)
             mv.pulseOn = prog > 0.60 ? 0 : 1;
         else
-            mv.pulseOn = e < 0.35 ? 3 : (e < 0.60 ? pick({ 1, 2 }) : 0);
+            // Less often than it was: the downbeat up to nearly half a fader,
+            // half the beats up to three quarters, and only then every beat.
+            mv.pulseOn = e < 0.45 ? 3 : (e < 0.75 ? pick({ 1, 2 }) : 0);
         mv.flashBar = tier == 2 && e > 0.75 && chance(0.4);
         // (the dimmer pulse cannot go faster than the beat - the sub-beat
         // timer only re-masks a pattern, it never re-triggers the pulse. Above
@@ -3845,7 +4052,8 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // bars, and roughly half the time something also moves - slowly:
         // halves or odd/even trading every second or fourth bar, never a
         // chase and never a step shorter than four beats.
-        bool stir = e > 0.15 && chance(0.30 + 0.35 * e);
+        // at a low fader a break barely moves; at a high one it keeps trading
+        bool stir = e > 0.10 && chance(0.35 + 0.55 * e);
         if (isBase && e > 0.45 && rng->bounded(3) == 0)
         {
             mv.pattern = ENGINE_PAT_HALVES;
@@ -3859,10 +4067,28 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         }
         else if (e > 0.2)
             mv.breatheBars = pick({ 2, 4, 4 });
-        // a hint of a pulse on the beat, so a break still has a heartbeat
-        if (e > 0.25 && chance(0.5))
-            mv.pulse = 0.10 + 0.10 * e;
+        // a heartbeat on the beat - shallow at the bottom of the fader, a
+        // real pulse near the top. A break is quiet, not dead.
+        if (e > 0.15 && chance(0.45 + 0.45 * e))
+            mv.pulse = 0.10 + 0.35 * e;
         mv.texture = 0.15;
+        mv.ownChaser = false;            // a break moves on the engine's figure
+
+        // Nearly half the time a break is ONE lamp at a time on the beat and
+        // nothing else at all - no picture behind it, no floor to fall back
+        // to. The quietest thing the rig can do that is still on the music,
+        // and the heads slowly hand the beat to each other down the row.
+        if (g.parts.count() >= 2 && chance(0.45))
+        {
+            mv.bare = true;
+            mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
+            mv.stepBeats = pick({ 1, 2, 2 });        // a new lamp every beat or two
+            mv.subSteps = 1;
+            mv.pulse = 1.0;                          // full on the beat, dark between
+            mv.pulseOn = e > 0.35 ? 0 : pick({ 1, 3 });
+            mv.breatheBars = 0;
+            mv.texture = 0.0;
+        }
         if (g.fixtures.count() < 2)
             mv.pattern = ENGINE_PAT_STATIC;
         return mv;
@@ -3875,7 +4101,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // the pulse arrives with the build rather than waiting for the energy
         mv.pulse = 0.10 + 0.30 * prog;
         mv.pulseOn = pick({ 0, 0, 2 });
-        mv.ownChaser = rng->bounded(2) == 0;
+        // A chase of the operator's switches the generated figure OFF - and a
+        // build was drawing one half the time, so half of all builds stood
+        // completely still. The engine's own figure is what a build needs.
+        mv.ownChaser = rng->bounded(5) == 0;
         if (isBase)
         {
             // the base carries the build: a fill that grows across the heads,
@@ -3886,6 +4115,26 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.stepBeats = prog > 0.6 ? 1 : 2;
             mv.subSteps = 1;
             mv.pulse = qMin(mv.pulse, 0.30);
+        }
+
+        // The build's own shape: the same bare blink as the break, handed
+        // round faster and faster the closer the drop gets. Nothing lit in
+        // between, so the acceleration is the only thing in the room and you
+        // cannot miss where it is going.
+        // gated, or every build in the set is the same one: past the middle
+        // it is nearly always this, early on it is often the fill above
+        if (g.parts.count() >= 2 && chance(0.45 + 0.45 * prog))
+        {
+            mv.bare = true;
+            mv.ownChaser = false;        // a chase of theirs would swallow the pattern
+            mv.pattern = ENGINE_PAT_CHASE;
+            mv.pulse = 1.0;
+            mv.breatheBars = 0;
+            mv.texture = 0.0;
+            if (prog < 0.30)      { mv.stepBeats = 2; mv.subSteps = 1; mv.pulseOn = 1; }
+            else if (prog < 0.60) { mv.stepBeats = 1; mv.subSteps = 1; mv.pulseOn = 0; }
+            else if (prog < 0.85) { mv.stepBeats = 1; mv.subSteps = 2; mv.pulseOn = 0; }
+            else                  { mv.stepBeats = 1; mv.subSteps = 4; mv.pulseOn = 0; }
         }
         return mv;
     }
@@ -3907,7 +4156,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     if (tier == 1)
     {
         // groove: a static look at the bottom, patterns and a pulse growing in
-        qreal live = ramp(e, 0.25, 0.75);            // 0 = still, 1 = full groove
+        qreal live = ramp(e, 0.12, 0.70);            // 0 = still, 1 = full groove
         if (chance(live))
         {
             qreal quick = ramp(e, 0.55, 0.95);       // chases and short steps
@@ -3976,13 +4225,34 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         mv.colourBars = 0;
         mv.flashBar = false;
     }
+    // A drop may drop the backdrop too: a random handful of lamps hits each
+    // beat and there is nothing lit in between. On the heads that reads as
+    // the room being punched rather than washed, and it is the one place
+    // where SPARKLE - a fresh random set every step - belongs.
+    // never on the base: that group is the light the room stands on, and the
+    // block just above spends fifteen lines saying so
+    if (tier == 2 && isBase == false && g.parts.count() >= 2 && chance(0.20 + 0.25 * e))
+    {
+        mv.bare = true;
+        mv.ownChaser = false;            // or the pattern never reaches the rig
+        mv.pattern = ENGINE_PAT_SPARKLE;
+        mv.stepBeats = 1;
+        mv.subSteps = e > 0.80 ? 2 : 1;
+        mv.pulse = 1.0;
+        mv.pulseOn = 0;
+        mv.breatheBars = 0;
+        mv.texture = 0.0;
+    }
+
     // ---------------------------------------------------------------- the top
     // From three-quarters of the fader upwards the engine stops holding back:
     // faster patterns, colour trading every bar, a deeper pulse and more
     // accents, climbing all the way to the stop. Movement is deliberately
     // left out of this - the heads and the bars stay slow whatever the fader
     // says, because that is the one thing this room does not want.
-    qreal fest = qBound(0.0, (e - 0.72) / 0.28, 1.0);
+    // Starts at 45 % and climbs all the way to the stop, so the whole top
+    // half of the fader is a slide and not a switch.
+    qreal fest = qBound(0.0, (e - 0.45) / 0.55, 1.0);
     if (fest > 0.0)
     {
         if (chance(0.55 + 0.40 * fest))
@@ -4004,6 +4274,8 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // runs in sixteenths
         if (isBase == false && chance(fest))
             mv.colourBars = pick({ 1, 1, 2 });
+        // qMax, so a bare look keeps its floor at nothing: the top of the
+        // fader may deepen a pulse, never fill the dark back in
         mv.pulse = qMax(mv.pulse, isBase ? 0.30 + 0.15 * fest : 0.35 + 0.40 * fest);
         if (isBase == false)
             mv.flashBar = mv.flashBar || chance(0.50 * fest);
@@ -4044,7 +4316,11 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
     int pattern = move.pattern;
     // the unlit fixtures of a pattern: dark on effects, dim on the base,
     // which must never look switched off
-    qreal dim = g.heads ? 0.35 : (pattern == ENGINE_PAT_CHASE || pattern == ENGINE_PAT_PINGPONG ? 0.0 : 0.15);
+    // A bare look means BARE: nothing at all behind the lamp that has the
+    // beat. Everything else keeps its floor - the heads must never read as
+    // switched off in an ordinary section.
+    qreal dim = move.bare ? 0.0
+              : (g.heads ? 0.35 : (pattern == ENGINE_PAT_CHASE || pattern == ENGINE_PAT_PINGPONG ? 0.0 : 0.15));
 
     QVector<qreal> mask(n, 1.0);
     if (n == 0)
@@ -4225,6 +4501,8 @@ QString TrackEngine::moveName(const TrackMove &move) const
         s += QString(s.isEmpty() ? "breathe/%1" : " breathe/%1").arg(move.breatheBars);
     if (move.colourBars > 0)
         s += QString(" swap/%1").arg(move.colourBars);
+    if (move.bare)
+        s += " bare";
     if (move.flashBar)
         s += " hits";
     return s.isEmpty() ? QString() : QString("(%1)").arg(s);
@@ -4288,9 +4566,13 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // room than pan, and a break barely stirs
     // a break's figure is wide enough to see but takes half a minute to walk
     // it; that is the whole point of a break
-    qreal reach = tier == 0 ? 20.0 : (tier == 2 ? 24.0 + 18.0 * e : 16.0 + 14.0 * e);
+    // A break's figure is BIG - the room is quiet, so the one thing moving
+    // has all the attention and it may as well travel. It is the pace that
+    // makes a break a break, not the size.
+    qreal reach = tier == 0 ? (30.0 + 22.0 * e)
+                : (tier == 2 ? 24.0 + 18.0 * e : 16.0 + 14.0 * e);
     if (build)
-        reach = 18.0 + 26.0 * prog;
+        reach = 26.0 + 30.0 * prog;
     qreal size = reach * (0.5 + 0.5 * rng->generateDouble());
     // pan has the whole room, tilt has the floor: the heads hang from the
     // ceiling and a figure must not climb the walls
@@ -4302,18 +4584,24 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     else
         sw.rotation = chance(0.4) ? int(rng->bounded(360)) : 0;
 
-    // tempo: beats per figure - in time with the music, faster when hot
-    // Twice as long a figure everywhere as this used to be: nothing in this
-    // room is supposed to look hurried. Four beats at 128 bpm is under two
-    // seconds for a whole circle, and that is now the fastest there is.
+    // Tempo: beats per figure. The ENERGY fader is the pace as well as the
+    // size now - a straight slide between the slowest this room allows and
+    // the quickest, in every section type, so 100 % feels different from
+    // 50 % everywhere and not only in a drop. Nothing here is fast: even the
+    // top of a drop is six beats for a whole circle.
+    auto beatsFor = [rng, e](int slow, int quick) {
+        qreal f = qreal(slow) + (qreal(quick) - qreal(slow)) * e;
+        f *= 0.85 + 0.30 * rng->generateDouble();      // the dice, but not much
+        return qMax(3, int(qRound(f)));
+    };
     if (tier == 0)
-        sw.beats = pick(QList<int>() << 32 << 48 << 64);
+        sw.beats = beatsFor(48, 20);      // a break: 22 s down to 9 s a figure
     else if (tier == 2)
-        sw.beats = e > 0.6 ? pick(QList<int>() << 4 << 8 << 8 << 16) : pick(QList<int>() << 8 << 16 << 16 << 32);
+        sw.beats = beatsFor(24, 6);       // a drop: 11 s down to under 3
     else
-        sw.beats = e > 0.5 ? pick(QList<int>() << 8 << 16 << 16 << 32) : pick(QList<int>() << 16 << 32 << 32 << 48);
+        sw.beats = beatsFor(36, 10);      // a groove: in between
     if (build)
-        sw.beats = prog > 0.5 ? pick(QList<int>() << 4 << 8 << 8) : pick(QList<int>() << 16 << 16 << 32);
+        sw.beats = beatsFor(28, 8) / (prog > 0.5 ? 2 : 1);
 
     // how the heads relate: in unison, as a wave, one after another,
     // mirrored, or fanned out around the figure
@@ -4371,16 +4659,23 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // the middle of the travel normally; on a drop, now and then, they may
         // take the whole wall - still slowly.
         bool wide = tier == 2 && chance(0.20);
-        sw.height = wide ? 40 + int(rng->bounded(30)) : 8 + int(rng->bounded(11));
-        sw.beats = qMax(wide ? 32 : 24, sw.beats);
+        // A swing of eight units is three degrees. On a bar hanging across
+        // the room that is invisible - which is why "no offset movement" was
+        // the report even though the offset was there. Bigger, and still slow.
+        sw.height = wide ? 40 + int(rng->bounded(30)) : 16 + int(rng->bounded(20));
+        // and slower than everything else, whatever the energy says: these
+        // mirrors are the most delicate thing in the rig
+        sw.beats = qMax(wide ? 40 : 28, sw.beats);
         sw.dx = 0;
         sw.dy = int(rng->bounded(9)) - 4;          // barely off the aim
-        // one after another along the wall, always: five bars swinging in
-        // unison is the one thing that never looks good
+        // One after another along the wall, always. And the offset has to be
+        // BIG to read: half the time neighbouring bars run in opposite
+        // directions - one up while the next goes down - which is the only
+        // version of this you can see from the floor.
         if (heads >= 2)
         {
             sw.spread = 1;                         // a wave down the row
-            sw.fan = 360 / qMax(2, heads);
+            sw.fan = chance(0.5) ? 180 : qMax(60, 360 / qMax(2, heads));
         }
         if (tier == 0 && chance(0.35))
         {
@@ -4919,6 +5214,13 @@ void TrackEngine::release()
     m_strobeUntil = -1;
     foreach (const QString &slot, m_active.keys())
     {
+        // the OFF mask goes with the engine: with AUTO off, the group's
+        // channels belong to the operator again
+        if (slot.startsWith("off:"))
+        {
+            stopSlot(slot, true);
+            continue;
+        }
         // A static aim stays: stopping a laser position is a move in itself,
         // and a slider may still have the beam lit. An aim that MOVES - an
         // EFX or a chase on the bars, which is what a laser "position" often
@@ -4965,10 +5267,13 @@ void TrackEngine::idle()
     // everything from the track goes; the start scene(s) come on
     stopSweeps();
     m_strobeUntil = -1;
+    applyGroupOff();                 // an off group stays off in the start look
     foreach (const QString &slot, m_active.keys())
     {
         if (slot.startsWith("idle:"))
             continue;
+        if (slot.startsWith("off:"))
+            continue;                    // the mask we started four lines ago
         // our own aims stay, as in release(): stopping a laser position is a
         // move in itself, and a start scene started after this one wins the
         // aim anyway. A position of the OPERATOR'S may carry a shutter or a
