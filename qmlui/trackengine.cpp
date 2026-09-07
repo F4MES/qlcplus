@@ -3216,7 +3216,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             stopSlot(slot, false);
     }
 
-    bool isBreak = (state == QStringLiteral("break"));
+    // Rekordbox' own phrase analysis, when the track has one, hands us two
+    // more section types than our own analysis produces. Both behave like a
+    // break - quiet, one figure moving - but an intro is the room before the
+    // track has started and an outro is it letting go, so both sit a little
+    // lower and neither gets the hardware strobe.
+    bool isIntro = (state == QStringLiteral("intro"));
+    bool isOutro = (state == QStringLiteral("outro"));
+    bool isBreak = (state == QStringLiteral("break")) || isIntro || isOutro;
     bool isBuild = (state == QStringLiteral("build"));
     bool isDrop  = (state == QStringLiteral("drop"));
     int tier = isBreak ? 0 : (isDrop ? 2 : 1);
@@ -3586,6 +3593,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                               : (0.60 + 0.35 * eNow);
     if (preDrop)
         tierLevel = qMax(tierLevel, 0.60);
+    if (isIntro || isOutro)
+        tierLevel *= 0.80;               // the ends of a track are not the middle
     if (isCalm)
         tierLevel = qMin(tierLevel, 0.55);
     // The energy is already inside tierLevel above, per section type; here it
@@ -3860,6 +3869,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     pulseBeat = false;
                 depth *= 0.5 + 0.5 * qBound(0.0, kick, 1.0);
             }
+            // A fixture whose dimmer is a switch is driven by a square gate,
+            // and a square gate stays SHUT until something re-opens it. On a
+            // beat that carries no pulse - an off-beat, or one the analysis
+            // heard no kick on - it would sit dark until the next beat that
+            // does, which on a quiet passage is the whole section. For those,
+            // "no pulse this beat" has to mean "no gate this beat".
+            if (g.patternDevice && pulseBeat == false)
+                depth = 0.0;
             if (depth > 0.0 && pulseBeat)
                 m_pulseStart.insert(key, m_clock.elapsed());
             if (depth > 0.0 || mv.breatheBars > 0 || mv.subSteps > 1)
@@ -3883,9 +3900,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
 
     if (anyPulse && m_pulseTimer.isActive() == false)
+    {
         m_pulseTimer.start();
-    else if (anyPulse == false)
+    }
+    else if (anyPulse == false && m_pulseTimer.isActive())
+    {
+        // the last factor the timer wrote may have been the shut half of a
+        // gate: level everything again or that zero stays until the next beat
         m_pulseTimer.stop();
+        reapplyLevels();
+    }
 
     // the cast is settled here, before the hits: genFlash() reads m_cast to
     // find the groups it has to hand back, and a beat-old cast left a group
@@ -3894,7 +3918,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     applyGroupOff();
     driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, bar, beatInBar,
-                isCalm || still || m_mixing || m_flash || m_blackout);
+                isCalm || still || m_mixing || m_flash || m_blackout
+                || isIntro || isOutro);       // nobody strobes an intro
 
     /* ---- hits ---- */
     // the minimal guard: more than eight hits in 32 beats is a strobe show,
@@ -3988,10 +4013,26 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     {
         mv.ownChaser = tier > 0 && rng->bounded(10) < 8;
         // An animation laser drawing the same pattern for a whole section is
-        // wallpaper. Its master dimmer gets a deep pulse so the pattern
-        // arrives in bursts on the beat instead of standing there.
-        mv.pulse = 0.55 + 0.40 * e;
-        mv.pulseOn = tier == 0 ? 3 : (e < 0.40 ? 3 : (e < 0.70 ? pick({ 1, 2 }) : 0));
+        // wallpaper. Its dimmer is on/off only, so pulseFactor gives it a
+        // square gate instead of a fade and the depth below decides how much
+        // of the beat it is ON for: about half at the bottom of the fader,
+        // a fifth at the top - short, hard bursts when the room is going.
+        // Every beat, always: the gate is re-triggered on the beat and shuts
+        // itself. How LONG it is open is the energy's job - about half a beat
+        // at the bottom of the fader, a fifth at the top - and how often the
+        // two of them swap is stepBeats below. Choosing beats to skip would
+        // just leave it dark, because a square gate cannot decay back.
+        mv.pulse = 0.35 + 0.55 * e;
+        mv.pulseOn = 0;
+        // and with two of them, they take the beat in turns rather than
+        // firing together - the mask is on/off too, which suits them
+        if (g.parts.count() >= 2 && chance(0.55))
+        {
+            mv.bare = true;
+            mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_ODDEVEN, ENGINE_PAT_PINGPONG });
+            mv.stepBeats = tier == 0 ? pick({ 2, 4 }) : pick({ 1, 2 });
+            mv.ownChaser = tier > 0 && rng->bounded(10) < 5;
+        }
         mv.breatheBars = 0;
         mv.texture = 0.0;
         return mv;
@@ -4468,12 +4509,33 @@ qreal TrackEngine::pulseFactor(const QString &group) const
     qreal depth = m_pulseDepth.value(group, 0.0);
     if (depth > 0.0 && m_pulseStart.contains(group))
     {
-        // A quarter of a beat is a kick - right for a wash, far too soft for
-        // a strobe, which has to be lit and dark again inside a tenth of one.
-        qreal tau = m_groups.value(group).strobes ? qMax(20.0, m_beatMs * 0.09)
-                                                  : qMax(40.0, m_beatMs * 0.25);
+        const TrackGroup &pg = m_groups.value(group);
         qreal t = qreal(now - m_pulseStart.value(group));
-        factor *= (1.0 - depth) + depth * std::exp(-t / tau);
+        if (pg.patternDevice)
+        {
+            // An animation laser's master dimmer is a SWITCH, not a dimmer:
+            // it is on or it is off, and nothing in between exists. An
+            // exponential fall would spend the beat drifting through values
+            // the fixture rounds one way or the other, so the light would go
+            // out at a moment nobody can predict or hear. A square gate is
+            // the honest version - full for a slice of the beat, nothing for
+            // the rest - and a deeper "pulse" simply means a shorter slice.
+            // qMax first: qBound asserts under Qt 6 when the low bound is
+            // above the high one, and 60 ms is above beatMs * 0.9 for
+            // anything over 900 bpm. Nothing plays at 900 bpm, but a garbled
+            // tempo packet should not abort the application.
+            const qreal bm = qMax(120.0, m_beatMs);
+            qreal onMs = qBound(60.0, bm * (0.55 - 0.35 * depth), bm * 0.9);
+            factor *= t < onMs ? 1.0 : 0.0;
+        }
+        else
+        {
+            // A quarter of a beat is a kick - right for a wash, far too soft
+            // for a strobe, which has to be lit and dark again inside a tenth.
+            qreal tau = pg.strobes ? qMax(20.0, m_beatMs * 0.09)
+                                   : qMax(40.0, m_beatMs * 0.25);
+            factor *= (1.0 - depth) + depth * std::exp(-t / tau);
+        }
     }
 
     // the breath: a slow sine over a few bars, 70..100 %, for the lit base

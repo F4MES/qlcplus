@@ -54,6 +54,8 @@ Rectangle
         if (type === "drop")  return "#E23B3B"
         if (type === "build") return "#E0921A"
         if (type === "break") return "#2F7FD0"
+        if (type === "intro") return "#5FB37A"
+        if (type === "outro") return "#8C6BB1"
         return "#9AA0A6"
     }
 
@@ -375,7 +377,7 @@ Rectangle
 
                     Repeater
                     {
-                        model: [ "break", "build", "drop" ]
+                        model: [ "break", "build", "drop", "intro", "outro" ]
                         TrackTile
                         {
                             width: 88
@@ -404,7 +406,7 @@ Rectangle
                         {
                             var mk = trackManager.markers[wfOverlay.selected]
                             if (mk === undefined) { wfOverlay.selected = -1; return }
-                            var order = [ "normal", "break", "build", "drop" ]
+                            var order = [ "normal", "break", "build", "drop", "intro", "outro" ]
                             var next = order[(order.indexOf(mk.type) + 1) % order.length]
                             trackManager.setMarkerType(wfOverlay.selected, next)
                         }
