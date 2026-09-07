@@ -516,7 +516,9 @@ public:
         NormalBlend = 0,
         MaskBlend,
         AdditiveBlend,
-        SubtractiveBlend
+        SubtractiveBlend,
+        ReplaceBlend,  // exact channel values above ordinary playback
+        FilterBlend    // multiply the completed playback/replace layers
     };
 
     /** Return a blend mode from a string */

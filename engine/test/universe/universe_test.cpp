@@ -27,6 +27,7 @@
 #undef protected
 
 #include "grandmaster.h"
+#include "genericfader.h"
 
 void Universe_Test::init()
 {
@@ -129,6 +130,34 @@ void Universe_Test::blendModes()
 
     QVERIFY(m_uni->writeBlended(0, 255, 1, Universe::SubtractiveBlend) == true);
     QCOMPARE(quint8(m_uni->postGMValues()->at(0)), quint8(0));
+
+    // Replacement must be exact for every 8-bit level, including zero:
+    // presets may already be at full while a TRACK dimmer closes a fixture.
+    QCOMPARE(Universe::stringToBlendMode("Replace"), Universe::ReplaceBlend);
+    QCOMPARE(Universe::blendModeToString(Universe::ReplaceBlend), QString("Replace"));
+    QCOMPARE(Universe::stringToBlendMode("Filter"), Universe::FilterBlend);
+    QCOMPARE(Universe::blendModeToString(Universe::FilterBlend), QString("Filter"));
+    for (int value = 0; value <= 255; ++value)
+    {
+        m_uni->writeBlended(0, 255, 1, Universe::ReplaceBlend);
+        m_uni->writeBlended(0, value, 1, Universe::ReplaceBlend);
+        QCOMPARE(quint8(m_uni->postGMValues()->at(0)), quint8(value));
+    }
+    m_uni->writeBlended(0, 128, 1, Universe::ReplaceBlend);
+    m_uni->writeBlended(0, 128, 1, Universe::FilterBlend);
+    QCOMPARE(quint8(m_uni->postGMValues()->at(0)), quint8(64));
+
+    GenericFader preset, colour, gate, manual, flash;
+    colour.setBlendMode(Universe::ReplaceBlend);
+    gate.setBlendMode(Universe::FilterBlend);
+    manual.setPriority(Universe::Override);
+    flash.setPriority(Universe::Flashing);
+    QVERIFY(preset.playbackOrder() < colour.playbackOrder());
+    QVERIFY(colour.playbackOrder() < gate.playbackOrder());
+    QVERIFY(gate.playbackOrder() < manual.playbackOrder());
+    QVERIFY(manual.playbackOrder() < flash.playbackOrder());
+    colour.setBlendMode(Universe::NormalBlend);
+    QCOMPARE(colour.playbackOrder(), preset.playbackOrder());
 
     /* check an unknown blend mode */
     QVERIFY(m_uni->writeBlended(9, 255, 1, Universe::BlendMode(42)) == false);

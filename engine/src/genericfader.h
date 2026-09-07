@@ -162,6 +162,8 @@ public:
      * @param mode the blend mode as listed in Universe::BlendMode
      */
     void setBlendMode(Universe::BlendMode mode);
+    int playbackOrder() const; // ordinary, replacement, filter, manual override, flash
+
 
     /** Enable/disable universe monitoring before writing new data */
     void setMonitoring(bool enable);

@@ -582,7 +582,9 @@ void TrackEngine::ensureTable()
     QSet<quint32> modifiers;
     foreach (Function *func, m_doc->functions())
         if (func != nullptr && (func->blendMode() == Universe::MaskBlend
-                                || func->blendMode() == Universe::SubtractiveBlend))
+                                || func->blendMode() == Universe::SubtractiveBlend
+                                || func->blendMode() == Universe::ReplaceBlend
+                                || func->blendMode() == Universe::FilterBlend))
             modifiers.insert(func->id());
 
     QSet<quint32> steps;
@@ -1814,7 +1816,13 @@ void TrackEngine::ensureDimmerScenes()
             }
             g.parts.append(scene == nullptr ? Function::invalidId() : scene->id());
             if (scene != nullptr)
+            {
+                // HTP zero cannot silence a dimmer in another running scene.
+                // Own this channel while AUTO runs; manual override and FLASH
+                // remain above this layer, and release() removes the fader.
+                scene->setBlendMode(Universe::ReplaceBlend);
                 g.hasDimmer = true;
+            }
         }
     }
 }
@@ -2494,7 +2502,11 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         const TrackFuncInfo &info = it.value();
         if (info.role != role)
             continue;
-        if (group.isEmpty() == false && info.groups.contains(group) == false)
+        // Per-group slots must never start a whole-room snapshot. Its other
+        // groups would bypass cast, colour and intensity decisions. Such
+        // looks remain available as START scenes and on the Virtual Console.
+        if (group.isEmpty() == false
+            && (info.groups.contains(group) == false || info.groups.count() != 1))
             continue;
         if (m_doc->function(info.id) == nullptr)
             continue;
@@ -3977,8 +3989,14 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     if (m_palette.isEmpty())
         found << tr("no colours found - the engine needs colour scenes, or RGB fixtures to make them from");
     if (m_blendSkipped.isEmpty() == false)
-        found << tr("not used, built on a mask scene: %1")
+        found << tr("not used, built on an override/filter scene: %1")
                  .arg(QStringList(m_blendSkipped.values()).join(", "));
+    int sharedLooks = 0;
+    foreach (const TrackFuncInfo &info, m_funcs)
+        if (info.role >= 0 && info.role != ENGINE_ROLE_IDLE && info.groups.count() > 1)
+            sharedLooks++;
+    if (sharedLooks)
+        found << tr("%1 whole-room looks reserved for VC/START; AUTO uses one group per look").arg(sharedLooks);
     QList<Universe *> universes = m_doc->inputOutputMap()->universes();
 
     foreach (const QString &key, m_groupOrder)

@@ -400,6 +400,16 @@ void GenericFader::setFadeOut(bool enable, uint fadeTime)
     }
 }
 
+int GenericFader::playbackOrder() const
+{
+    // Explicit slider/flash priorities retain precedence over scene layers.
+    if (m_priority != Universe::Auto)
+        return m_priority * 3;
+    if (m_blendMode == Universe::ReplaceBlend) return 1;
+    if (m_blendMode == Universe::FilterBlend) return 2;
+    return 0;
+}
+
 void GenericFader::setBlendMode(Universe::BlendMode mode)
 {
     m_blendMode = mode;

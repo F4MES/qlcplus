@@ -2228,37 +2228,18 @@ bool VCSlider::loadXMLLevel(QXmlStreamReader &level_root)
     value = attrs.value(KXMLQLCVCSliderLevelValue).toInt();
     setValue(value);
 
-    QXmlStreamReader::TokenType tType = level_root.readNext();
-
-    if (tType == QXmlStreamReader::EndElement)
+    // Stop on </Level>, even for <Level/> and compact XML. Reading one
+    // token beyond it consumes the following SpeedFunction or </Slider>.
+    while (level_root.readNextStartElement())
     {
-        level_root.readNext();
-        return true;
-    }
-
-    if (tType == QXmlStreamReader::Characters)
-        tType = level_root.readNext();
-
-    // check if there is a Channel tag defined
-    if (tType == QXmlStreamReader::StartElement)
-    {
-        /* Children */
-        do
+        if (level_root.name() == KXMLQLCVCSliderChannel)
         {
-            if (level_root.name() == KXMLQLCVCSliderChannel)
-            {
-                /* Fixture & channel */
-                value = level_root.attributes().value(KXMLQLCVCSliderChannelFixture).toInt();
-                addLevelChannel(
-                    static_cast<quint32>(value),
-                    static_cast<quint32> (level_root.readElementText().toInt()));
-            }
-            else
-            {
-                qWarning() << Q_FUNC_INFO << "Unknown slider level tag:" << level_root.name().toString();
-                level_root.skipCurrentElement();
-            }
-        } while (level_root.readNextStartElement());
+            value = level_root.attributes().value(KXMLQLCVCSliderChannelFixture).toInt();
+            addLevelChannel(static_cast<quint32>(value),
+                            static_cast<quint32>(level_root.readElementText().toInt()));
+        }
+        else
+            level_root.skipCurrentElement();
     }
 
     if (m_levelChannels.count())

@@ -22,6 +22,7 @@
 #include <QElapsedTimer>
 #include <QDebug>
 #include <math.h>
+#include <algorithm>
 
 #include "channelmodifier.h"
 #include "inputoutputmap.h"
@@ -367,6 +368,12 @@ void Universe::processFaders(uint elapsedMs)
         }
     }
 
+    // Layer order must not depend on which preset was started last.
+    // Stable ordering keeps ordinary QLC+ playback and equal layers unchanged.
+    std::stable_sort(activeFaders.begin(), activeFaders.end(),
+        [](const QSharedPointer<GenericFader> &a, const QSharedPointer<GenericFader> &b) {
+            return a->playbackOrder() < b->playbackOrder();
+        });
     foreach (const QSharedPointer<GenericFader> &fader, activeFaders)
         fader->write(this, elapsedMs);
 
@@ -520,6 +527,9 @@ Universe::BlendMode Universe::stringToBlendMode(QString mode)
     else if (mode == KXMLUniverseSubtractiveBlend)
         return SubtractiveBlend;
 
+    if (mode == QStringLiteral("Replace")) return ReplaceBlend;
+    if (mode == QStringLiteral("Filter")) return FilterBlend;
+
     return NormalBlend;
 }
 
@@ -537,6 +547,8 @@ QString Universe::blendModeToString(Universe::BlendMode mode)
         case AdditiveBlend:
             return QString(KXMLUniverseAdditiveBlend);
         break;
+        case ReplaceBlend: return QStringLiteral("Replace");
+        case FilterBlend: return QStringLiteral("Filter");
         case SubtractiveBlend:
             return QString(KXMLUniverseSubtractiveBlend);
         break;
@@ -1073,6 +1085,9 @@ bool Universe::writeBlended(int address, quint32 value, int channelCount, Univer
             }
         }
         break;
+        case ReplaceBlend:
+            break; // writeMultiple below preserves exact values, including zero
+        case FilterBlend:
         case MaskBlend:
         {
             const float maxValue = (channelCount == 1)
