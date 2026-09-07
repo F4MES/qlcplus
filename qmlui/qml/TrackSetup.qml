@@ -178,12 +178,24 @@ Rectangle
                 onTapped: if (trackEngine) trackEngine.showAll = !trackEngine.showAll
             }
 
+            // the forcing variant: it re-guesses roles the operator set by
+            // hand, and nothing here can put them back. So: two taps.
             TrackTile
             {
+                id: reguessTile
+                property bool armed: false
                 Layout.preferredWidth: 100
                 Layout.preferredHeight: 34
-                label: qsTr("RE-GUESS")
-                onTapped: if (trackEngine) trackEngine.autoAssign(true)
+                label: armed ? qsTr("SURE?") : qsTr("RE-GUESS")
+                active: armed
+                activeColor: "#E3B44F"
+                onTapped:
+                {
+                    if (armed === false) { armed = true; reguessArm.restart(); return }
+                    armed = false
+                    if (trackEngine) trackEngine.autoAssign(true)
+                }
+                Timer { id: reguessArm; interval: 4000; onTriggered: reguessTile.armed = false }
             }
 
             // the engine makes everything from the DMX channels; the user's
@@ -301,7 +313,7 @@ Rectangle
                     delegate: Rectangle
                     {
                         width: ListView.view.width
-                        height: 30
+                        height: 42
                         color: "#1F1F1F"
                         radius: 3
 
@@ -341,12 +353,25 @@ Rectangle
                                     font.pixelSize: 10
                                 }
                             }
+                            // two taps, and a target a finger can hit: this
+                            // throws away the flags for that track for good,
+                            // and it sits in a list the operator flicks
                             TrackTile
                             {
-                                Layout.preferredWidth: 80
-                                Layout.preferredHeight: 24
-                                label: qsTr("FORGET")
-                                onTapped: trackManager.forgetTrack(modelData.title)
+                                id: forgetTile
+                                property bool armed: false
+                                Layout.preferredWidth: 88
+                                Layout.preferredHeight: 34
+                                label: armed ? qsTr("SURE?") : qsTr("FORGET")
+                                active: armed
+                                activeColor: "#E36B6B"
+                                onTapped:
+                                {
+                                    if (armed === false) { armed = true; forgetArm.restart(); return }
+                                    armed = false
+                                    if (trackManager) trackManager.forgetTrack(modelData.title)
+                                }
+                                Timer { id: forgetArm; interval: 4000; onTriggered: forgetTile.armed = false }
                             }
                         }
                     }
@@ -386,8 +411,9 @@ Rectangle
                     Layout.fillHeight: true
                     radius: 3
                     color: (modelData && modelData.base) ? "#2A3F55" : ((modelData && modelData.enabled) ? "#333333" : "#1F1F1F")
-                    border.width: modelData.base ? 2 : 1
-                    border.color: modelData.base ? "#4FA3E3" : (modelData.enabled ? "#666666" : "#333333")
+                    border.width: (modelData && modelData.base) ? 2 : 1
+                    border.color: (modelData && modelData.base) ? "#4FA3E3"
+                                  : ((modelData && modelData.enabled) ? "#666666" : "#333333")
 
                     Column
                     {

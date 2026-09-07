@@ -1826,7 +1826,11 @@ void TrackEngine::applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32
     for (int i = 0; i < channels.count(); i++)
         scene->setValue(channels.at(i).first, channels.at(i).second, value);
 
-    if (value > 0 && scene->isRunning() == false)
+    // stop() is deferred to the MasterTimer thread, so a scene that has just
+    // been told to stop still says it is running. Push the slider back up
+    // inside that tick and the start would be skipped and the queued stop
+    // would land: the hazer sits off with the slider up.
+    if (value > 0 && (scene->isRunning() == false || scene->stopped()))
         scene->start(m_doc->masterTimer(), FunctionParent::master());
     else if (value == 0 && scene->isRunning())
         scene->stop(FunctionParent::master());
@@ -2729,6 +2733,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         tier = 1;
     }
 
+    // a flag edited to sit ahead of us, or a jump back in the track, makes
+    // beat - secStart negative: bar and beatInBar go with it, every downbeat
+    // test stops firing and patternMask() picks a negative step, which leaves
+    // a chase dark. Clamp once, here, and everything downstream is safe.
+    secStart = qMin(secStart, beat);
     int len = qMax(1, secEnd - secStart);
     qreal prog = qBound(0.0, qreal(beat - secStart) / qreal(len), 1.0);
     int bar = (beat - secStart) / 4;
@@ -3074,9 +3083,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (fresh)
         {
             QList<int> history = m_sweepHistory.value(key);
-            TrackSweep sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count(), g.lasers);
+            // how many heads the figure spans: the EFX holds one entry per
+            // pan/tilt head, and a four-eye bar is one fixture with four of
+            // them. Counting fixtures gave a bar no spread at all and gave
+            // two four-eyes a fan of 180 degrees over eight heads.
+            EFX *sweepEfx = qobject_cast<EFX *>(m_doc->function(m_sweepFunc.value(key)));
+            int sweepHeads = sweepEfx != nullptr ? sweepEfx->fixtures().count() : g.fixtures.count();
+            TrackSweep sw = drawSweep(tier, isBuild, prog, energy, sweepHeads, g.lasers);
             for (int attempt = 0; attempt < 4 && sw.shape >= 0 && history.contains(sw.shape); attempt++)
-                sw = drawSweep(tier, isBuild, prog, energy, g.fixtures.count(), g.lasers);
+                sw = drawSweep(tier, isBuild, prog, energy, sweepHeads, g.lasers);
             m_sweep.insert(key, sw);
             if (sw.shape >= 0)
             {
@@ -3313,6 +3328,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     else if (anyPulse == false)
         m_pulseTimer.stop();
 
+    // the cast is settled here, before the hits: genFlash() reads m_cast to
+    // find the groups it has to hand back, and a beat-old cast left a group
+    // that has just dropped out sitting at full for a beat
+    m_cast = castSet;
+
     /* ---- hits ---- */
     // the minimal guard: more than eight hits in 32 beats is a strobe show,
     // not an accent - then only the drop's own landing may flash
@@ -3346,7 +3366,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     checkConflicts(castSet);
 
-    m_cast = castSet;
     QStringList moveNames;
     foreach (const QString &key, castSorted)
     {
@@ -3971,8 +3990,9 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
                 continue;
             quint32 pan = QLCChannel::invalid();
             for (quint32 i = 0; i < fxi->channels() && pan == QLCChannel::invalid(); i++)
-                if (fxi->channel(i) != nullptr && fxi->channel(i)->group() == QLCChannel::Pan)
-                    pan = i;
+                if (fxi->channel(i) != nullptr && fxi->channel(i)->group() == QLCChannel::Pan
+                    && fxi->channel(i)->controlByte() == QLCChannel::MSB)
+                    pan = i;              // coarse only: fine swings on every degree
             int uni = int(fxi->universe());
             if (pan == QLCChannel::invalid() || uni < 0 || uni >= universes.count() || universes.at(uni) == nullptr)
                 continue;
@@ -4081,7 +4101,10 @@ void TrackEngine::announceRoom()
     if (p == m_roomSent)
         return;
     m_roomSent = p;
-    m_room = p < 70 ? 0 : (p < 90 ? 1 : (p < 115 ? 2 : 3));
+    // the same scale setRoom() sends: 35 / 55 / 75 / 90. The old
+    // thresholds were 70/90/115 against a percentage that stops at 85, so
+    // the room never got past "warming" all night.
+    m_room = p < 45 ? 0 : (p < 65 ? 1 : (p < 82 ? 2 : 3));
     emit roomChanged(p);
 }
 
@@ -4335,7 +4358,12 @@ void TrackEngine::idle()
     {
         if (slot.startsWith("idle:"))
             continue;
-        if (holdBase && (slot == "col:" + base || slot.startsWith("dim:" + base + "#") || slot == "pos:" + base))
+        // positions stay, exactly as in release(): stopping a laser position
+        // is a move in itself, and a start scene started after this one wins
+        // the aim anyway
+        if (slot.startsWith("pos:"))
+            continue;
+        if (holdBase && (slot == "col:" + base || slot.startsWith("dim:" + base + "#")))
             continue;
         stopSlot(slot, false);
     }
@@ -4641,6 +4669,8 @@ void TrackEngine::stopAll()
     m_breathe.clear();
     m_pulseTimer.stop();
     m_flash = false;
+    m_flashHeld.clear();         // release() clears it; without this the next
+                                 // beat skips the whole out-of-cast teardown
     m_report = tr("(stopped)");
     emit liveChanged();
 }
