@@ -184,7 +184,13 @@ void TrackEngine::slotDocChanged()
     m_accentPick.clear();
     m_pulseTimer.stop();
     m_fadeTimer.stop();
+    // every 'live' property (cast, report, warnings, colour, trims) notifies
+    // on liveChanged: without it they keep showing the last project's state
+    // until a beat happens to arrive
+    m_report.clear();
+    m_warnings.clear();
     emit tableChanged();
+    emit liveChanged();
 }
 
 void TrackEngine::slotPulseTimer()
