@@ -54,6 +54,7 @@
 #define ENGINE_HOMEB_PREFIX   QStringLiteral("TRACK Home B: ")
 #define ENGINE_EFX_PREFIX     QStringLiteral("TRACK EFX: ")
 #define ENGINE_ZOOM_PREFIX    QStringLiteral("TRACK Zoom: ")
+#define ENGINE_STROBE_PREFIX  QStringLiteral("TRACK Strobe: ")
 
 /* colours the house does not like: never in the palette, never as an accent,
  * never generated - even when a scene of that colour exists */
@@ -97,6 +98,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_calmUntil(0)
     , m_logEnabled(true)
     , m_dropStyle(0)
+    , m_strobeUntil(-1)
+    , m_strobeRate(0)
     , m_beatMs(500.0)
     , m_beatStartMs(0)
     , m_beatIndex(0)
@@ -161,6 +164,9 @@ void TrackEngine::slotDocChanged()
     m_sweepFunc.clear();
     m_splitScenes.clear();
     m_zoomScenes.clear();
+    m_strobeScenes.clear();
+    m_strobeUntil = -1;
+    m_strobeRate = 0;
     m_zoom.clear();
     m_active.clear();
     m_activeAttr.clear();
@@ -632,6 +638,7 @@ void TrackEngine::ensureTable()
         if (func == nullptr || func->isVisible() == false)
             continue;
         if (func->name().startsWith(ENGINE_DIMMER_PREFIX)
+            || func->name().startsWith(ENGINE_STROBE_PREFIX)
             || func->name() == ENGINE_HAZE_SCENE || func->name() == ENGINE_FAN_SCENE)
             continue;
         // A scene that blends instead of adding is a modifier, not a look.
@@ -819,6 +826,7 @@ void TrackEngine::ensureTable()
         m_palette.append(singles);
 
     ensureColourScenes();
+    ensureStrobeScenes();
     learnHome();
     ensurePositionScenes();
     ensureSweeps();
@@ -1541,11 +1549,14 @@ bool TrackEngine::userAllowed(const TrackFuncInfo &info, const QString &group) c
     return false;
 }
 
-void TrackEngine::genFlash(bool on)
+void TrackEngine::genFlash(bool on, const QString &colour)
 {
-    // the flash without a scene: the strobe groups go white with every part
-    // at full, whatever the cast is doing; off again, the parts of groups
-    // outside the cast are cut hard, the rest fall back on the next beat
+    // The flash without a scene: the strobe groups take every part to full,
+    // whatever the cast is doing; off again, the parts of groups outside the
+    // cast are cut hard, the rest fall back on the next beat.
+    // It used to be white every time. White is punctuation - it belongs on
+    // the downbeat of a drop, not on every accent all night.
+    QString hue = colour.isEmpty() ? QStringLiteral("white") : colour;
     if (on)
     {
         foreach (const QString &key, m_groupOrder)
@@ -1553,9 +1564,19 @@ void TrackEngine::genFlash(bool on)
             const TrackGroup &g = m_groups.value(key);
             if (g.strobes == false || g.generatable() == false || m_groupOff.contains(key))
                 continue;
-            quint32 white = colourFunction(key, "white");
-            if (white != Function::invalidId())
-                run("flash:" + key, white, 1.0, 0, true);
+            quint32 fid = colourFunction(key, hue);
+            if (fid == Function::invalidId())
+                fid = colourFunction(key, QStringLiteral("white"));
+            if (fid != Function::invalidId())
+            {
+                // Colour channels are HTP, so a red accent over a running
+                // blue base would mix to magenta. White never showed this
+                // because 255,255,255 wins every channel. The colour scene
+                // steps aside for the flash and comes back on the next beat.
+                if (hue != QStringLiteral("white"))
+                    stopSlot("col:" + key, true);
+                run("flash:" + key, fid, 1.0, 0, true);
+            }
             // full means full: no pulse or breath on the flash itself
             qreal keepDepth = m_pulseDepth.value(key, 0.0);
             int keepBreath = m_breathe.value(key, 0);
@@ -1754,6 +1775,213 @@ void TrackEngine::ensureColourScenes()
             info.fixtureCount = touched;
             m_funcs.insert(info.id, info);
         }
+    }
+}
+
+void TrackEngine::ensureStrobeScenes()
+{
+    // Every fixture in this rig carries a shutter channel that strobes in
+    // hardware - which is a different animal from blinking the dimmer, and
+    // it is the thing that was missing. One hidden scene per group per rate;
+    // it sets the shutter and NOTHING else, so the colour and the level
+    // underneath still decide what the strobe looks like.
+    static const qreal rates[] = { 0.22, 0.45, 0.72, 0.95 };
+    const int rateCount = int(sizeof(rates) / sizeof(rates[0]));
+
+    QMap<QString, quint32> existing;
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func != nullptr && func->name().startsWith(ENGINE_STROBE_PREFIX))
+            existing.insert(func->name().mid(ENGINE_STROBE_PREFIX.length()), func->id());
+    }
+
+    m_strobeScenes.clear();
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        QList<quint32> ids;
+        for (int r = 0; r < rateCount; r++)
+        {
+            QList<SceneValue> values;
+            foreach (quint32 fid, g.fixtures)
+            {
+                Fixture *fxi = m_doc->fixture(fid);
+                if (fxi == nullptr)
+                    continue;
+                for (quint32 i = 0; i < fxi->channels(); i++)
+                {
+                    const QLCChannel *qch = fxi->channel(i);
+                    if (qch == nullptr || qch->group() != QLCChannel::Shutter)
+                        continue;
+                    // the white strobe channel is left alone on purpose: it
+                    // is the one that made everything read white
+                    if (qch->name().contains(QStringLiteral("white"), Qt::CaseInsensitive))
+                        continue;
+                    int lo = -1, hi = -1;
+                    bool invert = false;
+                    // The preset is the honest answer; the name is a guess.
+                    // Matching "strob" in the text also matches "No strobe"
+                    // and "Strobe off", and a definition that wrote the widest
+                    // band as the OFF band would then have set the shutter to
+                    // not strobing.
+                    foreach (QLCCapability *cap, qch->capabilities())
+                    {
+                        if (cap == nullptr)
+                            continue;
+                        int p = int(cap->preset());
+                        bool slowFast = p == int(QLCCapability::StrobeSlowToFast)
+                                     || p == int(QLCCapability::StrobeFreqRange)
+                                     || p == int(QLCCapability::StrobeFrequency);
+                        bool fastSlow = p == int(QLCCapability::StrobeFastToSlow);
+                        if (slowFast == false && fastSlow == false)
+                            continue;
+                        if (int(cap->max()) - int(cap->min()) < hi - lo)
+                            continue;               // the widest strobe band wins
+                        lo = int(cap->min());
+                        hi = int(cap->max());
+                        invert = fastSlow;
+                    }
+                    if (lo < 0 && qch->preset() == QLCChannel::ShutterStrobeSlowFast)
+                    {
+                        lo = 16;                    // a definition that only names the preset
+                        hi = 230;
+                    }
+                    else if (lo < 0 && qch->preset() == QLCChannel::ShutterStrobeFastSlow)
+                    {
+                        lo = 16;
+                        hi = 230;
+                        invert = true;
+                    }
+                    if (lo < 0 || hi <= lo)
+                        continue;
+                    qreal f = invert ? 1.0 - rates[r] : rates[r];
+                    int v = lo + int(qRound(qreal(hi - lo) * f));
+                    values.append(SceneValue(fid, i, uchar(qBound(0, v, 255))));
+                }
+            }
+            if (values.isEmpty())
+                continue;
+
+            QString name = QString("%1 %2").arg(key).arg(r);
+            Scene *scene = nullptr;
+            if (existing.contains(name))
+                scene = qobject_cast<Scene *>(m_doc->function(existing.value(name)));
+            if (scene != nullptr)
+            {
+                scene->setVisible(false);        // in case a hand un-hid it
+                foreach (SceneValue old, scene->values())
+                    scene->unsetValue(old.fxi, old.channel);
+                foreach (SceneValue sv, values)
+                    scene->setValue(sv);
+            }
+            else
+            {
+                scene = new Scene(m_doc);
+                scene->setName(ENGINE_STROBE_PREFIX + name);
+                scene->setVisible(false);
+                foreach (SceneValue sv, values)
+                    scene->setValue(sv);
+                if (m_doc->addFunction(scene) == false)
+                {
+                    delete scene;
+                    continue;
+                }
+            }
+            while (ids.count() < r)
+                ids.append(Function::invalidId());
+            ids.append(scene->id());
+        }
+        if (ids.isEmpty() == false)
+            m_strobeScenes.insert(key, ids);
+    }
+}
+
+void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy, bool isDrop,
+                              bool isBuild, qreal prog, int bar, int beatInBar, bool quiet)
+{
+    // When the hardware strobe comes on, how fast it runs, and who joins in.
+    // Blinking a dimmer is a pulse; THIS is a strobe, and it is deliberately
+    // rare below three-quarters of the fader and everywhere at the top.
+    QRandomGenerator *rng = QRandomGenerator::global();
+    auto roll = [rng](qreal p) { return rng->bounded(1000) < int(qBound(0.0, p, 1.0) * 1000.0); };
+    qreal e = qBound(0.0, energy, 1.0);
+    qreal w = qBound(0.0, (e - 0.55) / 0.45, 1.0);       // 0 at 55 %, 1 at the top
+
+    // the DJ scrubbed backwards: an end beat in the future is a latch
+    if (beat < m_strobeUntil - 64)
+        m_strobeUntil = -1;
+
+    if (quiet)
+    {
+        m_strobeUntil = -1;
+    }
+    else if (beat > m_strobeUntil)
+    {
+        int want = -1, beats = 2;
+        if (isBuild && prog > 0.78 && e > 0.40)
+        {
+            // the riser: it comes in near the end of the build and speeds up
+            // into the drop. This is the thing a build was missing.
+            want = prog > 0.95 ? 3 : (prog > 0.90 ? 2 : (prog > 0.85 ? 1 : 0));
+            beats = 1;
+        }
+        else if (isDrop && bar == 0 && beatInBar == 0 && e > 0.50)
+        {
+            want = 1 + int(qRound(2.0 * w));             // the drop lands
+            beats = 2;
+        }
+        else if (isDrop && w > 0.0 && beatInBar == 0 && roll(0.10 + 0.55 * w))
+        {
+            want = 1 + int(qRound(2.0 * w));             // and again, more and more of it
+            beats = w > 0.65 ? 4 : 2;
+        }
+        else if (isDrop == false && isBuild == false && w > 0.5 && (bar % 8) == 7
+                 && beatInBar == 3 && roll(0.35 * w))
+        {
+            want = 1;                                    // a groove at the top gets a taste
+            beats = 1;
+        }
+        if (want >= 0)
+        {
+            m_strobeRate = want;
+            m_strobeUntil = beat + beats - 1;
+        }
+    }
+
+    bool on = beat <= m_strobeUntil;
+    foreach (const QString &key, m_groupOrder)
+    {
+        QString slot = "str:" + key;
+        const TrackGroup &g = m_groups.value(key);
+        const QList<quint32> &ids = m_strobeScenes.value(key);
+        // Only a group that is in the cast: its colour scene is what writes
+        // ShutterOpen every cycle, and that is what puts the shutter back
+        // when the burst ends. Strobing a group with nothing else running
+        // leaves the fixtures strobing for ever.
+        // The strobe group joins whenever it is lit; everyone else only once
+        // the room is at the top of the fader - that is the "abefest".
+        bool joins = cast.contains(key) && (g.strobes || w > 0.55);
+        if (on == false || joins == false || ids.isEmpty()
+            || m_groupOff.contains(key) || g.generatable() == false)
+        {
+            stopSlot(slot, true);
+            continue;
+        }
+        // int(): QList::count() is qsizetype under Qt 6 and qBound would
+        // not deduce a common type
+        int r = qBound(0, g.strobes ? m_strobeRate : qMax(0, m_strobeRate - 1),
+                       int(ids.count()) - 1);
+        if (ids.at(r) == Function::invalidId())
+        {
+            stopSlot(slot, true);            // a hole in the rates: nothing, not the old one
+            continue;
+        }
+        // Restarted every beat on purpose. The shutter is an LTP channel and
+        // the last fader started wins - and at the top of the fader a colour
+        // scene restarts every bar, which would otherwise put ShutterOpen
+        // back on top and silently kill the strobe mid-burst.
+        stopSlot(slot, true);
+        run(slot, ids.at(r), 1.0, 0, true);
     }
 }
 
@@ -2747,9 +2975,12 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
     if (ok.isEmpty())
         return Function::invalidId();
 
-    // strobes in exactly this colour, then strobes in white or colourless,
-    // then this colour anywhere, then white, then anything
-    auto pick = [&ok, this](std::function<bool(TrackFuncInfo *)> test) -> quint32 {
+    // Strobes in exactly this colour, then this colour ANYWHERE, then the
+    // strobes in white, then white, then anything. The white-strobe rung used
+    // to sit second, so a rig with a white strobe scene and no coloured one
+    // flashed white every single time - which is what "too much white
+    // blinking" was.
+    auto pick = [&ok](std::function<bool(TrackFuncInfo *)> test) -> quint32 {
         foreach (TrackFuncInfo *info, ok)
         {
             if (test(info))
@@ -2764,9 +2995,9 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
 
     quint32 fid = pick([&](TrackFuncInfo *i) { return onStrobes(i) && i->colour == colour; });
     if (fid != Function::invalidId()) return fid;
-    fid = pick([&](TrackFuncInfo *i) { return onStrobes(i) && (i->colour == "white" || i->colour.isEmpty()); });
-    if (fid != Function::invalidId()) return fid;
     fid = pick([&](TrackFuncInfo *i) { return i->colour == colour; });
+    if (fid != Function::invalidId()) return fid;
+    fid = pick([&](TrackFuncInfo *i) { return onStrobes(i) && (i->colour == "white" || i->colour.isEmpty()); });
     if (fid != Function::invalidId()) return fid;
     fid = pick([&](TrackFuncInfo *i) { return i->colour == "white" || i->colour.isEmpty(); });
     if (fid != Function::invalidId()) return fid;
@@ -2887,7 +3118,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // and the flash still reaches for it whenever it likes.
         m_colourCursor++;
         QStringList pool;
-        bool allowWhite = rng->bounded(6) == 0;
+        bool allowWhite = rng->bounded(10) == 0;   // white is punctuation
         foreach (const QString &c, m_palette)
         {
             if (c == m_colour)
@@ -2946,8 +3177,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             return energy > 0.45 && rng->bounded(3) > 0 ? 1 : 0;
         // The top of the ENERGY fader has to mean something: at full it is
         // three groups on a drop and two in a groove, not two and one.
+        // four groups on a drop at the stop, three in a groove: the fader's
+        // last quarter has to add rig, not just brightness
         qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.15) / 0.75, 1.0)
                           : 2.0 * qBound(0.0, (energy - 0.25) / 0.65, 1.0);
+        want += 1.0 * qBound(0.0, (energy - 0.80) / 0.20, 1.0);
         int whole = int(want);
         qreal frac = want - whole;
         return whole + (rng->bounded(1000) < int(frac * 1000.0) ? 1 : 0);
@@ -3473,6 +3707,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // that has just dropped out sitting at full for a beat
     m_cast = castSet;
 
+    driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, bar, beatInBar,
+                isCalm || still || m_mixing || m_flash || m_blackout);
+
     /* ---- hits ---- */
     // the minimal guard: more than eight hits in 32 beats is a strobe show,
     // not an accent - then only the drop's own landing may flash
@@ -3484,7 +3721,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // beats when the room is quiet, ten when it is not, and never two on top
     // of each other. Quiet nights stay calm; a full fader gets a real show.
     int hitCeil = 3 + int(qRound(7.0 * qBound(0.0, (energy - 0.30) / 0.60, 1.0)));
-    int hitGap = energy > 0.75 ? 2 : 4;
+    int hitGap = energy > 0.90 ? 1 : (energy > 0.75 ? 2 : 4);
     bool crowded = m_hitBeats.count() >= hitCeil
                 || (m_hitBeats.isEmpty() == false && beat - m_hitBeats.last() < hitGap);
     bool hit = isCalm == false && still == false && m_mixing == false
@@ -3496,11 +3733,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (hit)
         {
             m_hitBeats.append(beat);
-            quint32 ff = flashFunction(castSet, m_colour);
+            // white on the downbeat of a drop - that is the one moment it
+            // reads as a punch rather than as a lamp somebody forgot to
+            // colour. Everywhere else the accent is in the room's colour.
+            QString hue = (isDrop && bar == 0 && beatInBar == 0) ? QStringLiteral("white") : m_colour;
+            quint32 ff = flashFunction(castSet, hue);
             if (ff != Function::invalidId())
                 run("flash", ff, 1.0, 0, true);
             else
-                genFlash(true);
+                genFlash(true, hue);
         }
         else
         {
@@ -3592,6 +3833,9 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         else
             mv.pulseOn = e < 0.35 ? 3 : (e < 0.60 ? pick({ 1, 2 }) : 0);
         mv.flashBar = tier == 2 && e > 0.75 && chance(0.4);
+        // (the dimmer pulse cannot go faster than the beat - the sub-beat
+        // timer only re-masks a pattern, it never re-triggers the pulse. Above
+        // the beat it is driveStrobe's hardware strobe that takes over.)
         return mv;
     }
 
@@ -3732,6 +3976,42 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         mv.colourBars = 0;
         mv.flashBar = false;
     }
+    // ---------------------------------------------------------------- the top
+    // From three-quarters of the fader upwards the engine stops holding back:
+    // faster patterns, colour trading every bar, a deeper pulse and more
+    // accents, climbing all the way to the stop. Movement is deliberately
+    // left out of this - the heads and the bars stay slow whatever the fader
+    // says, because that is the one thing this room does not want.
+    qreal fest = qBound(0.0, (e - 0.72) / 0.28, 1.0);
+    if (fest > 0.0)
+    {
+        if (chance(0.55 + 0.40 * fest))
+        {
+            // a generated pattern only reaches the rig when the group is not
+            // already running one of the user's chases - and the base runs
+            // one seven times in ten, so without this the top of the fader
+            // changed nothing at all on the heads
+            mv.ownChaser = false;
+            mv.pattern = isBase
+                       ? pick({ ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES, ENGINE_PAT_ODDEVEN })
+                       : pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG,
+                                ENGINE_PAT_SPARKLE, ENGINE_PAT_ODDEVEN });
+            mv.stepBeats = isBase ? 2 : 1;
+            mv.subSteps = isBase ? 1 : (chance(fest) ? pick({ 2, 4, 4 }) : 2);
+        }
+        // the base is still the light the room stands on: it joins in, but it
+        // does not sparkle, it does not trade colour every bar and it never
+        // runs in sixteenths
+        if (isBase == false && chance(fest))
+            mv.colourBars = pick({ 1, 1, 2 });
+        mv.pulse = qMax(mv.pulse, isBase ? 0.30 + 0.15 * fest : 0.35 + 0.40 * fest);
+        if (isBase == false)
+            mv.flashBar = mv.flashBar || chance(0.50 * fest);
+        mv.breatheBars = 0;                              // nobody breathes at the top
+        if (isBase == false && chance(0.5 * fest))
+            mv.texture = 0.0;                            // they all hit together
+    }
+
     if (g.parts.count() < 2)
         mv.pattern = ENGINE_PAT_STATIC;                  // nothing to run across
     return mv;
@@ -3979,7 +4259,14 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     if (build)
         moveP = 0.90 + 0.10 * prog;
     if (chance(moveP) == false)
+    {
+        // "this group does not move" has to mean it: dx was already drawn
+        // above, and applySweep only leaves the EFX alone when the shape and
+        // BOTH offsets are zero - so a stray dx nudged the bars off their aim
+        sw.dx = 0;
+        sw.dy = 0;
         return sw;
+    }
 
     // the shape: a gentle few at rest, the whole menu when it is hot
     QList<int> shapes;
@@ -4096,7 +4383,11 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
             sw.fan = 360 / qMax(2, heads);
         }
         if (tier == 0 && chance(0.35))
+        {
             sw.shape = -1;                         // a break may leave them still
+            sw.dx = 0;
+            sw.dy = 0;
+        }
     }
     return sw;
 }
@@ -4625,12 +4916,21 @@ void TrackEngine::release()
     // are - stopping a laser position is a move, and a slider may still have
     // the beam lit.
     stopSweeps();
+    m_strobeUntil = -1;
     foreach (const QString &slot, m_active.keys())
     {
         // A static aim stays: stopping a laser position is a move in itself,
         // and a slider may still have the beam lit. An aim that MOVES - an
         // EFX or a chase on the bars, which is what a laser "position" often
         // is - has to go, or the bars sweep on after the show is stopped.
+        // and the hardware strobe is cut, not faded: the soft stop scales
+        // the intensity attribute, and a shutter-only scene has nothing for
+        // it to scale - the rig would strobe on through the whole fade
+        if (slot.startsWith("str:"))
+        {
+            stopSlot(slot, true);
+            continue;
+        }
         bool stillAim = slot.startsWith("pos:")
                      && m_funcs.value(m_active.value(slot)).type == int(Function::SceneType);
         if (stillAim == false)
@@ -4664,6 +4964,7 @@ void TrackEngine::idle()
 
     // everything from the track goes; the start scene(s) come on
     stopSweeps();
+    m_strobeUntil = -1;
     foreach (const QString &slot, m_active.keys())
     {
         if (slot.startsWith("idle:"))
@@ -4726,6 +5027,9 @@ void TrackEngine::trackLoaded()
     m_lastBeat = 0;
     m_hitBeats.clear();
     m_starCeil = 0;
+    // the burst end is a beat number of THIS track: carrying it over would
+    // hold the hardware strobe on for the whole of the next one
+    m_strobeUntil = -1;
 }
 
 /*********************************************************************
@@ -4981,6 +5285,8 @@ void TrackEngine::stopAll()
     m_liveMove.clear();
     m_zoom.clear();
     m_dropStyle = 0;
+    m_strobeUntil = -1;          // or the next tick walks straight back into a burst
+    m_strobeRate = 0;
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();

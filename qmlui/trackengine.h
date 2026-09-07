@@ -391,6 +391,9 @@ protected:
     void ensureDimmerScenes();
     void learnGroups();
     void ensureColourScenes();
+    void ensureStrobeScenes();
+    void driveStrobe(const QSet<QString> &cast, int beat, qreal energy, bool isDrop, bool isBuild,
+                     qreal prog, int bar, int beatInBar, bool quiet);
     void learnHome();
     void ensurePositionScenes();
     void ensureSweeps();
@@ -401,7 +404,7 @@ protected:
     QString sweepName(const TrackSweep &sweep) const;
     void stopSweeps();
     bool userAllowed(const TrackFuncInfo &info, const QString &group = QString()) const;
-    void genFlash(bool on);
+    void genFlash(bool on, const QString &colour = QString());
     quint32 dimmerChannel(Fixture *fxi) const;
     int guessStars(const TrackFuncInfo &info) const;
     qreal stepBeats(const TrackFuncInfo &info, qreal bpm) const;
@@ -520,6 +523,9 @@ private:
     QMap<QString, QList<quint32> > m_zoomScenes; // head group -> narrow, mid, wide
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight
+    QHash<QString, QList<quint32> > m_strobeScenes;   // group -> a scene per rate, slow to fast
+    int m_strobeUntil;        // the beat the burst ends on (-1: not strobing)
+    int m_strobeRate;         // which of the rates is up
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
     QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
     QMap<QString, int> m_breathe;          // groups on a slow sine, and over how many bars
