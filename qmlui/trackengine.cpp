@@ -3551,15 +3551,27 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
 
     if (tier == 0)
     {
-        // break: still, but alive - the base breathes over two or four bars;
-        // when the room is up it may slowly trade halves instead
+        // A break is quiet, not frozen. The base breathes over two to six
+        // bars, and roughly half the time something also moves - slowly:
+        // halves or odd/even trading every second or fourth bar, never a
+        // chase and never a step shorter than four beats.
+        bool stir = e > 0.15 && chance(0.30 + 0.35 * e);
         if (isBase && e > 0.45 && rng->bounded(3) == 0)
         {
             mv.pattern = ENGINE_PAT_HALVES;
             mv.stepBeats = 8;
         }
+        else if (stir && g.fixtures.count() >= 2)
+        {
+            mv.pattern = pick({ ENGINE_PAT_HALVES, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES });
+            mv.stepBeats = pick({ 8, 16, 16 });
+            mv.breatheBars = pick({ 4, 6 });
+        }
         else if (e > 0.2)
             mv.breatheBars = pick({ 2, 4, 4 });
+        // a hint of a pulse on the beat, so a break still has a heartbeat
+        if (e > 0.25 && chance(0.5))
+            mv.pulse = 0.10 + 0.10 * e;
         mv.texture = 0.15;
         if (g.fixtures.count() < 2)
             mv.pattern = ENGINE_PAT_STATIC;
