@@ -2503,10 +2503,12 @@ void TrackEngine::setFan(qreal level)
 
 void TrackEngine::loadRoles()
 {
-    // the old shared key is read as a fallback, so nothing is lost on upgrade
+    // One key for every workspace. That is wrong the day a second show turns
+    // up - its function 12 inherits this show's role - but see the note over
+    // saveRoles(): the fix needs something Doc does not expose today, and a
+    // half-right fix here loses every role assignment without saying so.
     QSettings settings;
-    QString stored = settings.value(settingsKey(SETTINGS_ENGINE_ROLES),
-                                    settings.value(SETTINGS_ENGINE_ROLES, QString())).toString();
+    QString stored = settings.value(SETTINGS_ENGINE_ROLES, QString()).toString();
     foreach (QString entry, stored.split(';', Qt::SkipEmptyParts))
     {
         QStringList parts = entry.split(':');
@@ -2521,8 +2523,7 @@ void TrackEngine::loadRoles()
         }
     }
 
-    QString stars = settings.value(settingsKey(SETTINGS_ENGINE_STARS),
-                                   settings.value(SETTINGS_ENGINE_STARS, QString())).toString();
+    QString stars = settings.value(SETTINGS_ENGINE_STARS, QString()).toString();
     foreach (QString entry, stars.split(';', Qt::SkipEmptyParts))
     {
         QStringList parts = entry.split(':');
@@ -2532,48 +2533,33 @@ void TrackEngine::loadRoles()
         if (m_funcs.contains(fid))
             m_funcs[fid].stars = qBound(1, parts.at(1).toInt(), 3);
     }
-
-    // and the group switches, which the constructor could only read from the
-    // shared key because no workspace was loaded yet
-    QString off = settings.value(settingsKey(SETTINGS_ENGINE_GROUPOFF), QString()).toString();
-    if (off.isEmpty() == false)
-    {
-        m_groupOff.clear();
-        foreach (QString key, off.split(';', Qt::SkipEmptyParts))
-            m_groupOff.insert(key);
-    }
 }
 
-QString TrackEngine::settingsKey(const QString &base) const
-{
-    // Roles, stars and the group switches are remembered by FUNCTION ID. Ids
-    // are per-workspace, so under one shared key a second show would inherit
-    // the first show's assignments for whatever happens to hold the same id -
-    // and the first save from that show would overwrite the first show's.
-    // The workspace's file name keeps them apart.
-    QString name = m_doc != nullptr ? m_doc->workspaceFile() : QString();
-    if (name.isEmpty())
-        return base;                       // an unsaved workspace: the old key
-    name = QFileInfo(name).fileName();
-    name.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")), QStringLiteral("_"));
-    return base + QStringLiteral("/") + name;
-}
-
+// NOTE - roles, stars and the group switches are keyed on FUNCTION ID under
+// one settings key shared by every workspace. With a second show its function
+// 12 inherits this show's role, and the first save from that show overwrites
+// this one's. It is on the backlog, NOT fixed, and the obvious fix does not
+// work: Doc has setWorkspacePath()/workspacePath() only, and app.cpp feeds it
+// QFileInfo(fileName).absolutePath() - the DIRECTORY. Two shows in the same
+// folder get the same fingerprint, so keying on it buys nothing while the
+// silent-loss path (loadRoles falls back to the shared key, saveRoles only
+// ever writes the new one) is real. Doing it properly means giving Doc the
+// file name, and that is engine core - bane B.
 void TrackEngine::saveRoles()
 {
     QStringList entries;
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
         if (it.value().role != it.value().guess || it.value().step)
             entries << QString("%1:%2").arg(it.key()).arg(it.value().role);
-    QSettings().setValue(settingsKey(SETTINGS_ENGINE_ROLES), entries.join(';'));
-    QSettings().setValue(settingsKey(SETTINGS_ENGINE_GROUPOFF),
+    QSettings().setValue(SETTINGS_ENGINE_ROLES, entries.join(';'));
+    QSettings().setValue(SETTINGS_ENGINE_GROUPOFF,
                          QStringList(m_groupOff.values()).join(';'));
 
     QStringList stars;
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
         if (it.value().stars != it.value().starsGuess && it.value().generated == false)
             stars << QString("%1:%2").arg(it.key()).arg(it.value().stars);
-    QSettings().setValue(settingsKey(SETTINGS_ENGINE_STARS), stars.join(';'));
+    QSettings().setValue(SETTINGS_ENGINE_STARS, stars.join(';'));
 }
 
 void TrackEngine::rebuild()
