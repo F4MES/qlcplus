@@ -1395,15 +1395,16 @@ Rectangle
             color: trackViewRoot.cPanel
             radius: 4
 
-            // The cast: one horizontal fader per group, laid out down the page
-            // so they read like the MASTER and ENERGY faders above them - empty
-            // at the left, full at the right. The DJ's trim sits on top of
-            // everything the engine does, and the switch on the right leaves a
-            // group out for the night.
+            // The cast: the groups side by side across the panel, exactly
+            // where they have always been - but each one's fader now fills
+            // from the LEFT (0 %) to the RIGHT (100 %), the way MASTER and
+            // ENERGY do, instead of from the bottom up. The DJ's trim sits on
+            // top of everything the engine does, and the switch in the top
+            // right corner leaves a group out for the night.
             // A group whose dimmer is a switch (an animation laser) gets no
             // fader at all: the whole row is its on/off button, because a
             // fader that only has two positions is a lie.
-            // (CAST_V8_HORIZONTAL)
+            // (CAST_V9_ROW_HORIZONTAL)
             Column
             {
                 id: castPanel
@@ -1412,178 +1413,197 @@ Rectangle
                 spacing: 4
                 visible: !trackViewRoot.setupOpen
 
-                Repeater
+                Row
                 {
-                    model: trackEngine ? trackEngine.groups : []
+                    id: castRow
+                    // once, here - not once per tile. trackEngine.groups is a
+                    // full rebuild of the function table, not a cheap getter.
+                    property int n: trackEngine ? Math.max(1, trackEngine.groups.length) : 1
+                    width: parent.width
+                    height: parent.height
+                    spacing: 6
 
-                    Rectangle
+                    Repeater
                     {
-                        id: castTile
-                        property int n: trackEngine ? Math.max(1, trackEngine.groups.length) : 1
-                        property bool lit: trackEngine ? trackEngine.cast.indexOf(modelData.key) >= 0 : false
-                        property bool off: !modelData.enabled
-                        property bool switchOnly: modelData.switchOnly === true
-                        property real trim: (trackEngine && trackEngine.trims[modelData.key] !== undefined)
-                                            ? trackEngine.trims[modelData.key] : 1.0
-                        width: castPanel.width
-                        height: (castPanel.height - (n - 1) * castPanel.spacing) / n
-                        radius: 6
-                        color: off ? "#161616" : "#1E1E1E"
-                        border.width: modelData.base ? 2 : 1
-                        border.color: lit ? "#9FD3FF" : (modelData.base ? "#4FA3E3" : "#3A3A3A")
-                        clip: true
+                        model: trackEngine ? trackEngine.groups : []
 
-                        // the scale: 25, 50, 75 % as ticks along the top and
-                        // bottom edges, the way a horizontal fader is read
-                        Repeater
-                        {
-                            model: castTile.switchOnly ? [] : [ 0.25, 0.5, 0.75 ]
-                            Item
-                            {
-                                x: 3 + (castTile.width - 6) * modelData - 1
-                                width: 2
-                                height: castTile.height
-                                Rectangle { y: 0; width: 2; height: 8; color: "#3A3A3A" }
-                                Rectangle { y: parent.height - 8; width: 2; height: 8; color: "#3A3A3A" }
-                            }
-                        }
-
-                        // the fader: the trim fills from the LEFT, with a
-                        // bright edge where the level stands
                         Rectangle
                         {
-                            id: castFill
-                            visible: !castTile.switchOnly
-                            anchors.left: parent.left
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            anchors.margins: 3
-                            width: (parent.width - 6) * (castTile.off ? 0 : castTile.trim)
-                            radius: 4
-                            color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4")
-                                                : (castArea.pressed ? "#3A3A3A" : "#303030")
-                            Behavior on color { ColorAnimation { duration: 150 } }
+                            id: castTile
+                            property bool lit: trackEngine ? trackEngine.cast.indexOf(modelData.key) >= 0 : false
+                            property bool off: !modelData.enabled
+                            property bool switchOnly: modelData.switchOnly === true
+                            property real trim: (trackEngine && trackEngine.trims[modelData.key] !== undefined)
+                                                ? trackEngine.trims[modelData.key] : 1.0
+                            width: (castRow.width - (castRow.n - 1) * castRow.spacing) / castRow.n
+                            height: castRow.height
+                            radius: 6
+                            color: off ? "#161616" : "#1E1E1E"
+                            border.width: modelData.base ? 2 : 1
+                            border.color: lit ? "#9FD3FF" : (modelData.base ? "#4FA3E3" : "#3A3A3A")
+                            clip: true
 
+                            // the scale: 25, 50, 75 % as ticks along the top and
+                            // bottom edges, the way a horizontal fader is read
+                            Repeater
+                            {
+                                model: castTile.switchOnly ? [] : [ 0.25, 0.5, 0.75 ]
+                                Item
+                                {
+                                    x: 3 + (castTile.width - 6) * modelData - 1
+                                    y: 0
+                                    width: 2
+                                    height: castTile.height
+                                    Rectangle { y: 0; width: 2; height: 10; color: "#3A3A3A" }
+                                    Rectangle { y: parent.height - 10; width: 2; height: 10; color: "#3A3A3A" }
+                                }
+                            }
+
+                            // the fader: the trim fills from the LEFT, with a
+                            // bright edge where the level stands
                             Rectangle
                             {
-                                anchors.right: parent.right
+                                id: castFill
+                                visible: !castTile.switchOnly
+                                anchors.left: parent.left
                                 anchors.top: parent.top
                                 anchors.bottom: parent.bottom
-                                width: castArea.pressed ? 4 : 3
-                                radius: 2
-                                visible: parent.width > 4
-                                color: castTile.lit ? "#BFE3FF" : (castArea.pressed ? "#DDDDDD" : "#8A8A8A")
+                                anchors.margins: 3
+                                width: (parent.width - 6) * (castTile.off ? 0 : castTile.trim)
+                                radius: 4
+                                color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4")
+                                                    : (castArea.pressed ? "#3A3A3A" : "#303030")
+                                Behavior on color { ColorAnimation { duration: 150 } }
+
+                                Rectangle
+                                {
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.bottom: parent.bottom
+                                    width: castArea.pressed ? 4 : 3
+                                    radius: 2
+                                    visible: parent.width > 4
+                                    color: castTile.lit ? "#BFE3FF" : (castArea.pressed ? "#DDDDDD" : "#8A8A8A")
+                                }
                             }
-                        }
 
-                        // an on/off group fills its whole row when it is on -
-                        // there is nothing in between to show
-                        Rectangle
-                        {
-                            visible: castTile.switchOnly && !castTile.off
-                            anchors.fill: parent
-                            anchors.margins: 3
-                            radius: 4
-                            color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4") : "#303030"
-                            Behavior on color { ColorAnimation { duration: 150 } }
-                        }
-
-                        // drag anywhere: the trim. A switch-only group toggles
-                        // instead - one tap, on or off.
-                        MouseArea
-                        {
-                            id: castArea
-                            anchors.fill: parent
-                            enabled: castTile.switchOnly || !castTile.off
-                            // keep clear of the ON/OFF switch on the right: it
-                            // is 56x30 with a 5 px margin, and a finger that
-                            // lands just beside it used to fall through to
-                            // here - which reads as "x near the right", i.e.
-                            // this group's trim slammed to full mid-track
-                            property bool hasSwitch: modelData && !modelData.base && !castTile.switchOnly
-                            function onSwitch(x)
+                            // an on/off group fills its whole row when it is on -
+                            // there is nothing in between to show
+                            Rectangle
                             {
-                                return hasSwitch && x > width - 74
-                            }
-                            function apply(x)
-                            {
-                                var v = (x - 3) / (width - 6)
-                                v = Math.max(0, Math.min(1, v))
-                                if (v > 0.97) v = 1
-                                if (v < 0.03) v = 0
-                                if (trackEngine) trackEngine.setGroupTrim(modelData.key, v)
-                            }
-                            onPressed: (mouse) =>
-                            {
-                                if (castTile.switchOnly)
-                                    return
-                                if (!onSwitch(mouse.x))
-                                    apply(mouse.x)
-                            }
-                            onPositionChanged: (mouse) =>
-                            {
-                                if (pressed && !castTile.switchOnly && !onSwitch(mouse.x))
-                                    apply(mouse.x)
-                            }
-                            onClicked: (mouse) =>
-                            {
-                                if (castTile.switchOnly && trackEngine)
-                                    trackEngine.setGroupEnabled(modelData.key, castTile.off)
-                            }
-                        }
-
-                        Text
-                        {
-                            anchors.left: parent.left
-                            anchors.leftMargin: 12
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.key.toUpperCase()
-                            color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#8A8A8A")
-                            font.bold: true
-                            font.pixelSize: 14
-                        }
-
-                        Text
-                        {
-                            anchors.right: parent.right
-                            anchors.rightMargin: modelData.base || castTile.switchOnly ? 12 : 74
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: castTile.off ? qsTr("OFF")
-                                : castTile.switchOnly ? qsTr("ON")
-                                : (modelData.base ? qsTr("BASE") + "   " : "")
-                                  + Math.round(castTile.trim * 100) + "%"
-                            color: castTile.lit ? "#E0F0FF" : (castTile.off ? "#6A6A6A" : "#9A9A9A")
-                            font.bold: castTile.switchOnly
-                            font.pixelSize: 13
-                        }
-
-                        // the switch: in or out of tonight's show. The base
-                        // (the heads) is always in; SETUP decides which one it
-                        // is. A switch-only group is its own switch.
-                        Rectangle
-                        {
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.rightMargin: 5
-                            width: 56
-                            height: 30
-                            radius: 15
-                            visible: !modelData.base && !castTile.switchOnly
-                            color: castTile.off ? "#3A3A3A" : "#7ED07E"
-
-                            Text
-                            {
-                                anchors.centerIn: parent
-                                text: castTile.off ? qsTr("OFF") : qsTr("ON")
-                                color: castTile.off ? "#9A9A9A" : "#102010"
-                                font.bold: true
-                                font.pixelSize: 12
+                                visible: castTile.switchOnly && !castTile.off
+                                anchors.fill: parent
+                                anchors.margins: 3
+                                radius: 4
+                                color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4") : "#303030"
+                                Behavior on color { ColorAnimation { duration: 150 } }
                             }
 
+                            // drag anywhere: the trim. A switch-only group toggles
+                            // instead - one tap, on or off.
                             MouseArea
                             {
+                                id: castArea
                                 anchors.fill: parent
-                                onClicked: trackEngine.setGroupEnabled(modelData.key, castTile.off)
+                                // the base group is always in the show, switch-only
+                                // or not - the comment on the switch below says so
+                                // and this is the path that could have broken it
+                                enabled: (castTile.switchOnly && !modelData.base) || !castTile.off
+                                // Keep clear of the ON/OFF switch in the top right.
+                                // It is 56x30 at a 5 px margin, and the halo has to
+                                // stay INSIDE the tile: on a narrow tile the old
+                                // "x > width - 74" compared against a negative
+                                // number, was true everywhere, and killed the whole
+                                // top of the tile. The switch's own MouseArea wins
+                                // the press by stacking order anyway - this is only
+                                // here so a finger that lands beside it does not
+                                // slam the trim to full.
+                                property bool hasSwitch: modelData && !modelData.base && !castTile.switchOnly
+                                function onSwitch(x, y)
+                                {
+                                    return hasSwitch && width > 96 && x > width - 69 && y < 41
+                                }
+                                function apply(x)
+                                {
+                                    var v = (x - 3) / (width - 6)
+                                    v = Math.max(0, Math.min(1, v))
+                                    if (v > 0.97) v = 1
+                                    if (v < 0.03) v = 0
+                                    if (trackEngine) trackEngine.setGroupTrim(modelData.key, v)
+                                }
+                                onPressed: (mouse) =>
+                                {
+                                    if (castTile.switchOnly)
+                                        return
+                                    if (!onSwitch(mouse.x, mouse.y))
+                                        apply(mouse.x)
+                                }
+                                onPositionChanged: (mouse) =>
+                                {
+                                    if (pressed && !castTile.switchOnly && !onSwitch(mouse.x, mouse.y))
+                                        apply(mouse.x)
+                                }
+                                onClicked: (mouse) =>
+                                {
+                                    if (castTile.switchOnly && !modelData.base && trackEngine)
+                                        trackEngine.setGroupEnabled(modelData.key, castTile.off)
+                                }
+                            }
+
+                            Column
+                            {
+                                anchors.centerIn: parent
+                                spacing: 4
+
+                                Text
+                                {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: modelData.key.toUpperCase()
+                                    color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#8A8A8A")
+                                    font.bold: true
+                                    font.pixelSize: 14
+                                }
+                                Text
+                                {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: castTile.off ? qsTr("OFF")
+                                        : castTile.switchOnly ? qsTr("ON")
+                                        : (modelData.base ? qsTr("BASE") + "  " : "")
+                                          + Math.round(castTile.trim * 100) + "%"
+                                    color: castTile.lit ? "#E0F0FF" : "#6A6A6A"
+                                    font.bold: castTile.switchOnly
+                                    font.pixelSize: 12
+                                }
+                            }
+
+                            // the switch: in or out of tonight's show. The base
+                            // (the heads) is always in; SETUP decides which one it
+                            // is. A switch-only group is its own switch.
+                            Rectangle
+                            {
+                                anchors.top: parent.top
+                                anchors.right: parent.right
+                                anchors.margins: 5
+                                width: 56
+                                height: 30
+                                radius: 15
+                                visible: !modelData.base && !castTile.switchOnly
+                                color: castTile.off ? "#3A3A3A" : "#7ED07E"
+
+                                Text
+                                {
+                                    anchors.centerIn: parent
+                                    text: castTile.off ? qsTr("OFF") : qsTr("ON")
+                                    color: castTile.off ? "#9A9A9A" : "#102010"
+                                    font.bold: true
+                                    font.pixelSize: 12
+                                }
+
+                                MouseArea
+                                {
+                                    anchors.fill: parent
+                                    onClicked: trackEngine.setGroupEnabled(modelData.key, castTile.off)
+                                }
                             }
                         }
                     }
