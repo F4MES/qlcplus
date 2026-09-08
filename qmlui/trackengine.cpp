@@ -1999,10 +1999,17 @@ void TrackEngine::ensureOffScenes()
     // group - can be holding any of them up. So: one scene per group that
     // sets every channel to zero and blends with Replace, which writes the
     // exact value AFTER the ordinary playback layer.
-    // It beats scenes, chasers and EFX. It does NOT beat a Virtual Console
-    // slider, a flash button or Simple Desk: those carry an explicit fader
-    // priority that sorts after us on purpose, and a hand on a fader should
-    // win.
+    // Where this sits in the layer order (GenericFader::playbackOrder):
+    //   0  ordinary playback - scenes, chasers, EFX, AND a plain VC slider or
+    //      a plain flash button, because those ask for Universe::Auto
+    //   1  us, and the per-fixture dimmer scenes
+    //   3  a VC slider with Monitor on (Universe::Override)
+    //   6  a flash button with Override="1" (Universe::Flashing)
+    //   9  Simple Desk
+    // So this beats ordinary playback and a PLAIN fader - which is the point
+    // while AUTO runs, but it is worth knowing: to busk over a running AUTO a
+    // widget has to be at 3 or above. With AUTO off everything here is
+    // released within a second and the faders are the operator's again.
     //
     // Pan, tilt and the speed channels are left alone on purpose: an off
     // group should go dark where it stands, not swing to a corner first.
@@ -5524,16 +5531,19 @@ void TrackEngine::release()
     m_strobeUntil = -1;
     foreach (const QString &slot, m_active.keys())
     {
-        // the OFF mask goes with the engine: with AUTO off, the group's
-        // channels belong to the operator again. A BLACKOUT mask does not -
-        // the blackout button is still down.
-        if (slot.startsWith("off:"))
+        // Both masks go: with AUTO off the group's channels belong to the
+        // operator again, and that has to include the blackout.
+        // Keeping the blackout mask was a trap. BLACKOUT lives on the Track
+        // page; the Virtual Console's own blackout button is a different
+        // mechanism entirely and does not clear it. So an operator who left
+        // the Track page with it down had a rig that answered to a handful of
+        // flash buttons and nothing else, with no route back from the pages
+        // they actually use.
+        if (slot.startsWith("off:") || slot.startsWith("black:"))
         {
             stopSlot(slot, true);
             continue;
         }
-        if (slot.startsWith("black:"))
-            continue;
         // A static aim stays: stopping a laser position is a move in itself,
         // and a slider may still have the beam lit. An aim that MOVES - an
         // EFX or a chase on the bars, which is what a laser "position" often
@@ -5546,14 +5556,24 @@ void TrackEngine::release()
             stopSlot(slot, true);
             continue;
         }
+        // A static aim of OURS stays: stopping a laser position is a move in
+        // itself. A position of the OPERATOR'S does not - it may carry a
+        // shutter or a dimmer of its own, and that would sit at full for the
+        // rest of the night with AUTO off. idle() has had this guard all
+        // along; release() was missing it.
+        const TrackFuncInfo &pi = m_funcs.value(m_active.value(slot));
         bool stillAim = slot.startsWith("pos:")
-                     && m_funcs.value(m_active.value(slot)).type == int(Function::SceneType);
+                     && pi.type == int(Function::SceneType)
+                     && pi.generated;
         if (stillAim == false)
             stopSlot(slot, false);
     }
     m_cast.clear();
     m_lastState.clear();
     m_flash = false;
+    // and the flag with them, or the next tick() would put the masks straight
+    // back and the Track page would still show BLACKOUT lit
+    m_blackout = false;
     m_pulseDepth.clear();
     m_breathe.clear();
     m_flashHeld.clear();
