@@ -77,6 +77,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     : QObject(parent)
     , m_doc(doc)
     , m_dirty(true)
+    , m_building(false)
     , m_hazeScene(0)
     , m_fanScene(0)
     , m_haze(0.0)
@@ -103,6 +104,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_logEnabled(true)
     , m_dropStyle(0)
     , m_strobeUntil(-1)
+    , m_strobeSeen(-1)
     , m_strobeRate(0)
     , m_beatMs(500.0)
     , m_beatStartMs(0)
@@ -119,6 +121,10 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
 {
     QSettings settings;
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
+    m_docTimer.setSingleShot(true);
+    m_docTimer.setInterval(0);         // the next turn of the event loop
+    connect(&m_docTimer, SIGNAL(timeout()), this, SLOT(slotDocSettled()));
+
     m_fadeTimer.setInterval(20);       // 50 a second: a fade, not a staircase
     connect(&m_fadeTimer, SIGNAL(timeout()), this, SLOT(slotFadeTimer()));
     m_clock.start();
@@ -141,6 +147,15 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
         connect(m_doc, SIGNAL(cleared()), this, SLOT(slotDocChanged()));
         connect(m_doc, SIGNAL(functionRemoved(quint32)), this, SLOT(slotDocChanged()));
         connect(m_doc, SIGNAL(fixtureRemoved(quint32)), this, SLOT(slotDocChanged()));
+        // Patching a fixture into an existing group used to leave it undriven:
+        // no hidden dimmer scene, no entry in g.parts, and not covered by the
+        // group's OFF mask either - so switching that group off left the new
+        // lamp lit. Renaming a group left the whole table stale the same way.
+        connect(m_doc, SIGNAL(fixtureAdded(quint32)), this, SLOT(slotDocChanged()));
+        connect(m_doc, SIGNAL(fixtureChanged(quint32)), this, SLOT(slotDocChanged()));
+        connect(m_doc, SIGNAL(fixtureGroupAdded(quint32)), this, SLOT(slotDocChanged()));
+        connect(m_doc, SIGNAL(fixtureGroupRemoved(quint32)), this, SLOT(slotDocChanged()));
+        connect(m_doc, SIGNAL(fixtureGroupChanged(quint32)), this, SLOT(slotDocChanged()));
     }
 }
 
@@ -158,8 +173,21 @@ void TrackEngine::slotFadeTimer()
 
 void TrackEngine::slotDocChanged()
 {
-    // a new project hands out its function ids from scratch: everything we
-    // hold points at something else now
+    // Loading a project emits functionRemoved once per function, fixtureRemoved
+    // once per fixture and fixtureGroupRemoved once per group, and then the
+    // same again on the way in - hundreds of signals for one event. Tearing the
+    // show down and rebuilding the table on each of them is not only wasted
+    // work: ensureTable() adds hidden scenes, and Doc::clearContents() iterates
+    // a SNAPSHOT of its function list, so scenes added in that window survive
+    // the clear and leak into the next project holding values for fixtures that
+    // are about to be deleted. One rebuild once the storm has passed.
+    m_dirty = true;
+    if (m_docTimer.isActive() == false)
+        m_docTimer.start();
+}
+
+void TrackEngine::slotDocSettled()
+{
     m_dirty = true;
     m_position.clear();
     m_moves.clear();
@@ -171,8 +199,19 @@ void TrackEngine::slotDocChanged()
     m_strobeScenes.clear();
     m_offScenes.clear();
     m_strobeUntil = -1;
+    m_strobeSeen = -1;
     m_strobeRate = 0;
+    // setHaze/setFan early-return on an unchanged value, so a stale reading
+    // here left the slider dead until it was moved somewhere else first
+    m_haze = 0.0;
+    m_fan = 0.0;
+    m_flash = false;
     m_zoom.clear();
+    // Everything the engine had running keeps running otherwise, with its
+    // intensity override stuck where it was - and this fires on an ordinary
+    // "delete a function" in the Function Manager, not only on a project load.
+    // stopAll() releases the overrides and stops the functions properly.
+    stopAll();
     m_active.clear();
     m_activeAttr.clear();
     m_activeLevel.clear();
@@ -226,7 +265,16 @@ void TrackEngine::slotPulseTimer()
             QVector<qreal> mask = patternMask(key, mv, step, 1.0);
             qreal level = m_moveLevel.value(key, 0.0);
             for (int i = 0; i < mask.count(); i++)
+            {
+                // Only parts we are already holding. setPart() STARTS a scene
+                // it does not find, so without this the sub-beat timer would
+                // restart every dimmer part of a group that had just been
+                // switched off - twenty milliseconds after the switch, and
+                // then fifty times a second against its own OFF mask.
+                if (m_active.contains(partSlot(key, i)) == false)
+                    continue;
                 setPart(key, i, level * mask.at(i));
+            }
             continue;
         }
         if (m_pulseDepth.value(key, 0.0) <= 0.0 && m_breathe.value(key, 0) <= 0)
@@ -545,8 +593,13 @@ int TrackEngine::classify(const TrackFuncInfo &info) const
 
 void TrackEngine::ensureTable()
 {
-    if (m_dirty == false || m_doc == nullptr)
+    if (m_dirty == false || m_doc == nullptr || m_building)
         return;
+    // Adding a generated scene emits Doc::functionAdded, and anything that
+    // reacts to that by reading the table would see it half-built: the groups
+    // populated but m_funcs still empty. m_dirty alone did not stop that,
+    // because it is cleared before any of the work starts.
+    m_building = true;
     m_dirty = false;
 
     /* ---- groups ---- */
@@ -841,6 +894,7 @@ void TrackEngine::ensureTable()
     ensureDimmerScenes();
     ensureAtmosScenes();
 
+    m_building = false;
     qDebug() << "[TrackEngine]" << m_groups.count() << "groups," << m_funcs.count()
              << "functions, palette" << m_palette;
 }
@@ -2020,8 +2074,22 @@ void TrackEngine::applyGroupOff()
         return;
     foreach (const QString &key, m_groupOrder)
     {
-        QString slot = "off:" + key;
         quint32 fid = m_offScenes.value(key, Function::invalidId());
+
+        // BLACKOUT rides the same mask. The intensity attribute only scales
+        // channels QLC+ flags as Intensity, so on a laser bar (colour on a
+        // colour channel) or an animation laser (light on effect channels)
+        // turning the level to zero did nothing at all - the masks are the
+        // only thing that actually blacks those out. Driven from here, so a
+        // teardown that drops them is corrected on the next beat instead of
+        // leaving the rig lit for the rest of the night.
+        QString black = "black:" + key;
+        if (m_blackout && fid != Function::invalidId())
+            run(black, fid, 1.0, 0, true);
+        else if (m_active.contains(black))
+            stopSlot(black, true);
+
+        QString slot = "off:" + key;
         if (m_groupOff.contains(key) && fid != Function::invalidId())
         {
             run(slot, fid, 1.0, 0, true);
@@ -2038,12 +2106,27 @@ void TrackEngine::applyGroupOff()
             func->stop(FunctionParent::master());
     }
 
-    // a mask left over from a group that has been renamed or deleted
+    // A slot whose group no longer exists - renamed, emptied, or the largest-
+    // group rule picked a different name - can never be reached by the loops
+    // that would otherwise stop it, because they all walk the CURRENT groups.
+    // A hardware strobe or an EFX sweep left like that runs until QLC+ exits.
     foreach (const QString &slot, m_active.keys())
     {
-        if (slot.startsWith("off:") == false)
+        if (slot.startsWith("off:"))
+        {
+            if (m_groupOff.contains(slot.mid(4)) == false)
+                stopSlot(slot, true);
             continue;
-        if (m_groupOff.contains(slot.mid(4)) == false)
+        }
+        static const QStringList owned = { "str:", "efx:", "zoom:", "col:",
+                                           "mot:", "pos:", "black:" };
+        bool mine = false;
+        foreach (const QString &p, owned)
+        {
+            if (slot.startsWith(p))
+                mine = true;
+        }
+        if (mine && m_groups.contains(slotGroup(slot)) == false)
             stopSlot(slot, true);
     }
 }
@@ -2063,9 +2146,14 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     // are 90 % and 100 %.
     qreal w = qBound(0.0, (e - 0.33) / 0.67, 1.0);
 
-    // the DJ scrubbed backwards: an end beat in the future is a latch
-    if (beat < m_strobeUntil - 64)
+    // The DJ scrubbed backwards. A burst is at most four beats, so any
+    // backwards jump can leave an end beat in the future - and then
+    // "beat <= m_strobeUntil" stays true for the whole length of the jump and
+    // the strobe runs solid. It cannot be checked against m_lastBeat: tick()
+    // has already set that to this beat by the time we get here.
+    if (m_strobeSeen >= 0 && beat < m_strobeSeen)
         m_strobeUntil = -1;
+    m_strobeSeen = beat;
 
     if (quiet)
     {
@@ -2549,6 +2637,12 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
             const TrackGroup &g = m_groups.value(key);
             for (int i = 0; i < g.parts.count(); i++)
                 stopSlot(partSlot(key, i), true);
+            // out of the cast as well, or the pulse timer keeps working on it
+            m_cast.remove(key);
+            m_liveMove.remove(key);
+            m_patterned.remove(key);
+            m_pulseDepth.remove(key);
+            m_breathe.remove(key);
         }
         applyGroupOff();
     }
@@ -2727,22 +2821,15 @@ void TrackEngine::setBlackout(bool on)
     if (on == m_blackout)
         return;
     m_blackout = on;
-    // straight onto everything that runs: parts and functions alike
-    foreach (const QString &slot, m_active.keys())
-    {
-        Function *func = m_doc->function(m_active.value(slot));
-        if (func == nullptr)
-            continue;
-        qreal level = m_activeLevel.value(slot, 1.0);
-        if (slot.startsWith("dim:"))
-        {
-            int hash = slot.lastIndexOf('#');
-            QString group = hash > 4 ? slot.mid(4, hash - 4) : QString();
-            level = qBound(0.0, level * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0);
-        }
-        m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, m_blackout ? 0.0 : level));
-        m_activeOut.insert(slot, m_blackout ? 0.0 : level);
-    }
+
+    applyGroupOff();          // it owns both masks: the off ones and the black ones
+
+    // and the levels: reapplyLevels() knows about MASTER, the group trim, the
+    // pulse AND the blackout clamp. The hand-rolled loop that used to be here
+    // only handled the dim: slots, so a colour scene that carried its own
+    // dimmer came back at full when blackout was released - at MASTER 50 %
+    // the room jumped to full, and during a START scene it stayed there.
+    reapplyLevels();
     // and onto what is fading out
     foreach (quint32 fid, m_fadeAttr.keys())
     {
@@ -4637,9 +4724,18 @@ void TrackEngine::reapplyLevels()
         QString group = slotGroup(slot);
         qreal out = m_activeLevel.value(slot, 1.0);
         if (slot.startsWith(QStringLiteral("dim:")))
+        {
             out *= pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master;
+            // and the same on/off squaring setPart() does: an animation
+            // laser's dimmer is a switch, and a fraction written to it is
+            // rounded by the fixture in a way nobody can predict
+            if (m_groups.value(group).patternDevice)
+                out = out > 0.10 ? 1.0 : 0.0;
+        }
         else
+        {
             out *= slotScale(slot, fid);
+        }
         out = m_blackout ? 0.0 : qBound(0.0, out, 1.0);
         m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
         m_activeOut.insert(slot, out);
@@ -5249,10 +5345,12 @@ void TrackEngine::setStartScene(bool on)
     }
     else
     {
-        // The start picture's colour never outlives the start picture. It used
-        // to, whenever the DJ tapped a tile while it was up: that cleared the
-        // "this lock is ours" mark, and nothing ever unlocked it again.
-        m_override.clear();
+        // The start picture's colour never outlives the start picture - but a
+        // colour the DJ chose while it was up is theirs and stays. m_startColour
+        // is exactly that distinction, and it was being written in three places
+        // and read in none, so the DJ's tile was thrown away every time.
+        if (m_startColour)
+            m_override.clear();
         m_startColour = false;
         foreach (const QString &slot, m_active.keys())
             stopSlot(slot, false);
@@ -5302,6 +5400,7 @@ void TrackEngine::startLook()
 
     // the aim, from the start scene(s)
     foreach (TrackFuncInfo *info, idles)
+        // the bare level: run() puts MASTER on through slotScale(), and an
         run("idle:" + QString::number(info->id), info->id,
             info->dimmer ? m_startLevel : 1.0, 0, false);
 
@@ -5426,12 +5525,15 @@ void TrackEngine::release()
     foreach (const QString &slot, m_active.keys())
     {
         // the OFF mask goes with the engine: with AUTO off, the group's
-        // channels belong to the operator again
+        // channels belong to the operator again. A BLACKOUT mask does not -
+        // the blackout button is still down.
         if (slot.startsWith("off:"))
         {
             stopSlot(slot, true);
             continue;
         }
+        if (slot.startsWith("black:"))
+            continue;
         // A static aim stays: stopping a laser position is a move in itself,
         // and a slider may still have the beam lit. An aim that MOVES - an
         // EFX or a chase on the bars, which is what a laser "position" often
@@ -5483,8 +5585,14 @@ void TrackEngine::idle()
     {
         if (slot.startsWith("idle:"))
             continue;
-        if (slot.startsWith("off:"))
-            continue;                    // the mask we started four lines ago
+        if (slot.startsWith("off:") || slot.startsWith("black:"))
+            continue;                    // the masks we started four lines ago
+        if (slot.startsWith("str:"))
+        {
+            stopSlot(slot, true);    // a shutter-only scene cannot be faded
+            continue;
+        }
+
         // our own aims stay, as in release(): stopping a laser position is a
         // move in itself, and a start scene started after this one wins the
         // aim anyway. A position of the OPERATOR'S may carry a shutter or a
@@ -5502,8 +5610,15 @@ void TrackEngine::idle()
     m_pulseTimer.stop();
 
     foreach (TrackFuncInfo *info, list)
+    {
+        // The BARE level. run() puts MASTER on through slotScale(), and an
+        // idle: slot has no group name in it, so it counts as carrying the
+        // intensity itself - passing m_master here as well squared it. At
+        // MASTER 50 % the between-tracks picture sat at 25 %, and there are
+        // no beats between tracks to correct it.
         run("idle:" + QString::number(info->id), info->id,
-            info->dimmer ? m_master : 1.0, 0, false);
+            info->dimmer ? m_startLevel : 1.0, 0, false);
+    }
 
     if (holdBase)
     {
@@ -5543,6 +5658,13 @@ void TrackEngine::trackLoaded()
     m_lastBeat = 0;
     m_hitBeats.clear();
     m_starCeil = 0;
+    // the cast size is hysteretic, so a peak-time track that ended on four
+    // groups handed four to the next track's intro and took three sections
+    // to come down again
+    m_effects = 0;
+    m_effectsBefore = 0;
+    m_zoom.clear();
+    m_strobeSeen = -1;
     // the burst end is a beat number of THIS track: carrying it over would
     // hold the hardware strobe on for the whole of the next one
     m_strobeUntil = -1;
@@ -5670,6 +5792,14 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
     {
         m_fadeAttr.insert(fid, attr);
         m_fadeLevel.insert(fid, level);
+        // The timer was only ever started by setFullAuto, startLook, release
+        // and idle - never by an ordinary soft stop in the middle of a track.
+        // tickFades() steps 0.02 per CALL, so during playback the only caller
+        // was tick(), once a beat: a "one second" fade took fifty beats, i.e.
+        // twenty-three seconds at 128 bpm. Every group that dropped out of the
+        // cast was still visibly lit twelve bars later.
+        if (m_fadeTimer.isActive() == false)
+            m_fadeTimer.start();
     }
 }
 
@@ -5799,7 +5929,17 @@ void TrackEngine::stopAll()
     m_moveHistory.clear();
     m_sweepHistory.clear();
     m_liveMove.clear();
+    m_patterned.clear();          // m_liveMove's partner, and it was left behind
+    m_moveLevel.clear();
+    m_conflictBeats.clear();
+    m_lastPan.clear();
+    m_headMoveBeats.clear();
     m_zoom.clear();
+    m_calmUntil = 0;              // CALM must not survive AUTO going off and on
+    // NOT m_lastBeat: slotDocChanged() calls this mid-track now, and zeroing
+    // the beat counter there would make a CALM pressed in that same beat
+    // compare 5000 < 32 and silently do nothing. m_calmUntil = 0 above is
+    // already the whole of what this line was for.
     m_dropStyle = 0;
     m_strobeUntil = -1;          // or the next tick walks straight back into a burst
     m_strobeRate = 0;

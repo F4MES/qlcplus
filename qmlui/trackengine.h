@@ -376,6 +376,7 @@ signals:
 
 protected slots:
     void slotDocChanged();
+    void slotDocSettled();
     void slotFadeTimer();
     void slotPulseTimer();
 
@@ -460,6 +461,7 @@ private:
     Doc *m_doc;
 
     bool m_dirty;
+    bool m_building;          // ensureTable() is mid-rebuild: do not re-enter
     QHash<quint32, TrackFuncInfo> m_funcs;
     QMap<QString, TrackGroup> m_groups;
     QStringList m_groupOrder;
@@ -509,6 +511,7 @@ private:
     int m_lastBeat;
     int m_calmUntil;          // beat until which the panic look holds
     QTimer m_fadeTimer;       // keeps fades ticking after a release
+    QTimer m_docTimer;        // coalesces a burst of document signals into one rebuild
     bool m_logEnabled;
     QFile m_log;
 
@@ -530,6 +533,7 @@ private:
     QHash<QString, quint32> m_offScenes;              // group -> the scene that forces it to zero
     QHash<QString, QList<quint32> > m_strobeScenes;   // group -> a scene per rate, slow to fast
     int m_strobeUntil;        // the beat the burst ends on (-1: not strobing)
+    int m_strobeSeen;         // the beat driveStrobe last saw, to catch a scrub
     int m_strobeRate;         // which of the rates is up
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
     QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
