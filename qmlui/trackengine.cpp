@@ -5695,7 +5695,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
             QTextStream head(&m_log);
             // funcs is APPENDED, never inserted: bane B's tracklog_report.py
             // reads the older columns by position and must keep working.
-            head << "time,beat,state,cast,colour,level,energy,section_energy,master,moves,funcs\n";
+            head << "time,beat,state,cast,colour,level,energy,section_energy,master,moves,funcs,track\n";
         }
     }
 
@@ -5723,7 +5723,12 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         << QString::number(sectionEnergy, 'f', 2) << ','
         << QString::number(m_master, 'f', 2) << ','
         << QString(m_lastMoves).replace(',', ';') << ','
-        << running.join(';') << '\n';
+        << running.join(';') << ','
+        // last, and appended like funcs was: bane B reads the older columns
+        // by position. Commas and quotes out - the log is read with a plain
+        // split(','), not a CSV parser, and a track called "Hello, Again"
+        // would have shifted every column after it.
+        << QString(m_trackTitle).replace(',', ' ').remove('"') << '\n';
     out.flush();
     m_log.flush();                       // the report script reads while we play
 }
@@ -5870,8 +5875,9 @@ void TrackEngine::idle()
     emit liveChanged();
 }
 
-void TrackEngine::trackLoaded()
+void TrackEngine::trackLoaded(const QString &title)
 {
+    m_trackTitle = title;
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
     m_colourBar = -1;            // hold the colour until the first break or drop

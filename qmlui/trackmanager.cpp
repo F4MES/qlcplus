@@ -311,6 +311,8 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     m_currentBeat = 0;
     m_trackTimeMs = 0;
     m_movePick = Function::invalidId();    // a new track picks afresh
+    if (m_engine != nullptr)
+        m_engine->trackLoaded();
     m_undo.clear();
     m_lastMoveIndex = -1;
     m_lastEngineBeat = -1;
@@ -319,7 +321,7 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     if (m_nextTitle == m_title)
         m_nextTitle.clear();
     if (m_engine != nullptr)
-        m_engine->trackLoaded();
+        m_engine->trackLoaded(m_title);
 
     qDebug() << "[TrackManager] track:" << m_title << m_beatCount << "beats,"
              << m_markers.count() << "markers";

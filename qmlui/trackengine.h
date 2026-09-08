@@ -366,7 +366,9 @@ public:
               qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
               const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
               qreal kick = -1.0, qreal high = -1.0);
-    void trackLoaded();
+    /** $title is the track TrackManager just loaded. Defaulted so an
+     *  un-patched trackmanager.cpp still compiles; the patch passes it. */
+    void trackLoaded(const QString &title = QString());
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** AUTO switched off: fade everything out over a bar, then let go. */
@@ -524,6 +526,7 @@ private:
     // same numbers the beat had. Inline-initialised on purpose: added to the
     // constructor's list they would have to sit in declaration order too, and
     // -Wreorder is an error in CI.
+    QString m_trackTitle;     // what is playing, for the log's track column
     int   m_logBeatNo = 0;
     qreal m_logLevel = 0.0;
     qreal m_logEnergy = 0.0;
