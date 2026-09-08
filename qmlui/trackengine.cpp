@@ -2742,6 +2742,10 @@ QVariantList TrackEngine::groups()
 
 void TrackEngine::setGroupEnabled(QString key, bool enable)
 {
+    // Already precise: it names the group, so it blames exactly the program
+    // that was on it. No tapping required.
+    if (enable != (m_groupOff.contains(key) == false))
+        logSignal((enable ? QStringLiteral("sig:group-on:") : QStringLiteral("sig:group-off:")) + key);
     if (enable) m_groupOff.remove(key); else m_groupOff.insert(key);
     saveRoles();
     // right now, not on the next beat - and stop whatever of ours is on it
@@ -2791,6 +2795,15 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
     level = qBound(0.0, level, 1.0);
     if (qFuzzyCompare(level + 1.0, m_groupTrim.value(key, 1.0) + 1.0))
         return;
+    // A fader is dragged, not tapped, so this would write a line per frame.
+    // One per group per logged beat is enough to see the gesture and where it
+    // ended, and the beat lines around it carry the rest.
+    if (m_trimLogged.value(key, -1) != m_logBeatNo)
+    {
+        m_trimLogged.insert(key, m_logBeatNo);
+        logSignal(QStringLiteral("sig:trim:") + key
+                  + QLatin1Char('=') + QString::number(level, 'f', 2));
+    }
     m_groupTrim.insert(key, level);
 
     // straight onto everything that is lit for this group - the dimmer parts
@@ -2901,6 +2914,8 @@ void TrackEngine::setColourOverride(QString colour)
         colour.clear();
     if (colour == m_override)
         return;
+    logSignal(colour.isEmpty() ? QStringLiteral("sig:colour-auto")
+                               : QStringLiteral("sig:colour:") + colour);
     m_override = colour;
     m_startColour = false;               // a tile the DJ tapped is theirs
     if (colour.isEmpty() == false)
@@ -2943,6 +2958,7 @@ void TrackEngine::setBlackout(bool on)
 {
     if (on == m_blackout)
         return;
+    logSignal(on ? QStringLiteral("sig:blackout") : QStringLiteral("sig:blackout-off"));
     m_blackout = on;
 
     applyGroupOff();          // it owns both masks: the off ones and the black ones
@@ -5399,14 +5415,27 @@ QStringList TrackEngine::warnings() const { return m_warnings; }
 void TrackEngine::calm(int bars)
 {
     // bars <= 0 ends it early
+    logSignal(bars <= 0 ? QStringLiteral("sig:calm-off") : QStringLiteral("sig:calm"));
     m_calmUntil = bars <= 0 ? 0 : m_lastBeat + bars * 4;
     emit liveChanged();
 }
 
 void TrackEngine::next()
 {
+    // The strongest free signal there is: whatever was on stage, he did not
+    // want it. How long it had been up is in the log already - the beat lines
+    // before this one say when funcs last changed.
+    logSignal(QStringLiteral("sig:next"));
     m_forceNext = true;
     emit liveChanged();
+}
+
+void TrackEngine::logSignal(const QString &tag)
+{
+    // Commas out: the log is read with a plain split(','), and a group called
+    // "Strobes, All" would shift every column after this one.
+    logBeat(QString(tag).replace(',', ' '),
+            m_logBeatNo, m_logLevel, m_logEnergy, m_logSection);
 }
 
 void TrackEngine::rate(int verdict)
@@ -5420,8 +5449,7 @@ void TrackEngine::rate(int verdict)
     // Deliberately no scoring, no average, no effect on the engine. Two or
     // three nights of this first, then we look at whether the verdicts are
     // even consistent before anything starts choosing by them.
-    logBeat(verdict >= 0 ? QStringLiteral("rate+1") : QStringLiteral("rate-1"),
-            m_logBeatNo, m_logLevel, m_logEnergy, m_logSection);
+    logSignal(verdict >= 0 ? QStringLiteral("rate+1") : QStringLiteral("rate-1"));
 }
 
 int TrackEngine::room() const { return m_room; }
@@ -5649,6 +5677,9 @@ void TrackEngine::setHold(bool on)
 {
     if (on == m_hold)
         return;
+    // The one free signal that is positive: freezing a look is asking it to
+    // stay. Everything else the operator reaches for means "not this".
+    logSignal(on ? QStringLiteral("sig:hold") : QStringLiteral("sig:hold-off"));
     m_hold = on;
     emit liveChanged();
 }

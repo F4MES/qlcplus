@@ -443,6 +443,10 @@ protected:
     qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;
     void checkConflicts(const QSet<QString> &cast);
     void logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy);
+    /** A marker line in the tracklog at the numbers of the last beat: the
+     *  operator did something. Same columns as a beat, so one parser reads
+     *  both, and the funcs column already says what was on stage. */
+    void logSignal(const QString &tag);
 
     /* running */
     void run(const QString &slot, quint32 fid, qreal level, int division, bool hard);
@@ -527,6 +531,7 @@ private:
     // constructor's list they would have to sit in declaration order too, and
     // -Wreorder is an error in CI.
     QString m_trackTitle;     // what is playing, for the log's track column
+    QHash<QString, int> m_trimLogged;   // group -> beat: one trim line per beat
     int   m_logBeatNo = 0;
     qreal m_logLevel = 0.0;
     qreal m_logEnergy = 0.0;
