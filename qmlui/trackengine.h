@@ -327,6 +327,12 @@ public:
     int calmBarsLeft() const;
     /** New colour, new cast, new moves - now. */
     Q_INVOKABLE void next();
+
+    /** The operator's verdict on what is on stage right now: +1 or -1.
+     *  Written to the tracklog next to the beat it belongs to. NOTHING reads
+     *  it yet - this is the measuring phase, so a rating cannot change what
+     *  the engine picks tonight. */
+    Q_INVOKABLE void rate(int verdict);
     int room() const;
     void setRoom(int room);
     bool roomAuto() const;
@@ -514,6 +520,14 @@ private:
     QTimer m_docTimer;        // coalesces a burst of document signals into one rebuild
     bool m_logEnabled;
     QFile m_log;
+    // The context of the last line written, so a rating can be logged with the
+    // same numbers the beat had. Inline-initialised on purpose: added to the
+    // constructor's list they would have to sit in declaration order too, and
+    // -Wreorder is an error in CI.
+    int   m_logBeatNo = 0;
+    qreal m_logLevel = 0.0;
+    qreal m_logEnergy = 0.0;
+    qreal m_logSection = 0.0;
 
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group

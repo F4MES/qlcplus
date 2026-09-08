@@ -5409,6 +5409,21 @@ void TrackEngine::next()
     emit liveChanged();
 }
 
+void TrackEngine::rate(int verdict)
+{
+    // A thumb goes in the tracklog as an ordinary line, so one parser reads
+    // beats and verdicts alike: same columns, and the funcs column already
+    // says what was on stage when the thumb was pressed. The numbers come
+    // from the last beat logged, so the rating carries the energy and the
+    // section it was given in.
+    //
+    // Deliberately no scoring, no average, no effect on the engine. Two or
+    // three nights of this first, then we look at whether the verdicts are
+    // even consistent before anything starts choosing by them.
+    logBeat(verdict >= 0 ? QStringLiteral("rate+1") : QStringLiteral("rate-1"),
+            m_logBeatNo, m_logLevel, m_logEnergy, m_logSection);
+}
+
 int TrackEngine::room() const { return m_room; }
 
 void TrackEngine::setRoom(int room)
@@ -5678,9 +5693,24 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         if (fresh)
         {
             QTextStream head(&m_log);
-            head << "time,beat,state,cast,colour,level,energy,section_energy,master,moves\n";
+            // funcs is APPENDED, never inserted: bane B's tracklog_report.py
+            // reads the older columns by position and must keep working.
+            head << "time,beat,state,cast,colour,level,energy,section_energy,master,moves,funcs\n";
         }
     }
+
+    // what was actually on stage, slot by slot - "efx:HEADS=1234". The slot
+    // keeps which group and which job the function had, which is the whole
+    // point: a rating has to be able to blame the right one later.
+    QStringList running;
+    for (QMap<QString, quint32>::const_iterator it = m_active.constBegin(); it != m_active.constEnd(); ++it)
+        running << QString("%1=%2").arg(QString(it.key()).replace(',', ' ')).arg(it.value());
+    running.sort();
+
+    m_logBeatNo = beat;
+    m_logLevel = level;
+    m_logEnergy = energy;
+    m_logSection = sectionEnergy;
 
     QStringList castSorted = m_cast.values();
     castSorted.sort();
@@ -5692,7 +5722,8 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         << QString::number(energy, 'f', 2) << ','
         << QString::number(sectionEnergy, 'f', 2) << ','
         << QString::number(m_master, 'f', 2) << ','
-        << QString(m_lastMoves).replace(',', ';') << '\n';
+        << QString(m_lastMoves).replace(',', ';') << ','
+        << running.join(';') << '\n';
     out.flush();
     m_log.flush();                       // the report script reads while we play
 }

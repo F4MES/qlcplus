@@ -427,6 +427,107 @@ Rectangle
                 }
             }
 
+            // ---- the verdict: two thumbs, bottom right, opposite the flag
+            //      tools. Deliberately NOT in the live row - that row is full
+            //      to the pixel on a 1280 screen - and deliberately in a
+            //      corner that never moves, so they can be hit without
+            //      looking away from the floor.
+            //
+            //      They only write a line in the tracklog. Nothing reads it
+            //      yet: for the next few nights this is measurement, and a
+            //      thumb cannot make tonight worse. Hidden when the log is
+            //      off, because then there is nowhere to write and a button
+            //      that silently does nothing is worse than no button.
+            Item
+            {
+                id: verdictTools
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 8
+                width: thumbRow.width
+                height: thumbRow.height
+                z: 3
+                visible: trackManager && trackEngine && trackManager.beatCount > 0
+                         && trackEngine.logEnabled && !trackViewRoot.setupOpen
+
+                MouseArea { anchors.fill: parent }
+
+                Row
+                {
+                    id: thumbRow
+                    spacing: 8
+
+                    Repeater
+                    {
+                        model: [ 1, -1 ]
+
+                        Rectangle
+                        {
+                            id: thumb
+                            width: 62
+                            height: 44
+                            radius: 6
+                            // a press flashes the tile for a moment: the only
+                            // receipt there is, since nothing else changes
+                            property bool lit: false
+                            color: lit ? (modelData > 0 ? "#3E7E4E" : "#8E3A3A") : "#1E1E1E"
+                            border.width: 1
+                            border.color: modelData > 0 ? "#4FA36B" : "#B05050"
+                            opacity: 0.9
+
+                            Canvas
+                            {
+                                anchors.centerIn: parent
+                                width: 26
+                                height: 26
+                                rotation: modelData > 0 ? 0 : 180
+                                onPaint:
+                                {
+                                    // a thumb, drawn rather than shipped: no
+                                    // icon file, no qrc entry, and it scales
+                                    var c = getContext("2d")
+                                    c.reset()
+                                    c.fillStyle = modelData > 0 ? "#9FD8AF" : "#E8A0A0"
+                                    // the fist
+                                    c.fillRect(3, 12, 8, 12)
+                                    // the palm and the thumb over it
+                                    c.beginPath()
+                                    c.moveTo(12, 24)
+                                    c.lineTo(12, 13)
+                                    c.lineTo(16, 3)
+                                    c.quadraticCurveTo(19, 1, 19, 5)
+                                    c.lineTo(17, 11)
+                                    c.lineTo(23, 11)
+                                    c.quadraticCurveTo(25, 11, 24, 14)
+                                    c.lineTo(22, 22)
+                                    c.quadraticCurveTo(21, 24, 19, 24)
+                                    c.closePath()
+                                    c.fill()
+                                }
+                            }
+
+                            MouseArea
+                            {
+                                anchors.fill: parent
+                                onClicked:
+                                {
+                                    if (trackEngine) trackEngine.rate(modelData)
+                                    thumb.lit = true
+                                    flash.restart()
+                                }
+                            }
+
+                            Timer
+                            {
+                                id: flash
+                                interval: 220
+                                onTriggered: thumb.lit = false
+                            }
+                        }
+                    }
+                }
+            }
+
             Canvas
             {
                 id: wfCanvas
