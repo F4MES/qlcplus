@@ -614,11 +614,15 @@ Rectangle
                 // shifts, so find the dragged flag again by the beat we asked for
                 function reindex(wantBeat)
                 {
+                    // moveMarker snapped the flag to a bar line: look for it
+                    // there, or a neighbour on the next bar can be nearer to
+                    // the raw beat and the drag jumps to the wrong flag
+                    var snapped = Math.max(1, Math.floor((wantBeat - 1 + 2) / 4) * 4 + 1)
                     var mk = trackManager.markers
                     var best = -1, bd = 1e9
                     for (var i = 0; i < mk.length; i++)
                     {
-                        var d = Math.abs(mk[i].beat - wantBeat)
+                        var d = Math.abs(mk[i].beat - snapped)
                         if (d < bd) { bd = d; best = i }
                     }
                     pressIndex = best
@@ -1008,7 +1012,10 @@ Rectangle
                         var v = Math.round(Math.max(0, Math.min(1, (x - 3) / (width - 6))) * 100)
                         if (trackManager) trackManager.energyTrim = v
                     }
-                    onPressed: (mouse) => apply(mouse.x)
+                    // a hand on the bar takes over from the clock - also when it
+                    // lands exactly where the clock already put it (the setter
+                    // only infers a touch from a CHANGE of value)
+                    onPressed: (mouse) => { if (trackEngine && trackEngine.roomAuto) trackEngine.roomAuto = false; apply(mouse.x) }
                     onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
                 }
             }
@@ -1531,18 +1538,28 @@ Rectangle
                                     if (v < 0.03) v = 0
                                     if (trackEngine) trackEngine.setGroupTrim(modelData.key, v)
                                 }
+                                // decided on the press alone: a drag that began on
+                                // the fader keeps working when the finger wanders
+                                // into the halo - testing every move froze the
+                                // fader at about half on the right-hand side
+                                property bool dragging: false
                                 onPressed: (mouse) =>
                                 {
+                                    dragging = false
                                     if (castTile.switchOnly)
                                         return
                                     if (!onSwitch(mouse.x, mouse.y))
+                                    {
+                                        dragging = true
                                         apply(mouse.x)
+                                    }
                                 }
                                 onPositionChanged: (mouse) =>
                                 {
-                                    if (pressed && !castTile.switchOnly && !onSwitch(mouse.x, mouse.y))
+                                    if (pressed && dragging)
                                         apply(mouse.x)
                                 }
+                                onReleased: dragging = false
                                 onClicked: (mouse) =>
                                 {
                                     if (castTile.switchOnly && !modelData.base && trackEngine)

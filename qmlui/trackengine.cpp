@@ -261,7 +261,16 @@ void TrackEngine::slotPulseTimer()
         {
             any = true;
             qreal within = qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999);
-            int step = m_beatIndex * mv.subSteps + int(within * mv.subSteps) + mv.phase;
+            int sub = int(within * mv.subSteps);
+            int step = m_beatIndex * mv.subSteps + sub + mv.phase;
+            // every sub-step is a hit of its own: without this the pulse
+            // decayed from the beat, and on a bare chase the eighths and
+            // sixteenths landed at 37, 14 and 5 per cent - a trail, not steps
+            if (mv.pulse > 0.0 && sub != m_subStepSeen.value(key, 0))
+            {
+                m_subStepSeen.insert(key, sub);
+                m_pulseStart.insert(key, now);
+            }
             QVector<qreal> mask = patternMask(key, mv, step, 1.0);
             qreal level = m_moveLevel.value(key, 0.0);
             for (int i = 0; i < mask.count(); i++)
@@ -291,6 +300,11 @@ void TrackEngine::slotPulseTimer()
             if (func != nullptr)
             {
                 qreal out = m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_groupTrim.value(key, 1.0) * m_master, 1.0);
+                // the same on/off squaring setPart() does: an animation
+                // laser's dimmer is a switch, and 0.7 written to it 20 ms
+                // after the beat is whatever the fixture makes of it
+                if (g.patternDevice)
+                    out = out > 0.10 ? 1.0 : 0.0;
                 m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
                 m_activeOut.insert(slot, out);
             }
@@ -369,7 +383,7 @@ QString TrackEngine::colourOf(const QString &text) const
         { "magenta", { "magenta", "magneta", "pink", "lilla", "purple" } },
         { "orange",  { "orange" } },
         { "amber",   { "amber" } },
-        { "yellow",  { "yellow", "gul" } },
+        { "yellow",  { "yellow" } },
         { "cyan",    { "cyan" } },
         { "green",   { "green", "grøn", "groen" } },
         { "blue",    { "blue", "blå", "blaa" } },
@@ -388,6 +402,7 @@ QString TrackEngine::colourOf(const QString &text) const
 
     // the two that are too short to trust inside other words
     if (hasWord(t, QStringList() << "uv")) return "uv";
+    if (hasWord(t, QStringList() << "gul")) return "yellow";    // "gulv" is the floor, not yellow
     if (hasWord(t, QStringList() << "w"))  return "white";
 
     // "Strobe Strobes MediumB" - a single capital suffix after a lowercase run
@@ -621,20 +636,23 @@ void TrackEngine::ensureTable()
             QString low = key.toLower();
             g.strobes = low.contains("strob") || low.contains("blind");
             g.lasers  = low.contains("laser");
-            // pan and tilt on a non-laser: a moving head
-            bool pan = false, tilt = false;
-            for (quint32 ch = 0; ch < fxi->channels(); ch++)
-            {
-                const QLCChannel *qch = fxi->channel(ch);
-                if (qch == nullptr) continue;
-                if (qch->group() == QLCChannel::Pan)  pan = true;
-                if (qch->group() == QLCChannel::Tilt) tilt = true;
-            }
-            g.heads = pan && tilt && g.lasers == false;
             m_groups.insert(key, g);
             m_groupOrder.append(key);
         }
-        m_groups[key].fixtures.append(fxi->id());
+        TrackGroup &grp = m_groups[key];
+        grp.fixtures.append(fxi->id());
+        // pan and tilt on a non-laser: a moving head. ANY fixture of the
+        // group - not the first one the document happens to list
+        bool pan = false, tilt = false;
+        for (quint32 ch = 0; ch < fxi->channels(); ch++)
+        {
+            const QLCChannel *qch = fxi->channel(ch);
+            if (qch == nullptr) continue;
+            if (qch->group() == QLCChannel::Pan)  pan = true;
+            if (qch->group() == QLCChannel::Tilt) tilt = true;
+        }
+        if (pan && tilt && grp.lasers == false)
+            grp.heads = true;
     }
 
     /* ---- functions ---- */
@@ -809,7 +827,12 @@ void TrackEngine::ensureTable()
         }
         else if ((t == Function::EFXType || t == Function::RGBMatrixType) && func->duration() < 600000)
         {
-            info.durationMs = func->duration();
+            // in Beats tempo the duration is beats x 1000, not milliseconds:
+            // read as ms a four-beat figure came out as eight and ran at half speed
+            if (func->tempoType() == Function::Beats)
+                info.beats = qreal(func->duration()) / 1000.0;
+            else
+                info.durationMs = func->duration();
         }
 
         info.role = old.contains(info.id) ? old.value(info.id).role : -2;   // -2 = not decided yet
@@ -839,8 +862,16 @@ void TrackEngine::ensureTable()
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
     {
         const TrackFuncInfo &info = it.value();
-        if (info.role != ENGINE_ROLE_COLOR || info.colour.isEmpty())
+        if (info.colour.isEmpty())
             continue;
+        // a colour scene inside a chaser is their taste (an RGB group can make
+        // it) but not coverage: it cannot be run on its own
+        if (info.role != ENGINE_ROLE_COLOR)
+        {
+            if (info.step && info.role == -1 && info.guess == ENGINE_ROLE_COLOR)
+                userColours.insert(info.colour);
+            continue;
+        }
         coverage[info.colour].unite(info.groups);
         userColours.insert(info.colour);
     }
@@ -996,7 +1027,7 @@ void TrackEngine::learnGroups()
             Fixture *fxi = m_doc->fixture(fid);
             if (fxi == nullptr)
                 continue;
-            bool r = false, gr = false, b = false;
+            bool r = false, gr = false, b = false, pan = false, tilt = false;
             int effects = 0;
             for (quint32 i = 0; i < fxi->channels(); i++)
             {
@@ -1007,10 +1038,16 @@ void TrackEngine::learnGroups()
                 if (qch->group() == QLCChannel::Intensity && qch->colour() == QLCChannel::Green) gr = true;
                 if (qch->group() == QLCChannel::Intensity && qch->colour() == QLCChannel::Blue) b = true;
                 if (qch->group() == QLCChannel::Effect) effects++;
+                if (qch->group() == QLCChannel::Pan)  pan = true;
+                if (qch->group() == QLCChannel::Tilt) tilt = true;
             }
             if (r && gr && b)
                 g.rgb = true;
-            else if (effects >= 3)
+            // three effect channels and no colour mixing reads as an
+            // animation laser - unless it pans and tilts: a gobo or CMY spot
+            // has prism, prism rotation and a macro channel too, and making
+            // it a pattern device took its positions, zoom and figure away
+            else if (effects >= 3 && (pan && tilt) == false)
                 g.patternDevice = true;
         }
 
@@ -1025,7 +1062,12 @@ void TrackEngine::learnGroups()
         for (QHash<quint32, TrackFuncInfo>::const_iterator fit = m_funcs.constBegin(); fit != m_funcs.constEnd(); ++fit)
         {
             const TrackFuncInfo &info = fit.value();
-            if (info.role != ENGINE_ROLE_COLOR || info.generated || info.colour.isEmpty()
+            // a colour scene that sits inside a chaser is not RUN on its own
+            // (role -1), but it still says what "red" is on these fixtures -
+            // and in a show built as colour chases it is the only place that
+            // is written down
+            bool colourStep = info.step && info.role == -1 && info.guess == ENGINE_ROLE_COLOR;
+            if ((info.role != ENGINE_ROLE_COLOR && colourStep == false) || info.generated || info.colour.isEmpty()
                 || info.type != int(Function::SceneType)
                 || info.groups.contains(g.key) == false)
                 continue;
@@ -1741,31 +1783,32 @@ void TrackEngine::ensureColourScenes()
                 Fixture *fxi = m_doc->fixture(fid);
                 if (fxi == nullptr)
                     continue;
-                quint32 rc = QLCChannel::invalid(), gc = QLCChannel::invalid(),
-                        bc = QLCChannel::invalid(), wc = QLCChannel::invalid();
+                // EVERY cell: a four-cell bar is one fixture with four reds,
+                // and writing the first of them lit one pixel of the bar
+                QList<quint32> rcs, gcs, bcs, wcs;
                 for (quint32 i = 0; i < fxi->channels(); i++)
                 {
                     const QLCChannel *qch = fxi->channel(i);
                     if (qch == nullptr || qch->group() != QLCChannel::Intensity)
                         continue;
-                    if (qch->colour() == QLCChannel::Red && rc == QLCChannel::invalid()) rc = i;
-                    if (qch->colour() == QLCChannel::Green && gc == QLCChannel::invalid()) gc = i;
-                    if (qch->colour() == QLCChannel::Blue && bc == QLCChannel::invalid()) bc = i;
-                    if (qch->colour() == QLCChannel::White && wc == QLCChannel::invalid()) wc = i;
+                    if (qch->colour() == QLCChannel::Red)   rcs.append(i);
+                    if (qch->colour() == QLCChannel::Green) gcs.append(i);
+                    if (qch->colour() == QLCChannel::Blue)  bcs.append(i);
+                    if (qch->colour() == QLCChannel::White) wcs.append(i);
                 }
 
                 bool coloured = false;
                 bool isWhite = colour == QStringLiteral("white");
-                if (isWhite && wc != QLCChannel::invalid())
+                if (isWhite && wcs.isEmpty() == false)
                 {
                     // A real white channel: use it alone. R+G+B on top only
                     // makes it colder and dirtier.
                     // And on a strobe it is capped: those three lamps at a
                     // full white channel are painful to stand in front of.
-                    values.append(SceneValue(fid, wc, uchar(g.strobes ? 153 : 255)));
-                    if (rc != QLCChannel::invalid()) values.append(SceneValue(fid, rc, uchar(0)));
-                    if (gc != QLCChannel::invalid()) values.append(SceneValue(fid, gc, uchar(0)));
-                    if (bc != QLCChannel::invalid()) values.append(SceneValue(fid, bc, uchar(0)));
+                    foreach (quint32 c, wcs) values.append(SceneValue(fid, c, uchar(g.strobes ? 153 : 255)));
+                    foreach (quint32 c, rcs) values.append(SceneValue(fid, c, uchar(0)));
+                    foreach (quint32 c, gcs) values.append(SceneValue(fid, c, uchar(0)));
+                    foreach (quint32 c, bcs) values.append(SceneValue(fid, c, uchar(0)));
                     coloured = true;
                 }
                 else if (isWhite && g.colourValue.contains(fid) == false)
@@ -1775,13 +1818,12 @@ void TrackEngine::ensureColourScenes()
                     // faking one by driving red, green and blue to full
                     continue;
                 }
-                else if (sw != nullptr && rc != QLCChannel::invalid() && gc != QLCChannel::invalid() && bc != QLCChannel::invalid())
+                else if (sw != nullptr && rcs.isEmpty() == false && gcs.isEmpty() == false && bcs.isEmpty() == false)
                 {
-                    values.append(SceneValue(fid, rc, uchar(sw->r)));
-                    values.append(SceneValue(fid, gc, uchar(sw->g)));
-                    values.append(SceneValue(fid, bc, uchar(sw->b)));
-                    if (wc != QLCChannel::invalid())
-                        values.append(SceneValue(fid, wc, uchar(sw->w)));
+                    foreach (quint32 c, rcs) values.append(SceneValue(fid, c, uchar(sw->r)));
+                    foreach (quint32 c, gcs) values.append(SceneValue(fid, c, uchar(sw->g)));
+                    foreach (quint32 c, bcs) values.append(SceneValue(fid, c, uchar(sw->b)));
+                    foreach (quint32 c, wcs) values.append(SceneValue(fid, c, uchar(sw->w)));
                     coloured = true;
                 }
                 else if (g.colourValue.contains(fid))
@@ -2578,6 +2620,7 @@ void TrackEngine::setStars(quint32 fid, int stars)
 
 void TrackEngine::autoAssign(bool force)
 {
+    bool rebuilt = m_dirty;
     ensureTable();
     if (force)
     {
@@ -2585,10 +2628,15 @@ void TrackEngine::autoAssign(bool force)
         for (QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.begin(); it != m_funcs.end(); ++it)
             it.value().role = it.value().step ? -1 : it.value().guess;
         saveRoles();
+        m_dirty = true;
+        ensureTable();
+        rebuilt = true;
     }
-    m_dirty = true;
-    ensureTable();
-    emit tableChanged();
+    // SETUP calls autoAssign(false) every time it opens: rebuilding the whole
+    // table for that tore the live page's cast and colour tiles down under
+    // the operator's finger, twice. Nothing changed - nothing to tell.
+    if (rebuilt)
+        emit tableChanged();
 }
 
 QVariantList TrackEngine::groups()
@@ -3040,6 +3088,13 @@ bool TrackEngine::lightsGroup(quint32 fid, const QString &group) const
     Scene *scene = qobject_cast<Scene *>(m_doc ? m_doc->function(fid) : nullptr);
     if (scene == nullptr)
         return true;                     // a chase or an EFX: cannot tell from here
+    // our own: built from this group's fixtures and only kept when at least
+    // one of them took the colour (ensureColourScenes: touched > 0). A
+    // macro-colour group's generated scene has no Intensity channel in it at
+    // all - the dimmer is the parts' job - so the test below refused every
+    // colour the engine made for the laser bars, and they ran uncoloured
+    if (m_funcs.value(fid).generated)
+        return true;
     const TrackGroup &g = m_groups.value(group);
     foreach (SceneValue sv, scene->values())
     {
@@ -3048,6 +3103,10 @@ bool TrackEngine::lightsGroup(quint32 fid, const QString &group) const
         Fixture *fxi = m_doc->fixture(sv.fxi);
         const QLCChannel *ch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
         if (ch != nullptr && ch->group() == QLCChannel::Intensity)
+            return true;
+        // a learned colour channel is this group's colour, whatever the
+        // definition calls it
+        if (g.colourValue.value(sv.fxi).contains(sv.channel))
             return true;
     }
     return false;
@@ -3215,8 +3274,9 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
     {
         // a laser sweep runs on its own only when its name says it stays low -
         // the rest are there for the operator to choose by hand
+        // "low" as a WORD: "Slow" and "Yellow" are not a promise to stay low
         if (lasers && (info->sweep || info->type == int(Function::ChaserType))
-            && info->name.toLower().contains("low") == false)
+            && hasWord(info->name.toLower(), QStringList() << "low") == false)
             continue;
         safe.append(info);
     }
@@ -3828,9 +3888,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_sweep.remove(key);
             continue;
         }
-        // the build tightens its figure past the middle
+        // the build tightens its figure ONCE, on the first downbeat past the
+        // middle: "beats > 4" as the test redrew it every bar from there on
+        // (a halved build figure is 5-14 beats), so the heads jumped to a new
+        // figure every bar through the back half of every build
+        qreal prevProg = qreal(beat - 4 - secStart) / qreal(len);
         bool fresh = redraw || m_sweep.contains(key) == false
-                  || (isBuild && prog > 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0 && m_sweep.value(key).beats > 4);
+                  || (isBuild && prog > 0.5 && prevProg <= 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0);
         if (fresh)
         {
             QList<int> history = m_sweepHistory.value(key);
@@ -3940,9 +4004,34 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mv = TrackMove();
         if (isBuild)
         {
-            // the roll: steps halve as the build climbs, the pulse deepens
-            mv.stepBeats = qMax(1, mv.stepBeats >> qBound(0, int(prog * 3.0), 2));
-            mv.pulse *= 0.5 + 0.5 * prog;
+            // drawMove() saw prog at the START of the build and is only asked
+            // again every eight bars, so everything it shaped from prog was a
+            // constant: the bare blink never accelerated, the strobes never
+            // went over to the beat. The climb is shaped here, on every beat,
+            // where prog is live - which is the whole point of a build.
+            if (mv.bare)
+            {
+                // the blink handed round faster and faster: how far it gets by
+                // the end is the fader's decision - every beat at the bottom,
+                // eighths halfway up, sixteenths at the top. And it stays
+                // BARE: nothing lit between the blinks
+                qreal reach = 1.0 + 3.0 * qBound(0.0, energy, 1.0);
+                mv.stepBeats = prog < 0.30 ? 2 : 1;
+                qreal sub = 1.0 + (reach - 1.0) * qBound(0.0, (prog - 0.30) / 0.70, 1.0);
+                int subs = sub >= 3.0 ? 4 : (sub >= 1.6 ? 2 : 1);
+                mv.subSteps = g.lasers ? 1 : qMin(g.strobes ? 2 : 4, subs);
+                if (g.strobes == false)
+                    mv.pulseOn = (prog < 0.20 && energy < 0.5) ? 1 : 0;
+            }
+            else
+            {
+                // the roll: steps halve as the build climbs, the pulse deepens
+                mv.stepBeats = qMax(1, mv.stepBeats >> qBound(0, int(prog * 3.0), 2));
+                mv.pulse *= 0.5 + 0.5 * prog;
+            }
+            // the strobes are handed over to the beat as the build runs out
+            if (g.strobes)
+                mv.pulseOn = prog > 0.60 ? 0 : 1;
         }
         // the turnaround: bars 7-8 of an eight-bar phrase move twice as
         // fast, the way a drummer fills into the next phrase - down to
@@ -4049,12 +4138,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           || (mv.pulseOn == 3 && beatInBar == 0);
             qreal depth = darkGroups.contains(key) ? 0.0 : mv.pulse;
             // the kick the analysis heard on this beat: no kick, no pulse;
-            // a soft kick, a soft pulse
+            // a soft kick, a soft pulse. The kick scales the HIT, never the
+            // depth: depth is how far the light falls between two beats, so
+            // scaling it down for a soft kick RAISED the floor - a bare strobe
+            // chase sat half-lit through every kickless passage
+            qreal strength = 1.0;
             if (kick >= 0.0)
             {
                 if (kick < 0.20)
                     pulseBeat = false;
-                depth *= 0.5 + 0.5 * qBound(0.0, kick, 1.0);
+                strength = 0.5 + 0.5 * qBound(0.0, kick, 1.0);
             }
             // A fixture whose dimmer is a switch is driven by a square gate,
             // and a square gate stays SHUT until something re-opens it. On a
@@ -4065,7 +4158,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (g.patternDevice && pulseBeat == false)
                 depth = 0.0;
             if (depth > 0.0 && pulseBeat)
+            {
                 m_pulseStart.insert(key, m_clock.elapsed());
+                m_pulseStrength.insert(key, strength);
+                m_subStepSeen.insert(key, 0);
+            }
             if (depth > 0.0 || mv.breatheBars > 0 || mv.subSteps > 1)
                 anyPulse = true;
             m_pulseDepth.insert(key, depth);
@@ -4332,7 +4429,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.pattern = ENGINE_PAT_HALVES;
             mv.stepBeats = 8;
         }
-        else if (stir && g.fixtures.count() >= 2)
+        else if (stir && g.parts.count() >= 2)
         {
             mv.pattern = pick({ ENGINE_PAT_HALVES, ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES });
             mv.stepBeats = pick({ 8, 16, 16 });
@@ -4364,7 +4461,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.breatheBars = 0;
             mv.texture = 0.0;
         }
-        if (g.fixtures.count() < 2)
+        if (g.parts.count() < 2)
             mv.pattern = ENGINE_PAT_STATIC;
         return mv;
     }
@@ -4614,7 +4711,7 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
             int lit = step % n;
             int tail = (lit + n - 1) % n;
             for (int i = 0; i < n; i++)
-                mask[i] = i == lit ? 1.0 : (i == tail ? 0.3 : dim);
+                mask[i] = i == lit ? 1.0 : (i == tail && move.bare == false ? 0.3 : dim);
         }
         break;
         case ENGINE_PAT_PINGPONG:
@@ -4757,10 +4854,14 @@ qreal TrackEngine::pulseFactor(const QString &group) const
     // the pulse: full on the beat, down to (1 - depth) a quarter beat later
     // and flat from there - a kick, not a sine
     qreal depth = m_pulseDepth.value(group, 0.0);
-    if (depth > 0.0 && m_pulseStart.contains(group))
+    if (depth > 0.0)
     {
         const TrackGroup &pg = m_groups.value(group);
-        qreal t = qreal(now - m_pulseStart.value(group));
+        // no hit yet (the section opened on an off-beat, or on a beat the
+        // analysis heard no kick on): the light sits on its floor, it does
+        // not stand at full waiting for one
+        qreal t = m_pulseStart.contains(group) ? qreal(now - m_pulseStart.value(group)) : 1.0e9;
+        qreal strength = m_pulseStrength.value(group, 1.0);
         if (pg.patternDevice)
         {
             // An animation laser's master dimmer is a SWITCH, not a dimmer:
@@ -4784,7 +4885,7 @@ qreal TrackEngine::pulseFactor(const QString &group) const
             // for a strobe, which has to be lit and dark again inside a tenth.
             qreal tau = pg.strobes ? qMax(20.0, m_beatMs * 0.09)
                                    : qMax(40.0, m_beatMs * 0.25);
-            factor *= (1.0 - depth) + depth * std::exp(-t / tau);
+            factor *= (1.0 - depth) + depth * strength * std::exp(-t / tau);
         }
     }
 
@@ -4993,7 +5094,11 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // only version of this you can see from the floor.
         if (heads >= 2)
         {
-            sw.spread = 1;                         // a wave down the row
+            // Parallel, with the start offset alone. Asymmetric adds its own
+            // 360/(n+1) degrees per bar ON TOP of the fan, and the two stacked
+            // put two bars opposite at the bottom of the fader and 60 degrees
+            // apart at the top - the fader ran the wrong way
+            sw.spread = 0;
             int spread = int(qRound(60.0 + 120.0 * lw));
             sw.fan = qBound(60, spread, 180);
         }

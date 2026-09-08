@@ -292,6 +292,12 @@ protected:
     /** The second pass over a fresh analysis. True when it changed anything. */
     bool refineMarkers();
     qreal kickMean(int fromBeat, int count, bool needHalf = true) const;
+    /** min(waveform, low) / 255 averaged over [fromBeat, toBeat), the way
+     *  BLT measures a section's energy; -1 without curves. */
+    qreal curveEnergy(int fromBeat, int toBeat) const;
+    /** Give every flag whose energy is -1 (or every flag, when all is set)
+     *  the energy of its section, measured on the curves. */
+    void fillMarkerEnergies(bool all);
     void markersEdited();
     void pushUndo();
     void sendEvent(const QJsonObject &obj);

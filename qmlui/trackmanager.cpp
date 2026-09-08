@@ -304,6 +304,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
     if (m_markersManual == false && refineMarkers())
         sendMarkers(false);
+    // flags from the cache, from rekordbox or from the second pass without an
+    // energy get one now, before the engine or the page reads them
+    fillMarkerEnergies(false);
 
     m_currentBeat = 0;
     m_trackTimeMs = 0;
@@ -1003,6 +1006,7 @@ void TrackManager::moveMarker(int index, int beat)
         m_lastMoveIndex = index;
     }
     m_markers.replace(index, marker);
+    fillMarkerEnergies(true);            // the moved flag and its neighbours span other beats now
 
     emit markersChanged();
     updateState();
@@ -1761,6 +1765,7 @@ qreal TrackManager::sectionEnergy(int beat) const
 {
     qreal best = -1.0;
     int bestBeat = -1;
+    int nextBeat = -1;
 
     for (int i = 0; i < m_markers.count(); i++)
     {
@@ -1771,7 +1776,14 @@ qreal TrackManager::sectionEnergy(int beat) const
             bestBeat = mb;
             best = marker.value(QStringLiteral("energy"), -1.0).toDouble();
         }
+        if (mb > beat && (nextBeat < 0 || mb < nextBeat))
+            nextBeat = mb;
     }
+
+    // a flag without an energy: measure the section on the curves rather than
+    // hand the engine a -1 (fillMarkerEnergies() normally gets there first)
+    if (best < 0.0 && bestBeat > 0)
+        best = curveEnergy(bestBeat, nextBeat > 0 ? nextBeat : (m_beatCount > 0 ? m_beatCount + 1 : beat + 1));
 
     return best;
 }
@@ -1856,6 +1868,57 @@ qreal TrackManager::kickMean(int fromBeat, int count, bool needHalf) const
     // half the window has to be there. A short curve used to average over
     // the one or two beats that were in range and invent a drop at the tail
     return n > 0 && (needHalf == false || n * 2 >= count) ? sum / n : -1.0;
+}
+
+qreal TrackManager::curveEnergy(int fromBeat, int toBeat) const
+{
+    // BLT's energy curve is min(display, low), smoothed over four beats and
+    // averaged over the section; the same two curves arrive here as 0..255
+    if (m_waveform.isEmpty() || m_low.isEmpty())
+        return -1.0;
+    qreal sum = 0.0;
+    int n = 0;
+    for (int b = fromBeat; b < toBeat; b++)
+    {
+        if (b < 1 || b - 1 >= m_waveform.count() || b - 1 >= m_low.count())
+            continue;
+        sum += qMin(m_waveform.at(b - 1).toInt(), m_low.at(b - 1).toInt()) / 255.0;
+        n++;
+    }
+    return n > 0 ? sum / n : -1.0;
+}
+
+void TrackManager::fillMarkerEnergies(bool all)
+{
+    // A flag set by hand, added by the second pass or moved carries energy -1,
+    // and -1 went back to BLT's cache as a correction, so it stayed -1 for
+    // good: the engine then ran the section at the fader's energy alone, and
+    // the waveform had no energy to show for it. Measure it here instead.
+    if (m_waveform.isEmpty() || m_low.isEmpty() || m_markers.isEmpty())
+        return;
+    QList<int> order;
+    for (int i = 0; i < m_markers.count(); i++)
+        order.append(i);
+    std::sort(order.begin(), order.end(), [this](int a, int b) {
+        return m_markers.at(a).toMap().value(QStringLiteral("beat")).toInt()
+             < m_markers.at(b).toMap().value(QStringLiteral("beat")).toInt(); });
+    int total = m_beatCount > 0 ? m_beatCount : m_waveform.count();
+    for (int k = 0; k < order.count(); k++)
+    {
+        QVariantMap mk = m_markers.at(order.at(k)).toMap();
+        if (all == false && mk.value(QStringLiteral("energy"), -1.0).toDouble() >= 0.0)
+            continue;
+        int from = mk.value(QStringLiteral("beat")).toInt();
+        int to = k + 1 < order.count()
+               ? m_markers.at(order.at(k + 1)).toMap().value(QStringLiteral("beat")).toInt()
+               : total + 1;
+        // a last flag on the last beat: an empty span would say 0, a dead outro
+        qreal e = curveEnergy(from, qMax(to, from + 1));
+        if (e < 0.0)
+            continue;
+        mk.insert(QStringLiteral("energy"), e);
+        m_markers.replace(order.at(k), mk);
+    }
 }
 
 static int tmSnapBar(int beat)
@@ -2057,6 +2120,7 @@ void TrackManager::markersEdited()
 {
     m_markersManual = true;
     m_lastMoveIndex = -1;                // the next drag is its own undo step
+    fillMarkerEnergies(true);            // a flag came or went: the neighbours' spans moved too
     emit markersChanged();
     updateState();
     if (m_autoRun && m_roleMode)
@@ -2137,6 +2201,7 @@ void TrackManager::undoMarkers()
     settings.setValue(SETTINGS_TRACK_BREAKKICK, m_breakKick);
     m_markersManual = snap.value(QStringLiteral("manual"), true).toBool();
     m_lastMoveIndex = -1;
+    fillMarkerEnergies(false);
     emit markersChanged();
     updateState();
     if (m_autoRun && m_roleMode)

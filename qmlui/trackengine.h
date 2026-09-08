@@ -537,6 +537,8 @@ private:
     int m_strobeRate;         // which of the rates is up
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
     QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
+    QMap<QString, qreal> m_pulseStrength;  // how hard that beat hit, 0.5..1 - the kick's say
+    QMap<QString, int> m_subStepSeen;      // the last sub-step the pulse timer masked, per group
     QMap<QString, int> m_breathe;          // groups on a slow sine, and over how many bars
     QElapsedTimer m_clock;
     qreal m_beatMs;
