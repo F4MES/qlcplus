@@ -38,6 +38,7 @@
 #include "collection.h"
 #include "qlcchannel.h"
 #include "rgbmatrix.h"
+#include "virtualconsole.h"   // usageList(): which functions a VC widget points at
 #include "efxfixture.h"
 #include "function.h"
 #include "fixture.h"
@@ -2612,9 +2613,33 @@ QVariantList TrackEngine::table()
         return a.name.toLower() < b.name.toLower();
     });
 
+    // Everything the operator actually reaches sits on a Virtual Console
+    // widget; the rest is show-file archaeology that only made this list
+    // longer to scroll. The console answers for itself - usageList() knows
+    // every widget type that can hold a function, and keeps knowing when
+    // QLC+ adds one - so nothing here walks the widget tree by hand.
+    //
+    // Fails OPEN on purpose, twice over: no console at all, or a console
+    // with no widgets yet because it has not finished loading, leaves every
+    // row visible. A SETUP list that had quietly emptied itself would look
+    // exactly like a lost show file, and that is not a thing to discover
+    // during a gig.
+    //
+    // This is the DISPLAY filter and nothing else. m_funcs is untouched, so
+    // what the engine may pick is unchanged, and a VC button still starts
+    // its function whatever this decides. Busking cannot notice it.
+    // SHOW ALL brings the rows back, and a row that already has a role is
+    // never hidden by any of this.
+    VirtualConsole *vc = (m_doc != nullptr && m_doc->parent() != nullptr)
+                         ? m_doc->parent()->findChild<VirtualConsole *>()
+                         : nullptr;
+    if (vc != nullptr && vc->widgetsList().isEmpty())
+        vc = nullptr;
+
     foreach (const TrackFuncInfo &info, rows)
     {
-        bool hidden = info.junk || info.step || info.groups.isEmpty() || info.generated;
+        bool hidden = info.junk || info.step || info.groups.isEmpty() || info.generated
+                      || (vc != nullptr && vc->usageList(info.id).isEmpty());
         if (hidden && m_showAll == false && info.role < 0)
             continue;
 
