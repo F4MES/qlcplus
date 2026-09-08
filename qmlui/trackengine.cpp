@@ -741,6 +741,30 @@ void TrackEngine::ensureTable()
             t != Function::CollectionType && t != Function::SequenceType)
             continue;
 
+        // An empty function cannot light anything, but it still showed up in
+        // the SETUP list as a row to give a role to - and a role given to it
+        // is a slot that goes silently dead for that whole section. It gets
+        // past every guard below: classify() hands it -1 because it has no
+        // groups, but a role set BY HAND is loaded straight back in, and
+        // candidates() skips the group test when picking for the whole room.
+        // PSMAIN.qxw has four of them today ("New Chaser 1" in
+        // Strobes All/Chases/Chases, "New Chaser 406", "Filler",
+        // "AnimationWaveRed1"). Emptiness is read from the function itself,
+        // not from fixturesOf(), which gives up past three levels of nesting
+        // and would drop a deep collection that is perfectly fine.
+        if (t == Function::SceneType)
+        {
+            Scene *hollow = qobject_cast<Scene *>(func);
+            if (hollow != nullptr && hollow->values().isEmpty())
+                continue;
+        }
+        else if (t == Function::ChaserType || t == Function::SequenceType)
+        {
+            Chaser *hollow = qobject_cast<Chaser *>(func);
+            if (hollow != nullptr && hollow->steps().isEmpty())
+                continue;
+        }
+
         TrackFuncInfo info;
         info.id = func->id();
         info.name = func->name();
