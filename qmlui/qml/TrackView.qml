@@ -143,44 +143,6 @@ Rectangle
             border.width: 1
             border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cLine
 
-            // ---- flag tools: a flag on the bar the track is at, the selected
-            //      flag retyped or deleted. What the operator sets is the truth -
-            //      it goes to BLT's cache as manual and teaches the second pass.
-            Item
-            {
-                anchors.left: parent.left
-                anchors.bottom: parent.bottom
-                anchors.margins: 8
-                width: flagTools.width
-                height: flagTools.height
-                z: 3
-                visible: trackManager && trackManager.beatCount > 0 && trackManager.roleMode
-
-                // a press that misses a tile must not reach the waveform
-                // underneath and clear the selection the tiles depend on
-                MouseArea { anchors.fill: parent }
-
-                }
-
-            // ---- flag tools: a flag on the bar the track is at, the selected
-            //      flag retyped or deleted. What the operator sets is the truth -
-            //      it goes to BLT's cache as manual and teaches the second pass.
-            Item
-            {
-                anchors.left: parent.left
-                anchors.bottom: parent.bottom
-                anchors.margins: 8
-                width: flagTools.width
-                height: flagTools.height
-                z: 3
-                visible: trackManager && trackManager.beatCount > 0 && trackManager.roleMode
-
-                // a press that misses a tile must not reach the waveform
-                // underneath and clear the selection the tiles depend on
-                MouseArea { anchors.fill: parent }
-
-                }
-
             // ---- what the analysis and the engine see, drawn over the
             //      waveform: bass as a warm floor, highs as a cool line, kicks
             //      as ticks, section bands with their energy, the played part
@@ -954,7 +916,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V19_START)
+        // =============================================== live controls  (LIVE_V20_START)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -1122,14 +1084,27 @@ Rectangle
             }
 
             // ---- colour: AUTO or a locked palette colour
+            //      Every tile used to be a fixed 1.5 x touchH. The rest of the
+            //      row (status, CALM, HOLD, BLACKOUT, FULL AUTO, SETUP) needs
+            //      about 740 px, so from seven palette colours up the tiles ran
+            //      out over the buttons on a 1280 screen. The row now gets a
+            //      fixed share of the width and the tiles shrink inside it.
             Row
             {
+                id: colourRow
                 Layout.fillHeight: true
+                Layout.maximumWidth: liveRow.width * 0.42
                 spacing: 6
+
+                property int cells: 1 + (trackEngine ? trackEngine.palette.length : 0)
+                property real cellW: Math.max(trackViewRoot.touchH * 0.6,
+                                        Math.min(trackViewRoot.touchH * 1.5,
+                                                 (liveRow.width * 0.42
+                                                  - spacing * (cells - 1)) / cells))
 
                 TrackTile
                 {
-                    width: trackViewRoot.touchH * 1.5
+                    width: colourRow.cellW
                     height: liveRow.height
                     label: qsTr("AUTO")
                     active: trackEngine ? trackEngine.colourOverride === "" : true
@@ -1145,7 +1120,7 @@ Rectangle
                     // AUTO happens to be running right now.
                     TrackTile
                     {
-                        width: trackViewRoot.touchH * 1.5
+                        width: colourRow.cellW
                         height: liveRow.height
                         label: modelData.toUpperCase()
                         activeColor: liveRow.swatch(modelData)
@@ -1411,7 +1386,7 @@ Rectangle
             // A group whose dimmer is a switch (an animation laser) gets no
             // fader at all: the whole row is its on/off button, because a
             // fader that only has two positions is a lie.
-            // (CAST_V9_ROW_HORIZONTAL)
+            // (CAST_V10_MD_GUARD)
             Column
             {
                 id: castPanel
@@ -1437,17 +1412,22 @@ Rectangle
                         Rectangle
                         {
                             id: castTile
-                            property bool lit: trackEngine ? trackEngine.cast.indexOf(modelData.key) >= 0 : false
-                            property bool off: !modelData.enabled
-                            property bool switchOnly: modelData.switchOnly === true
-                            property real trim: (trackEngine && trackEngine.trims[modelData.key] !== undefined)
-                                                ? trackEngine.trims[modelData.key] : 1.0
+                            // same fallback as the track list: a groups rebuild
+                            // re-evaluates every tile binding with modelData gone
+                            property var md: modelData ? modelData
+                                                       : ({ key: "", enabled: true,
+                                                            switchOnly: false, base: false })
+                            property bool lit: trackEngine ? trackEngine.cast.indexOf(md.key) >= 0 : false
+                            property bool off: !md.enabled
+                            property bool switchOnly: md.switchOnly === true
+                            property real trim: (trackEngine && trackEngine.trims[md.key] !== undefined)
+                                                ? trackEngine.trims[md.key] : 1.0
                             width: (castRow.width - (castRow.n - 1) * castRow.spacing) / castRow.n
                             height: castRow.height
                             radius: 6
                             color: off ? "#161616" : "#1E1E1E"
-                            border.width: modelData.base ? 2 : 1
-                            border.color: lit ? "#9FD3FF" : (modelData.base ? "#4FA3E3" : "#3A3A3A")
+                            border.width: md.base ? 2 : 1
+                            border.color: lit ? "#9FD3FF" : (md.base ? "#4FA3E3" : "#3A3A3A")
                             clip: true
 
                             // the scale: 25, 50, 75 % as ticks along the top and
@@ -1478,7 +1458,7 @@ Rectangle
                                 anchors.margins: 3
                                 width: (parent.width - 6) * (castTile.off ? 0 : castTile.trim)
                                 radius: 4
-                                color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4")
+                                color: castTile.lit ? (md.base ? "#2E6FA8" : "#3D86C4")
                                                     : (castArea.pressed ? "#3A3A3A" : "#303030")
                                 Behavior on color { ColorAnimation { duration: 150 } }
 
@@ -1502,7 +1482,7 @@ Rectangle
                                 anchors.fill: parent
                                 anchors.margins: 3
                                 radius: 4
-                                color: castTile.lit ? (modelData.base ? "#2E6FA8" : "#3D86C4") : "#303030"
+                                color: castTile.lit ? (md.base ? "#2E6FA8" : "#3D86C4") : "#303030"
                                 Behavior on color { ColorAnimation { duration: 150 } }
                             }
 
@@ -1515,7 +1495,7 @@ Rectangle
                                 // the base group is always in the show, switch-only
                                 // or not - the comment on the switch below says so
                                 // and this is the path that could have broken it
-                                enabled: (castTile.switchOnly && !modelData.base) || !castTile.off
+                                enabled: (castTile.switchOnly && !md.base) || !castTile.off
                                 // Keep clear of the ON/OFF switch in the top right.
                                 // It is 56x30 at a 5 px margin, and the halo has to
                                 // stay INSIDE the tile: on a narrow tile the old
@@ -1525,7 +1505,7 @@ Rectangle
                                 // the press by stacking order anyway - this is only
                                 // here so a finger that lands beside it does not
                                 // slam the trim to full.
-                                property bool hasSwitch: modelData && !modelData.base && !castTile.switchOnly
+                                property bool hasSwitch: md && !md.base && !castTile.switchOnly
                                 function onSwitch(x, y)
                                 {
                                     return hasSwitch && width > 96 && x > width - 69 && y < 41
@@ -1536,7 +1516,7 @@ Rectangle
                                     v = Math.max(0, Math.min(1, v))
                                     if (v > 0.97) v = 1
                                     if (v < 0.03) v = 0
-                                    if (trackEngine) trackEngine.setGroupTrim(modelData.key, v)
+                                    if (trackEngine) trackEngine.setGroupTrim(md.key, v)
                                 }
                                 // decided on the press alone: a drag that began on
                                 // the fader keeps working when the finger wanders
@@ -1562,8 +1542,8 @@ Rectangle
                                 onReleased: dragging = false
                                 onClicked: (mouse) =>
                                 {
-                                    if (castTile.switchOnly && !modelData.base && trackEngine)
-                                        trackEngine.setGroupEnabled(modelData.key, castTile.off)
+                                    if (castTile.switchOnly && !md.base && trackEngine)
+                                        trackEngine.setGroupEnabled(md.key, castTile.off)
                                 }
                             }
 
@@ -1575,7 +1555,7 @@ Rectangle
                                 Text
                                 {
                                     anchors.horizontalCenter: parent.horizontalCenter
-                                    text: modelData.key.toUpperCase()
+                                    text: md.key.toUpperCase()
                                     color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#8A8A8A")
                                     font.bold: true
                                     font.pixelSize: 14
@@ -1585,7 +1565,7 @@ Rectangle
                                     anchors.horizontalCenter: parent.horizontalCenter
                                     text: castTile.off ? qsTr("OFF")
                                         : castTile.switchOnly ? qsTr("ON")
-                                        : (modelData.base ? qsTr("BASE") + "  " : "")
+                                        : (md.base ? qsTr("BASE") + "  " : "")
                                           + Math.round(castTile.trim * 100) + "%"
                                     color: castTile.lit ? "#E0F0FF" : "#6A6A6A"
                                     font.bold: castTile.switchOnly
@@ -1604,7 +1584,7 @@ Rectangle
                                 width: 56
                                 height: 30
                                 radius: 15
-                                visible: !modelData.base && !castTile.switchOnly
+                                visible: !md.base && !castTile.switchOnly
                                 color: castTile.off ? "#3A3A3A" : "#7ED07E"
 
                                 Text
@@ -1619,7 +1599,7 @@ Rectangle
                                 MouseArea
                                 {
                                     anchors.fill: parent
-                                    onClicked: trackEngine.setGroupEnabled(modelData.key, castTile.off)
+                                    onClicked: trackEngine.setGroupEnabled(md.key, castTile.off)
                                 }
                             }
                         }

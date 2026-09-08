@@ -137,6 +137,9 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_fullAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
+    // NOT per show here: the constructor runs before any workspace is loaded,
+    // so the fingerprint would be empty. loadRoles() re-reads it per show once
+    // the table is built; this is only the starting point.
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString())
                                   .toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
@@ -2500,7 +2503,10 @@ void TrackEngine::setFan(qreal level)
 
 void TrackEngine::loadRoles()
 {
-    QString stored = QSettings().value(SETTINGS_ENGINE_ROLES, QString()).toString();
+    // the old shared key is read as a fallback, so nothing is lost on upgrade
+    QSettings settings;
+    QString stored = settings.value(settingsKey(SETTINGS_ENGINE_ROLES),
+                                    settings.value(SETTINGS_ENGINE_ROLES, QString())).toString();
     foreach (QString entry, stored.split(';', Qt::SkipEmptyParts))
     {
         QStringList parts = entry.split(':');
@@ -2515,7 +2521,8 @@ void TrackEngine::loadRoles()
         }
     }
 
-    QString stars = QSettings().value(SETTINGS_ENGINE_STARS, QString()).toString();
+    QString stars = settings.value(settingsKey(SETTINGS_ENGINE_STARS),
+                                   settings.value(SETTINGS_ENGINE_STARS, QString())).toString();
     foreach (QString entry, stars.split(';', Qt::SkipEmptyParts))
     {
         QStringList parts = entry.split(':');
@@ -2525,6 +2532,31 @@ void TrackEngine::loadRoles()
         if (m_funcs.contains(fid))
             m_funcs[fid].stars = qBound(1, parts.at(1).toInt(), 3);
     }
+
+    // and the group switches, which the constructor could only read from the
+    // shared key because no workspace was loaded yet
+    QString off = settings.value(settingsKey(SETTINGS_ENGINE_GROUPOFF), QString()).toString();
+    if (off.isEmpty() == false)
+    {
+        m_groupOff.clear();
+        foreach (QString key, off.split(';', Qt::SkipEmptyParts))
+            m_groupOff.insert(key);
+    }
+}
+
+QString TrackEngine::settingsKey(const QString &base) const
+{
+    // Roles, stars and the group switches are remembered by FUNCTION ID. Ids
+    // are per-workspace, so under one shared key a second show would inherit
+    // the first show's assignments for whatever happens to hold the same id -
+    // and the first save from that show would overwrite the first show's.
+    // The workspace's file name keeps them apart.
+    QString name = m_doc != nullptr ? m_doc->workspaceFile() : QString();
+    if (name.isEmpty())
+        return base;                       // an unsaved workspace: the old key
+    name = QFileInfo(name).fileName();
+    name.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")), QStringLiteral("_"));
+    return base + QStringLiteral("/") + name;
 }
 
 void TrackEngine::saveRoles()
@@ -2533,14 +2565,15 @@ void TrackEngine::saveRoles()
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
         if (it.value().role != it.value().guess || it.value().step)
             entries << QString("%1:%2").arg(it.key()).arg(it.value().role);
-    QSettings().setValue(SETTINGS_ENGINE_ROLES, entries.join(';'));
-    QSettings().setValue(SETTINGS_ENGINE_GROUPOFF, QStringList(m_groupOff.values()).join(';'));
+    QSettings().setValue(settingsKey(SETTINGS_ENGINE_ROLES), entries.join(';'));
+    QSettings().setValue(settingsKey(SETTINGS_ENGINE_GROUPOFF),
+                         QStringList(m_groupOff.values()).join(';'));
 
     QStringList stars;
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
         if (it.value().stars != it.value().starsGuess && it.value().generated == false)
             stars << QString("%1:%2").arg(it.key()).arg(it.value().stars);
-    QSettings().setValue(SETTINGS_ENGINE_STARS, stars.join(';'));
+    QSettings().setValue(settingsKey(SETTINGS_ENGINE_STARS), stars.join(';'));
 }
 
 void TrackEngine::rebuild()
@@ -5079,8 +5112,11 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
             return sw;
         }
         bool wide = tier == 2 && chance(0.15 + 0.35 * lw);
-        // 12 units is five degrees, 60 is a quarter of the travel: the fader
-        // decides where between those two this sits
+        // The ordinary figure is 12-42 units (5-18 degrees); a "wide" one on a
+        // drop reaches 34-85, which is a third of the travel. That is
+        // deliberate - the bars are meant to take the whole wall now and then
+        // when it lands - and 85 is the agreed ceiling for the mirrors. The
+        // fader decides where inside each band this sits.
         sw.height = wide ? int(34 + 40 * lw) + int(rng->bounded(12))
                          : int(12 + 30 * lw) + int(rng->bounded(10));
         // FIXED, whatever the energy says. A figure takes 13 seconds at 128

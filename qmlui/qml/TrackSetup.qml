@@ -316,6 +316,11 @@ Rectangle
                         height: 42
                         color: "#1F1F1F"
                         radius: 3
+                        // a model reset re-evaluates the bindings below while
+                        // the row is already gone; without a fallback that is a
+                        // TypeError per binding per row, on every reset.
+                        property var md: modelData ? modelData
+                                                   : ({ title: "", flags: 0, manual: false })
 
                         RowLayout
                         {
@@ -326,7 +331,7 @@ Rectangle
                             Text
                             {
                                 Layout.fillWidth: true
-                                text: modelData.title
+                                text: md.title
                                 color: setupRoot.cText
                                 font.pixelSize: 13
                                 elide: Text.ElideRight
@@ -334,7 +339,7 @@ Rectangle
                             Text
                             {
                                 Layout.preferredWidth: 70
-                                text: modelData.flags + " " + qsTr("flags")
+                                text: md.flags + " " + qsTr("flags")
                                 color: setupRoot.cDim
                                 font.pixelSize: 12
                             }
@@ -343,12 +348,12 @@ Rectangle
                                 Layout.preferredWidth: 72
                                 Layout.preferredHeight: 22
                                 radius: 11
-                                color: modelData.manual ? "#E3B44F" : "#3A3A3A"
+                                color: md.manual ? "#E3B44F" : "#3A3A3A"
                                 Text
                                 {
                                     anchors.centerIn: parent
-                                    text: modelData.manual ? qsTr("MANUAL") : qsTr("AUTO")
-                                    color: modelData.manual ? "#101010" : "#AAAAAA"
+                                    text: md.manual ? qsTr("MANUAL") : qsTr("AUTO")
+                                    color: md.manual ? "#101010" : "#AAAAAA"
                                     font.bold: true
                                     font.pixelSize: 10
                                 }
@@ -369,7 +374,7 @@ Rectangle
                                 {
                                     if (armed === false) { armed = true; forgetArm.restart(); return }
                                     armed = false
-                                    if (trackManager) trackManager.forgetTrack(modelData.title)
+                                    if (trackManager) trackManager.forgetTrack(md.title)
                                 }
                                 Timer { id: forgetArm; interval: 4000; onTriggered: forgetTile.armed = false }
                             }
@@ -571,6 +576,9 @@ Rectangle
                 property int rowRole: modelData ? modelData.role : -1
                 property int rowStars: modelData ? modelData.stars : 0
                 property var rowId: modelData ? modelData.id : 0
+                property var md: modelData ? modelData
+                                           : ({ hidden: false, role: -1, stars: 0, id: 0,
+                                                colour: 0, name: "", group: "", path: "" })
 
                 RowLayout
                 {
@@ -583,7 +591,7 @@ Rectangle
                         Layout.preferredWidth: 10
                         Layout.fillHeight: true
                         radius: 2
-                        color: setupRoot.swatch(modelData.colour)
+                        color: setupRoot.swatch(md.colour)
                         visible: true
                     }
 
@@ -596,16 +604,16 @@ Rectangle
                         Text
                         {
                             Layout.fillWidth: true
-                            text: modelData.name
-                            color: modelData.hidden ? "#888888" : setupRoot.cText
+                            text: md.name
+                            color: md.hidden ? "#888888" : setupRoot.cText
                             font.pixelSize: 14
                             elide: Text.ElideRight
                         }
                         Text
                         {
                             Layout.fillWidth: true
-                            text: modelData.group
-                                  + (modelData.path.length > 0 ? "   ·   " + modelData.path : "")
+                            text: md.group
+                                  + (md.path.length > 0 ? "   ·   " + md.path : "")
                             color: "#6A6A6A"
                             font.pixelSize: 10
                             elide: Text.ElideRight

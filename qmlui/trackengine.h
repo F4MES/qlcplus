@@ -390,6 +390,7 @@ protected:
     int classify(const TrackFuncInfo &info) const;
     void loadRoles();
     void saveRoles();
+    QString settingsKey(const QString &base) const;
     void ensureDimmerScenes();
     void learnGroups();
     void ensureColourScenes();
