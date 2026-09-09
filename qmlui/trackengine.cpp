@@ -5671,11 +5671,39 @@ void TrackEngine::logSignal(const QString &tag)
     // that is exactly when getting it wrong would matter. Every intervention
     // is about the look that is on stage, not about the bar the track has
     // reached, so this holds for the sig: lines too.
-    const QString &sect = m_lookState.isEmpty() ? m_lastState : m_lookState;
+    QString sect = m_lookState.isEmpty() ? m_lastState : m_lookState;
     QString mark = QString(tag).replace(',', ' ');
+
+    // A verdict is filed against the snapshot markVerdictPoint() took when
+    // the finger landed - rate() and rateGroup() both read verdictStage()
+    // and verdictBucket(). A long press, a look at the list and a tap can
+    // take seven seconds, and in that time the section can turn or a thumb
+    // down can already have swapped the look. The line has to describe the
+    // same stage the engine credited, or the rebuild tool blames the look
+    // that came AFTER. So for rate lines the funcs column and the @section
+    // come from the snapshot too: m_active is swapped for the duration of
+    // the one write (a QMap copy is a pointer), and the section is spelled
+    // from the bucket - intro and outro both read "break", which is the
+    // bucket the tool puts them in anyway.
+    bool verdict = tag.startsWith(QStringLiteral("rate"));
+    bool frozen = verdict && &verdictStage() != &m_active;
+    QMap<QString, quint32> now;
+    if (frozen)
+    {
+        now = m_active;
+        m_active = m_verdictActive;
+        static const char *const names[ENGINE_RATE_BUCKETS] = { "break", "build", "drop", "normal" };
+        // ... but never invent one: with no section there is no track, and
+        // rate() skips the verdict - the line must stay bare so the tool does
+        int b = verdictBucket();
+        if (sect.isEmpty() == false && b >= 0 && b < ENGINE_RATE_BUCKETS)
+            sect = QLatin1String(names[b]);
+    }
     if (sect.isEmpty() == false)
         mark += QLatin1Char('@') + QString(sect).replace(',', ' ');
     logBeat(mark, m_logBeatNo, m_logLevel, m_logEnergy, m_logSection);
+    if (frozen)
+        m_active = now;
 }
 
 int TrackEngine::rateBucket() const
