@@ -6016,8 +6016,9 @@ QVariantList TrackEngine::onStage() const
         // there dropped the group from the list although his own chase was
         // running on mot: - and rateGroup() would have credited it.
         quint32 fid = Function::invalidId();
-        static const char *const slots[] = { "col:", "mot:", "efx:" };
-        for (const char *prefix : slots)
+        // not "slots": under Qt that word is a macro and the line does not parse
+        static const char *const slotPrefixes[] = { "col:", "mot:", "efx:" };
+        for (const char *prefix : slotPrefixes)
         {
             quint32 cand = stage.value(QLatin1String(prefix) + key, Function::invalidId());
             if (cand == Function::invalidId() || m_funcs.contains(cand) == false
