@@ -149,7 +149,7 @@ Rectangle
             //      of this section tinted in the running colour, and a countdown
             //      to the next section. A finger on a flag selects it (drag to
             //      move it); the tools at the bottom left add, retype and delete.
-            //      (WF_OVERLAY_V14)
+            //      (WF_OVERLAY_V15)
             Canvas
             {
                 id: wfOverlay
@@ -440,11 +440,12 @@ Rectangle
             //      corner that never moves, so they can be hit without
             //      looking away from the floor.
             //
-            //      They only write a line in the tracklog. Nothing reads it
-            //      yet: for the next few nights this is measurement, and a
-            //      thumb cannot make tonight worse. Hidden when the log is
-            //      off, because then there is nowhere to write and a button
-            //      that silently does nothing is worse than no button.
+            //      A thumb is counted against every program on stage (a long
+            //      press aims it at one group), written to the tracklog when
+            //      the log is on, and - with RATINGS on in SETUP - it steers
+            //      the rotation. The count does not need the log, so the
+            //      buttons no longer hide when the log is off: they used to,
+            //      from the days when the log was all a thumb did.
             Item
             {
                 id: verdictTools
@@ -453,7 +454,7 @@ Rectangle
                 anchors.margins: 8
                 z: 3
                 visible: trackManager && trackEngine && trackManager.beatCount > 0
-                         && trackEngine.logEnabled && !trackViewRoot.setupOpen
+                         && !trackViewRoot.setupOpen
 
                 // 0 = the thumbs; +1 / -1 = a thumb is waiting for a target.
                 // A long press opens the list of what is on stage; the tap

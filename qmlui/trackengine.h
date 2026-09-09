@@ -388,15 +388,15 @@ public:
     /** New colour, new cast, new moves - now. */
     Q_INVOKABLE void next();
 
-    /** The operator's verdict on what is on stage right now: +1 or -1.
-     *  Written to the tracklog next to the beat it belongs to. NOTHING reads
-     *  it yet - this is the measuring phase, so a rating cannot change what
-     *  the engine picks tonight. */
     /** Called the moment a finger lands on a thumb: freezes what is on stage
      *  so the verdict that follows - however long it takes him to aim it -
      *  lands on what he was actually looking at. */
     Q_INVOKABLE void markVerdictPoint();
 
+    /** The operator's verdict on what is on stage right now: +1 or -1.
+     *  Counted once per program on stage (up[]/down[] per section bucket),
+     *  written to the tracklog when the log is on, and - only with
+     *  ratingEnabled - weighed by pickWeighted(). A -1 also calls next(). */
     Q_INVOKABLE void rate(int verdict);
 
     /** The same verdict, but on one group's program alone. A long press opens

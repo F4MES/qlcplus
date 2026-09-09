@@ -138,9 +138,9 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_fullAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
-    // NOT per show here: the constructor runs before any workspace is loaded,
-    // so the fingerprint would be empty. loadRoles() re-reads it per show once
-    // the table is built; this is only the starting point.
+    // Read once, here. loadRoles() does not touch the group switches (the
+    // per-show fingerprint they were meant to hang on never came - see the
+    // note over saveRoles()); importSettings() re-reads them from the file.
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString())
                                   .toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
@@ -3166,12 +3166,6 @@ QString TrackEngine::importSettings()
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
-    bool wantAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
-    if (wantAuto != m_fullAuto)
-    {
-        m_fullAuto = !wantAuto;            // let the setter do its teardown
-        setFullAuto(wantAuto);
-    }
     m_groupOff.clear();
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString()).toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
@@ -3179,8 +3173,18 @@ QString TrackEngine::importSettings()
     // rebuild NOW, not on the next table() call: setFullAuto(), rebuild() and
     // a doc change all save the in-memory table before they rebuild, and
     // until this rebuild has run the in-memory table is the OLD verdicts -
-    // one FULL AUTO toggle in that window would write them over the import
+    // one FULL AUTO toggle in that window would write them over the import.
+    // And the first such toggle is the one four lines down: setFullAuto()
+    // saves, so it has to run AFTER the table holds the imported values, or
+    // it writes the old roles, stars, verdicts, stage counts and bans back
+    // over the file that was just read - while reporting "loaded N".
     ensureTable();
+    bool wantAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
+    if (wantAuto != m_fullAuto)
+    {
+        m_fullAuto = !wantAuto;            // let the setter do its teardown
+        setFullAuto(wantAuto);
+    }
     m_moves.clear();
     emit tableChanged();
     emit liveChanged();
@@ -3880,7 +3884,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     QString accentColour;
     if (m_accent && isDrop && isCalm == false && castSet.count() >= 2 && m_override.isEmpty())
     {
-        if (sectionChanged || m_accentPick.isEmpty() || m_palette.contains(m_accentPick) == false)
+        // a section turn under HOLD redraws nothing else, so not this either -
+        // HOLD is "no colour changes", and the accent is a colour
+        if ((sectionChanged && hold == false) || m_accentPick.isEmpty()
+            || m_palette.contains(m_accentPick) == false)
             m_accentPick = accentFor(m_colour);
         accentColour = m_accentPick;
     }
@@ -5907,16 +5914,25 @@ QVariantList TrackEngine::onStage() const
     const QMap<QString, quint32> &stage = verdictStage();
     foreach (const QString &key, m_groupOrder)
     {
-        quint32 fid = stage.value("col:" + key, Function::invalidId());
+        // The first slot that holds a program HE can be asked about. Not the
+        // first slot that holds anything: in FULL AUTO the colour slot is a
+        // generated TRACK Colour scene on nearly every group, and stopping
+        // there dropped the group from the list although his own chase was
+        // running on mot: - and rateGroup() would have credited it.
+        quint32 fid = Function::invalidId();
+        static const char *const slots[] = { "col:", "mot:", "efx:" };
+        for (const char *prefix : slots)
+        {
+            quint32 cand = stage.value(QLatin1String(prefix) + key, Function::invalidId());
+            if (cand == Function::invalidId() || m_funcs.contains(cand) == false
+                || m_funcs.value(cand).generated)
+                continue;
+            fid = cand;
+            break;
+        }
         if (fid == Function::invalidId())
-            fid = stage.value("mot:" + key, Function::invalidId());
-        if (fid == Function::invalidId())
-            fid = stage.value("efx:" + key, Function::invalidId());
-        if (fid == Function::invalidId() || m_funcs.contains(fid) == false)
             continue;
         const TrackFuncInfo &info = m_funcs.value(fid);
-        if (info.generated)
-            continue;                  // ours, and rebuilt with the table
         QVariantMap row;
         row.insert("group", key);
         row.insert("name", info.name);
@@ -5961,6 +5977,10 @@ void TrackEngine::rateGroup(int verdict, const QString &group)
     // used the snapshot, so changing the look now cannot corrupt the verdict.
     if (verdict < 0)
         next();
+    // The snapshot has been used. Left valid, a second verdict inside the
+    // twenty seconds that did NOT come through onPressed - a script, a
+    // future shortcut - would be filed against a stage that is gone.
+    m_verdictMs = -1;
 }
 
 void TrackEngine::rate(int verdict)
@@ -6032,6 +6052,7 @@ void TrackEngine::rate(int verdict)
     }
     if (verdict < 0)
         next();                    // same reasoning as rateGroup()
+    m_verdictMs = -1;              // used, see rateGroup()
 }
 
 int TrackEngine::room() const { return m_room; }
@@ -6426,6 +6447,14 @@ void TrackEngine::idle()
     // everything from the track goes; the start scene(s) come on
     stopSweeps();
     m_strobeUntil = -1;
+    // No section either. rate() reads an empty m_lastState as "nothing to
+    // judge", and release() and trackLoaded() both clear it - this did not,
+    // so a thumb on a paused deck (runEngine() idles when the player stops,
+    // and after 30 s without Link) was filed under the last section of the
+    // track that had ended, against the start scenes. tick() treats an
+    // empty state as a fresh section on resume, which is what it is.
+    m_lastState.clear();
+    m_lookState.clear();
     applyGroupOff();                 // an off group stays off in the start look
     foreach (const QString &slot, m_active.keys())
     {
