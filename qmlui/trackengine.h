@@ -87,6 +87,19 @@ class Doc;
 #define SETTINGS_ENGINE_LOG       QStringLiteral("trackengine/log")
 #define SETTINGS_ENGINE_STARS     QStringLiteral("trackengine/stars")
 #define SETTINGS_ENGINE_FULLAUTO  QStringLiteral("trackengine/fullauto")
+#define SETTINGS_ENGINE_RATING    QStringLiteral("trackengine/rating")
+#define SETTINGS_ENGINE_BANNED    QStringLiteral("trackengine/banned")
+#define SETTINGS_ENGINE_RATINGON  QStringLiteral("trackengine/ratingon")
+
+/** Which bucket a verdict lands in. A look that is wrong in a break can be
+ *  the best thing in the room on a drop, so one number per program would
+ *  average the two into "meh". Four is the same split the engine already
+ *  picks by, so nothing new has to be decided. */
+#define ENGINE_RATE_BREAK   0
+#define ENGINE_RATE_BUILD   1
+#define ENGINE_RATE_DROP    2
+#define ENGINE_RATE_NORMAL  3
+#define ENGINE_RATE_BUCKETS 4
 
 /** Everything the engine needs to know about one function, derived once. */
 struct TrackFuncInfo
@@ -111,6 +124,14 @@ struct TrackFuncInfo
     int stars = 0;            // energy 1..3: when this may run (0 = not applicable)
     int starsGuess = 0;       // what the engine would say, from tempo and name
     int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
+
+    /* ---- the operator's verdict, per section kind ---- */
+    int up[ENGINE_RATE_BUCKETS] = { 0, 0, 0, 0 };
+    int down[ENGINE_RATE_BUCKETS] = { 0, 0, 0, 0 };
+    /** Never again, whatever the counts say. A hard flag on purpose: it is
+     *  the one thing the operator wants to be certain of, and it must not be
+     *  at the mercy of a score that can drift back up on one good night. */
+    bool banned = false;
 };
 
 /** How one group moves inside a section. Drawn at random when the section
@@ -228,6 +249,10 @@ class TrackEngine : public QObject
     Q_PROPERTY(QStringList warnings READ warnings NOTIFY liveChanged)
     Q_PROPERTY(int calmBarsLeft READ calmBarsLeft NOTIFY liveChanged)
     Q_PROPERTY(bool logEnabled READ logEnabled WRITE setLogEnabled NOTIFY tableChanged)
+    /** Whether the thumbs steer what the engine picks. OFF by default: the
+     *  verdicts are still recorded, they just do not count, so a night can
+     *  never go wrong because of a score nobody has looked at yet. */
+    Q_PROPERTY(bool ratingEnabled READ ratingEnabled WRITE setRatingEnabled NOTIFY tableChanged)
 
     /** Kept for scripts: 0 empty, 1 warming, 2 full, 3 peak - a preset for
      *  the ENERGY slider. The page itself only has the slider. */
@@ -333,6 +358,20 @@ public:
      *  it yet - this is the measuring phase, so a rating cannot change what
      *  the engine picks tonight. */
     Q_INVOKABLE void rate(int verdict);
+
+    /** Never pick this one again, whatever it scores. */
+    Q_INVOKABLE void setBanned(quint32 fid, bool on);
+    Q_INVOKABLE bool banned(quint32 fid) const;
+
+    /** How often this one should come up, 1..3, from its verdicts in the
+     *  section kind we are in. 1 when it is unrated or the switch is off,
+     *  so the rotation is exactly what it is today. */
+    int rateWeight(const TrackFuncInfo &info) const;
+    /** break / build / drop / normal as an index into up[] and down[]. */
+    int rateBucket() const;
+    /** One from the shortlist, the cursor walking it as it always has - but
+     *  the better-rated standing in it more than once. */
+    quint32 pickWeighted(const QList<TrackFuncInfo *> &ok, int cursor) const;
     int room() const;
     void setRoom(int room);
     bool roomAuto() const;
@@ -349,6 +388,8 @@ public:
     bool hold() const;
     void setHold(bool on);
     bool logEnabled() const;
+    bool ratingEnabled() const;
+    void setRatingEnabled(bool on);
     void setLogEnabled(bool on);
 
     /* ---- atmosphere: the hazer's fan and output, straight from two sliders ---- */
@@ -532,6 +573,7 @@ private:
     // -Wreorder is an error in CI.
     QString m_trackTitle;     // what is playing, for the log's track column
     QHash<QString, int> m_trimLogged;   // group -> beat: one trim line per beat
+    bool m_ratingOn = false;            // do the verdicts count? OFF by default
     int   m_logBeatNo = 0;
     qreal m_logLevel = 0.0;
     qreal m_logEnergy = 0.0;

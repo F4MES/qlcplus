@@ -178,6 +178,21 @@ Rectangle
                 onTapped: if (trackEngine) trackEngine.showAll = !trackEngine.showAll
             }
 
+            // Do the thumbs count? Off by default. The verdicts are recorded
+            // either way - this only decides whether they steer what gets
+            // picked. Off is the honest starting point: nobody has looked at
+            // the numbers yet, and a night should not go quiet because of a
+            // score that has three votes behind it.
+            TrackTile
+            {
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 34
+                label: qsTr("RATINGS")
+                active: trackEngine ? trackEngine.ratingEnabled : false
+                activeColor: "#4FA36B"
+                onTapped: if (trackEngine) trackEngine.ratingEnabled = !trackEngine.ratingEnabled
+            }
+
             // the forcing variant: it re-guesses roles the operator set by
             // hand, and nothing here can put them back. So: two taps.
             TrackTile
@@ -578,7 +593,8 @@ Rectangle
                 property var rowId: modelData ? modelData.id : 0
                 property var md: modelData ? modelData
                                            : ({ hidden: false, role: -1, stars: 0, id: 0,
-                                                colour: 0, name: "", group: "", path: "" })
+                                                colour: 0, name: "", group: "", path: "",
+                                                banned: false, rateUp: 0, rateDown: 0 })
 
                 RowLayout
                 {
@@ -663,6 +679,48 @@ Rectangle
                                 onTapped: if (trackEngine) trackEngine.setStars(funcRow.rowId, index + 1)
                             }
                         }
+                    }
+
+                    // What the thumbs have said about this one. Blank until
+                    // there is anything, so 700 rows do not all shout "0 / 0".
+                    Text
+                    {
+                        Layout.preferredWidth: 54
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        Layout.fillHeight: true
+                        visible: (md.rateUp + md.rateDown) > 0
+                        text: (md.rateUp > 0 ? "+" + md.rateUp : "")
+                              + (md.rateDown > 0 ? " -" + md.rateDown : "")
+                        color: md.rateUp >= md.rateDown ? "#7ED07E" : "#E36B6B"
+                        font.pixelSize: 12
+                    }
+
+                    // Never again. Two taps, like RE-GUESS: it is not a thing
+                    // to hit by accident on the way past, and unlike a role it
+                    // survives every re-guess there is.
+                    TrackTile
+                    {
+                        id: banTile
+                        property bool armed: false
+                        property bool isBanned: md.banned === true
+                        Layout.preferredWidth: 66
+                        Layout.fillHeight: true
+                        visible: funcRow.rowRole >= 0
+                        label: armed ? qsTr("SURE?") : (isBanned ? qsTr("BANNED") : qsTr("BAN"))
+                        active: armed || isBanned
+                        activeColor: armed ? "#E3B44F" : "#B03030"
+                        opacity: isBanned ? 1.0 : 0.55
+                        onTapped:
+                        {
+                            if (trackEngine === null) return
+                            // un-banning is harmless, so it needs no arming
+                            if (isBanned) { trackEngine.setBanned(funcRow.rowId, false); return }
+                            if (armed === false) { armed = true; banArm.restart(); return }
+                            armed = false
+                            trackEngine.setBanned(funcRow.rowId, true)
+                        }
+                        Timer { id: banArm; interval: 4000; onTriggered: banTile.armed = false }
                     }
 
                     Item

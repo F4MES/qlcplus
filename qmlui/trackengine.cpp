@@ -2558,6 +2558,34 @@ void TrackEngine::loadRoles()
         if (m_funcs.contains(fid))
             m_funcs[fid].stars = qBound(1, parts.at(1).toInt(), 3);
     }
+
+    // the verdicts: "fid:bucket:up:down", one per bucket that has anything.
+    // A malformed or out-of-range entry is skipped rather than clamped - a
+    // count is evidence, and inventing a plausible number out of a broken
+    // line would be inventing evidence.
+    QString rating = settings.value(SETTINGS_ENGINE_RATING, QString()).toString();
+    foreach (QString entry, rating.split(';', Qt::SkipEmptyParts))
+    {
+        QStringList parts = entry.split(':');
+        if (parts.count() != 4)
+            continue;
+        quint32 fid = parts.at(0).toUInt();
+        int b = parts.at(1).toInt();
+        if (m_funcs.contains(fid) == false || b < 0 || b >= ENGINE_RATE_BUCKETS)
+            continue;
+        m_funcs[fid].up[b] = qMax(0, parts.at(2).toInt());
+        m_funcs[fid].down[b] = qMax(0, parts.at(3).toInt());
+    }
+
+    foreach (QString entry, settings.value(SETTINGS_ENGINE_BANNED, QString())
+                                    .toString().split(';', Qt::SkipEmptyParts))
+    {
+        quint32 fid = entry.toUInt();
+        if (m_funcs.contains(fid))
+            m_funcs[fid].banned = true;
+    }
+
+    m_ratingOn = settings.value(SETTINGS_ENGINE_RATINGON, false).toBool();
 }
 
 // NOTE - roles, stars and the group switches are keyed on FUNCTION ID under
@@ -2585,6 +2613,24 @@ void TrackEngine::saveRoles()
         if (it.value().stars != it.value().starsGuess && it.value().generated == false)
             stars << QString("%1:%2").arg(it.key()).arg(it.value().stars);
     QSettings().setValue(SETTINGS_ENGINE_STARS, stars.join(';'));
+
+    QStringList rating, bans;
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &info = it.value();
+        if (info.banned)
+            bans << QString::number(it.key());
+        if (info.generated)
+            continue;                  // rebuilt every table: nothing to keep
+        for (int b = 0; b < ENGINE_RATE_BUCKETS; b++)
+        {
+            if (info.up[b] == 0 && info.down[b] == 0)
+                continue;
+            rating << QString("%1:%2:%3:%4").arg(it.key()).arg(b).arg(info.up[b]).arg(info.down[b]);
+        }
+    }
+    QSettings().setValue(SETTINGS_ENGINE_RATING, rating.join(';'));
+    QSettings().setValue(SETTINGS_ENGINE_BANNED, bans.join(';'));
 }
 
 void TrackEngine::rebuild()
@@ -2658,6 +2704,19 @@ QVariantList TrackEngine::table()
         row.insert("stars", info.stars);
         row.insert("starsGuess", info.starsGuess);
         row.insert("generated", info.generated);
+        row.insert("banned", info.banned);
+        // the verdicts, summed over the four buckets - enough for the row to
+        // show why something is favoured. A binding on a Q_INVOKABLE would
+        // only refresh because the model happens to be rebuilt; data in the
+        // row refreshes because it IS the row.
+        int rup = 0, rdown = 0;
+        for (int b = 0; b < ENGINE_RATE_BUCKETS; b++)
+        {
+            rup += info.up[b];
+            rdown += info.down[b];
+        }
+        row.insert("rateUp", rup);
+        row.insert("rateDown", rdown);
         list.append(row);
     }
     return list;
@@ -3147,6 +3206,10 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         const TrackFuncInfo &info = it.value();
         if (info.role != role)
             continue;
+        // Hard, and hard on purpose: no weighting, no floor, no "unless
+        // nothing else is left". The operator said never.
+        if (info.banned)
+            continue;
         // Per-group slots must never start a whole-room snapshot. Its other
         // groups would bypass cast, colour and intensity decisions. Such
         // looks remain available as START scenes and on the Virtual Console.
@@ -3302,7 +3365,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     if (hot.isEmpty() == false)
         ok = hot;
 
-    return ok.at(qAbs(cursor) % ok.count())->id;
+    return pickWeighted(ok, cursor);
 }
 
 int TrackEngine::tierOf(const QString &text) const
@@ -3379,7 +3442,7 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
     QList<TrackFuncInfo *> pool = tagged + tagged + plain;
     if (pool.isEmpty())
         pool = safe;
-    return pool.at(qAbs(cursor) % pool.count())->id;
+    return pickWeighted(pool, cursor);
 }
 
 QString TrackEngine::accentFor(const QString &colour) const
@@ -5432,10 +5495,117 @@ void TrackEngine::next()
 
 void TrackEngine::logSignal(const QString &tag)
 {
+    // The section kind rides along: the state column is where it normally
+    // lives, and a marker takes that column over. Without it a verdict cannot
+    // be put in the right bucket by anything reading the log afterwards -
+    // the engine knows from m_lastState, but the file would not, and the file
+    // is what the rebuild tool has. Same principle as the track title: every
+    // line self-contained, nothing that has to be recovered by scanning back.
+    //
     // Commas out: the log is read with a plain split(','), and a group called
     // "Strobes, All" would shift every column after this one.
-    logBeat(QString(tag).replace(',', ' '),
-            m_logBeatNo, m_logLevel, m_logEnergy, m_logSection);
+    QString mark = QString(tag).replace(',', ' ');
+    if (m_lastState.isEmpty() == false)
+        mark += QLatin1Char('@') + QString(m_lastState).replace(',', ' ');
+    logBeat(mark, m_logBeatNo, m_logLevel, m_logEnergy, m_logSection);
+}
+
+int TrackEngine::rateBucket() const
+{
+    // The same four the engine already picks by. intro and outro count as
+    // break: they are the same job for the lights, and splitting them would
+    // spread already thin evidence over six buckets instead of four.
+    if (m_lastState == QStringLiteral("build"))
+        return ENGINE_RATE_BUILD;
+    if (m_lastState == QStringLiteral("drop"))
+        return ENGINE_RATE_DROP;
+    if (m_lastState == QStringLiteral("break") || m_lastState == QStringLiteral("intro")
+        || m_lastState == QStringLiteral("outro"))
+        return ENGINE_RATE_BREAK;
+    return ENGINE_RATE_NORMAL;
+}
+
+int TrackEngine::rateWeight(const TrackFuncInfo &info) const
+{
+    // How many times this one stands in the rotation. Not a probability: the
+    // cursor still walks the list in order, so nothing becomes a habit and
+    // "why did it pick that" always has an answer.
+    //
+    // Two verdicts are not evidence. The gate is deliberately blunt - it takes
+    // three of a kind before anything moves, and the most a program can be is
+    // three times as likely, never certain and never impossible. Impossible is
+    // what the ban flag is for, and the operator sets that himself.
+    if (m_ratingOn == false)
+        return 1;
+    int b = rateBucket();
+    int up = info.up[b];
+    int down = info.down[b];
+    if (up - down >= 3)
+        return 3;
+    if (up - down >= 1)
+        return 2;
+    if (down - up >= 3)
+        return 0;              // still reachable: the callers keep a floor
+    return 1;
+}
+
+quint32 TrackEngine::pickWeighted(const QList<TrackFuncInfo *> &ok, int cursor) const
+{
+    if (ok.isEmpty())
+        return Function::invalidId();
+    // Switch off: not "the same thing by another route" but the identical
+    // line this used to be. Nothing to reason about when a night goes wrong.
+    if (m_ratingOn == false)
+        return ok.at(qAbs(cursor) % ok.count())->id;
+
+    // Repeating entries rather than drawing at random, which is what
+    // positionFunction already does with its tiers (tagged + tagged + plain).
+    // The cursor still walks in order, so the rotation still guarantees
+    // everything gets its turn - the well-rated just get more turns.
+    QList<TrackFuncInfo *> pool;
+    foreach (TrackFuncInfo *info, ok)
+    {
+        int w = rateWeight(*info);
+        for (int i = 0; i < w; i++)
+            pool.append(info);
+    }
+    // Everything here scored badly. Rather the old rotation than nothing at
+    // all: a section with no motion is a worse answer than a mediocre one,
+    // and "never" is the ban flag's job, not the arithmetic's.
+    if (pool.isEmpty())
+        return ok.at(qAbs(cursor) % ok.count())->id;
+    return pool.at(qAbs(cursor) % pool.count())->id;
+}
+
+bool TrackEngine::banned(quint32 fid) const
+{
+    return m_funcs.contains(fid) && m_funcs.value(fid).banned;
+}
+
+void TrackEngine::setBanned(quint32 fid, bool on)
+{
+    if (m_funcs.contains(fid) == false || m_funcs[fid].banned == on)
+        return;
+    m_funcs[fid].banned = on;
+    saveRoles();
+    logSignal((on ? QStringLiteral("sig:ban:") : QStringLiteral("sig:unban:"))
+              + QString::number(fid));
+    m_dirty = true;
+    emit tableChanged();
+}
+
+bool TrackEngine::ratingEnabled() const { return m_ratingOn; }
+
+void TrackEngine::setRatingEnabled(bool on)
+{
+    if (on == m_ratingOn)
+        return;
+    m_ratingOn = on;
+    QSettings().setValue(SETTINGS_ENGINE_RATINGON, on);
+    // in the log too, so a night that felt wrong can be read back: was this
+    // the engine's own rotation, or was it steering by the counts?
+    logSignal(on ? QStringLiteral("sig:rating-on") : QStringLiteral("sig:rating-off"));
+    emit tableChanged();
 }
 
 void TrackEngine::rate(int verdict)
@@ -5450,6 +5620,38 @@ void TrackEngine::rate(int verdict)
     // three nights of this first, then we look at whether the verdicts are
     // even consistent before anything starts choosing by them.
     logSignal(verdict >= 0 ? QStringLiteral("rate+1") : QStringLiteral("rate-1"));
+
+    // ... and count it. Only against the operator's OWN programs: the engine's
+    // generated scenes are rebuilt from the fixtures every time the table is,
+    // so a verdict on one is a verdict on something that will not exist in the
+    // same shape tomorrow. The masks and the zoom scenes are plumbing, not a
+    // look, and they are not in m_funcs as looks either.
+    //
+    // Every program on stage gets the same credit. That is the crude part, and
+    // it is crude on purpose: which of the four was the one that made it is
+    // exactly what we do not know yet, and guessing here would bake the guess
+    // into the numbers. The log keeps the raw record, so a better rule can be
+    // applied to the same nights later without losing anything.
+    int b = rateBucket();
+    bool touched = false;
+    foreach (quint32 fid, m_active.values())
+    {
+        if (m_funcs.contains(fid) == false)
+            continue;
+        TrackFuncInfo &info = m_funcs[fid];
+        if (info.generated)
+            continue;
+        if (verdict >= 0)
+            info.up[b] += 1;
+        else
+            info.down[b] += 1;
+        touched = true;
+    }
+    if (touched)
+    {
+        saveRoles();
+        emit tableChanged();
+    }
 }
 
 int TrackEngine::room() const { return m_room; }
