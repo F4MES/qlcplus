@@ -1878,6 +1878,35 @@ void TrackEngine::ensureColourScenes()
                 const QMap<quint32, uchar> base = g.baseValue.value(fid);
                 for (QMap<quint32, uchar>::const_iterator bit = base.constBegin(); bit != base.constEnd(); ++bit)
                     values.append(SceneValue(fid, bit.key(), bit.value()));
+                // The per-eye channels, at 0. On a laser bar an eye is lit by
+                // putting a COLOUR VALUE on its own channel, the master dimmer
+                // dims all eight together, and nothing turns an eye off but a
+                // 0 written back to it (Tobias, 2026-09-09). The operator's own
+                // colour scenes write channel 4 alone (checked in PSMAIN: seven
+                // of them, eyes-set=0), so the colour scenes learned from them
+                // did the same - and when an eye chase on mot: stopped, its
+                // last step's eye stayed burning under whatever colour came
+                // next. A running colour scene that holds the eyes at 0 takes
+                // them back the moment the chase lets go; while the chase runs
+                // it started later and wins the LTP, exactly as it already
+                // does for channel 4.
+                if (g.perEye)
+                {
+                    static const QRegularExpression eyeRx(QStringLiteral("(colou?r|eye)\\s*\\d+"),
+                                                          QRegularExpression::CaseInsensitiveOption);
+                    for (quint32 i = 0; i < fxi->channels(); i++)
+                    {
+                        const QLCChannel *qch = fxi->channel(i);
+                        if (qch == nullptr || base.contains(i) || qch->name().contains(eyeRx) == false)
+                            continue;
+                        bool written = false;
+                        foreach (const SceneValue &sv, values)
+                            if (sv.fxi == fid && sv.channel == i)
+                                written = true;
+                        if (written == false)
+                            values.append(SceneValue(fid, i, uchar(0)));
+                    }
+                }
                 // and an open shutter, when the definition says which value that is
                 for (quint32 i = 0; i < fxi->channels(); i++)
                 {
