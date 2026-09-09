@@ -5693,19 +5693,24 @@ int TrackEngine::rateWeight(const TrackFuncInfo &info) const
     if (m_ratingOn == false)
         return 1;
     int b = rateBucket();
-    int d = info.up[b] - info.down[b];
-    if (d == 0)
+    qreal d = info.up[b] * ENGINE_RATE_UPVOTE - info.down[b];
+    if (qFuzzyIsNull(d))
         return 2;
     // Less than one showing still counts as one: a brand new program with a
     // single thumb should move, not be divided into silence.
     qreal shows = qMax(1.0, info.seen[b] / ENGINE_RATE_EXPOSURE);
     qreal s = d / shows;
     // Two gates, and both have to open. The rate says how strongly the
-    // verdicts lean; qAbs(d) says whether there are enough of them to mean
-    // anything. Without the second, a brand new program with one thumb sits
-    // at shows = 1 and scores a perfect 1.0 - four times as likely as
-    // everything else, on the strength of a single tap. The ends of the
-    // scale are for things he has said twice.
+    // verdicts lean; qAbs(d) says whether there is enough of them to mean
+    // anything.
+    //
+    // With UPVOTE at 3 the two directions land differently on purpose, and
+    // it is the right way round. One thumb up gives d = 3 and clears the
+    // gate on its own - he went out of his way to say it, and he only does
+    // that for something worth keeping. One thumb down gives d = -1 and
+    // does not: a down is the reflex when something is in his face, it lands
+    // on every program on stage, and only one of them was the problem. Say
+    // it twice, or aim it with a long press, and it moves.
     if (d >= 2 && s >= 0.50)
         return 4;
     if (s >= 0.15)
@@ -5798,19 +5803,45 @@ void TrackEngine::setRatingEnabled(bool on)
     emit tableChanged();
 }
 
+void TrackEngine::markVerdictPoint()
+{
+    m_verdictActive = m_active;
+    m_verdictBucket = rateBucket();
+    m_verdictMs = m_clock.elapsed();
+}
+
+const QMap<QString, quint32> &TrackEngine::verdictStage() const
+{
+    // Twenty seconds is long enough for a long press, a look at the list and
+    // a considered tap; past that he has wandered off and come back, and the
+    // honest answer is what is on stage now. m_clock never resets, so there
+    // is no wrap-around to reason about.
+    if (m_verdictMs >= 0 && m_clock.elapsed() - m_verdictMs <= 20000)
+        return m_verdictActive;
+    return m_active;
+}
+
+int TrackEngine::verdictBucket() const
+{
+    if (m_verdictMs >= 0 && m_clock.elapsed() - m_verdictMs <= 20000 && m_verdictBucket >= 0)
+        return m_verdictBucket;
+    return rateBucket();
+}
+
 QVariantList TrackEngine::onStage() const
 {
     // One row per group, named by the program that carries its look. The
     // colour slot is the look; a motion or a sweep is what it does. Groups
     // with neither are left out - there is nothing there to blame.
     QVariantList out;
+    const QMap<QString, quint32> &stage = verdictStage();
     foreach (const QString &key, m_groupOrder)
     {
-        quint32 fid = m_active.value("col:" + key, Function::invalidId());
+        quint32 fid = stage.value("col:" + key, Function::invalidId());
         if (fid == Function::invalidId())
-            fid = m_active.value("mot:" + key, Function::invalidId());
+            fid = stage.value("mot:" + key, Function::invalidId());
         if (fid == Function::invalidId())
-            fid = m_active.value("efx:" + key, Function::invalidId());
+            fid = stage.value("efx:" + key, Function::invalidId());
         if (fid == Function::invalidId() || m_funcs.contains(fid) == false)
             continue;
         const TrackFuncInfo &info = m_funcs.value(fid);
@@ -5832,10 +5863,11 @@ void TrackEngine::rateGroup(int verdict, const QString &group)
 
     // Exactly the programs sitting on this one group. No spreading, no
     // exposure arithmetic to undo it: he pointed, so the guess is not needed.
-    int b = rateBucket();
+    int b = verdictBucket();
+    const QMap<QString, quint32> &stage = verdictStage();
     QSet<quint32> counted;
     bool touched = false;
-    for (QMap<QString, quint32>::const_iterator it = m_active.constBegin(); it != m_active.constEnd(); ++it)
+    for (QMap<QString, quint32>::const_iterator it = stage.constBegin(); it != stage.constEnd(); ++it)
     {
         if (slotGroup(it.key()) != group || counted.contains(it.value()))
             continue;
@@ -5844,9 +5876,9 @@ void TrackEngine::rateGroup(int verdict, const QString &group)
         if (fi == m_funcs.end() || fi.value().generated)
             continue;
         if (verdict >= 0)
-            fi.value().up[b] += 1;
+            fi.value().up[b] += ENGINE_RATE_AIMED;
         else
-            fi.value().down[b] += 1;
+            fi.value().down[b] += ENGINE_RATE_AIMED;
         touched = true;
     }
     if (touched)
@@ -5854,6 +5886,11 @@ void TrackEngine::rateGroup(int verdict, const QString &group)
         saveRoles();
         emit tableChanged();
     }
+    // Told to its face that this is wrong, the light should not keep doing it
+    // for another thirty seconds. The counting above already happened, and it
+    // used the snapshot, so changing the look now cannot corrupt the verdict.
+    if (verdict < 0)
+        next();
 }
 
 void TrackEngine::rate(int verdict)
@@ -5893,7 +5930,8 @@ void TrackEngine::rate(int verdict)
     if (m_lastState.isEmpty())
         return;
 
-    int b = rateBucket();
+    int b = verdictBucket();
+    const QMap<QString, quint32> &stage = verdictStage();
     bool touched = false;
     // Once per program, not once per slot: m_active is keyed by SLOT, and one
     // function can in principle hold two of them. candidates() makes that
@@ -5901,7 +5939,7 @@ void TrackEngine::rate(int verdict)
     // from over here means a change to the picker could quietly start
     // double-counting. One thumb, one verdict.
     QSet<quint32> counted;
-    foreach (quint32 fid, m_active.values())
+    foreach (quint32 fid, stage.values())
     {
         if (counted.contains(fid))
             continue;
@@ -5922,6 +5960,8 @@ void TrackEngine::rate(int verdict)
         saveRoles();
         emit tableChanged();
     }
+    if (verdict < 0)
+        next();                    // same reasoning as rateGroup()
 }
 
 int TrackEngine::room() const { return m_room; }

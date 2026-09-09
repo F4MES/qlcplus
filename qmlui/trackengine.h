@@ -99,6 +99,24 @@ class Doc;
  *  nothing, three on something that appeared twice is a verdict. */
 #define ENGINE_RATE_EXPOSURE 64.0
 
+/** What one thumb UP is worth against one thumb DOWN.
+ *
+ *  They are not the same act. A look he likes simply plays on - there is
+ *  nothing to do, and no reason to reach for the screen. A look he dislikes
+ *  is in his face until he changes it, so a thumb down is the reflex and a
+ *  thumb up is a deliberate detour. Counting them one for one would read the
+ *  rare deliberate act as the weaker signal, which is backwards. */
+#define ENGINE_RATE_UPVOTE 3.0
+
+/** What an AIMED verdict is worth against a spread one.
+ *
+ *  A tap on a thumb lands on every program on stage and is a guess about
+ *  which of them was the point. A long press followed by a tap on a group is
+ *  not a guess - he stopped, looked at the list and pointed. It costs him a
+ *  second he does not always have, so when he spends it, it should be worth
+ *  spending. Three spread taps' worth. */
+#define ENGINE_RATE_AIMED 3
+
 /** Which bucket a verdict lands in. A look that is wrong in a break can be
  *  the best thing in the room on a drop, so one number per program would
  *  average the two into "meh". Four is the same split the engine already
@@ -134,6 +152,12 @@ struct TrackFuncInfo
     int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
 
     /* ---- the operator's verdict, per section kind ---- */
+    /** Verdict POINTS, not taps. A spread thumb is worth 1, an aimed one
+     *  (long press onto a group) ENGINE_RATE_AIMED. The distinction lives
+     *  here rather than in a fifth counter, so nothing downstream - not the
+     *  weight, not the SETUP row, not rebuild_ratings.py - has to know which
+     *  kind a verdict was. The cost is that "5" no longer means five taps,
+     *  which is why it says so on this line. */
     int up[ENGINE_RATE_BUCKETS] = { 0, 0, 0, 0 };
     int down[ENGINE_RATE_BUCKETS] = { 0, 0, 0, 0 };
     /** Beats this program has spent on stage, per section kind. The
@@ -368,6 +392,11 @@ public:
      *  Written to the tracklog next to the beat it belongs to. NOTHING reads
      *  it yet - this is the measuring phase, so a rating cannot change what
      *  the engine picks tonight. */
+    /** Called the moment a finger lands on a thumb: freezes what is on stage
+     *  so the verdict that follows - however long it takes him to aim it -
+     *  lands on what he was actually looking at. */
+    Q_INVOKABLE void markVerdictPoint();
+
     Q_INVOKABLE void rate(int verdict);
 
     /** The same verdict, but on one group's program alone. A long press opens
@@ -378,6 +407,11 @@ public:
      *  { group, name }. For the long-press list - the operator points at a
      *  group, not at a function id. */
     Q_INVOKABLE QVariantList onStage() const;
+
+    /** m_active as it was when the finger landed, or the live one if that was
+     *  too long ago. Everything a verdict touches goes through these two. */
+    const QMap<QString, quint32> &verdictStage() const;
+    int verdictBucket() const;
 
     /** Never pick this one again, whatever it scores. */
     Q_INVOKABLE void setBanned(quint32 fid, bool on);
@@ -597,6 +631,16 @@ private:
     /** The section the look on stage was CHOSEN for. Not the same as
      *  m_lastState once HOLD is on: the look freezes, the track does not. */
     QString m_lookState;
+
+    /* ---- what was on stage when the finger went down ----
+     * A verdict has to land on what he was looking at when he pressed, not on
+     * what is there when he lets go. Between the two: a long press is 800 ms,
+     * picking a group in the list takes a second or two more, and a thumb
+     * down now changes the look immediately - so by the time the verdict is
+     * cast, the stage can easily be showing something else entirely. */
+    QMap<QString, quint32> m_verdictActive;
+    int m_verdictBucket = -1;
+    qint64 m_verdictMs = -1;
     int   m_logBeatNo = 0;
     qreal m_logLevel = 0.0;
     qreal m_logEnergy = 0.0;
