@@ -192,6 +192,11 @@ void TrackEngine::slotDocChanged()
 
 void TrackEngine::slotDocSettled()
 {
+    // same as setFullAuto(): the rebuild drops the unsaved stage counts. On
+    // an ordinary edit in the Function Manager this is the current show; on
+    // a project switch m_funcs still holds the previous show, and that is
+    // exactly what any save before the switch would have written.
+    saveRoles();
     m_dirty = true;
     m_position.clear();
     m_moves.clear();
@@ -2613,6 +2618,15 @@ void TrackEngine::loadRoles()
 // file name, and that is engine core - bane B.
 void TrackEngine::saveRoles()
 {
+    // An empty table is "not built yet", not "nothing is worth keeping".
+    // trackLoaded() saves unconditionally, and BLT sends the current track
+    // the moment QLC+ connects - before the Track page has been opened and
+    // before the first beat, so before anything has called ensureTable().
+    // Writing this state would replace every role, star, verdict, stage
+    // count and ban with an empty string.
+    if (m_funcs.isEmpty())
+        return;
+
     QStringList entries;
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
         if (it.value().role != it.value().guess || it.value().step)
@@ -2654,6 +2668,7 @@ void TrackEngine::saveRoles()
 
 void TrackEngine::rebuild()
 {
+    saveRoles();               // the counts since the last save, see setFullAuto()
     m_dirty = true;
     ensureTable();
     emit tableChanged();
@@ -2956,6 +2971,10 @@ void TrackEngine::setFullAuto(bool on)
     }
     m_position.clear();
     m_moves.clear();
+    // ensureTable() builds every TrackFuncInfo afresh and reads the verdicts
+    // and stage counts back from QSettings - so whatever tick() has counted
+    // since the last save is gone unless it is written first
+    saveRoles();
     m_dirty = true;
     // the soft stops are stepped down by the fade timer, and no beat may come
     if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
@@ -3150,6 +3169,11 @@ QString TrackEngine::importSettings()
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString()).toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
     m_dirty = true;
+    // rebuild NOW, not on the next table() call: setFullAuto(), rebuild() and
+    // a doc change all save the in-memory table before they rebuild, and
+    // until this rebuild has run the in-memory table is the OLD verdicts -
+    // one FULL AUTO toggle in that window would write them over the import
+    ensureTable();
     m_moves.clear();
     emit tableChanged();
     emit liveChanged();
