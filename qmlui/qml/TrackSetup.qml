@@ -594,7 +594,8 @@ Rectangle
                 property var md: modelData ? modelData
                                            : ({ hidden: false, role: -1, stars: 0, id: 0,
                                                 colour: 0, name: "", group: "", path: "",
-                                                banned: false, rateUp: 0, rateDown: 0 })
+                                                banned: false, rateUp: 0, rateDown: 0,
+                                                generated: false })
 
                 RowLayout
                 {
@@ -706,7 +707,11 @@ Rectangle
                         property bool isBanned: md.banned === true
                         Layout.preferredWidth: 66
                         Layout.fillHeight: true
-                        visible: funcRow.rowRole >= 0
+                        // not on the engine's own scenes: it would leave the
+                        // group without a colour, and setBanned() refuses
+                        // anyway - a button that does nothing is worse than
+                        // no button
+                        visible: funcRow.rowRole >= 0 && md.generated !== true
                         label: armed ? qsTr("SURE?") : (isBanned ? qsTr("BANNED") : qsTr("BAN"))
                         active: armed || isBanned
                         activeColor: armed ? "#E3B44F" : "#B03030"

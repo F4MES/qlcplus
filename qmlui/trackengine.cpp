@@ -2618,10 +2618,10 @@ void TrackEngine::saveRoles()
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
     {
         const TrackFuncInfo &info = it.value();
-        if (info.banned)
-            bans << QString::number(it.key());
         if (info.generated)
             continue;                  // rebuilt every table: nothing to keep
+        if (info.banned)
+            bans << QString::number(it.key());
         for (int b = 0; b < ENGINE_RATE_BUCKETS; b++)
         {
             if (info.up[b] == 0 && info.down[b] == 0)
@@ -5430,7 +5430,35 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
                     missing << colour;
         }
         if (missing.isEmpty() == false)
-            found << tr("%1 has no scene for %2").arg(key).arg(missing.join(", "));
+        {
+            // Which of the two it is matters. Missing SOME colours means the
+            // group sits dark whenever that colour comes round. Missing them
+            // ALL means candidates() is empty, and a group with no colour
+            // candidate never enters `eligible` in tick() - it is out of the
+            // cast entirely and dark for the rest of the night.
+            //
+            // A ban can cause either. That is allowed: he said never, and
+            // never is never - the arithmetic bends, the ban does not. But he
+            // is told it was the ban, because "I banned one thing and a whole
+            // group went away" is not something to work out during a gig.
+            bool byBan = false;
+            for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin();
+                 it != m_funcs.constEnd(); ++it)
+            {
+                if (it.value().banned && it.value().role == ENGINE_ROLE_COLOR
+                    && it.value().groups.contains(key))
+                {
+                    byBan = true;
+                    break;
+                }
+            }
+            QString why = byBan ? tr(" (banned)") : QString();
+            if (candidates(ENGINE_ROLE_COLOR, key).isEmpty())
+                found << tr("%1 has no colour at all%2 - it drops out of the cast and stays dark")
+                         .arg(key).arg(why);
+            else
+                found << tr("%1 has no scene for %2%3").arg(key).arg(missing.join(", ")).arg(why);
+        }
     }
 
     // Moving heads whose pan changes while none of our sweeps runs are being
@@ -5620,6 +5648,15 @@ bool TrackEngine::banned(quint32 fid) const
 void TrackEngine::setBanned(quint32 fid, bool on)
 {
     if (m_funcs.contains(fid) == false || m_funcs[fid].banned == on)
+        return;
+    // Not on our own. A generated scene exists because the group had no
+    // palette colour of its own, so banning one leaves that group with
+    // nothing to be - and the flag could not be kept anyway: generated
+    // scenes are matched by NAME when they already exist, but a fresh one
+    // takes whatever id addFunction() hands out. Saved against that id, the
+    // ban would after a reload sit on a completely different program, and
+    // silently. Refuse at the source rather than filter it at save time.
+    if (m_funcs[fid].generated)
         return;
     m_funcs[fid].banned = on;
     saveRoles();
