@@ -3385,16 +3385,14 @@ quint32 TrackEngine::homePosition(const QString &group) const
     // the room. It is their normal look and the only one they get below the
     // top of the fader, so it has to be found by name rather than by the
     // rotation the cursor happens to land on.
-    QList<TrackFuncInfo *> all = candidates(ENGINE_ROLE_POSITION, group);
-    TrackFuncInfo *best = nullptr;
-    foreach (TrackFuncInfo *info, all)
+    auto isHome = [](const TrackFuncInfo &info) -> bool
     {
-        if (info->type != int(Function::SceneType))
-            continue;                          // a chase is a move, not an aim
-        QString n = info->name.toLower();
+        if (info.type != int(Function::SceneType))
+            return false;                      // a chase is a move, not an aim
+        QString n = info.name.toLower();
         if (n.contains(QStringLiteral("down")) || n.contains(QStringLiteral("beat"))
             || n.contains(QStringLiteral("wiggle")) || n.contains(QStringLiteral("move")))
-            continue;
+            return false;
         // "UP", "laser upp", "Bars Up Home": the word has to stand on its
         // own, or "setup" and "wake up" would match as well.
         // And "LaserUPP" - the name in this show - only reads as a word
@@ -3403,10 +3401,41 @@ quint32 TrackEngine::homePosition(const QString &group) const
         static const QRegularExpression up(QStringLiteral("(^|[^a-z])upp?([^a-z]|$)"),
                                            QRegularExpression::CaseInsensitiveOption);
         static const QRegularExpression upCamel(QStringLiteral("[a-z]UPP?([^A-Za-z]|$)"));
-        if (up.match(n).hasMatch() == false && upCamel.match(info->name).hasMatch() == false)
-            continue;
-        if (best == nullptr || info->fixtureCount > best->fixtureCount)
+        return up.match(n).hasMatch() || upCamel.match(info.name).hasMatch();
+    };
+
+    const TrackFuncInfo *best = nullptr;
+    foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_POSITION, group))
+    {
+        if (isHome(*info) && (best == nullptr || info->fixtureCount > best->fixtureCount))
             best = info;
+    }
+    if (best != nullptr)
+        return best->id;
+
+    // Nothing left, which for this one function means the ban has to give.
+    //
+    // Home is not a look competing for a turn in the rotation - it is where
+    // the beams park. Everything above 60 % energy may roam; below it, in a
+    // break, in a build, in CALM, the bars are driven back here. Take that
+    // away and the rule quietly stops holding: the bars keep whatever drop
+    // aim they were last given, through the whole quiet passage. Banning it
+    // is banning the brakes, and it is the one place where "he said never"
+    // loses to what the fixtures are pointed at.
+    //
+    // Only the ban is ignored. Role, group and the name test all still apply,
+    // and they are the same test the loop above used - one copy, so the two
+    // cannot drift apart.
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin();
+         it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &info = it.value();
+        if (info.banned == false || info.role != ENGINE_ROLE_POSITION)
+            continue;
+        if (info.groups.count() != 1 || info.groups.contains(group) == false)
+            continue;
+        if (isHome(info) && (best == nullptr || info.fixtureCount > best->fixtureCount))
+            best = &info;
     }
     return best != nullptr ? best->id : Function::invalidId();
 }
@@ -5411,9 +5440,29 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
 
     foreach (const QString &key, m_groupOrder)
     {
-        if (m_groups.value(key).hasDimmer == false && m_groupOff.contains(key) == false
+        const TrackGroup &g = m_groups.value(key);
+        if (g.hasDimmer == false && m_groupOff.contains(key) == false
             && castSet.contains(key))
             found << tr("%1 has no master dimmer - on/off only").arg(key);
+
+        // The heads have had this warning all along, but it is guarded by
+        // g.heads - and a laser bar is never a head: heads needs pan AND tilt
+        // AND not lasers, and the bars have no pan at all. So the group that
+        // most needs telling was the one group that never got told. The aims
+        // loop in tick() skips a group with no position candidate entirely,
+        // which means the bars keep pointing wherever they last were.
+        if (g.lasers && m_groupOff.contains(key) == false
+            && candidates(ENGINE_ROLE_POSITION, key).isEmpty())
+            found << tr("%1 has no aim left - the beams stay where they are").arg(key);
+
+        // homePosition() ignores the ban on purpose (see there), so a banned
+        // home keeps running. That is the right call and a confusing sight:
+        // the row says BANNED and the bars keep going there. Say it out loud
+        // rather than leave him hunting for it.
+        quint32 home = g.lasers ? homePosition(key) : Function::invalidId();
+        if (home != Function::invalidId() && m_funcs.value(home).banned)
+            found << tr("%1: the home aim is banned, but it is still used - "
+                        "the beams have to park somewhere").arg(key);
     }
 
     // a group the engine cannot make colours for (an animation laser) and
