@@ -60,6 +60,14 @@
 // How many strobe rates ensureStrobeScenes() builds per group. driveStrobe()
 // draws an index in this range, so the two must never disagree.
 #define ENGINE_STROBE_RATES   6
+// The strobe budget: how many beats of hardware strobe a 64-beat window may
+// hold, at a third of the ENERGY fader and at the stop (a ramp between). The
+// drop's landing and the build's riser are outside it - they are the music -
+// the "and again" and the groove tastes are inside it. A three-hour night is
+// not a three-hour strobe.
+#define ENGINE_STROBE_WINDOW  64
+#define ENGINE_STROBE_BUDGET_LOW   2
+#define ENGINE_STROBE_BUDGET_HIGH  16
 
 /* colours the house does not like: never in the palette, never as an accent,
  * never generated - even when a scene of that colour exists */
@@ -95,6 +103,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_master(1.0)
     , m_blackout(false)
     , m_mixing(false)
+    , m_mixBeat(-1)
     , m_speed(0)
     , m_flash(false)
     , m_effects(0)
@@ -107,6 +116,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_strobeUntil(-1)
     , m_strobeSeen(-1)
     , m_strobeRate(0)
+    , m_strobeWindow(-1)
+    , m_strobeSpent(0)
     , m_beatMs(500.0)
     , m_beatStartMs(0)
     , m_beatIndex(0)
@@ -210,6 +221,9 @@ void TrackEngine::slotDocSettled()
     m_strobeUntil = -1;
     m_strobeSeen = -1;
     m_strobeRate = 0;
+    m_strobeWindow = -1;
+    m_strobeSpent = 0;
+    m_mixBeat = -1;
     // setHaze/setFan early-return on an unchanged value, so a stale reading
     // here left the slider dead until it was moved somewhere else first
     m_haze = 0.0;
@@ -2266,6 +2280,17 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         m_strobeUntil = -1;
     m_strobeSeen = beat;
 
+    // the budget window: 64 beats, restarted when it runs out or the track
+    // scrubs backwards past its start
+    if (m_strobeWindow < 0 || beat < m_strobeWindow || beat - m_strobeWindow >= ENGINE_STROBE_WINDOW)
+    {
+        m_strobeWindow = beat;
+        m_strobeSpent = 0;
+    }
+    int budget = ENGINE_STROBE_BUDGET_LOW
+                 + int(qRound(w * qreal(ENGINE_STROBE_BUDGET_HIGH - ENGINE_STROBE_BUDGET_LOW)));
+    auto affordable = [this, budget](int beats) { return m_strobeSpent + beats <= budget; };
+
     if (quiet)
     {
         m_strobeUntil = -1;
@@ -2294,14 +2319,15 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
             want = drawn;                                // the drop lands
             beats = 1 + int(qRound(2.0 * w));
         }
-        else if (isDrop && w > 0.0 && beatInBar == 0 && roll(0.05 + 0.70 * w))
+        else if (isDrop && w > 0.0 && beatInBar == 0 && roll(0.05 + 0.70 * w)
+                 && affordable(1 + int(qRound(3.0 * w))))
         {
             want = drawn;                                // and again, more of it
             beats = 1 + int(qRound(3.0 * w));
         }
         else if (isDrop == false && isBuild == false && w > 0.0
                  && (bar % qMax(2, 10 - int(qRound(8.0 * w)))) == 0
-                 && beatInBar == 3 && roll(0.10 + 0.50 * w))
+                 && beatInBar == 3 && roll(0.10 + 0.50 * w) && affordable(1))
         {
             want = drawn;                                // a groove gets a taste
             beats = 1;
@@ -2314,6 +2340,8 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     }
 
     bool on = beat <= m_strobeUntil;
+    if (on)
+        m_strobeSpent++;                 // every burst counts, budgeted or not
     foreach (const QString &key, m_groupOrder)
     {
         QString slot = "str:" + key;
@@ -3119,6 +3147,12 @@ void TrackEngine::setMixing(bool on)
     if (on == m_mixing)
         return;
     m_mixing = on;
+    // A mix that begins while a track plays is this track going OUT: from
+    // here the effect groups leave over sixteen bars (tick()), the colour is
+    // already frozen. A mix that is on when the next track loads is that
+    // track coming IN, and trackLoaded() clears the mark - an intro is not
+    // faded out.
+    m_mixBeat = (on && m_lastState.isEmpty() == false) ? m_lastBeat : -1;
     emit liveChanged();
 }
 
@@ -3767,12 +3801,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // and the flash still reaches for it whenever it likes.
         m_colourCursor++;
         QStringList pool;
-        bool allowWhite = rng->bounded(10) == 0;   // white is punctuation
+        // White is never the room's colour (Tobias, 2026-09-10: "hvid kun til
+        // hits og accenter; en hvid base ser ud som arbejdslys"). It used to
+        // come up one change in ten. The flash, the hits and the accent table
+        // still reach for it - that is what it is for.
         foreach (const QString &c, m_palette)
         {
-            if (c == m_colour)
-                continue;
-            if (allowWhite == false && c == QStringLiteral("white"))
+            if (c == m_colour || c == QStringLiteral("white"))
                 continue;
             pool.append(c);
         }
@@ -3830,8 +3865,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // A break is a quiet section, not an empty one. It always keeps one
         // group besides the base, and from half a fader upwards it keeps two -
         // so the ENERGY slider is felt in a break as well, which it was not.
+        // (Tobias, 2026-09-10: "kun base + ét langsomt element, aldrig
+        // strober".) One, whatever the fader says - the fader is felt in the
+        // level and in what the one element does, not in how many there are.
         if (brk)
-            return 1 + (energy > 0.50 && rng->bounded(3) > 0 ? 1 : 0);
+            return 1;
         // The top of the ENERGY fader has to mean something: at full it is
         // three groups on a drop and two in a groove, not two and one.
         // four groups on a drop at the stop, three in a groove: the fader's
@@ -3873,14 +3911,29 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         effects = qMax(effects, int(qRound(3.0 * qBound(0.0, (energy - 0.15) / 0.75, 1.0))));
     if (isCalm || still)
         effects = 0;
+    // Mix-out: the track on its way out hands the room over in steps, not in
+    // a cut - two groups for six bars, one for six more, then the base alone
+    // until the next track's own look arrives. The colour is frozen for the
+    // same stretch (above), so the picture thins out; it does not change.
+    if (m_mixing && m_mixBeat >= 0)
+    {
+        int mixBars = qMax(0, beat - m_mixBeat) / 4;
+        effects = qMin(effects, mixBars < 6 ? 2 : (mixBars < 12 ? 1 : 0));
+    }
     if (base.isEmpty())
         effects = qMax(effects, 1);                 // no base: something must show
 
     QStringList pool;
     foreach (const QString &key, eligible)
     {
-        if (key != base)
-            pool.append(key);
+        if (key == base)
+            continue;
+        // a break's one element is never the strobes: a strobe group that is
+        // "in the cast" of a break stands there as a static white pattern at
+        // half level, which is work light, not depth
+        if (isBreak && m_groups.value(key).strobes)
+            continue;
+        pool.append(key);
     }
 
     QSet<QString> castSet;
@@ -6558,6 +6611,7 @@ void TrackEngine::trackLoaded(const QString &title)
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
     m_lookState.clear();
+    m_mixBeat = -1;              // a mix still on now is the mix INTO this track
     m_colourBar = -1;            // hold the colour until the first break or drop
     m_colourSince = -1;
     m_castCursor++;

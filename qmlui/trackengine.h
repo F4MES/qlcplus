@@ -602,6 +602,7 @@ private:
     qreal m_master;
     bool m_blackout;
     bool m_mixing;
+    int m_mixBeat;                        // the beat a mix began DURING this track (-1: none) - the mix-out fade counts from it
     QMap<QString, quint32> m_splitScenes;  // "group|a|b" -> hidden two-colour scene
     int m_speed;                          // -1 half, 0 as the music, +1 double
     QMap<QString, qreal> m_groupTrim;     // the DJ's fader per group, 1.0 when untouched
@@ -666,6 +667,8 @@ private:
     int m_strobeUntil;        // the beat the burst ends on (-1: not strobing)
     int m_strobeSeen;         // the beat driveStrobe last saw, to catch a scrub
     int m_strobeRate;         // which of the rates is up
+    int m_strobeWindow;       // first beat of the current 64-beat strobe budget window (-1: none)
+    int m_strobeSpent;        // strobe beats used in that window
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
     QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
     QMap<QString, qreal> m_pulseStrength;  // how hard that beat hit, 0.5..1 - the kick's say
