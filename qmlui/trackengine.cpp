@@ -5311,9 +5311,14 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // fader decides where inside each band this sits.
         sw.height = wide ? int(34 + 40 * lw) + int(rng->bounded(12))
                          : int(12 + 30 * lw) + int(rng->bounded(10));
-        // FIXED, whatever the energy says. A figure takes 13 seconds at 128
-        // bpm and a wide one 19, and that is the whole range there is.
-        sw.beats = wide ? 40 : 28;
+        // FIXED, whatever the energy says - and slow. The beams are 8-20 m
+        // long, so what is a small angle at the bar is metres at the far end:
+        // at 28 beats the tip of a 42-unit figure crossed the ceiling at over
+        // 6 m/s, and the wide one at nearly 7. A figure now takes 56 beats
+        // (26 s at 128 bpm) and a wide one 80 (38 s); the tip stays between 1
+        // and 3.3 m/s. Tobias, 2026-09-09: "EKSTREMT langsomme" - and of the
+        // options he kept the big figures and halved the pace, not the reach.
+        sw.beats = wide ? 80 : 56;
         sw.dx = 0;
         sw.dy = int(rng->bounded(9)) - 4;          // barely off the aim
         // One after another along the wall, always - and the higher the fader
@@ -5352,9 +5357,15 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     // DJ's beat, halved or doubled by the SPEED tiles
     qreal beatMs = bpm > 0.0 ? 60000.0 / bpm : 468.75;
     int beats = sw.beats;
+    // Not for the lasers. drawSweep() fixes their pace - "nothing here is ever
+    // allowed to hurry" - and then this halved it whenever the DJ hit 2x. The
+    // beams are 8-20 m long, so a 42-unit figure at half period puts the tip
+    // past 6 m/s across the ceiling: a whip, not a sweep. The SPEED tile may
+    // make them SLOWER (1/2x still applies); faster is not on offer.
+    bool laser = m_groups.value(group).lasers;
     if (m_speed < 0)
         beats *= 2;
-    else if (m_speed > 0)
+    else if (m_speed > 0 && laser == false)
         beats = qMax(1, beats / 2);
     uint ms = uint(qMax(250.0, beats * beatMs));
 

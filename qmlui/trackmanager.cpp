@@ -1489,6 +1489,12 @@ void TrackManager::runEngine(bool sectionChanged)
     QString nextState;
     int beatsToNext = 0;
     nextSection(stateBeat, nextState, beatsToNext);
+    // which section is next: from the quantised beat, so it agrees with
+    // the state. How FAR it is: from the real beat, or a countdown that
+    // has to hit exactly 1 never does once quantize > 1 - it would step
+    // 8, 4, 0 and the pre-drop blink would never fire.
+    if (beatsToNext > 0)
+        beatsToNext = qMax(0, beatsToNext - (beat - stateBeat));
 
     // Energy = BPM dial x how loud this section is. The section's LEVEL slider
     // goes in separately as a brightness trim, so it cannot change how many

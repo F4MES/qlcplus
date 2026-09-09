@@ -1248,7 +1248,13 @@ Rectangle
                         ctx.stroke()
                     }
 
+                    // Two label rows: a label drops to the second row when it
+                    // would collide with the previous one, so close markers stay
+                    // readable instead of printing on top of each other.
                     var mk = trackManager.markers
+                    var rowH = Math.floor((lane - 4) / 2)
+                    var rowRight = [ -1e9, -1e9 ]
+
                     for (var m = 0; m < mk.length; m++)
                     {
                         var mb = mk[m].beat
@@ -1270,10 +1276,17 @@ Rectangle
                         var tw = ctx.measureText(label).width + 10
                         var bx = Math.min(Math.max(mx, 0), w - tw)
 
+                        var labelRow = (bx < rowRight[0] + 3) ? 1 : 0
+                        if (labelRow === 1 && bx < rowRight[1] + 3)
+                            labelRow = 0          // both taken: overlap the older one
+                        rowRight[labelRow] = bx + tw
+
+                        var ly = labelRow * rowH
+
                         ctx.fillStyle = col
-                        ctx.fillRect(bx, 0, tw, lane - 3)
+                        ctx.fillRect(bx, ly, tw, rowH - 2)
                         ctx.fillStyle = "#000000"
-                        ctx.fillText(label, bx + 5, lane - 8)
+                        ctx.fillText(label, bx + 5, ly + rowH - 6)
 
                         if (held)
                         {
