@@ -2720,7 +2720,14 @@ QVariantList TrackEngine::table()
     {
         bool hidden = info.junk || info.step || info.groups.isEmpty() || info.generated
                       || (vc != nullptr && vc->usageList(info.id).isEmpty());
-        if (hidden && m_showAll == false && info.role < 0)
+        // "A row that has been given a role is never hidden" - given by the
+        // OPERATOR, which is role != guess, the same test saveRoles() uses to
+        // decide what is his. The first version tested role < 0, and every
+        // classified look has role == guess >= 0 by default, so of the ~730
+        // rows not on a VC widget the filter hid almost none (PSMAIN: 573
+        // visible own functions, 237 on widgets; 396 AUTO, none on widgets).
+        // role < 0 stays in the test so junk and step rows hide as before.
+        if (hidden && m_showAll == false && (info.role < 0 || info.role == info.guess))
             continue;
 
         QStringList groups = info.groups.values();
