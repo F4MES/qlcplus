@@ -574,6 +574,9 @@ private:
     QString m_trackTitle;     // what is playing, for the log's track column
     QHash<QString, int> m_trimLogged;   // group -> beat: one trim line per beat
     bool m_ratingOn = false;            // do the verdicts count? OFF by default
+    /** The section the look on stage was CHOSEN for. Not the same as
+     *  m_lastState once HOLD is on: the look freezes, the track does not. */
+    QString m_lookState;
     int   m_logBeatNo = 0;
     qreal m_logLevel = 0.0;
     qreal m_logEnergy = 0.0;

@@ -3737,6 +3737,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         int want = effectsFor(isDrop, isBreak);
         m_effects = qBound(m_effects - 1, want, m_effects + 1);
     }
+    // Every re-pick below sits behind `hold == false`, so this is exactly the
+    // moment the look on stage may change. A verdict belongs in the section
+    // the look was CHOSEN for, not the one the track happens to have reached:
+    // freeze a drop look, let it ride into the break, thumb it up, and without
+    // this the drop look collects credit under "break" - and then gets
+    // favoured in breaks, where nothing ever chose it. HOLD is the button you
+    // press when you like what you see, so this is not a corner case.
+    if (hold == false)
+        m_lookState = state;
     m_lastState = state;
 
     int effects = m_effects;
@@ -5504,9 +5513,16 @@ void TrackEngine::logSignal(const QString &tag)
     //
     // Commas out: the log is read with a plain split(','), and a group called
     // "Strobes, All" would shift every column after this one.
+    // The SAME string rateBucket() files by - m_lookState with m_lastState as
+    // the fallback - so the log and the engine cannot disagree about which
+    // section a verdict belongs to. They differ only while HOLD is on, and
+    // that is exactly when getting it wrong would matter. Every intervention
+    // is about the look that is on stage, not about the bar the track has
+    // reached, so this holds for the sig: lines too.
+    const QString &sect = m_lookState.isEmpty() ? m_lastState : m_lookState;
     QString mark = QString(tag).replace(',', ' ');
-    if (m_lastState.isEmpty() == false)
-        mark += QLatin1Char('@') + QString(m_lastState).replace(',', ' ');
+    if (sect.isEmpty() == false)
+        mark += QLatin1Char('@') + QString(sect).replace(',', ' ');
     logBeat(mark, m_logBeatNo, m_logLevel, m_logEnergy, m_logSection);
 }
 
@@ -5515,12 +5531,17 @@ int TrackEngine::rateBucket() const
     // The same four the engine already picks by. intro and outro count as
     // break: they are the same job for the lights, and splitting them would
     // spread already thin evidence over six buckets instead of four.
-    if (m_lastState == QStringLiteral("build"))
+    // m_lookState, not m_lastState: see tick(). They are the same until HOLD
+    // freezes the look, and then only the first one is still true about what
+    // is actually on stage. Falls back for the case where a hold was already
+    // on before the first tick of a track.
+    const QString &st = m_lookState.isEmpty() ? m_lastState : m_lookState;
+    if (st == QStringLiteral("build"))
         return ENGINE_RATE_BUILD;
-    if (m_lastState == QStringLiteral("drop"))
+    if (st == QStringLiteral("drop"))
         return ENGINE_RATE_DROP;
-    if (m_lastState == QStringLiteral("break") || m_lastState == QStringLiteral("intro")
-        || m_lastState == QStringLiteral("outro"))
+    if (st == QStringLiteral("break") || st == QStringLiteral("intro")
+        || st == QStringLiteral("outro"))
         return ENGINE_RATE_BREAK;
     return ENGINE_RATE_NORMAL;
 }
@@ -6057,6 +6078,7 @@ void TrackEngine::release()
     }
     m_cast.clear();
     m_lastState.clear();
+    m_lookState.clear();
     m_flash = false;
     // and the flag with them, or the next tick() would put the masks straight
     // back and the Track page would still show BLACKOUT lit
@@ -6155,6 +6177,7 @@ void TrackEngine::trackLoaded(const QString &title)
     m_trackTitle = title;
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
+    m_lookState.clear();
     m_colourBar = -1;            // hold the colour until the first break or drop
     m_colourSince = -1;
     m_castCursor++;
@@ -6431,6 +6454,7 @@ void TrackEngine::stopAll()
     m_cast.clear();
     m_position.clear();
     m_lastState.clear();
+    m_lookState.clear();
     m_moves.clear();
     m_sweep.clear();
     m_sweepShown.clear();
