@@ -5531,22 +5531,27 @@ int TrackEngine::rateWeight(const TrackFuncInfo &info) const
     // cursor still walks the list in order, so nothing becomes a habit and
     // "why did it pick that" always has an answer.
     //
-    // Two verdicts are not evidence. The gate is deliberately blunt - it takes
-    // three of a kind before anything moves, and the most a program can be is
-    // three times as likely, never certain and never impossible. Impossible is
-    // what the ban flag is for, and the operator sets that himself.
+    // The floor is 1, never 0. The first version returned 0 for a badly rated
+    // program and leaned on the callers to "keep a floor" - but the caller's
+    // floor only fires when EVERY candidate scored 0, so as soon as one decent
+    // program was in the list the bad ones became unreachable. That is
+    // "never", and never is the ban flag's job: a thing the operator decides
+    // and can see, not something three votes on one night arrive at quietly.
+    //
+    // So the scale is 1..4 around a neutral 2. Disliked is half as likely as
+    // unrated, the best is four times as likely as the worst, and nothing is
+    // impossible. Two verdicts are still not evidence: it takes three of a
+    // kind to reach either end.
     if (m_ratingOn == false)
         return 1;
-    int b = rateBucket();
-    int up = info.up[b];
-    int down = info.down[b];
-    if (up - down >= 3)
+    int d = info.up[rateBucket()] - info.down[rateBucket()];
+    if (d >= 3)
+        return 4;
+    if (d >= 1)
         return 3;
-    if (up - down >= 1)
-        return 2;
-    if (down - up >= 3)
-        return 0;              // still reachable: the callers keep a floor
-    return 1;
+    if (d <= -3)
+        return 1;
+    return 2;
 }
 
 quint32 TrackEngine::pickWeighted(const QList<TrackFuncInfo *> &ok, int cursor) const
@@ -5558,20 +5563,29 @@ quint32 TrackEngine::pickWeighted(const QList<TrackFuncInfo *> &ok, int cursor) 
     if (m_ratingOn == false)
         return ok.at(qAbs(cursor) % ok.count())->id;
 
-    // Repeating entries rather than drawing at random, which is what
-    // positionFunction already does with its tiers (tagged + tagged + plain).
-    // The cursor still walks in order, so the rotation still guarantees
-    // everything gets its turn - the well-rated just get more turns.
-    QList<TrackFuncInfo *> pool;
+    // Repeat the LIST, not the entry. positionFunction's own idiom is
+    // `tagged + tagged + plain`, and the distinction turns out to be the
+    // whole thing: appending a favoured program three times in a row gave
+    // AAABCDD, so three consecutive sections ran the SAME look. More often
+    // is what was wanted; back to back is a stuck record. Pass k holds
+    // everything with weight >= k, which gives ABCDADA - the favoured come
+    // round more often and still take their turn.
+    int top = 1;
     foreach (TrackFuncInfo *info, ok)
+        top = qMax(top, rateWeight(*info));
+
+    QList<TrackFuncInfo *> pool;
+    for (int k = 1; k <= top; k++)
     {
-        int w = rateWeight(*info);
-        for (int i = 0; i < w; i++)
-            pool.append(info);
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (rateWeight(*info) >= k)
+                pool.append(info);
+        }
     }
-    // Everything here scored badly. Rather the old rotation than nothing at
-    // all: a section with no motion is a worse answer than a mediocre one,
-    // and "never" is the ban flag's job, not the arithmetic's.
+    // rateWeight() never returns less than 1, so this cannot fire today. It
+    // stays because the alternative to a wrong weight scale is a section with
+    // no light in it, and that is not a thing to discover on a Saturday.
     if (pool.isEmpty())
         return ok.at(qAbs(cursor) % ok.count())->id;
     return pool.at(qAbs(cursor) % pool.count())->id;
