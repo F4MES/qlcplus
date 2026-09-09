@@ -444,11 +444,19 @@ Rectangle
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: 8
-                width: thumbRow.width
-                height: thumbRow.height
                 z: 3
                 visible: trackManager && trackEngine && trackManager.beatCount > 0
                          && trackEngine.logEnabled && !trackViewRoot.setupOpen
+
+                // 0 = the thumbs; +1 / -1 = a thumb is waiting for a target.
+                // A long press opens the list of what is on stage; the tap
+                // that follows puts the whole verdict on that one group
+                // instead of spreading it over everything.
+                property int blaming: 0
+                property var stageRows: []
+
+                width: blaming === 0 ? thumbRow.width : blameRow.width
+                height: blaming === 0 ? thumbRow.height : blameRow.height
 
                 MouseArea { anchors.fill: parent }
 
@@ -456,6 +464,7 @@ Rectangle
                 {
                     id: thumbRow
                     spacing: 8
+                    visible: verdictTools.blaming === 0
 
                     Repeater
                     {
@@ -509,8 +518,24 @@ Rectangle
                             MouseArea
                             {
                                 anchors.fill: parent
+                                // Qt does not agree with itself across versions
+                                // about whether clicked follows pressAndHold.
+                                // A flag costs nothing and settles it.
+                                property bool held: false
+                                onPressed: held = false
+                                onPressAndHold:
+                                {
+                                    if (trackEngine === null) return
+                                    var rows = trackEngine.onStage()
+                                    if (rows.length === 0) return
+                                    held = true
+                                    verdictTools.stageRows = rows
+                                    verdictTools.blaming = modelData
+                                    blameTimeout.restart()
+                                }
                                 onClicked:
                                 {
+                                    if (held) { held = false; return }
                                     if (trackEngine) trackEngine.rate(modelData)
                                     thumb.lit = true
                                     flash.restart()
@@ -525,6 +550,57 @@ Rectangle
                             }
                         }
                     }
+                }
+
+                // The list a long press opens. One tile per group that has a
+                // look, named by the group because that is what he is looking
+                // at - not by a function he would have to recognise. Tap one
+                // and the verdict goes there alone; tap the cross, or wait,
+                // and nothing happened.
+                Row
+                {
+                    id: blameRow
+                    spacing: 6
+                    visible: verdictTools.blaming !== 0
+
+                    Repeater
+                    {
+                        model: verdictTools.stageRows
+
+                        TrackTile
+                        {
+                            width: 118
+                            height: 44
+                            label: modelData.group
+                            active: true
+                            activeColor: verdictTools.blaming > 0 ? "#3E7E4E" : "#8E3A3A"
+                            opacity: 0.92
+                            onTapped:
+                            {
+                                if (trackEngine)
+                                    trackEngine.rateGroup(verdictTools.blaming, modelData.group)
+                                verdictTools.blaming = 0
+                                blameTimeout.stop()
+                            }
+                        }
+                    }
+
+                    TrackTile
+                    {
+                        width: 44
+                        height: 44
+                        label: "\u00d7"
+                        opacity: 0.7
+                        onTapped: { verdictTools.blaming = 0; blameTimeout.stop() }
+                    }
+                }
+
+                // A list left open in the dark is a trap for the next finger
+                Timer
+                {
+                    id: blameTimeout
+                    interval: 6000
+                    onTriggered: verdictTools.blaming = 0
                 }
             }
 

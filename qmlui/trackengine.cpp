@@ -2577,6 +2577,19 @@ void TrackEngine::loadRoles()
         m_funcs[fid].down[b] = qMax(0, parts.at(3).toInt());
     }
 
+    foreach (QString entry, settings.value(SETTINGS_ENGINE_SEEN, QString())
+                                    .toString().split(';', Qt::SkipEmptyParts))
+    {
+        QStringList parts = entry.split(':');
+        if (parts.count() != 3)
+            continue;
+        quint32 fid = parts.at(0).toUInt();
+        int b = parts.at(1).toInt();
+        if (m_funcs.contains(fid) == false || b < 0 || b >= ENGINE_RATE_BUCKETS)
+            continue;
+        m_funcs[fid].seen[b] = qMax(0, parts.at(2).toInt());
+    }
+
     foreach (QString entry, settings.value(SETTINGS_ENGINE_BANNED, QString())
                                     .toString().split(';', Qt::SkipEmptyParts))
     {
@@ -2614,7 +2627,7 @@ void TrackEngine::saveRoles()
             stars << QString("%1:%2").arg(it.key()).arg(it.value().stars);
     QSettings().setValue(SETTINGS_ENGINE_STARS, stars.join(';'));
 
-    QStringList rating, bans;
+    QStringList rating, bans, exposure;
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
     {
         const TrackFuncInfo &info = it.value();
@@ -2628,9 +2641,15 @@ void TrackEngine::saveRoles()
                 continue;
             rating << QString("%1:%2:%3:%4").arg(it.key()).arg(b).arg(info.up[b]).arg(info.down[b]);
         }
+        for (int b = 0; b < ENGINE_RATE_BUCKETS; b++)
+        {
+            if (info.seen[b] > 0)
+                exposure << QString("%1:%2:%3").arg(it.key()).arg(b).arg(info.seen[b]);
+        }
     }
     QSettings().setValue(SETTINGS_ENGINE_RATING, rating.join(';'));
     QSettings().setValue(SETTINGS_ENGINE_BANNED, bans.join(';'));
+    QSettings().setValue(SETTINGS_ENGINE_SEEN, exposure.join(';'));
 }
 
 void TrackEngine::rebuild()
@@ -4445,6 +4464,27 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         moveNames << (mn.isEmpty() ? key : QString("%1 %2").arg(key).arg(mn));
     }
     m_lastMoves = moveNames.join(" + ");
+
+    // Stage time, the denominator rateWeight() divides by. Counted here and
+    // not in logBeat(), which the operator can switch off - the arithmetic
+    // must not quietly change meaning because somebody turned the log off.
+    // Same filter as rate(): once per program however many slots it holds,
+    // and never the engine's own generated scenes, which are rebuilt with
+    // the table and would be counting something that does not persist.
+    {
+        int b = rateBucket();
+        QSet<quint32> onceEach;
+        foreach (quint32 fid, m_active.values())
+        {
+            if (onceEach.contains(fid))
+                continue;
+            onceEach.insert(fid);
+            QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.find(fid);
+            if (it != m_funcs.end() && it.value().generated == false)
+                it.value().seen[b] += 1;
+        }
+    }
+
     logBeat(state, beat, level, energy, sectionEnergy);
     m_report = QString("%1  |  %2%3  |  %4%5%6%7")
         .arg(moveNames.isEmpty() ? (silent ? tr("(silence)") : tr("(no groups)"))
@@ -5629,7 +5669,7 @@ int TrackEngine::rateWeight(const TrackFuncInfo &info) const
     // cursor still walks the list in order, so nothing becomes a habit and
     // "why did it pick that" always has an answer.
     //
-    // The floor is 1, never 0. The first version returned 0 for a badly rated
+    // The floor is 1, never 0. An earlier version returned 0 for a badly rated
     // program and leaned on the callers to "keep a floor" - but the caller's
     // floor only fires when EVERY candidate scored 0, so as soon as one decent
     // program was in the list the bad ones became unreachable. That is
@@ -5638,16 +5678,39 @@ int TrackEngine::rateWeight(const TrackFuncInfo &info) const
     //
     // So the scale is 1..4 around a neutral 2. Disliked is half as likely as
     // unrated, the best is four times as likely as the worst, and nothing is
-    // impossible. Two verdicts are still not evidence: it takes three of a
-    // kind to reach either end.
+    // impossible.
+    //
+    // The score is net votes PER SHOWING, not net votes. A thumb lands on
+    // every program on stage - four to six of them - and only one of them was
+    // usually the thing that was wrong. Raw counts therefore punish the
+    // ordinary: the base group's look and the haze are up for most of the
+    // night, so they collect every verdict there is and drift to whatever the
+    // room felt like on average, while the distinctive program that actually
+    // caused it got one vote out of its three appearances. Dividing by stage
+    // time turns that around - the same three thumbs mean nothing on a
+    // program that ran all night and everything on one that showed up twice.
+    // It costs the operator no extra taps, which is the point.
     if (m_ratingOn == false)
         return 1;
-    int d = info.up[rateBucket()] - info.down[rateBucket()];
-    if (d >= 3)
+    int b = rateBucket();
+    int d = info.up[b] - info.down[b];
+    if (d == 0)
+        return 2;
+    // Less than one showing still counts as one: a brand new program with a
+    // single thumb should move, not be divided into silence.
+    qreal shows = qMax(1.0, info.seen[b] / ENGINE_RATE_EXPOSURE);
+    qreal s = d / shows;
+    // Two gates, and both have to open. The rate says how strongly the
+    // verdicts lean; qAbs(d) says whether there are enough of them to mean
+    // anything. Without the second, a brand new program with one thumb sits
+    // at shows = 1 and scores a perfect 1.0 - four times as likely as
+    // everything else, on the strength of a single tap. The ends of the
+    // scale are for things he has said twice.
+    if (d >= 2 && s >= 0.50)
         return 4;
-    if (d >= 1)
+    if (s >= 0.15)
         return 3;
-    if (d <= -3)
+    if (d <= -2 && s <= -0.50)
         return 1;
     return 2;
 }
@@ -5733,6 +5796,64 @@ void TrackEngine::setRatingEnabled(bool on)
     // the engine's own rotation, or was it steering by the counts?
     logSignal(on ? QStringLiteral("sig:rating-on") : QStringLiteral("sig:rating-off"));
     emit tableChanged();
+}
+
+QVariantList TrackEngine::onStage() const
+{
+    // One row per group, named by the program that carries its look. The
+    // colour slot is the look; a motion or a sweep is what it does. Groups
+    // with neither are left out - there is nothing there to blame.
+    QVariantList out;
+    foreach (const QString &key, m_groupOrder)
+    {
+        quint32 fid = m_active.value("col:" + key, Function::invalidId());
+        if (fid == Function::invalidId())
+            fid = m_active.value("mot:" + key, Function::invalidId());
+        if (fid == Function::invalidId())
+            fid = m_active.value("efx:" + key, Function::invalidId());
+        if (fid == Function::invalidId() || m_funcs.contains(fid) == false)
+            continue;
+        const TrackFuncInfo &info = m_funcs.value(fid);
+        if (info.generated)
+            continue;                  // ours, and rebuilt with the table
+        QVariantMap row;
+        row.insert("group", key);
+        row.insert("name", info.name);
+        out.append(row);
+    }
+    return out;
+}
+
+void TrackEngine::rateGroup(int verdict, const QString &group)
+{
+    logSignal((verdict >= 0 ? QStringLiteral("rate+1:") : QStringLiteral("rate-1:")) + group);
+    if (m_lastState.isEmpty())
+        return;
+
+    // Exactly the programs sitting on this one group. No spreading, no
+    // exposure arithmetic to undo it: he pointed, so the guess is not needed.
+    int b = rateBucket();
+    QSet<quint32> counted;
+    bool touched = false;
+    for (QMap<QString, quint32>::const_iterator it = m_active.constBegin(); it != m_active.constEnd(); ++it)
+    {
+        if (slotGroup(it.key()) != group || counted.contains(it.value()))
+            continue;
+        counted.insert(it.value());
+        QHash<quint32, TrackFuncInfo>::iterator fi = m_funcs.find(it.value());
+        if (fi == m_funcs.end() || fi.value().generated)
+            continue;
+        if (verdict >= 0)
+            fi.value().up[b] += 1;
+        else
+            fi.value().down[b] += 1;
+        touched = true;
+    }
+    if (touched)
+    {
+        saveRoles();
+        emit tableChanged();
+    }
 }
 
 void TrackEngine::rate(int verdict)
@@ -6260,6 +6381,11 @@ void TrackEngine::idle()
 
 void TrackEngine::trackLoaded(const QString &title)
 {
+    // Stage time is counted every beat but only written when something else
+    // triggers a save, and a whole night can pass without one. Once per track
+    // bounds the loss to the track that was playing when the power went, and
+    // costs a few kilobytes every four minutes.
+    saveRoles();
     m_trackTitle = title;
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();

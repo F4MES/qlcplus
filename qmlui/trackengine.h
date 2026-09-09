@@ -90,6 +90,14 @@ class Doc;
 #define SETTINGS_ENGINE_RATING    QStringLiteral("trackengine/rating")
 #define SETTINGS_ENGINE_BANNED    QStringLiteral("trackengine/banned")
 #define SETTINGS_ENGINE_RATINGON  QStringLiteral("trackengine/ratingon")
+#define SETTINGS_ENGINE_SEEN      QStringLiteral("trackengine/seen")
+
+/** Beats of stage time that count as one "showing". A section is 32-64 beats,
+ *  so 64 is roughly "it was up for a section". Exposure is measured in these,
+ *  because a verdict has to be read against how much of the night the program
+ *  was actually on: three thumbs down on something that ran all night is
+ *  nothing, three on something that appeared twice is a verdict. */
+#define ENGINE_RATE_EXPOSURE 64.0
 
 /** Which bucket a verdict lands in. A look that is wrong in a break can be
  *  the best thing in the room on a drop, so one number per program would
@@ -128,6 +136,9 @@ struct TrackFuncInfo
     /* ---- the operator's verdict, per section kind ---- */
     int up[ENGINE_RATE_BUCKETS] = { 0, 0, 0, 0 };
     int down[ENGINE_RATE_BUCKETS] = { 0, 0, 0, 0 };
+    /** Beats this program has spent on stage, per section kind. The
+     *  denominator: a verdict counts for as much as the program is rare. */
+    int seen[ENGINE_RATE_BUCKETS] = { 0, 0, 0, 0 };
     /** Never again, whatever the counts say. A hard flag on purpose: it is
      *  the one thing the operator wants to be certain of, and it must not be
      *  at the mercy of a score that can drift back up on one good night. */
@@ -358,6 +369,15 @@ public:
      *  it yet - this is the measuring phase, so a rating cannot change what
      *  the engine picks tonight. */
     Q_INVOKABLE void rate(int verdict);
+
+    /** The same verdict, but on one group's program alone. A long press opens
+     *  the list; this is what a tap in it does. */
+    Q_INVOKABLE void rateGroup(int verdict, const QString &group);
+
+    /** What is on stage right now, one entry per group that has a look:
+     *  { group, name }. For the long-press list - the operator points at a
+     *  group, not at a function id. */
+    Q_INVOKABLE QVariantList onStage() const;
 
     /** Never pick this one again, whatever it scores. */
     Q_INVOKABLE void setBanned(quint32 fid, bool on);
