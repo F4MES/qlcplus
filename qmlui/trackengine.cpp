@@ -5604,7 +5604,13 @@ void TrackEngine::setBanned(quint32 fid, bool on)
     saveRoles();
     logSignal((on ? QStringLiteral("sig:ban:") : QStringLiteral("sig:unban:"))
               + QString::number(fid));
-    m_dirty = true;
+    // NOT m_dirty. The flag is already set in m_funcs, and that is where both
+    // candidates() and table() read it - a rebuild would restore the same
+    // value from QSettings and change nothing. It would however walk all 2892
+    // functions again while the show is running, and autoAssign() carries the
+    // scar from exactly that: "rebuilding the whole table tore the live page's
+    // cast and colour tiles down under the operator's finger, twice."
+    // Tapping BAN in SETUP is no different.
     emit tableChanged();
 }
 
@@ -5646,10 +5652,32 @@ void TrackEngine::rate(int verdict)
     // exactly what we do not know yet, and guessing here would bake the guess
     // into the numbers. The log keeps the raw record, so a better rule can be
     // applied to the same nights later without losing anything.
+    // Nothing is playing: release(), trackLoaded() and stopAll() all clear
+    // m_lastState, so an empty one means there is no section to judge. What
+    // is on stage between two tracks is the start scene, and EVERY start
+    // scene runs - idle picks nothing, so a verdict on one cannot change
+    // anything anyway. Counting it would only file noise under "normal" and
+    // put a number in the SETUP row that means nothing.
+    //
+    // The line is still written to the log. It carries no @section, and the
+    // rebuild tool already drops those, so the engine and the tool agree -
+    // which they have to, or the two would drift apart over a season.
+    if (m_lastState.isEmpty())
+        return;
+
     int b = rateBucket();
     bool touched = false;
+    // Once per program, not once per slot: m_active is keyed by SLOT, and one
+    // function can in principle hold two of them. candidates() makes that
+    // unlikely today by demanding groups.count() == 1, but leaning on that
+    // from over here means a change to the picker could quietly start
+    // double-counting. One thumb, one verdict.
+    QSet<quint32> counted;
     foreach (quint32 fid, m_active.values())
     {
+        if (counted.contains(fid))
+            continue;
+        counted.insert(fid);
         if (m_funcs.contains(fid) == false)
             continue;
         TrackFuncInfo &info = m_funcs[fid];
