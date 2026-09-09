@@ -3487,7 +3487,9 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
 
 int TrackEngine::tierOf(const QString &text) const
 {
-    static const QStringList breakWords  = { "break", "slow", "center", "centre", "calm", "low" };
+    // "vifte": the animation lasers' flat fan ("ANIMATION Flad vifte",
+    // "Fladviftebølge") is the one pattern of theirs a break may show
+    static const QStringList breakWords  = { "break", "slow", "center", "centre", "calm", "low", "vifte" };
     static const QStringList grooveWords = { "fan", "groove", "medium", "normal" };
     static const QStringList dropWords   = { "drop", "cross", "high", "wide", "eight", "fast" };
     if (hasWord(text, dropWords))   return 2;
@@ -3865,11 +3867,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // A break is a quiet section, not an empty one. It always keeps one
         // group besides the base, and from half a fader upwards it keeps two -
         // so the ENERGY slider is felt in a break as well, which it was not.
-        // (Tobias, 2026-09-10: "kun base + ét langsomt element, aldrig
-        // strober".) One, whatever the fader says - the fader is felt in the
-        // level and in what the one element does, not in how many there are.
+        // A break is the base alone (Tobias, 2026-09-10: "tilbage til ikke
+        // at have effekter"). Once in a while - one break in three - it may
+        // add ONE thing, and the pool below makes sure that thing is either
+        // the laser bars, at home, running a slow chase, or the animation
+        // lasers on their flat fan ("flad vifte"). Nothing else, ever.
         if (brk)
-            return 1;
+            return rng->bounded(3) == 0 ? 1 : 0;
         // The top of the ENERGY fader has to mean something: at full it is
         // three groups on a drop and two in a groove, not two and one.
         // four groups on a drop at the stop, three in a groove: the fader's
@@ -3928,10 +3932,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         if (key == base)
             continue;
-        // a break's one element is never the strobes: a strobe group that is
-        // "in the cast" of a break stands there as a static white pattern at
-        // half level, which is work light, not depth
-        if (isBreak && m_groups.value(key).strobes)
+        // the one thing a break may add is the laser bars - at home, with a
+        // slow chase (see `moving` and the EFX gate below) - or the animation
+        // lasers on their flat fan (tier 0 favours "vifte", see tierOf()).
+        // Heads, strobes and the rest sit a break out.
+        if (isBreak && m_groups.value(key).lasers == false && m_groups.value(key).patternDevice == false)
             continue;
         pool.append(key);
     }
@@ -4202,9 +4207,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool aimed = m_active.contains("pos:" + key);
         // HOLD freezes the figure rather than stopping it; STILL, CALM and a
         // blackout do stop it
+        // and no laser figure in a break: there the bars stay in the home
+        // aim and the slow chase is the whole movement
         bool wanted = castSet.contains(key) && aimed && userMoves == false && darkGroups.contains(key) == false
                    && isCalm == false && still == false && m_blackout == false
-                   && (g.lasers == false || m_fullAuto);
+                   && (g.lasers == false || (m_fullAuto && isBreak == false));
         if (wanted == false)
         {
             if (m_active.contains(slot))
@@ -4428,7 +4435,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the move drew whether this group runs one of the user's own chases
         // or EFX (never in a break, only the climbing half of a build); the
         // base may reach one star higher, it is what carries the room
-        bool moving = mv.ownChaser && isBreak == false && still == false && (isBuild == false || prog > 0.5);
+        // ... except the laser bars in a break, which are only ever in a
+        // break's cast to run a slow (tier 0: "break", "slow", "low") chase
+        bool breakLasers = isBreak && g.lasers;
+        bool moving = still == false
+                   && (breakLasers || (mv.ownChaser && isBreak == false && (isBuild == false || prog > 0.5)));
         int stars = qMin(3, maxStars + (key == base ? 1 : 0));
         quint32 mf = Function::invalidId();
         if (isCalm == false)
@@ -4654,7 +4665,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // at the bottom of the fader, a fifth at the top - and how often the
         // two of them swap is stepBeats below. Choosing beats to skip would
         // just leave it dark, because a square gate cannot decay back.
-        mv.pulse = 0.35 + 0.55 * e;
+        // ... but not in a break: there the fan stands still and steady, the
+        // way it does on his own button - a gate chopping it on the beat is
+        // a drop's idea of it
+        mv.pulse = tier == 0 ? 0.0 : 0.35 + 0.55 * e;
         mv.pulseOn = 0;
         // and with two of them, they take the beat in turns rather than
         // firing together - the mask is on/off too, which suits them
