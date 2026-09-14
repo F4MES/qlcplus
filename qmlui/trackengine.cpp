@@ -4208,10 +4208,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // HOLD freezes the figure rather than stopping it; STILL, CALM and a
         // blackout do stop it
         // and no laser figure in a break: there the bars stay in the home
-        // aim and the slow chase is the whole movement
+        // aim and the slow chase is the whole movement.
+        // CALM keeps the heads drifting at break pace (Tobias, 2026-09-14) -
+        // it stops the lasers, the pulse and the colour changes, not the one
+        // slow figure that keeps the room from looking switched off.
         bool wanted = castSet.contains(key) && aimed && userMoves == false && darkGroups.contains(key) == false
-                   && isCalm == false && still == false && m_blackout == false
-                   && (g.lasers == false || (m_fullAuto && isBreak == false));
+                   && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
+                   && (g.lasers == false || (m_fullAuto && isBreak == false && isCalm == false));
         if (wanted == false)
         {
             if (m_active.contains(slot))
@@ -4235,9 +4238,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // two four-eyes a fan of 180 degrees over eight heads.
             EFX *sweepEfx = qobject_cast<EFX *>(m_doc->function(m_sweepFunc.value(key)));
             int sweepHeads = sweepEfx != nullptr ? sweepEfx->fixtures().count() : g.fixtures.count();
-            TrackSweep sw = drawSweep(tier, isBuild, prog, energy, sweepHeads, g.lasers);
+            // calm draws at break pace whatever the section says
+            int sweepTier = isCalm ? 0 : tier;
+            TrackSweep sw = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers);
             for (int attempt = 0; attempt < 4 && sw.shape >= 0 && history.contains(sw.shape); attempt++)
-                sw = drawSweep(tier, isBuild, prog, energy, sweepHeads, g.lasers);
+                sw = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers);
             m_sweep.insert(key, sw);
             if (sw.shape >= 0)
             {
@@ -5305,7 +5310,10 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // A break and a build were the two places a figure was least likely to be
     // drawn - and they are exactly where a still rig is noticed. Both are now
     // near-certain; a break just gets a very slow one.
-    qreal moveP = tier == 0 ? 0.80 + 0.20 * e : (tier == 2 ? 0.90 + 0.10 * e : 0.85 + 0.15 * e);
+    // A break ALWAYS moves (Tobias, 2026-09-14: "intro/break SKAL altid have
+    // LANGSOM bevaegelse paa basen") - one in five used to stand still at
+    // the bottom of the fader, and a still base in a quiet room is a photo.
+    qreal moveP = tier == 0 ? 1.0 : (tier == 2 ? 0.90 + 0.10 * e : 0.85 + 0.15 * e);
     if (build)
         moveP = 0.90 + 0.10 * prog;
     if (chance(moveP) == false)
@@ -5366,8 +5374,12 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         f *= 0.85 + 0.30 * rng->generateDouble();      // the dice, but not much
         return qMax(3, int(qRound(f)));
     };
+    // A break: a whole minute for one figure at the bottom of the fader
+    // (128 beats at 128 bpm), a quarter of that at the top. Slow enough that
+    // the eye reads it as drift, not as a move; the fader is the only thing
+    // that hurries it. It used to be 48 -> 20.
     if (tier == 0)
-        sw.beats = beatsFor(48, 20);      // a break: 22 s down to 9 s a figure
+        sw.beats = beatsFor(128, 32);
     else if (tier == 2)
         sw.beats = beatsFor(24, 6);       // a drop: 11 s down to under 3
     else
@@ -5751,6 +5763,11 @@ void TrackEngine::calm(int bars)
     // bars <= 0 ends it early
     logSignal(bars <= 0 ? QStringLiteral("sig:calm-off") : QStringLiteral("sig:calm"));
     m_calmUntil = bars <= 0 ? 0 : m_lastBeat + bars * 4;
+    // the heads' figure is redrawn at the new pace on the next beat: calm
+    // slows it to a break's drift, and calm-off lets the section draw again.
+    // (A calm that simply runs out keeps the slow figure until the next
+    // section or 16-bar redraw - a gentle way back, not a jump.)
+    m_sweep.clear();
     emit liveChanged();
 }
 
