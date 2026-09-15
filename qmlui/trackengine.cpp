@@ -4452,6 +4452,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      && g.lasers == false) mv.subSteps = qMin(4, mv.subSteps * 2);
         }
 
+        // The strobe lamps do not run between the beats outside a drop
+        // (Tobias, 2026-09-15: "deres chases er alt for hurtige generelt paa
+        // full auto"). Six lamps handing a pattern round on sixteenths reads
+        // as a strobe whatever channel it is on, and the shutter is what a
+        // strobe is for - driveStrobe() owns that, on a budget. Here they get
+        // a whole beat in a groove and a break, eighths at most in a drop.
+        //
+        // Last, deliberately: the build path, the turnaround and the SPEED
+        // slider all raise subSteps above, and every one of them has to land
+        // under this ceiling. The generated chases were slowed the same way
+        // (gen_programs.py: everything without a drop word in its name is a
+        // whole beat or slower), so the two halves now agree.
+        if (g.strobes)
+            mv.subSteps = qMin(mv.subSteps, tier == 2 ? 2 : 1);
+
         QString colour = m_colour;
         quint32 splitScene = Function::invalidId();
         if (accentColour.isEmpty() == false && key == accentGroup)
