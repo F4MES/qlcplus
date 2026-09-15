@@ -106,6 +106,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_colourBar(-1)
     , m_colourSince(-1)
     , m_holdNow(32)
+    , m_keyBias(-1)
+    , m_nextKeyBias(-1)
     , m_accentWasWhite(false)
     , m_hatsOut(false)
     , m_castCursor(0)
@@ -160,6 +162,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_master = 1.0;
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
+    loadClockCurve(settings);
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_fullAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
     // Read once, here. loadRoles() does not touch the group switches (the
@@ -3282,6 +3285,7 @@ QString TrackEngine::importSettings()
     // take them on board: roles, stars and options are read in ensureTable
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
+    loadClockCurve(settings);
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
     m_groupOff.clear();
@@ -3697,6 +3701,30 @@ bool TrackEngine::macroPosition(quint32 fid) const
     return false;
 }
 
+QString TrackEngine::drawColour(const QStringList &pool, int keyBias, QRandomGenerator *rng) const
+{
+    // one colour from the pool - weighted towards the key's side of the
+    // wheel when the key is known: minor leans cold (blue, cyan, magenta,
+    // purple, uv), major leans warm (red, amber, yellow, orange). Green sits
+    // on neither side. Three to one, not all or nothing: a warm track in a
+    // cold palette still gets a colour, and a cold night still sees red.
+    if (pool.isEmpty())
+        return QString();
+    if (keyBias < 0)
+        return pool.at(int(rng->bounded(pool.count())));
+    static const QStringList cold = { "blue", "cyan", "magenta", "purple", "uv", "pink" };
+    static const QStringList warm = { "red", "amber", "yellow", "orange" };
+    const QStringList &side = keyBias == 0 ? cold : warm;
+    QStringList weighted;
+    foreach (const QString &c, pool)
+    {
+        weighted << c;
+        if (side.contains(c))
+            weighted << c << c;
+    }
+    return weighted.at(int(rng->bounded(weighted.count())));
+}
+
 QString TrackEngine::accentFor(const QString &colour, bool allowWhite) const
 {
     // pairs that sit well together - what the hands would pick. Every colour
@@ -3964,10 +3992,31 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         if (pool.isEmpty())
             pool = m_palette;
-        m_colour = pool.at(int(rng->bounded(pool.count())));
+        m_colour = drawColour(pool, m_keyBias, rng);
     }
     else if (m_colour.isEmpty() && m_palette.isEmpty() == false)
         m_colour = m_palette.first();
+
+    // A mix going out: the incoming track's colour is drawn the moment the
+    // mix begins, and the BASE takes it over the mix's second half (below,
+    // where the colour scenes run) while the effects thin out in the old
+    // one. So the room turns towards the next record while it is being
+    // mixed in, not a bar after it has landed. The draw leans on the next
+    // track's key when BLT has sent it. (Tobias, 2026-09-15: "saa lyset
+    // skifter MED musikken, ikke efter".)
+    if (m_mixing && m_mixBeat >= 0 && m_nextColour.isEmpty() && m_palette.isEmpty() == false && m_override.isEmpty())
+    {
+        QStringList pool;
+        foreach (const QString &c, m_palette)
+        {
+            if (c != m_colour && c != QStringLiteral("white") && engineBannedColour(c) == false)
+                pool.append(c);
+        }
+        if (pool.isEmpty())
+            pool = m_palette;
+        m_nextColour = drawColour(pool, m_nextKeyBias, rng);
+    }
+    int mixBarsOut = (m_mixing && m_mixBeat >= 0) ? qMax(0, beat - m_mixBeat) / 4 : -1;
 
     /* ---- eligible groups: enabled, and with a colour to take ---- */
     QStringList eligible;
@@ -4298,7 +4347,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // fader dropping under 60 % would swing the bars home under a hold.
         if (g.lasers && hold == false)
         {
-            bool mayRoam = energy >= 0.60 && isBreak == false && isBuild == false
+            // ... and only while they are LIT. A bar outside the cast stood
+            // at the top of the fader running its slow tilt chase in the dark
+            // (Tobias, 2026-09-15: "laser bars staar stadig og bevaeger sig,
+            // selvom de ikke lyser"): the pos: slot runs whether the group is
+            // in the cast or not. Dark bars go home and stand still.
+            bool mayRoam = inCast && energy >= 0.60 && isBreak == false && isBuild == false
                         && isCalm == false && still == false;
             quint32 home = mayRoam ? Function::invalidId() : homePosition(key);
             if (home != Function::invalidId())
@@ -4331,7 +4385,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
 
         quint32 want = m_position.value(key, Function::invalidId());
-        if (want == Function::invalidId() || (mayMove && sectionChanged))
+        // a laser group out of the cast never draws a fresh aim either: it
+        // has been sent home above, and this is only reached with no home
+        if (want == Function::invalidId() || (mayMove && sectionChanged && (g.lasers == false || inCast)))
         {
             quint32 np = positionFunction(key, m_castCursor, tier);
             if (np != want && (mayMove || want == Function::invalidId()))
@@ -4583,6 +4639,25 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         TrackMove mv = m_moves.value(key);
         if (isCalm || still)
             mv = TrackMove();
+        // The drop's first bar (two, from three fifths of the fader) is the
+        // IMPACT: every effect group runs a fast chase through its lamps,
+        // pulsing hard, whatever it drew for the section - the white hit lands
+        // on the downbeat above it, and from bar two the section's own look
+        // takes over. The strongest moment of the record used to arrive with
+        // the same look it would then run for thirty-two bars. Pattern devices
+        // (animation lasers) and the base sit it out; the bars step on the
+        // beat, never between (they never do).
+        int impactBars = energy >= 0.60 ? 2 : 1;
+        if (isDrop && bar < impactBars && key != base && hold == false && isCalm == false
+            && still == false && g.patternDevice == false && darkGroups.contains(key) == false)
+        {
+            mv.pattern = ENGINE_PAT_CHASE;
+            mv.stepBeats = 1;
+            mv.subSteps = g.lasers ? 1 : 2;
+            mv.pulse = qMax(mv.pulse, 0.85);
+            mv.pulseOn = 0;
+            mv.ownChaser = false;
+        }
         if (isBuild)
         {
             // drawMove() saw prog at the START of the build and is only asked
@@ -4662,6 +4737,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mv.subSteps = qMin(mv.subSteps, tier == 2 ? 2 : 1);
 
         QString colour = m_colour;
+        // the mix's second half: the base stands in the incoming track's colour
+        if (key == base && mixBarsOut >= 6 && m_nextColour.isEmpty() == false && m_override.isEmpty())
+            colour = m_nextColour;
         quint32 splitScene = Function::invalidId();
         if (accentColour.isEmpty() == false && key == accentGroup)
         {
@@ -4738,7 +4816,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      && isDrop == false && (beatInBar % 2) != 0
                      && m_active.value("mot:" + key, Function::invalidId()) == mf;
             if (wait == false)
+            {
                 run("mot:" + key, mf, mi.dimmer ? gl : 1.0, divisionFor(mi, bpm, division), hard);
+                m_recentUse.insert(mf, m_clock.elapsed());     // the cooldown starts from its last beat
+            }
         }
         else
             stopSlot("mot:" + key, false);
@@ -4908,6 +4989,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // beat - so "did the colour change on a turn or on the clock" and "how
     // much white on the strobes" can be read off a log instead of guessed
     m_logAccent = accentColour.isEmpty() ? QString() : accentGroup + "=" + accentColour;
+    int impactBarsLog = energy >= 0.60 ? 2 : 1;
     {
         QStringList ev;
         if (sectionChanged) ev << "section";
@@ -4915,6 +4997,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (changeColour) ev << (turnUp ? "colour-on-turn" : (holdUp ? "colour-on-clock" : "colour"));
         if (isBuild && state != QStringLiteral("build")) ev << "riser-build";
         if (m_hatsOut) ev << "hats-out";
+        if (isDrop && bar < impactBarsLog) ev << "impact";
+        if (mixBarsOut >= 6 && m_nextColour.isEmpty() == false) ev << "mix-turn";
+        if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
         m_logEvent = ev.join('+');
     }
     logBeat(state, beat, level, energy, sectionEnergy);
@@ -6243,10 +6328,26 @@ int TrackEngine::rateWeight(const TrackFuncInfo &info) const
     return 2;
 }
 
-quint32 TrackEngine::pickWeighted(const QList<TrackFuncInfo *> &ok, int cursor) const
+quint32 TrackEngine::pickWeighted(const QList<TrackFuncInfo *> &okAll, int cursor) const
 {
-    if (ok.isEmpty())
+    if (okAll.isEmpty())
         return Function::invalidId();
+    // The cooldown: a programme that ran in the last twelve minutes steps
+    // back and lets the rested ones take the draw - so a night works its
+    // way through the pool instead of circling its first few. Soft, not a
+    // ban: when fewer than two rested ones are left the whole list is back
+    // in, and a small pool simply repeats (Tobias, 2026-09-15: "der maa
+    // gerne vaere gentagelser, bare ikke saa ofte ... vi kan loebe toer").
+    QList<TrackFuncInfo *> ok;
+    qint64 now = m_clock.elapsed();
+    foreach (TrackFuncInfo *info, okAll)
+    {
+        qint64 last = m_recentUse.value(info->id, -1);
+        if (last < 0 || now - last >= ENGINE_COOLDOWN_MS)
+            ok.append(info);
+    }
+    if (ok.count() < 2)
+        ok = okAll;
     // Switch off: not "the same thing by another route" but the identical
     // line this used to be. Nothing to reason about when a night goes wrong.
     if (m_ratingOn == false)
@@ -6539,12 +6640,56 @@ void TrackEngine::setRoomAuto(bool on)
 
 int TrackEngine::roomPercent() const { return m_roomSent; }
 
+void TrackEngine::loadClockCurve(const QSettings &settings)
+{
+    // the default is the curve that was hard-wired here until runde 48: a
+    // restaurant, still until 22:00, then a slow creep to 85 % at 02:00
+    static const int dflt[6] = { 0, 0, 20, 45, 70, 85 };
+    m_clockCurve.clear();
+    QStringList parts = settings.value(SETTINGS_ENGINE_CLOCKCURVE, QString()).toString().split(',', Qt::SkipEmptyParts);
+    for (int i = 0; i < 6; i++)
+    {
+        bool ok = false;
+        int v = i < parts.count() ? parts.at(i).trimmed().toInt(&ok) : 0;
+        m_clockCurve.append(ok ? qBound(0, v, 100) : dflt[i]);
+    }
+}
+
+QVariantList TrackEngine::clockCurve() const
+{
+    QVariantList out;
+    foreach (int v, m_clockCurve)
+        out << v;
+    return out;
+}
+
+void TrackEngine::cycleClockPoint(int index)
+{
+    if (index < 0 || index >= m_clockCurve.count())
+        return;
+    // a tap steps ten percent; past ninety it comes round to nought
+    int v = m_clockCurve.at(index) + 10;
+    m_clockCurve[index] = v > 90 ? 0 : v;
+    QStringList parts;
+    foreach (int p, m_clockCurve)
+        parts << QString::number(p);
+    QSettings().setValue(SETTINGS_ENGINE_CLOCKCURVE, parts.join(','));
+    m_roomSent = -1;                       // announceRoom() re-sends on the next beat
+    emit tableChanged();
+}
+
 int TrackEngine::clockPercent() const
 {
-    // anchor points through the night, minutes past 21:00 -> percent. A
-    // restaurant: still until 22:00, then a slow creep - the DJ pushes the
-    // slider when the floor actually opens, somewhere between 23:00 and 01:00
-    static const int anchor[][2] = { { 0, 0 }, { 60, 0 }, { 120, 20 }, { 180, 45 }, { 240, 70 }, { 300, 85 }, { 420, 85 }, { 480, 0 } };
+    // anchor points through the night, minutes past 21:00 -> percent: the
+    // six hourly points of SETUP > ADVANCED > "ENERGY by clock", flat from
+    // 02:00 to 05:00, a restaurant again from 05:00. The curve only moves
+    // the ENERGY slider the way the old one did; a hand on the slider still
+    // wins (Tobias, 2026-09-15: "det er stadig energi-slideren der skal
+    // bestemme").
+    int anchor[8][2] = { { 0, 0 }, { 60, 0 }, { 120, 20 }, { 180, 45 }, { 240, 70 }, { 300, 85 }, { 420, 85 }, { 480, 0 } };
+    for (int i = 0; i < 6 && i < m_clockCurve.count(); i++)
+        anchor[i][1] = m_clockCurve.at(i);
+    anchor[6][1] = anchor[5][1];
     QTime now = QTime::currentTime();
     int minutes = now.hour() * 60 + now.minute() - 21 * 60;
     if (minutes < 0)
@@ -7058,7 +7203,39 @@ void TrackEngine::idle()
     emit liveChanged();
 }
 
-void TrackEngine::trackLoaded(const QString &title)
+int TrackEngine::keyBiasOf(const QString &key)
+{
+    // rekordbox writes the key one of three ways, depending on a preference:
+    // classical ("Am", "F#m", "Bb"), Camelot ("8A" minor / "8B" major) or
+    // Open Key ("1m" minor / "1d" major). Anything else, or nothing: unknown,
+    // and the palette is drawn as it always was.
+    QString k = key.trimmed();
+    if (k.isEmpty())
+        return -1;
+    static const QRegularExpression camelot(QStringLiteral("^\\d{1,2}([ABab])$"));
+    static const QRegularExpression openKey(QStringLiteral("^\\d{1,2}([mdMD])$"));
+    static const QRegularExpression classical(QStringLiteral("^[A-Ga-g][#b]?(m|min|maj|M)?$"));
+    QRegularExpressionMatch m = camelot.match(k);
+    if (m.hasMatch())
+        return m.captured(1).toUpper() == QStringLiteral("A") ? 0 : 1;
+    m = openKey.match(k);
+    if (m.hasMatch())
+        return m.captured(1).toLower() == QStringLiteral("m") ? 0 : 1;
+    m = classical.match(k);
+    if (m.hasMatch())
+    {
+        QString q = m.captured(1);
+        return (q == QStringLiteral("m") || q == QStringLiteral("min")) ? 0 : 1;
+    }
+    return -1;
+}
+
+void TrackEngine::setNextKey(const QString &key)
+{
+    m_nextKeyBias = keyBiasOf(key);
+}
+
+void TrackEngine::trackLoaded(const QString &title, const QString &key)
 {
     // Stage time is counted every beat but only written when something else
     // triggers a save, and a whole night can pass without one. Once per track
@@ -7066,6 +7243,16 @@ void TrackEngine::trackLoaded(const QString &title)
     // costs a few kilobytes every four minutes.
     saveRoles();
     m_trackTitle = title;
+    // the key leans the palette: minor to the cold side, major to the warm
+    // (runde 48). Unknown - not every track is key-analysed - leans nowhere.
+    m_keyBias = keyBiasOf(key);
+    m_nextKeyBias = -1;
+    // the mix drew this track's colour when the mix began, and the base has
+    // been standing in it for the mix's second half: it IS the room's colour
+    // now, and colourBar -1 below holds it to the first break or drop
+    if (m_nextColour.isEmpty() == false && m_palette.contains(m_nextColour))
+        m_colour = m_nextColour;
+    m_nextColour.clear();
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
     m_lookState.clear();

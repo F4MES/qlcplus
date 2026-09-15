@@ -60,6 +60,8 @@ class Function;
 class Fixture;
 class Scene;
 class Doc;
+class QSettings;
+class QRandomGenerator;
 
 #define ENGINE_ROLE_COLOR     0
 #define ENGINE_ROLE_MOTION    1
@@ -83,6 +85,8 @@ class Doc;
 #define SETTINGS_ENGINE_MASTER    QStringLiteral("trackengine/master")
 #define SETTINGS_ENGINE_ACCENT    QStringLiteral("trackengine/accent")
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
+#define SETTINGS_ENGINE_CLOCKCURVE QStringLiteral("trackengine/clockcurve")   // "0,0,20,45,70,85": 21,22,23,00,01,02 h
+#define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 #define SETTINGS_ENGINE_BASE      QStringLiteral("trackengine/base")
 #define SETTINGS_ENGINE_LOG       QStringLiteral("trackengine/log")
 #define SETTINGS_ENGINE_STARS     QStringLiteral("trackengine/stars")
@@ -259,6 +263,8 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool fullAuto READ fullAuto WRITE setFullAuto NOTIFY tableChanged)
     Q_PROPERTY(bool accent READ accent WRITE setAccent NOTIFY tableChanged)
     Q_PROPERTY(int holdBars READ holdBars WRITE setHoldBars NOTIFY tableChanged)
+    /** ENERGY by clock: percent at 21, 22, 23, 00, 01 and 02 h (flat to 05, then 0). */
+    Q_PROPERTY(QVariantList clockCurve READ clockCurve NOTIFY tableChanged)
 
     Q_PROPERTY(QString colourOverride READ colourOverride WRITE setColourOverride NOTIFY liveChanged)
     Q_PROPERTY(QString currentColour READ currentColour NOTIFY liveChanged)
@@ -352,6 +358,9 @@ public:
     bool accent() const;
     void setAccent(bool on);
     int holdBars() const;
+    QVariantList clockCurve() const;
+    /** one of the six clock points, in steps of ten: 0 -> 10 -> ... -> 90 -> 0 */
+    Q_INVOKABLE void cycleClockPoint(int index);
     void setHoldBars(int bars);
 
     /* ---- live ---- */
@@ -447,6 +456,8 @@ public:
      *  to 0 at 05:00 - a slow creep, not steps. The DJ pushes the slider when
      *  the floor actually opens. */
     int clockPercent() const;
+    void loadClockCurve(const QSettings &settings);
+    static int keyBiasOf(const QString &key);
     void announceRoom();
     bool hold() const;
     void setHold(bool on);
@@ -483,7 +494,9 @@ public:
               qreal bass = -1.0);
     /** $title is the track TrackManager just loaded. Defaulted so an
      *  un-patched trackmanager.cpp still compiles; the patch passes it. */
-    void trackLoaded(const QString &title = QString());
+    void trackLoaded(const QString &title = QString(), const QString &key = QString());
+    /** the key of the track on the other deck (BLT "next"), for the mix */
+    void setNextKey(const QString &key);
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** AUTO switched off: fade everything out over a bar, then let go. */
@@ -558,6 +571,7 @@ protected:
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
     int tierOf(const QString &text) const;
     QString accentFor(const QString &colour, bool allowWhite) const;
+    QString drawColour(const QStringList &pool, int keyBias, QRandomGenerator *rng) const;
     qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;
     void checkConflicts(const QSet<QString> &cast);
     void logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy);
@@ -619,6 +633,11 @@ private:
     int m_holdNow;            // bars this colour holds - drawn each change around holdBars
     QString m_accentPick;     // the accent drawn for this section
     QString m_accentGroup;    // the group carrying it - rotates, never the same twice running
+    int m_keyBias;            // this track's key: -1 unknown, 0 minor (cold side), 1 major (warm side)
+    int m_nextKeyBias;        // the next track's, from BLT "next"
+    QString m_nextColour;     // drawn when a mix begins: the colour the incoming track arrives in
+    QList<int> m_clockCurve;  // six percents, see SETTINGS_ENGINE_CLOCKCURVE
+    QHash<quint32, qint64> m_recentUse;   // programme -> clock ms it last ran (the cooldown)
     bool m_accentWasWhite;    // the last accent was white: the next one is not
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
     int m_castCursor;

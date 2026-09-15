@@ -825,6 +825,23 @@ Rectangle
 
             Item { Layout.preferredWidth: 20 }
 
+            // the six points of the clock curve: tap steps ten percent
+            Repeater
+            {
+                model: trackEngine ? trackEngine.clockCurve : []
+                TrackTile
+                {
+                    Layout.preferredWidth: 58
+                    Layout.preferredHeight: 34
+                    label: [ "21", "22", "23", "00", "01", "02" ][index] + "h\n" + modelData + "%"
+                    active: trackEngine ? trackEngine.roomAuto : false
+                    activeColor: "#4FA3E3"
+                    onTapped: if (trackEngine) trackEngine.cycleClockPoint(index)
+                }
+            }
+
+            Item { Layout.preferredWidth: 20 }
+
             // every Track setting to / from Documents/QLC+/track-settings.json
             TrackTile
             {

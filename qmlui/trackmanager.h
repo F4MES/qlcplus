@@ -346,6 +346,7 @@ private:
     qint64 m_lastMoveMs;
     bool m_mixing;
     QString m_nextTitle;
+    QString m_key;                       // this track's key from rekordbox, or empty
     QVariantList m_nextMarkers;
     QVariantList m_cacheList;
 

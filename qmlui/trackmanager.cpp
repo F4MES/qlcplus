@@ -264,6 +264,7 @@ void TrackManager::handleLine(const QByteArray &line)
 void TrackManager::handleTrack(const QJsonObject &obj)
 {
     m_title = obj.value(QStringLiteral("title")).toString();
+    m_key = obj.value(QStringLiteral("key")).toString();      // "Am", "8A", "1m" - or nothing
     m_bpm = obj.value(QStringLiteral("bpm")).toDouble();
     m_beatCount = obj.value(QStringLiteral("beats")).toInt();
     m_durationMs = obj.value(QStringLiteral("duration")).toInt();
@@ -311,8 +312,6 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     m_currentBeat = 0;
     m_trackTimeMs = 0;
     m_movePick = Function::invalidId();    // a new track picks afresh
-    if (m_engine != nullptr)
-        m_engine->trackLoaded();
     m_undo.clear();
     m_lastMoveIndex = -1;
     m_lastEngineBeat = -1;
@@ -321,7 +320,7 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     if (m_nextTitle == m_title)
         m_nextTitle.clear();
     if (m_engine != nullptr)
-        m_engine->trackLoaded(m_title);
+        m_engine->trackLoaded(m_title, m_key);
 
     qDebug() << "[TrackManager] track:" << m_title << m_beatCount << "beats,"
              << m_markers.count() << "markers";
@@ -2345,6 +2344,8 @@ void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
     {
         // what is loaded on the other deck, analysed ahead of time
         m_nextTitle = obj.value(QStringLiteral("title")).toString();
+        if (m_engine != nullptr)
+            m_engine->setNextKey(obj.value(QStringLiteral("key")).toString());
         m_nextMarkers.clear();
         QJsonArray mk = obj.value(QStringLiteral("markers")).toArray();
         for (int i = 0; i < mk.count(); i++)
