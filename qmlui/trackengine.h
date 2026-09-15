@@ -599,6 +599,7 @@ private:
     int m_motionCursor;
     QSet<QString> m_cast;
     QMap<QString, quint32> m_position;   // sticky position pick per group
+    QHash<QString, int> m_darkUntil;     // group -> last beat of a planned dark stretch
     qreal m_master;
     bool m_blackout;
     bool m_mixing;

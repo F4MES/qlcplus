@@ -51,6 +51,9 @@
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
 // gen_programs.py files its ~2700 chase step scenes here. See ensureTable().
 #define ENGINE_STEP_PATH      QStringLiteral("AUTO Programs/Steps")
+// How long a group stays dark while its beams walk home at the top of a
+// break. Four bars: long enough for the motor, short enough to be a pause.
+#define ENGINE_DARK_BARS      4
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
 #define ENGINE_HOME_PREFIX    QStringLiteral("TRACK Home: ")
@@ -68,8 +71,11 @@
 // the "and again" and the groove tastes are inside it. A three-hour night is
 // not a three-hour strobe.
 #define ENGINE_STROBE_WINDOW  64
+// 2026-09-15, Tobias: "der er lidt for meget strob ift. chases paa
+// strobe-lamperne". The ceiling came down from 16 to 10 beats per 64 - a
+// third less at the top of the fader, unchanged at the bottom.
 #define ENGINE_STROBE_BUDGET_LOW   2
-#define ENGINE_STROBE_BUDGET_HIGH  16
+#define ENGINE_STROBE_BUDGET_HIGH  10
 
 /* colours the house does not like: never in the palette, never as an accent,
  * never generated - even when a scene of that colour exists */
@@ -205,6 +211,7 @@ void TrackEngine::slotDocChanged()
 
 void TrackEngine::slotDocSettled()
 {
+    m_darkUntil.clear();
     // same as setFullAuto(): the rebuild drops the unsaved stage counts. On
     // an ordinary edit in the Function Manager this is the current show; on
     // a project switch m_funcs still holds the previous show, and that is
@@ -4066,6 +4073,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     /* ---- positions: sticky, tiered, only changed in the dark for lasers ---- */
     QSet<QString> darkGroups;
+    // A planned dark stretch that is still running. The bars are blanked for
+    // the beat they are told to move on, but the motor takes far longer than
+    // a beat to walk a 20 m beam home - so the room saw them go out at the
+    // top of a break and come back at some arbitrary point in the travel.
+    // Four bars, decided here, so it is the same length every time (Tobias,
+    // 2026-09-15: "hvis de altsaa slukker i det break, skiftes til 4 bars").
+    // The upper guard bounds a backwards scrub: without it a jump to an
+    // earlier beat would hold the group dark until the tape caught up.
+    foreach (const QString &key, m_darkUntil.keys())
+    {
+        int until = m_darkUntil.value(key);
+        if (beat <= until && until - beat < ENGINE_DARK_BARS * 4)
+            darkGroups.insert(key);
+        else if (beat > until)
+            m_darkUntil.remove(key);
+    }
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
@@ -4107,8 +4130,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // A beam that swings while it is lit is the one thing
                     // these fixtures must never do: the group goes dark for
                     // the beat it moves on, exactly as the generic path does.
+                    // In a break it stays dark for four bars - long enough
+                    // for the motor to finish, and the same length every
+                    // time, so the room reads it as a deliberate pause and
+                    // not as a fault.
                     if (inCast)
+                    {
                         darkGroups.insert(key);
+                        // ... but never the base for four bars: that is the
+                        // light the room stands on, and "the room never goes
+                        // black" is the one promise the engine keeps
+                        // everywhere else. The base blinks for its one beat
+                        // and comes back.
+                        if (isBreak && key != base)
+                            m_darkUntil.insert(key, beat + ENGINE_DARK_BARS * 4 - 1);
+                    }
                     m_position.insert(key, home);
                 }
                 run("pos:" + key, home, 1.0, 0, true);
@@ -4123,7 +4159,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (np != want && (mayMove || want == Function::invalidId()))
             {
                 if (inCast && g.lasers)
+                {
                     darkGroups.insert(key);
+                    if (isBreak && key != base)     // never the base, see above
+                        m_darkUntil.insert(key, beat + ENGINE_DARK_BARS * 4 - 1);
+                }
                 want = np;
                 m_position.insert(key, want);
                 m_headMoveBeats.insert(key, -8);     // our own move: grace before the Light Rider check
@@ -6500,6 +6540,7 @@ void TrackEngine::release()
     // the beam lit.
     stopSweeps();
     m_strobeUntil = -1;
+    m_darkUntil.clear();              // AUTO is off: nothing is waiting to come back
     foreach (const QString &slot, m_active.keys())
     {
         // Both masks go: with AUTO off the group's channels belong to the
@@ -6654,6 +6695,7 @@ void TrackEngine::trackLoaded(const QString &title)
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
     m_lookState.clear();
+    m_darkUntil.clear();         // its beats belong to the track that just ended
     m_mixBeat = -1;              // a mix still on now is the mix INTO this track
     m_colourBar = -1;            // hold the colour until the first break or drop
     m_colourSince = -1;
