@@ -1511,12 +1511,59 @@ void TrackManager::runEngine(bool sectionChanged)
 
     // what the analysis heard on this very beat (0..1), -1 when BLT did not
     // send the curves: the pulse follows the kick, hats-only passages sparkle
-    qreal kick = (beat >= 1 && beat - 1 < m_kick.count()) ? m_kick.at(beat - 1).toInt() / 255.0 : -1.0;
-    qreal high = (beat >= 1 && beat - 1 < m_high.count()) ? m_high.at(beat - 1).toInt() / 255.0 : -1.0;
+    auto curveAt = [](const QVariantList &c, int b) {
+        return (b >= 1 && b - 1 < c.count()) ? c.at(b - 1).toInt() / 255.0 : -1.0;
+    };
+    auto curveMean = [&curveAt](const QVariantList &c, int from, int to) {
+        // mean over [from, to], -1 when fewer than half the beats are there
+        qreal sum = 0.0; int n = 0;
+        for (int b = from; b <= to; b++)
+        {
+            qreal v = curveAt(c, b);
+            if (v >= 0.0) { sum += v; n++; }
+        }
+        return (n > 0 && n * 2 >= (to - from + 1)) ? sum / n : -1.0;
+    };
+    qreal kick = curveAt(m_kick, beat);
+    qreal high = curveAt(m_high, beat);
+
+    // What the curves say about this beat beyond its own kick and highs,
+    // so the engine can put its changes where the music turns rather than
+    // on a timer (Tobias, 2026-09-15: "naar det skifter skal det vaere stilet
+    // og passe med musikken").
+    //   turn  - the kick comes back after at least two beats without one (a
+    //           fill's end), a crash on the highs (well above the last two
+    //           bars), or the bass jumping a quarter above its four-bar mean
+    //   riser - the highs over the last eight bars against the eight before
+    //   hats  - the highs over the last two bars
+    bool turn = false;
+    qreal riser = 0.0;
+    qreal hats = -1.0;
+    if (kick >= 0.0)
+    {
+        qreal k1 = curveAt(m_kick, beat - 1), k2 = curveAt(m_kick, beat - 2);
+        if (kick >= 0.45 && k1 >= 0.0 && k1 < 0.20 && k2 >= 0.0 && k2 < 0.20)
+            turn = true;
+        qreal hMax = -1.0;
+        for (int i = 1; i <= 8; i++)
+            hMax = qMax(hMax, curveAt(m_high, beat - i));
+        if (high >= 0.75 && hMax >= 0.0 && high >= hMax + 0.15)
+            turn = true;
+        qreal low = curveAt(m_low, beat);
+        qreal lowMean = curveMean(m_low, beat - 16, beat - 1);
+        if (low >= 0.0 && lowMean >= 0.0 && low >= lowMean + 0.25)
+            turn = true;
+        qreal hNow = curveMean(m_high, beat - 8, beat - 1);
+        qreal hThen = curveMean(m_high, beat - 32, beat - 9);
+        if (hNow >= 0.0 && hThen >= 0.0)
+            riser = qBound(0.0, hNow - hThen, 1.0);
+        hats = curveMean(m_high, beat - 7, beat);
+    }
 
     m_engine->tick(state, beat, secStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
-                   m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high);
+                   m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high,
+                   turn, riser, hats);
 
     if (sectionChanged)
         emit stateChanged();

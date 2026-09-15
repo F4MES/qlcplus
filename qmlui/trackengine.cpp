@@ -106,6 +106,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_colourBar(-1)
     , m_colourSince(-1)
     , m_holdNow(32)
+    , m_accentWasWhite(false)
+    , m_hatsOut(false)
     , m_castCursor(0)
     , m_motionCursor(0)
     , m_master(1.0)
@@ -265,6 +267,8 @@ void TrackEngine::slotDocSettled()
     m_headMoveBeats.clear();
     m_hitBeats.clear();
     m_accentPick.clear();
+    m_accentGroup.clear();
+    m_hatsOut = false;
     m_pulseTimer.stop();
     m_fadeTimer.stop();
     // every 'live' property (cast, report, warnings, colour, trims) notifies
@@ -3690,27 +3694,31 @@ bool TrackEngine::macroPosition(quint32 fid) const
     return false;
 }
 
-QString TrackEngine::accentFor(const QString &colour) const
+QString TrackEngine::accentFor(const QString &colour, bool allowWhite) const
 {
-    // pairs that sit well together - what the hands would pick
+    // pairs that sit well together - what the hands would pick. Every colour
+    // has a coloured partner as well as white, so a rig can say no to white
+    // and still get an accent.
     static const QMap<QString, QStringList> pairs =
     {
         { "blue",    { "white", "cyan" } },
         { "red",     { "amber", "white" } },
         { "cyan",    { "magenta", "white" } },
-        { "green",   { "white" } },
+        { "green",   { "cyan", "yellow", "white" } },
         { "magenta", { "blue", "white" } },
         { "white",   { "blue", "cyan" } },
         { "yellow",  { "amber", "white" } },
         { "orange",  { "amber", "red" } },
         { "amber",   { "red", "white" } },
-        { "uv",      { "white" } },
+        { "uv",      { "magenta", "blue", "white" } },
     };
     // of the partners the palette has, one at random - the same pair every
     // drop would be a habit, not a choice
     QStringList have;
     foreach (const QString &p, pairs.value(colour))
     {
+        if (allowWhite == false && p == QStringLiteral("white"))
+            continue;
         if (m_palette.contains(p) && engineBannedColour(p) == false && p != colour)
             have << p;
     }
@@ -3793,7 +3801,7 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
 void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                        qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
                        const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
-                       qreal kick, qreal high)
+                       qreal kick, qreal high, bool turn, qreal riser, qreal hats)
 {
     if (m_doc == nullptr)
         return;
@@ -3866,20 +3874,44 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 && nextState == QStringLiteral("drop")
                 && beatsToNext > 0 && beatsToNext <= 4;
 
+    // The highs climbing for bars on end with a drop ahead IS the build,
+    // whatever the flag on this stretch says - the riser is in the music,
+    // not in the marker. Promoted, the climb is measured to the drop, so
+    // everything shaped by prog (pulse depth, the bare blink, the sweep)
+    // reaches its top as the drop lands. (Tobias, 2026-09-15: "musikken
+    // foelger waveformen mere ift. hvordan det blinker, skifter".)
+    if (isDrop == false && isBreak == false && isBuild == false && m_mixing == false
+        && riser > 0.15 && nextState == QStringLiteral("drop")
+        && beatsToNext > 0 && beatsToNext <= 32)
+    {
+        isBuild = true;
+        prog = qBound(0.0, 1.0 - qreal(beatsToNext) / 32.0, 1.0);
+    }
+
     /* ---- palette: one colour, changed rarely. A fresh track keeps the colour
      *      it arrived with until its first break or drop. ---- */
     // the hold is counted from the last change and varies around the SETUP
     // value (x0.5, x0.75, x1, x1.5), always ending on a bar line - so the
     // colour does not change on the same beat of every track
+    // With the analysis curves in hand the timer becomes a window rather than
+    // a clock: from half the hold onwards the colour changes on the next
+    // musical TURN - the kick coming back after a fill, a crash, the bass
+    // jumping - and only if no turn comes does it change on the timer, at one
+    // and a half times the hold. Fewer changes, and each one lands on
+    // something the ear heard too. Without curves it is the old timer.
+    int holdBeats = qMax(4, m_holdNow * 4);
+    bool haveCurves = kick >= 0.0;
     bool holdUp = m_colourSince >= 0 && beatInBar == 0
-               && beat - m_colourSince >= qMax(4, m_holdNow * 4);
+               && beat - m_colourSince >= (haveCurves ? holdBeats * 3 / 2 : holdBeats);
+    bool turnUp = haveCurves && turn && m_colourSince >= 0
+               && beat - m_colourSince >= holdBeats / 2;
     bool changeColour;
     if (m_colour.isEmpty())
         changeColour = true;
     else if (m_colourBar < 0)
         changeColour = sectionChanged && (isBreak || isDrop);
     else
-        changeColour = (sectionChanged && (isBreak || isDrop)) || holdUp;
+        changeColour = (sectionChanged && (isBreak || isDrop)) || holdUp || turnUp;
     if (isCalm)
         changeColour = m_colour.isEmpty();
     if (forceNext)
@@ -4063,6 +4095,30 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     castSet.insert(key);
             }
         }
+        // The strobes are the hi-hats' lamps. When the highs go quiet for two
+        // bars they step out of the cast; when the hats come back, they come
+        // back - decided on the bar line, with a gap between the two
+        // thresholds so a wobbling curve does not make them flicker in and
+        // out. Without curves nothing changes. The ENERGY fader still decides
+        // how many groups there are; this only decides whether one of them is
+        // the strobes while the music has nothing for them to do.
+        if (hats >= 0.0 && beatInBar == 0 && hold == false)
+        {
+            if (m_hatsOut == false && hats < 0.20)
+                m_hatsOut = true;
+            else if (m_hatsOut && hats > 0.32)
+                m_hatsOut = false;
+        }
+        if (hats < 0.0)
+            m_hatsOut = false;
+        if (m_hatsOut && castSet.count() >= 2)
+        {
+            foreach (const QString &key, castSet.values())
+            {
+                if (key != base && m_groups.value(key).strobes)
+                    castSet.remove(key);
+            }
+        }
         while (castSet.count() > 3)
         {
             QStringList sorted = castSet.values(); sorted.sort();
@@ -4079,18 +4135,49 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // HOLD is "no colour changes", and the accent is a colour
         if ((sectionChanged && hold == false) || m_accentPick.isEmpty()
             || m_palette.contains(m_accentPick) == false)
-            m_accentPick = accentFor(m_colour);
+        {
+            // White is punctuation, not a colour: it may be the accent about
+            // one draw in four and never two sections running. It used to be
+            // a partner of nearly every colour and so the drop's accent more
+            // often than not - and on the strobes, every time (below), which
+            // is the "white pulsing on the strobes almost constantly" of
+            // 2026-09-15.
+            bool allowWhite = m_accentWasWhite == false && rng->bounded(4) == 0;
+            m_accentPick = accentFor(m_colour, allowWhite);
+            m_accentWasWhite = (m_accentPick == QStringLiteral("white"));
+        }
         accentColour = m_accentPick;
     }
 
     bool hard = sectionChanged && isDrop;
     QStringList castSorted = castSet.values();
     castSorted.sort();
+    // The accent's group is drawn per section from the effect groups in the
+    // cast, and never the same group twice running. It used to be "the last
+    // effect group" of an alphabetically sorted list - which was the strobes
+    // in every drop with strobes in it.
     QString accentGroup;
-    foreach (const QString &key, castSorted)
     {
-        if (key != base)
-            accentGroup = key;                   // the last effect group takes the accent
+        QStringList cands;
+        foreach (const QString &key, castSorted)
+        {
+            if (key != base)
+                cands << key;
+        }
+        if (cands.isEmpty() == false)
+        {
+            bool redraw = cands.contains(m_accentGroup) == false
+                       || (sectionChanged && hold == false && cands.count() > 1);
+            if (redraw)
+            {
+                QStringList fresh = cands;
+                fresh.removeAll(m_accentGroup);
+                if (fresh.isEmpty())
+                    fresh = cands;
+                m_accentGroup = fresh.at(int(rng->bounded(fresh.count())));
+            }
+            accentGroup = m_accentGroup;
+        }
     }
 
     /* ---- the drop's character: one draw that leans every group's dice

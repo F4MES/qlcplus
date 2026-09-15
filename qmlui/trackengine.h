@@ -456,11 +456,19 @@ public:
     /* ---- driven by TrackManager ---- */
     /** kick / high: what the analysis heard on this beat, 0..1, or -1 when
      *  BLT did not send the curves. The pulse follows the kick; a hats-only
-     *  passage sparkles. */
+     *  passage sparkles.
+     *  turn: this beat is a musical turn read in the curves (the kick comes
+     *  back after a gap, a crash on the highs, the bass jumps) - colour and
+     *  accent changes land on one of these rather than on a timer.
+     *  riser: how far the highs have climbed over the last eight bars, 0..1
+     *  - with a drop ahead, that is a build whatever the flag says.
+     *  hats: the highs over the last two bars, 0..1 or -1 - the strobes are
+     *  the hi-hats' lamps and sit out when there are none. */
     void tick(const QString &state, int beat, int secStart, int secEnd,
               qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
               const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
-              qreal kick = -1.0, qreal high = -1.0);
+              qreal kick = -1.0, qreal high = -1.0,
+              bool turn = false, qreal riser = 0.0, qreal hats = -1.0);
     /** $title is the track TrackManager just loaded. Defaulted so an
      *  un-patched trackmanager.cpp still compiles; the patch passes it. */
     void trackLoaded(const QString &title = QString());
@@ -536,7 +544,7 @@ protected:
     quint32 homePosition(const QString &group) const;
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
     int tierOf(const QString &text) const;
-    QString accentFor(const QString &colour) const;
+    QString accentFor(const QString &colour, bool allowWhite) const;
     qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;
     void checkConflicts(const QSet<QString> &cast);
     void logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy);
@@ -597,6 +605,9 @@ private:
     int m_colourSince;        // beat of the last colour change
     int m_holdNow;            // bars this colour holds - drawn each change around holdBars
     QString m_accentPick;     // the accent drawn for this section
+    QString m_accentGroup;    // the group carrying it - rotates, never the same twice running
+    bool m_accentWasWhite;    // the last accent was white: the next one is not
+    bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
     int m_castCursor;
     int m_motionCursor;
     QSet<QString> m_cast;
