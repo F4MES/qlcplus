@@ -5085,15 +5085,26 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
 
     if (isBase)
     {
-        // the heads: slow trades only, a gentle breath, the palette colour
+        // the heads: slow trades only, the palette colour - and, since
+        // 2026-09-15, the same pulse the mini 4-eyes get (see below)
         if (mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_ODDEVEN && mv.pattern != ENGINE_PAT_HALVES)
             mv.pattern = ENGINE_PAT_HALVES;
         mv.stepBeats = qMax(mv.stepBeats, tier == 2 ? 2 : 4);
         mv.subSteps = 1;
-        // 0.30 -> 0.45 (Tobias, 2026-09-15: "lyset maa gerne pulse mere med
-        // musikken generelt"). Still a ceiling - the base is the floor of the
-        // room and must not pump - but the kick is now visible on it.
-        mv.pulse = qMin(mv.pulse, 0.45);
+        // NO ceiling on the pulse depth (Tobias, 2026-09-15: "den samme type
+        // pulse FULL AUTO laver paa 4eyes lamperne er den samme type du skal
+        // lave paa movingheads"). That cap - 0.30, then 0.45 - was the ONLY
+        // thing that made the heads breathe where the mini 4-eyes punch:
+        // every other part of the pulse is already shared. Same depth per
+        // tier now (groove 15-70 %, drop 35-80 %, break 15-75 %), the same
+        // fall-off (pulseFactor: full on the beat, down to 1 - depth a
+        // quarter beat later), and the same choice of which beats it lands on
+        // (pulseOn). The heads hit with the kick like the 4-eyes do.
+        //
+        // What the base still does NOT do is go BARE - nothing lit between
+        // the blinks. That is a different thing from a deep pulse: a pulse
+        // leaves a floor of (1 - depth), bare leaves nothing at all, and bare
+        // on the base is what made breaks go dark (round 38).
         mv.colourBars = 0;
         mv.flashBar = false;
     }
