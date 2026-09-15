@@ -595,7 +595,8 @@ QVariantList TrackManager::folderList() const
 
     foreach (Function *func, m_doc->functions())
     {
-        if (func == nullptr || func->isVisible() == false)
+        if (func == nullptr || func->isVisible() == false
+            || func->path(true).startsWith(QStringLiteral("AUTO Programs/Steps")))
             continue;
 
         QString path = func->path(true);
@@ -622,7 +623,8 @@ QVariantList TrackManager::slotFunctions(int slot) const
 
     foreach (Function *func, m_doc->functions())
     {
-        if (func == nullptr || func->isVisible() == false)
+        if (func == nullptr || func->isVisible() == false
+            || func->path(true).startsWith(QStringLiteral("AUTO Programs/Steps")))
             continue;
 
         Function::Type t = func->type();
@@ -1159,7 +1161,8 @@ QVariantList TrackManager::roleTable() const
 
     foreach (Function *func, m_doc->functions())
     {
-        if (func == nullptr || func->isVisible() == false)
+        if (func == nullptr || func->isVisible() == false
+            || func->path(true).startsWith(QStringLiteral("AUTO Programs/Steps")))
             continue;
 
         Function::Type t = func->type();
@@ -1327,7 +1330,8 @@ void TrackManager::autoAssignRoles(bool force)
 
     foreach (Function *func, m_doc->functions())
     {
-        if (func == nullptr || func->isVisible() == false)
+        if (func == nullptr || func->isVisible() == false
+            || func->path(true).startsWith(QStringLiteral("AUTO Programs/Steps")))
             continue;
 
         Function::Type t = func->type();

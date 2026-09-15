@@ -49,6 +49,8 @@
 
 #define ENGINE_INTENSITY_ATTR 0
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
+// gen_programs.py files its ~2700 chase step scenes here. See ensureTable().
+#define ENGINE_STEP_PATH      QStringLiteral("AUTO Programs/Steps")
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
 #define ENGINE_HOME_PREFIX    QStringLiteral("TRACK Home: ")
@@ -735,6 +737,15 @@ void TrackEngine::ensureTable()
     foreach (Function *func, m_doc->functions())
     {
         if (func == nullptr || func->isVisible() == false)
+            continue;
+        // The generated chase steps. They were Hidden until 2026-09-15, which
+        // is how they stayed out of here - but QLC+ writes a hidden scene's
+        // values as ZERO when it saves (engine/src/scene.cpp: "if a Scene is
+        // hidden, so used as a container by some Sequences, it must be saved
+        // with values set to zero"), so one save in QLC+ emptied every AUTO
+        // program in the show. They are visible functions in their own folder
+        // now, and this is the line that keeps them out of the table.
+        if (func->path(true).startsWith(ENGINE_STEP_PATH))
             continue;
         if (func->name().startsWith(ENGINE_DIMMER_PREFIX)
             || func->name().startsWith(ENGINE_STROBE_PREFIX)
