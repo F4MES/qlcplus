@@ -1910,6 +1910,36 @@ void TrackEngine::ensureColourScenes()
                 const QMap<quint32, uchar> base = g.baseValue.value(fid);
                 for (QMap<quint32, uchar>::const_iterator bit = base.constBegin(); bit != base.constEnd(); ++bit)
                     values.append(SceneValue(fid, bit.key(), bit.value()));
+                // The fixture's own effect engine, at 0. A laser bar has
+                // "Effect", "Effect Speed", "Movement Effect" and "Movement
+                // Effect Speed" channels; put a value on one and the bar runs
+                // its own built-in pattern at its own pace and stops obeying
+                // the colour and dimmer channels. One press of a Virtual
+                // Console button that sets them - LaserWiggle writes 146 to
+                // Movement Effect - and every look the engine sends afterwards
+                // lands on a fixture that is not listening. The colour scene
+                // is what runs on every group in the cast every section, so
+                // holding the effect channels at zero here is what takes the
+                // bars back. (Tobias, 2026-09-15: "de bevaeger sig op og ned
+                // paa ALLE programmerne ... derudover taender de fortsat
+                // ikke" - one cause, both symptoms.)
+                if (g.lasers)
+                {
+                    static const QRegularExpression fxRx(QStringLiteral("effect"),
+                                                         QRegularExpression::CaseInsensitiveOption);
+                    for (quint32 i = 0; i < fxi->channels(); i++)
+                    {
+                        const QLCChannel *qch = fxi->channel(i);
+                        if (qch == nullptr || base.contains(i) || qch->name().contains(fxRx) == false)
+                            continue;
+                        bool written = false;
+                        foreach (const SceneValue &sv, values)
+                            if (sv.fxi == fid && sv.channel == i)
+                                written = true;
+                        if (written == false)
+                            values.append(SceneValue(fid, i, uchar(0)));
+                    }
+                }
                 // The per-eye channels, at 0. On a laser bar an eye is lit by
                 // putting a COLOUR VALUE on its own channel, the master dimmer
                 // dims all eight together, and nothing turns an eye off but a
