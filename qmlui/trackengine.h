@@ -280,6 +280,8 @@ class TrackEngine : public QObject
      *  engine stays at groove level until the outgoing track is gone. */
     Q_PROPERTY(bool mixing READ mixing NOTIFY liveChanged)
     Q_PROPERTY(QString report READ report NOTIFY liveChanged)
+    /** SETUP > SELF TEST is running: every group's colour scenes, 2 s each. */
+    Q_PROPERTY(bool testing READ testing NOTIFY liveChanged)
 
     Q_PROPERTY(QStringList warnings READ warnings NOTIFY liveChanged)
     Q_PROPERTY(int calmBarsLeft READ calmBarsLeft NOTIFY liveChanged)
@@ -323,6 +325,13 @@ public:
     Q_INVOKABLE void setStars(quint32 fid, int stars);
     Q_INVOKABLE void autoAssign(bool force);
     Q_INVOKABLE void rebuild();
+    /** Run every enabled group's colour scenes one after the other, two
+     *  seconds each, without a track - so "the bars do not light" is seen
+     *  on a Monday in SETUP and not on a Saturday at 23:00. A second tap,
+     *  or a track starting, stops it. */
+    Q_INVOKABLE void selfTest();
+    bool testing() const;
+    void testDark();
 
     QVariantList groups();
     Q_INVOKABLE void setGroupEnabled(QString key, bool enable);
@@ -463,12 +472,15 @@ public:
      *  riser: how far the highs have climbed over the last eight bars, 0..1
      *  - with a drop ahead, that is a build whatever the flag says.
      *  hats: the highs over the last two bars, 0..1 or -1 - the strobes are
-     *  the hi-hats' lamps and sit out when there are none. */
+     *  the hi-hats' lamps and sit out when there are none.
+     *  bass: the lows over the last two bars, 0..1 or -1 - a heavy sub makes
+     *  the pulse fall deeper between two beats, a thin one lighter. */
     void tick(const QString &state, int beat, int secStart, int secEnd,
               qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
               const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
               qreal kick = -1.0, qreal high = -1.0,
-              bool turn = false, qreal riser = 0.0, qreal hats = -1.0);
+              bool turn = false, qreal riser = 0.0, qreal hats = -1.0,
+              qreal bass = -1.0);
     /** $title is the track TrackManager just loaded. Defaulted so an
      *  un-patched trackmanager.cpp still compiles; the patch passes it. */
     void trackLoaded(const QString &title = QString());
@@ -490,6 +502,7 @@ protected slots:
     void slotDocSettled();
     void slotFadeTimer();
     void slotPulseTimer();
+    void slotSelfTestStep();
 
 protected:
     /* table building */
@@ -694,6 +707,15 @@ private:
     int m_beatIndex;                       // beats since the section started
     QString m_lastMoves;                   // what the report said, for the log
     QTimer m_pulseTimer;                   // 40 ms: the breath between two beats
+    QTimer m_testTimer;                    // SELF TEST: one colour scene every 2 s
+    QList<quint32> m_testSteps;            // the scenes it walks through
+    QStringList m_testGroups;              // ... and the group each belongs to
+    QStringList m_testLabels;              // "group / colour" for the report
+    int m_testIndex;
+    QString m_logAccent;                   // "group=colour" of this beat's accent, for the log
+    QString m_logEvent;                    // what moved this beat: turn, colour, section - for the log
+    QMap<QString, int> m_turnCursor;       // pattern devices: extra draw offset, bumped on a turn
+    QMap<QString, int> m_turnBeat;         // ... and the beat it was last bumped on
     int m_room;
     bool m_roomAuto;
     int m_roomSent;                        // last percent handed to the ENERGY trim

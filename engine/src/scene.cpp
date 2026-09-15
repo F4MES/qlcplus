@@ -32,6 +32,7 @@
 #include "mastertimer.h"
 #include "universe.h"
 #include "scene.h"
+#include "sequence.h"
 #include "doc.h"
 #include "bus.h"
 
@@ -456,6 +457,23 @@ bool Scene::saveXML(QXmlStreamWriter *doc) const
     // make a copy of the Scene values cause we need to empty it in the process
     QList<SceneValue> values = m_values.keys();
 
+    // zero the values only for a hidden scene a Sequence is actually bound to
+    bool zeroValues = false;
+    // Function::doc() spelled out: this method's writer argument is also
+    // called doc, and shadows it
+    if (isVisible() == false && Function::doc() != nullptr)
+    {
+        foreach (Function *f, Function::doc()->functionsByType(Function::SequenceType))
+        {
+            Sequence *seq = static_cast<Sequence *>(f);   // functionsByType already filtered
+            if (seq != nullptr && seq->boundSceneID() == id())
+            {
+                zeroValues = true;      // boundToSequence
+                break;
+            }
+        }
+    }
+
     // loop through the Scene Fixtures in the order they've been added
     foreach (quint32 fxId, m_fixtures)
     {
@@ -476,9 +494,12 @@ bool Scene::saveXML(QXmlStreamWriter *doc) const
 
             found = true;
             currFixValues.append(QString::number(scv.channel));
-            // IMPORTANT: if a Scene is hidden, so used as a container by some Sequences,
-            // it must be saved with values set to zero
-            currFixValues.append(QString::number(isVisible() ? scv.value : 0));
+            // IMPORTANT: a Scene that is the container of a Sequence keeps its
+            // values in the Sequence's steps and must be saved with them set
+            // to zero. That is a fact about BINDING, not about visibility: a
+            // hidden scene nobody binds keeps its values (2026-09-15, a
+            // generated show lost ~2500 hidden scenes to this on one Save).
+            currFixValues.append(QString::number(zeroValues ? 0 : scv.value));
             values.removeAt(j);
             j--;
         }

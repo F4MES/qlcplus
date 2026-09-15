@@ -225,6 +225,19 @@ Rectangle
                 onTapped: if (trackEngine) trackEngine.fullAuto = !trackEngine.fullAuto
             }
 
+            // every enabled group in red, green, blue, white - two seconds
+            // each, no track needed. Tap again to stop. What it shows is in
+            // the report line, so a dark group can be named, not guessed.
+            TrackTile
+            {
+                Layout.preferredWidth: 100
+                Layout.preferredHeight: 34
+                label: (trackEngine && trackEngine.testing) ? qsTr("STOP TEST") : qsTr("SELF TEST")
+                active: trackEngine ? trackEngine.testing : false
+                activeColor: "#4FB3C8"
+                onTapped: if (trackEngine) trackEngine.selfTest()
+            }
+
             TrackTile
             {
                 Layout.preferredWidth: 120

@@ -131,6 +131,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_beatMs(500.0)
     , m_beatStartMs(0)
     , m_beatIndex(0)
+    , m_testIndex(0)
     , m_room(2)
     , m_roomAuto(true)
     , m_roomSent(-1)
@@ -152,6 +153,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_clock.start();
     m_pulseTimer.setInterval(20);      // the breath is a slow sine: 25 Hz showed
     connect(&m_pulseTimer, SIGNAL(timeout()), this, SLOT(slotPulseTimer()));
+    m_testTimer.setInterval(2000);
+    connect(&m_testTimer, SIGNAL(timeout()), this, SLOT(slotSelfTestStep()));
     // MASTER is deliberately not restored: a night that starts at 40 %
     // because someone dimmed last time is worse than one that starts bright
     m_master = 1.0;
@@ -3801,10 +3804,12 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
 void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                        qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
                        const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
-                       qreal kick, qreal high, bool turn, qreal riser, qreal hats)
+                       qreal kick, qreal high, bool turn, qreal riser, qreal hats, qreal bass)
 {
     if (m_doc == nullptr)
         return;
+    if (m_testTimer.isActive())  // a track started under the self test: the test yields
+        selfTest();
     if (m_startScene)            // the opening picture is up: nothing else runs
         return;
     ensureTable();
@@ -4701,12 +4706,27 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool moving = still == false
                    && (breakLasers || (mv.ownChaser && isBreak == false && (isBuild == false || prog > 0.5)));
         int stars = qMin(3, maxStars + (key == base ? 1 : 0));
+        // The animation lasers change their pattern where the music turns -
+        // the same turn the colours land on - and not only on the section
+        // line. At most once every two bars, and never under HOLD; the cursor
+        // offset is per group so the two lasers may differ.
+        int cursor = m_motionCursor;
+        if (g.patternDevice)
+        {
+            if (turn && hold == false && isCalm == false
+                && beat - m_turnBeat.value(key, -100) >= 8)
+            {
+                m_turnCursor.insert(key, m_turnCursor.value(key, 0) + 1 + int(rng->bounded(3)));
+                m_turnBeat.insert(key, beat);
+            }
+            cursor += m_turnCursor.value(key, 0);
+        }
         quint32 mf = Function::invalidId();
         if (isCalm == false)
         {
-            mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division, moving == false, stars);
+            mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, moving == false, stars);
             if (mf == Function::invalidId() && moving)
-                mf = motionFor(key, colour, castSet, m_motionCursor, tier, bpm, division, true, stars);
+                mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars);
         }
         if (mf != Function::invalidId())
         {
@@ -4732,6 +4752,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           || (mv.pulseOn == 2 && (beatInBar == 1 || beatInBar == 3))
                           || (mv.pulseOn == 3 && beatInBar == 0);
             qreal depth = darkGroups.contains(key) ? 0.0 : mv.pulse;
+            // The bass sets how far the light FALLS between two beats: a
+            // heavy sub and the room pumps deep, a thin bass and it rides
+            // light. The kick (below) is the hit, the bass is the weight
+            // under it. Around two thirds up the curve nothing changes;
+            // without curves nothing changes at all. Never past 0.95, or a
+            // dimmer-as-switch fixture reads it as off.
+            if (bass >= 0.0 && depth > 0.0)
+                depth = qMin(0.95, depth * qBound(0.70, 0.70 + 0.60 * bass, 1.25));
             // the kick the analysis heard on this beat: no kick, no pulse;
             // a soft kick, a soft pulse. The kick scales the HIT, never the
             // depth: depth is how far the light falls between two beats, so
@@ -4876,6 +4904,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
+    // for the night report: what carried the accent, and what moved this
+    // beat - so "did the colour change on a turn or on the clock" and "how
+    // much white on the strobes" can be read off a log instead of guessed
+    m_logAccent = accentColour.isEmpty() ? QString() : accentGroup + "=" + accentColour;
+    {
+        QStringList ev;
+        if (sectionChanged) ev << "section";
+        if (turn) ev << "turn";
+        if (changeColour) ev << (turnUp ? "colour-on-turn" : (holdUp ? "colour-on-clock" : "colour"));
+        if (isBuild && state != QStringLiteral("build")) ev << "riser-build";
+        if (m_hatsOut) ev << "hats-out";
+        m_logEvent = ev.join('+');
+    }
     logBeat(state, beat, level, energy, sectionEnergy);
     m_report = QString("%1  |  %2%3  |  %4%5%6%7")
         .arg(moveNames.isEmpty() ? (silent ? tr("(silence)") : tr("(no groups)"))
@@ -6735,7 +6776,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
             QTextStream head(&m_log);
             // funcs is APPENDED, never inserted: bane B's tracklog_report.py
             // reads the older columns by position and must keep working.
-            head << "time,beat,state,cast,colour,level,energy,section_energy,master,moves,funcs,track\n";
+            head << "time,beat,state,cast,colour,level,energy,section_energy,master,moves,funcs,track,accent,event\n";
         }
     }
 
@@ -6768,7 +6809,10 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         // by position. Commas and quotes out - the log is read with a plain
         // split(','), not a CSV parser, and a track called "Hello, Again"
         // would have shifted every column after it.
-        << QString(m_trackTitle).replace(',', ' ').remove('"') << '\n';
+        << QString(m_trackTitle).replace(',', ' ').remove('"') << ','
+        // runde 47, appended again: the accent ("Strobes All=white") and what
+        // moved on this beat (section / turn / colour-on-turn / ...)
+        << m_logAccent << ',' << m_logEvent << '\n';
     out.flush();
     m_log.flush();                       // the report script reads while we play
 }
@@ -6835,6 +6879,95 @@ void TrackEngine::release()
     m_report = tr("(released)");
     if (m_fadeAttr.isEmpty() == false)
         m_fadeTimer.start();
+    emit liveChanged();
+}
+
+bool TrackEngine::testing() const { return m_testTimer.isActive(); }
+
+void TrackEngine::selfTest()
+{
+    if (m_testTimer.isActive())
+    {
+        m_testTimer.stop();
+        testDark();
+        m_testSteps.clear();
+        m_testGroups.clear();
+        m_testLabels.clear();
+        m_report = tr("self test stopped");
+        emit liveChanged();
+        return;
+    }
+    if (m_doc == nullptr)
+        return;
+    ensureTable();
+    m_testSteps.clear();
+    m_testGroups.clear();
+    m_testLabels.clear();
+    // the colours a rig is most likely to have, and the one that fails most
+    // often (white: a lamp with no white channel and nothing learned sits it out)
+    static const char *const testColours[] = { "red", "green", "blue", "white" };
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_groupOff.contains(key))
+            continue;
+        for (int i = 0; i < 4; i++)
+        {
+            QString colour = QString::fromLatin1(testColours[i]);
+            quint32 fid = colourFunction(key, colour);
+            if (fid == Function::invalidId())
+                continue;
+            m_testSteps.append(fid);
+            m_testGroups.append(key);
+            m_testLabels.append(key + " / " + colour);
+        }
+    }
+    if (m_testSteps.isEmpty())
+    {
+        m_report = tr("self test: no colour scenes to run");
+        emit liveChanged();
+        return;
+    }
+    m_testIndex = 0;
+    m_testTimer.start();
+    slotSelfTestStep();
+}
+
+void TrackEngine::testDark()
+{
+    // the group the last step lit: colour slot and every dimmer part off,
+    // the same way idle() clears a group
+    if (m_testIndex <= 0 || m_testIndex > m_testGroups.count())
+        return;
+    QString key = m_testGroups.at(m_testIndex - 1);
+    stopSlot("col:" + key, false);
+    const TrackGroup &g = m_groups.value(key);
+    for (int i = 0; i < g.parts.count(); i++)
+        stopSlot(partSlot(key, i), false);
+}
+
+void TrackEngine::slotSelfTestStep()
+{
+    testDark();
+    if (m_testIndex >= m_testSteps.count())
+    {
+        selfTest();                       // the stopping half
+        m_report = tr("self test done");
+        emit liveChanged();
+        return;
+    }
+    // exactly the two things a beat does for a lit group: the colour scene
+    // in the "col:" slot (MASTER and trim on top when it carries the
+    // intensity) and every dimmer part at full through setDimmer(). If a
+    // group stays dark here, it stays dark in a show too - and the report
+    // line says which group and which colour.
+    QString key = m_testGroups.at(m_testIndex);
+    quint32 cf = m_testSteps.at(m_testIndex);
+    run("col:" + key, cf, 1.0, 0, true);
+    if (m_groups.value(key).hasDimmer)
+        setDimmer(key, 1.0);
+    m_report = tr("SELF TEST %1/%2: %3")
+                   .arg(m_testIndex + 1).arg(m_testSteps.count()).arg(m_testLabels.at(m_testIndex));
+    m_testIndex++;
     emit liveChanged();
 }
 

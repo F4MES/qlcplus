@@ -1536,9 +1536,11 @@ void TrackManager::runEngine(bool sectionChanged)
     //           bars), or the bass jumping a quarter above its four-bar mean
     //   riser - the highs over the last eight bars against the eight before
     //   hats  - the highs over the last two bars
+    //   bass  - the lows over the last two bars (the pulse's weight)
     bool turn = false;
     qreal riser = 0.0;
     qreal hats = -1.0;
+    qreal bass = -1.0;
     if (kick >= 0.0)
     {
         qreal k1 = curveAt(m_kick, beat - 1), k2 = curveAt(m_kick, beat - 2);
@@ -1558,12 +1560,13 @@ void TrackManager::runEngine(bool sectionChanged)
         if (hNow >= 0.0 && hThen >= 0.0)
             riser = qBound(0.0, hNow - hThen, 1.0);
         hats = curveMean(m_high, beat - 7, beat);
+        bass = curveMean(m_low, beat - 7, beat);
     }
 
     m_engine->tick(state, beat, secStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
                    m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high,
-                   turn, riser, hats);
+                   turn, riser, hats, bass);
 
     if (sectionChanged)
         emit stateChanged();
