@@ -108,6 +108,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_holdNow(32)
     , m_keyBias(-1)
     , m_nextKeyBias(-1)
+    , m_cooldownMs(-1)
     , m_accentWasWhite(false)
     , m_hatsOut(false)
     , m_castCursor(0)
@@ -204,6 +205,9 @@ void TrackEngine::slotFadeTimer()
 
 void TrackEngine::slotDocChanged()
 {
+    m_autoStageKeys.clear();
+    m_verdictAutoKeys.clear();
+    m_verdictMs = -1;
     // Loading a project emits functionRemoved once per function, fixtureRemoved
     // once per fixture and fixtureGroupRemoved once per group, and then the
     // same again on the way in - hundreds of signals for one event. Tearing the
@@ -2718,6 +2722,16 @@ void TrackEngine::loadRoles()
             m_funcs[fid].banned = true;
     }
 
+    m_autoRatings.clear();
+    QJsonObject recipes = QJsonDocument::fromJson(settings.value(SETTINGS_ENGINE_AUTORATING)
+                                                .toString().toUtf8()).object();
+    for (auto it = recipes.constBegin(); it != recipes.constEnd(); ++it)
+    {
+        QJsonObject votes = it.value().toObject();
+        int up = votes.value("up").toInt(-1), down = votes.value("down").toInt(-1);
+        if (it.key().startsWith("v1|") && it.key().size() <= 8192 && up >= 0 && down >= 0 && up <= 1000000 && down <= 1000000)
+            m_autoRatings.insert(it.key(), qMakePair(up, down));
+    }
     m_ratingOn = settings.value(SETTINGS_ENGINE_RATINGON, false).toBool();
 }
 
@@ -2779,6 +2793,16 @@ void TrackEngine::saveRoles()
     QSettings().setValue(SETTINGS_ENGINE_RATING, rating.join(';'));
     QSettings().setValue(SETTINGS_ENGINE_BANNED, bans.join(';'));
     QSettings().setValue(SETTINGS_ENGINE_SEEN, exposure.join(';'));
+    QJsonObject recipes;
+    for (auto it = m_autoRatings.constBegin(); it != m_autoRatings.constEnd(); ++it)
+    {
+        QJsonObject votes;
+        votes.insert("up", it.value().first);
+        votes.insert("down", it.value().second);
+        recipes.insert(it.key(), votes);
+    }
+    QSettings().setValue(SETTINGS_ENGINE_AUTORATING,
+                         QString::fromUtf8(QJsonDocument(recipes).toJson(QJsonDocument::Compact)));
 }
 
 void TrackEngine::rebuild()
@@ -3842,6 +3866,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         return;
     ensureTable();
     tickFades();
+    if (beat < m_lastBeat || beat - m_lastBeat > 8)
+    {
+        m_fillUntil = -1;
+        m_fillLast = beat - 8;
+    }
     m_lastBeat = beat;
 
     // the clock moves the ENERGY slider (through roomChanged), so the time
@@ -4039,6 +4068,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_lastState.isEmpty() == false)
             m_castCursor += 1 + int(rng->bounded(2));
         m_motionCursor += 1 + int(rng->bounded(3));
+        // the cooldown is judged from HERE for the whole section: judged from
+        // "now" every beat, the programme that had just started counted as
+        // recent on its second beat, fell out of the list, and the pick moved
+        // on - one programme per beat through the whole pool
+        m_cooldownMs = m_clock.elapsed();
     }
 
     QString base = baseGroup();
@@ -4114,6 +4148,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         int mixBars = qMax(0, beat - m_mixBeat) / 4;
         effects = qMin(effects, mixBars < 6 ? 2 : (mixBars < 12 ? 1 : 0));
     }
+    // One budget for the whole cast. Breaks never inherit a peak's groups;
+    // the top of ENERGY can use four effects plus the base on a drop.
+    effects = qBound(0, effects, isBreak ? 1 : (isDrop || preDrop ? 4 : 3));
     if (base.isEmpty())
         effects = qMax(effects, 1);                 // no base: something must show
 
@@ -4131,54 +4168,50 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         pool.append(key);
     }
 
+    // Hats availability is settled BEFORE allocating the budget, so another
+    // eligible effect can take that place. Hysteresis is still on bar lines.
+    if (hats >= 0.0 && beatInBar == 0 && hold == false)
+    {
+        if (m_hatsOut == false && hats < 0.20) m_hatsOut = true;
+        else if (m_hatsOut && hats > 0.32) m_hatsOut = false;
+    }
+    if (hats < 0.0) m_hatsOut = false;
+    QStringList priority;
+    for (int i = 0; i < pool.count(); i++)
+    {
+        QString key = pool.at((m_castCursor + i) % pool.count());
+        if (m_hatsOut && m_groups.value(key).strobes)
+            continue;
+        priority.append(key);
+    }
+    // One rhythmic lead in a drop, INSIDE the same budget. The remainder
+    // keeps the section's rotation; fixture names never decide who is cut.
+    if ((isDrop || preDrop) && hold == false && isCalm == false)
+    {
+        for (int i = 0; i < priority.count(); i++)
+        {
+            if (m_groups.value(priority.at(i)).strobes)
+            {
+                priority.prepend(priority.takeAt(i));
+                break;
+            }
+        }
+    }
     QSet<QString> castSet;
-    // the base is in the cast whatever happens - the light the room stands on
     if (base.isEmpty() == false)
         castSet.insert(base);
     if (silent == false)
     {
-        int n = pool.count();
-        for (int i = 0; i < qMin(effects, n); i++)
-            castSet.insert(pool.at((m_castCursor + i) % n));
-        // strobes carry a drop; swap one in when the energy allows effects
-        if ((isDrop || preDrop) && effects > 0 && isCalm == false && hold == false)
-        {
-            foreach (const QString &key, pool)
-            {
-                if (m_groups.value(key).strobes && castSet.contains(key) == false && castSet.count() <= 3)
-                    castSet.insert(key);
-            }
-        }
-        // The strobes are the hi-hats' lamps. When the highs go quiet for two
-        // bars they step out of the cast; when the hats come back, they come
-        // back - decided on the bar line, with a gap between the two
-        // thresholds so a wobbling curve does not make them flicker in and
-        // out. Without curves nothing changes. The ENERGY fader still decides
-        // how many groups there are; this only decides whether one of them is
-        // the strobes while the music has nothing for them to do.
-        if (hats >= 0.0 && beatInBar == 0 && hold == false)
-        {
-            if (m_hatsOut == false && hats < 0.20)
-                m_hatsOut = true;
-            else if (m_hatsOut && hats > 0.32)
-                m_hatsOut = false;
-        }
-        if (hats < 0.0)
-            m_hatsOut = false;
-        if (m_hatsOut && castSet.count() >= 2)
-        {
-            foreach (const QString &key, castSet.values())
-            {
-                if (key != base && m_groups.value(key).strobes)
-                    castSet.remove(key);
-            }
-        }
-        while (castSet.count() > 3)
-        {
-            QStringList sorted = castSet.values(); sorted.sort();
-            for (int i = sorted.count() - 1; i >= 0; i--)
-                if (sorted.at(i) != base) { castSet.remove(sorted.at(i)); break; }
-        }
+        for (int i = 0; i < qMin(effects, int(priority.count())); i++)
+            castSet.insert(priority.at(i));
+    }
+
+    if (hold && still == false && isCalm == false && m_cast.isEmpty() == false)
+    {
+        castSet.clear();
+        foreach (const QString &key, m_cast)
+            if (eligible.contains(key)) castSet.insert(key);
+        if (base.isEmpty() == false) castSet.insert(base);
     }
 
     /* ---- accent: a partner colour on one effect group in drops ---- */
@@ -4262,9 +4295,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (redraw == false && m_moves.contains(key))
             continue;
         QList<int> history = m_moveHistory.value(key);
-        TrackMove fresh = drawMove(key, tier, isBuild, energy, key == base, prog);
-        for (int attempt = 0; attempt < 4 && fresh.pattern != ENGINE_PAT_STATIC && history.contains(fresh.pattern); attempt++)
-            fresh = drawMove(key, tier, isBuild, energy, key == base, prog);
+        TrackMove fresh;
+        int total = 0;
+        int samples = m_fullAuto && m_ratingOn ? 6 : 1;
+        for (int sample = 0; sample < samples; sample++)
+        {
+            TrackMove candidate = drawMove(key, tier, isBuild, energy, key == base, prog);
+            for (int attempt = 0; attempt < 4 && candidate.pattern != ENGINE_PAT_STATIC && history.contains(candidate.pattern); attempt++)
+                candidate = drawMove(key, tier, isBuild, energy, key == base, prog);
+            m_moves.insert(key, candidate);
+            int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
+            total += weight;
+            if (sample == 0 || rng->bounded(total) < weight)
+                fresh = candidate;
+        }
         m_moves.insert(key, fresh);
         if (fresh.pattern != ENGINE_PAT_STATIC)
         {
@@ -4541,9 +4585,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             int sweepHeads = sweepEfx != nullptr ? sweepEfx->fixtures().count() : g.fixtures.count();
             // calm draws at break pace whatever the section says
             int sweepTier = isCalm ? 0 : tier;
-            TrackSweep sw = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers);
-            for (int attempt = 0; attempt < 4 && sw.shape >= 0 && history.contains(sw.shape); attempt++)
-                sw = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers);
+            TrackSweep sw;
+            int total = 0;
+            int samples = m_fullAuto && m_ratingOn && isCalm == false ? 6 : 1;
+            for (int sample = 0; sample < samples; sample++)
+            {
+                TrackSweep candidate = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers);
+                for (int attempt = 0; attempt < 4 && candidate.shape >= 0 && history.contains(candidate.shape); attempt++)
+                    candidate = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers);
+                m_sweep.insert(key, candidate);
+                int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
+                total += weight;
+                if (sample == 0 || rng->bounded(total) < weight)
+                    sw = candidate;
+            }
             m_sweep.insert(key, sw);
             if (sw.shape >= 0)
             {
@@ -4580,25 +4635,44 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             want = 2;                                        // the landing: everything wide
         else if (pickZoom)
         {
-            if (isBreak)       want = rng->bounded(4) == 0 ? 1 : 2;
-            else if (isBuild)  want = prog > 0.5 ? 0 : 1;
-            else if (isDrop)   want = m_dropStyle == 2 ? 2 : (m_dropStyle == 3 ? 0 : (m_dropStyle == 1 ? int(rng->bounded(2)) : int(rng->bounded(3))));
-            else               want = rng->bounded(3) == 0 ? 2 : 1;
+            int chosen = want, total = 0;
+            int samples = m_fullAuto && m_ratingOn ? 6 : 1;
+            for (int sample = 0; sample < samples; sample++)
+            {
+                if (isBreak)       want = rng->bounded(4) == 0 ? 1 : 2;
+                else if (isBuild)  want = prog > 0.5 ? 0 : 1;
+                else if (isDrop)   want = m_dropStyle == 2 ? 2 : (m_dropStyle == 3 ? 0 : (m_dropStyle == 1 ? int(rng->bounded(2)) : int(rng->bounded(3))));
+                else               want = rng->bounded(3) == 0 ? 2 : 1;
+                m_zoom.insert(key, want);
+                int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
+                total += weight;
+                if (sample == 0 || rng->bounded(total) < weight)
+                    chosen = want;
+            }
+            want = chosen;
         }
         m_zoom.insert(key, want);
         run(slot, m_zoomScenes.value(key).at(qBound(0, want, 2)), 1.0, 0, true);
     }
 
-    /* ---- the phrase: bars 7 and 8 of every eight turn around - the
-     *      effects halve their step, and on a hot night the last beat goes
-     *      dark every other phrase, so the one after lands. Bar 1 of a
-     *      drop is the landing: every effect lit and still for a bar. ---- */
+    /* ---- musical fills; the eight-bar clock is only a no-curves fallback ---- */
     int phraseBar = bar % 8;
-    bool turnaround = hold == false && isCalm == false && still == false && bar >= 6
-                   && (phraseBar == 6 || phraseBar == 7)
-                   && (isDrop || (tier == 1 && energy > 0.5));
+    bool phraseAllowed = hold == false && isCalm == false && still == false
+                      && m_mixing == false && (isDrop || (tier == 1 && energy > 0.5));
+    bool fillSignal = haveCurves && (turn || (high > 0.65 && kick < 0.35 && riser > 0.08));
+    if (phraseAllowed && fillSignal && beat - m_fillLast >= 8)
+    {
+        m_fillLast = beat;
+        m_fillUntil = beat + 3;   // one bar of response, never an endless acceleration
+    }
+    bool turnaround = phraseAllowed && (haveCurves ? beat <= m_fillUntil
+                                      : (bar >= 6 && (phraseBar == 6 || phraseBar == 7)));
     bool landing = isDrop && bar == 0 && isCalm == false;
-    if (turnaround && phraseBar == 7 && beatInBar == 3 && energy > 0.6 && ((bar / 8) % 2) == 0)
+    // With curves a blackout accent needs a real gap. Never blank the kick
+    // as it returns. The explicit pre-drop cue above remains unchanged.
+    bool phraseDark = haveCurves ? (kick < 0.20 && high >= 0.0 && high < 0.20)
+                                 : (phraseBar == 7 && beatInBar == 3 && ((bar / 8) % 2) == 0);
+    if (turnaround && phraseDark && energy > 0.6)
     {
         foreach (const QString &key, castSet)
         {
@@ -4882,7 +4956,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_liveMove.insert(key, mv);                  // the shaped move, for the sub-beat steps
             if ((m_flash && m_flashHeld.contains(key)) == false)
                 applyMove(key, darkGroups.contains(key) ? 0.0 : groupLevel, beat, secStart, prog, mv, patterned);
-            if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1)
+            if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1 && (haveCurves == false || turn))
                 moveHit = true;
         }
     }
@@ -4927,7 +5001,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool crowded = m_hitBeats.count() >= hitCeil
                 || (m_hitBeats.isEmpty() == false && beat - m_hitBeats.last() < hitGap);
     bool hit = isCalm == false && still == false && m_mixing == false
-            && ((isBuild && prog > 0.82 && crowded == false)
+            && ((isBuild && prog > 0.82 && crowded == false
+                 && (haveCurves == false || turn || (kick > 0.45 && riser > 0.08)))
                 || (isDrop && bar == 0 && beatInBar < 2)
                 || (moveHit && crowded == false));
     if (m_flash == false)
@@ -4954,6 +5029,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
 
     checkConflicts(castSet);
+
+    m_autoStageKeys.clear();
+    bool impactActive = isDrop && bar < (energy >= 0.60 ? 2 : 1);
+    if (m_fullAuto && m_blackout == false && m_flash == false && m_mixing == false
+        && isCalm == false && still == false && m_override.isEmpty()
+        && darkGroups.isEmpty() && hit == false && impactActive == false && turnaround == false)
+        m_autoStageKeys = autoLookKeys(castSet, energy);
 
     QStringList moveNames;
     foreach (const QString &key, castSorted)
@@ -4994,6 +5076,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         QStringList ev;
         if (sectionChanged) ev << "section";
         if (turn) ev << "turn";
+        if (turnaround) ev << (haveCurves ? "music-fill" : "clock-fill");
         if (changeColour) ev << (turnUp ? "colour-on-turn" : (holdUp ? "colour-on-clock" : "colour"));
         if (isBuild && state != QStringLiteral("build")) ev << "riser-build";
         if (m_hatsOut) ev << "hats-out";
@@ -6338,12 +6421,16 @@ quint32 TrackEngine::pickWeighted(const QList<TrackFuncInfo *> &okAll, int curso
     // ban: when fewer than two rested ones are left the whole list is back
     // in, and a small pool simply repeats (Tobias, 2026-09-15: "der maa
     // gerne vaere gentagelser, bare ikke saa ofte ... vi kan loebe toer").
+    // Judged against the clock reading of the last section change, not
+    // against now, so the list is the same on every beat of a section. A
+    // programme whose last use is AFTER that reading is the one running in
+    // this very section - it stays in, or it would knock itself out.
     QList<TrackFuncInfo *> ok;
-    qint64 now = m_clock.elapsed();
+    qint64 since = m_cooldownMs < 0 ? m_clock.elapsed() : m_cooldownMs;
     foreach (TrackFuncInfo *info, okAll)
     {
         qint64 last = m_recentUse.value(info->id, -1);
-        if (last < 0 || now - last >= ENGINE_COOLDOWN_MS)
+        if (last < 0 || last > since || since - last >= ENGINE_COOLDOWN_MS)
             ok.append(info);
     }
     if (ok.count() < 2)
@@ -6427,9 +6514,129 @@ void TrackEngine::setRatingEnabled(bool on)
     emit tableChanged();
 }
 
+
+QMap<QString, QString> TrackEngine::autoLookKeys(const QSet<QString> &cast, qreal energy) const
+{
+    QMap<QString, QString> keys;
+    QStringList groups = cast.values();
+    groups.sort();
+    QStringList rig;
+    foreach (const QString &group, groups)
+        rig << QString::fromLatin1(group.toUtf8().toHex()) + ':' + QString::number(m_groups.value(group).fixtures.count());
+    QString context = QString("v1|%1|e%2|%3|%4|%5|d%6")
+        .arg(rateBucket()).arg(qMin(3, int(qBound(0.0, energy, 1.0) * 4)))
+        .arg(m_colour).arg(m_accent && m_dropStyle > 0 ? m_accentPick : QString())
+        .arg(rig.join(';')).arg(m_dropStyle);
+    QStringList room;
+    foreach (const QString &group, groups)
+    {
+        TrackMove mv = m_moves.value(group);
+        TrackSweep sw = m_sweep.value(group);
+        // Coarse bands let a 17-beat circle learn from a 16-beat circle.
+        // Pulse shape, own-chase choice, sweep, zoom and accent belong
+        // together; a transient generated function ID says nothing about them.
+        QStringList f;
+        f << QString::number(mv.pattern) << QString::number(mv.stepBeats)
+          << QString::number(mv.subSteps) << QString::number(mv.pulseOn)
+          << QString::number(qBound(0, int(mv.pulse * 3), 2))
+          << QString::number(mv.bare) << QString::number(mv.ownChaser)
+          << QString::number(mv.breatheBars > 0) << QString::number(mv.colourBars)
+          << QString::number(sw.shape) << QString::number(sw.width / 16)
+          << QString::number(sw.height / 16) << QString::number(sw.beats / 8)
+          << QString::number(sw.spread) << QString::number(sw.mirror)
+          << QString::number(sw.fan > 0) << QString::number(m_zoom.value(group, -1))
+          << QString::number(m_accent && m_dropStyle > 0 && group == m_accentGroup);
+        QString recipe = QString::fromLatin1(group.toUtf8().toHex()) + ':' + f.join(',');
+        keys.insert(group, context + '|' + recipe);
+        room << recipe;
+    }
+    if (room.isEmpty() == false)
+        keys.insert(QString(), context + "|room|" + room.join(';'));
+    return keys;
+}
+
+int TrackEngine::autoLookWeight(const QMap<QString, QString> &keys, const QString &group) const
+{
+    if (m_ratingOn == false || m_fullAuto == false)
+        return 2;
+    auto weight = [this](const QString &key) {
+        QPair<int, int> votes = m_autoRatings.value(key);
+        qreal up = votes.first, down = votes.second, similarity = 1.0;
+        if (up + down == 0 && key.isEmpty() == false)
+        {
+            // Exact random recipes rarely repeat. Learn from the closest
+            // combinations in the SAME section/energy/palette/cast, allowing
+            // at most one fifth of the coarse features to differ. Different
+            // groups and room-vs-group judgements never share credit.
+            int cut = key.lastIndexOf('|');
+            QString prefix = key.left(cut + 1);
+            QString tail = key.mid(cut + 1);
+            QString identity = tail.left(tail.indexOf(':'));
+            QStringList features = tail.split(',');
+            int closest = int(features.count()) / 5 + 1;
+            for (auto it = m_autoRatings.constBegin(); it != m_autoRatings.constEnd(); ++it)
+            {
+                if (it.key().startsWith(prefix) == false)
+                    continue;
+                QString other = it.key().mid(cut + 1);
+                if (other.left(other.indexOf(':')) != identity)
+                    continue;
+                QStringList values = other.split(',');
+                if (values.count() != features.count())
+                    continue;
+                int distance = 0;
+                for (int i = 0; i < features.count(); i++)
+                    if (features.at(i) != values.at(i)) distance++;
+                if (distance >= int(features.count()) / 5 + 1 || distance > closest)
+                    continue;
+                if (distance < closest) { up = 0; down = 0; closest = distance; }
+                up += it.value().first;
+                down += it.value().second;
+            }
+            similarity = 1.0 - qreal(closest) / qMax(1, int(features.count()));
+        }
+        // Prior evidence keeps a single dislike from banishing a recipe.
+        qreal score = similarity * (3.0 * up - down) / (up + down + 4.0);
+        return qBound(1, 2 + int(qRound(score)), 4);
+    };
+    // Room and group evidence both count. Neutral (2) contributes zero;
+    // a pointed dislike must still matter when the complete room is new.
+    return qBound(1, weight(keys.value(QString())) + weight(keys.value(group)) - 2, 4);
+}
+
+const QMap<QString, QString> &TrackEngine::verdictAutoKeys() const
+{
+    if (m_verdictMs >= 0 && m_clock.elapsed() - m_verdictMs <= 20000)
+        return m_verdictAutoKeys;
+    return m_autoStageKeys;
+}
+
+bool TrackEngine::rateAutoLook(int verdict, const QString &group)
+{
+    const QMap<QString, QString> &keys = verdictAutoKeys();
+    QSet<QString> once;
+    for (auto it = keys.constBegin(); it != keys.constEnd(); ++it)
+    {
+        // A pointed verdict is evidence about ONE group, not the room.
+        if (group.isEmpty() == false && it.key() != group)
+            continue;
+        if (once.contains(it.value()))
+            continue;
+        once.insert(it.value());
+        QPair<int, int> &votes = m_autoRatings[it.value()];
+        int amount = group.isEmpty() ? 1 : ENGINE_RATE_AIMED;
+        if (verdict >= 0) votes.first = qMin(1000000, votes.first + amount);
+        else votes.second = qMin(1000000, votes.second + amount);
+    }
+    return once.isEmpty() == false;
+}
+
 void TrackEngine::markVerdictPoint()
 {
     m_verdictActive = m_active;
+    m_verdictAutoKeys = (m_fullAuto && m_blackout == false && m_flash == false
+                         && m_mixing == false && m_override.isEmpty())
+                       ? m_autoStageKeys : QMap<QString, QString>();
     m_verdictBucket = rateBucket();
     m_verdictMs = m_clock.elapsed();
 }
@@ -6478,12 +6685,11 @@ QVariantList TrackEngine::onStage() const
             fid = cand;
             break;
         }
-        if (fid == Function::invalidId())
+        if (fid == Function::invalidId() && verdictAutoKeys().contains(key) == false)
             continue;
-        const TrackFuncInfo &info = m_funcs.value(fid);
         QVariantMap row;
         row.insert("group", key);
-        row.insert("name", info.name);
+        row.insert("name", fid == Function::invalidId() ? tr("FULL AUTO") : m_funcs.value(fid).name);
         out.append(row);
     }
     return out;
@@ -6500,7 +6706,7 @@ void TrackEngine::rateGroup(int verdict, const QString &group)
     int b = verdictBucket();
     const QMap<QString, quint32> &stage = verdictStage();
     QSet<quint32> counted;
-    bool touched = false;
+    bool touched = rateAutoLook(verdict, group);
     for (QMap<QString, quint32>::const_iterator it = stage.constBegin(); it != stage.constEnd(); ++it)
     {
         if (slotGroup(it.key()) != group || counted.contains(it.value()))
@@ -6570,7 +6776,7 @@ void TrackEngine::rate(int verdict)
 
     int b = verdictBucket();
     const QMap<QString, quint32> &stage = verdictStage();
-    bool touched = false;
+    bool touched = rateAutoLook(verdict);
     // Once per program, not once per slot: m_active is keyed by SLOT, and one
     // function can in principle hold two of them. candidates() makes that
     // unlikely today by demanding groups.count() == 1, but leaning on that
@@ -7012,6 +7218,11 @@ void TrackEngine::release()
     }
     m_cast.clear();
     m_lastState.clear();
+    m_autoStageKeys.clear();
+    m_verdictAutoKeys.clear();
+    m_verdictMs = -1;
+    m_fillUntil = -1;
+    m_fillLast = -8;
     m_lookState.clear();
     m_flash = false;
     // and the flag with them, or the next tick() would put the masks straight
@@ -7072,6 +7283,13 @@ void TrackEngine::selfTest()
         emit liveChanged();
         return;
     }
+    // the start picture steps aside for the test; idle() puts it back when
+    // the manager next asks for it
+    foreach (const QString &slot, m_active.keys())
+    {
+        if (slot.startsWith("idle:"))
+            stopSlot(slot, false);
+    }
     m_testIndex = 0;
     m_testTimer.start();
     slotSelfTestStep();
@@ -7120,6 +7338,8 @@ void TrackEngine::idle()
 {
     if (m_doc == nullptr)
         return;
+    if (m_testTimer.isActive())   // SELF TEST owns the stage until it is done
+        return;
     ensureTable();
     tickFades();
 
@@ -7139,6 +7359,11 @@ void TrackEngine::idle()
     // track that had ended, against the start scenes. tick() treats an
     // empty state as a fresh section on resume, which is what it is.
     m_lastState.clear();
+    m_autoStageKeys.clear();
+    m_verdictAutoKeys.clear();
+    m_verdictMs = -1;
+    m_fillUntil = -1;
+    m_fillLast = -8;
     m_lookState.clear();
     applyGroupOff();                 // an off group stays off in the start look
     foreach (const QString &slot, m_active.keys())
@@ -7255,6 +7480,11 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_nextColour.clear();
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
+    m_autoStageKeys.clear();
+    m_verdictAutoKeys.clear();
+    m_verdictMs = -1;
+    m_fillUntil = -1;
+    m_fillLast = -8;
     m_lookState.clear();
     m_darkUntil.clear();         // its beats belong to the track that just ended
     m_mixBeat = -1;              // a mix still on now is the mix INTO this track
@@ -7534,6 +7764,11 @@ void TrackEngine::stopAll()
     m_cast.clear();
     m_position.clear();
     m_lastState.clear();
+    m_autoStageKeys.clear();
+    m_verdictAutoKeys.clear();
+    m_verdictMs = -1;
+    m_fillUntil = -1;
+    m_fillLast = -8;
     m_lookState.clear();
     m_moves.clear();
     m_sweep.clear();

@@ -11,9 +11,9 @@
       only when a break or a drop starts, or every 32 bars. Drops may add one
       accent colour on a single group. Never three.
 
-    * A small CAST of fixture groups: one in a break, two in the groove,
-      three in a drop. Which groups rotate from section to section. Groups
-      outside the cast sit at zero.
+    * An ENERGY-budgeted CAST: the base plus up to three effects in a
+      groove or four in a drop; breaks normally use the base alone.
+      Groups outside the cast sit at zero.
 
     * Each group keeps its character: a static colour in the groove, its
       chases and patterns in a drop, flashes on the hits. Laser positions
@@ -93,6 +93,7 @@ class QRandomGenerator;
 #define SETTINGS_ENGINE_FULLAUTO  QStringLiteral("trackengine/fullauto")
 #define SETTINGS_ENGINE_RATING    QStringLiteral("trackengine/rating")
 #define SETTINGS_ENGINE_BANNED    QStringLiteral("trackengine/banned")
+#define SETTINGS_ENGINE_AUTORATING QStringLiteral("trackengine/auto-rating-v1")
 #define SETTINGS_ENGINE_RATINGON  QStringLiteral("trackengine/ratingon")
 #define SETTINGS_ENGINE_SEEN      QStringLiteral("trackengine/seen")
 
@@ -441,6 +442,10 @@ public:
     int rateWeight(const TrackFuncInfo &info) const;
     /** break / build / drop / normal as an index into up[] and down[]. */
     int rateBucket() const;
+    QMap<QString, QString> autoLookKeys(const QSet<QString> &cast, qreal energy) const;
+    int autoLookWeight(const QMap<QString, QString> &keys, const QString &group) const;
+    bool rateAutoLook(int verdict, const QString &group = QString());
+    const QMap<QString, QString> &verdictAutoKeys() const;
     /** One from the shortlist, the cursor walking it as it always has - but
      *  the better-rated standing in it more than once. */
     quint32 pickWeighted(const QList<TrackFuncInfo *> &ok, int cursor) const;
@@ -638,6 +643,7 @@ private:
     QString m_nextColour;     // drawn when a mix begins: the colour the incoming track arrives in
     QList<int> m_clockCurve;  // six percents, see SETTINGS_ENGINE_CLOCKCURVE
     QHash<quint32, qint64> m_recentUse;   // programme -> clock ms it last ran (the cooldown)
+    qint64 m_cooldownMs;      // the clock reading the cooldown is judged against: frozen per section
     bool m_accentWasWhite;    // the last accent was white: the next one is not
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
     int m_castCursor;
@@ -701,6 +707,11 @@ private:
     QMap<QString, TrackSweep> m_sweepShown; // what the EFX is configured to right now
     QMap<QString, QList<int> > m_moveHistory;   // the last patterns per group - not again
     QMap<QString, QList<int> > m_sweepHistory;  // the last figures per head group
+    int m_fillUntil = -1;
+    int m_fillLast = -8;
+    QMap<QString, QPair<int, int> > m_autoRatings; // stable recipe -> up/down; never scene IDs
+    QMap<QString, QString> m_autoStageKeys;
+    QMap<QString, QString> m_verdictAutoKeys;
     QMap<QString, TrackMove> m_liveMove;   // the move as shaped for this beat (build, turnaround)
     QMap<QString, qreal> m_moveLevel;      // the level applyMove last gave a group (sub-beat steps)
     QMap<QString, bool> m_patterned;       // whether that group's pattern is live (sub-beat steps)
