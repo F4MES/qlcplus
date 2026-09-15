@@ -4342,9 +4342,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // CALM keeps the heads drifting at break pace (Tobias, 2026-09-14) -
         // it stops the lasers, the pulse and the colour changes, not the one
         // slow figure that keeps the room from looking switched off.
+        // NEVER on the laser bars. Their movement is ours now, and all of it
+        // lives in the "Bars Tilt ..." chases: offsets from each bar's own UP
+        // aim, tens of beats a step, the fixture's built-in movement channel
+        // held at zero. An EFX on top of that is a second hand on the same
+        // wheel, and it is what kept the beams wandering (Tobias, 2026-09-15:
+        // "bevaegelserne i full-auto skal du ogsaa 100% selv lave").
         bool wanted = castSet.contains(key) && aimed && userMoves == false && darkGroups.contains(key) == false
-                   && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
-                   && (g.lasers == false || (m_fullAuto && isBreak == false && isCalm == false));
+                   && isCalm == false && still == false && m_blackout == false
+                   && g.lasers == false;
         if (wanted == false)
         {
             if (m_active.contains(slot))
