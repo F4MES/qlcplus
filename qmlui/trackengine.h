@@ -531,6 +531,8 @@ protected:
                       const QSet<QString> &cast, int cursor, int tier,
                       qreal bpm, int division, bool staticOnly, int maxStars) const;
     quint32 positionFunction(const QString &group, int cursor, int tier) const;
+    /** True if this scene switches a fixture's own effect/movement macro on. */
+    bool macroPosition(quint32 fid) const;
     quint32 homePosition(const QString &group) const;
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
     int tierOf(const QString &text) const;

@@ -769,7 +769,10 @@ Rectangle
 
             Repeater
             {
-                model: [ 16, 32, 64 ]
+                // 8 added 2026-09-15 on Tobias' ask: "lav en ny knap saa vi
+                // kan skifte sceneskift til hvert 8 bar ogsaa". setHoldBars()
+                // already bounds to 4..128, so the value itself needed nothing.
+                model: [ 8, 16, 32, 64 ]
                 TrackTile
                 {
                     Layout.preferredWidth: 80

@@ -3591,6 +3591,17 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         if (lasers && (info->sweep || info->type == int(Function::ChaserType))
             && hasWord(info->name.toLower(), QStringList() << "low") == false)
             continue;
+        // ... and never one that switches the FIXTURE'S OWN movement macro on
+        // (Tobias, 2026-09-15: "de bevaeger sig konstant?? ... du skal bygge
+        // dine egne bevaegelser i full-auto"). A bar's "Movement Effect"
+        // channel starts a pattern inside the fixture that runs at its own
+        // speed for ever, ignores the beat, and is only stopped by writing a
+        // zero back. LaserWiggle (ch 8 = 146) and LaserMovewithStops (96) are
+        // aim scenes by name, so they were in the position pool - one pick and
+        // the bars never stood still again. The engine's own movement is the
+        // EFX sweep, which it can start, shape and stop.
+        if (lasers && macroPosition(info->id))
+            continue;
         safe.append(info);
     }
     if (safe.isEmpty())
@@ -3609,6 +3620,44 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
     if (pool.isEmpty())
         pool = safe;
     return pickWeighted(pool, cursor);
+}
+
+bool TrackEngine::macroPosition(quint32 fid) const
+{
+    // An aim scene may write pan, tilt (and their fine channels) and the
+    // pan/tilt speed. Anything else non-zero on a laser is the fixture's own
+    // effect engine - a movement macro, a built-in pattern, a strobe - and
+    // once it is on, nothing the engine does moves those beams.
+    if (m_doc == nullptr)
+        return false;
+    Scene *scene = qobject_cast<Scene *>(m_doc->function(fid));
+    if (scene == nullptr)
+        return false;
+    foreach (const SceneValue &sv, scene->values())
+    {
+        if (sv.value == 0)
+            continue;                    // a zero is what turns a macro OFF
+        Fixture *fxi = m_doc->fixture(sv.fxi);
+        const QLCChannel *qch = fxi == nullptr ? nullptr : fxi->channel(sv.channel);
+        if (qch == nullptr)
+            continue;
+        switch (qch->preset())
+        {
+            case QLCChannel::PositionPan:
+            case QLCChannel::PositionPanFine:
+            case QLCChannel::PositionTilt:
+            case QLCChannel::PositionTiltFine:
+            case QLCChannel::SpeedPanTiltFastSlow:
+            case QLCChannel::SpeedPanTiltSlowFast:
+                continue;
+            default:
+                break;
+        }
+        if (qch->group() == QLCChannel::Pan || qch->group() == QLCChannel::Tilt)
+            continue;
+        return true;
+    }
+    return false;
 }
 
 QString TrackEngine::accentFor(const QString &colour) const
@@ -4869,8 +4918,8 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.breatheBars = pick({ 2, 4, 4 });
         // a heartbeat on the beat - shallow at the bottom of the fader, a
         // real pulse near the top. A break is quiet, not dead.
-        if (chance(0.15 + 0.75 * e))
-            mv.pulse = 0.05 + 0.55 * e;      // a heartbeat, from a hint to a real one
+        if (chance(0.45 + 0.50 * e))     // a break has a heartbeat far more often now
+            mv.pulse = 0.15 + 0.60 * e;      // a heartbeat, from a hint to a real one
         mv.texture = 0.15;
         mv.ownChaser = false;            // a break moves on the engine's figure
 
@@ -4878,7 +4927,15 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // nothing else at all - no picture behind it, no floor to fall back
         // to. The quietest thing the rig can do that is still on the music,
         // and the heads slowly hand the beat to each other down the row.
-        if (g.parts.count() >= 2 && chance(0.15 + 0.60 * e))
+        // NEVER the base. "bare" means nothing is lit between the blinks, so
+        // on the group the room stands on it is a blackout with a lamp
+        // walking through it - and since a break is the base alone (round
+        // 30), that is the room going out. It happened on 15-75 % of breaks
+        // depending on the fader, which is exactly the "lyset slukker helt i
+        // breaks" report (Tobias, 2026-09-15: it is the moving heads = the
+        // base). The drop path twenty lines down has carried this same guard
+        // all along; the break path never got it.
+        if (isBase == false && g.parts.count() >= 2 && chance(0.15 + 0.60 * e))
         {
             mv.bare = true;
             mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
@@ -4901,7 +4958,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // the fill grows with the build; the pulse comes in on the offbeats
         mv.pattern = ENGINE_PAT_FILL;
         // the pulse arrives with the build rather than waiting for the energy
-        mv.pulse = (0.10 + 0.30 * prog) * (0.4 + 0.6 * e);
+        mv.pulse = (0.20 + 0.35 * prog) * (0.4 + 0.6 * e);
         mv.pulseOn = pick({ 0, 0, 2 });
         // A chase of the operator's switches the generated figure OFF - and a
         // build was drawing one half the time, so half of all builds stood
@@ -4916,7 +4973,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.pattern = ENGINE_PAT_FILL;
             mv.stepBeats = prog > 0.6 ? 1 : 2;
             mv.subSteps = 1;
-            mv.pulse = qMin(mv.pulse, 0.30);
+            mv.pulse = qMin(mv.pulse, 0.45);
         }
 
         // The build's own shape: the same bare blink as the break, handed
@@ -4925,9 +4982,9 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // cannot miss where it is going.
         // gated, or every build in the set is the same one: past the middle
         // it is nearly always this, early on it is often the fill above
-        if (g.parts.count() >= 2 && chance(0.35 + 0.55 * prog))
+        if (isBase == false && g.parts.count() >= 2 && chance(0.35 + 0.55 * prog))
         {
-            mv.bare = true;
+            mv.bare = true;              // not the base: see the break branch
             mv.ownChaser = false;        // a chase of theirs would swallow the pattern
             mv.pattern = ENGINE_PAT_CHASE;
             mv.pulse = 1.0;
@@ -4979,7 +5036,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         }
         else if (isBase)
             mv.breatheBars = 4;                      // still, but alive
-        mv.pulse = 0.45 * ramp(e, 0.08, 1.00) * (0.6 + 0.4 * rng->bounded(1000) / 1000.0);
+        // 0..45 % -> 15..70 %: the kick reads from a quarter of the fader
+        // instead of only near the top. The SHAPE is unchanged (full on the
+        // beat, down to 1 - depth a quarter beat later); this is the depth.
+        mv.pulse = 0.15 + 0.55 * ramp(e, 0.08, 1.00) * (0.6 + 0.4 * rng->bounded(1000) / 1000.0);
         if (mv.pulse < 0.06)
             mv.pulse = 0.0;
         mv.pulseOn = chance(ramp(e, 0.30, 1.00)) ? pick({ 0, 1 }) : pick({ 1, 3 });
@@ -5011,7 +5071,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
                  || mv.pattern == ENGINE_PAT_ODDEVEN || mv.pattern == ENGINE_PAT_SPARKLE;
         if (fast && mv.stepBeats == 1 && chance((m_dropStyle == 2 ? 0.2 : 0.6) * ramp(e, 0.45, 0.95)))
             mv.subSteps = m_dropStyle == 1 ? pick({ 2, 4, 4 }) : pick({ 2, 2, 4 });
-        mv.pulse = 0.25 + 0.40 * wild * (0.7 + 0.3 * rng->bounded(1000) / 1000.0);
+        mv.pulse = 0.35 + 0.45 * wild * (0.7 + 0.3 * rng->bounded(1000) / 1000.0);
         if (m_dropStyle == 2)
             mv.pulse *= 0.6;
         mv.pulseOn = chance(0.7) ? 0 : pick({ 1, 2 });
@@ -5030,7 +5090,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.pattern = ENGINE_PAT_HALVES;
         mv.stepBeats = qMax(mv.stepBeats, tier == 2 ? 2 : 4);
         mv.subSteps = 1;
-        mv.pulse = qMin(mv.pulse, 0.30);
+        // 0.30 -> 0.45 (Tobias, 2026-09-15: "lyset maa gerne pulse mere med
+        // musikken generelt"). Still a ceiling - the base is the floor of the
+        // room and must not pump - but the kick is now visible on it.
+        mv.pulse = qMin(mv.pulse, 0.45);
         mv.colourBars = 0;
         mv.flashBar = false;
     }
