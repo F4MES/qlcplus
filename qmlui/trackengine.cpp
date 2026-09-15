@@ -3738,11 +3738,18 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
     QList<TrackFuncInfo *> ok;
     foreach (TrackFuncInfo *info, list)
     {
-        bool inside = info->groups.isEmpty() == false;
+        // ONE of its groups in the cast is enough. It used to need every
+        // one of them, and a fixture belongs to as many groups as the
+        // operator has put it in - "Flash Strobes WHITE" covers three
+        // strobes that sit in five different groups, so the test could
+        // essentially never pass and FLASH did nothing. (Tobias, 2026-09-15:
+        // "Flash white knappen virker ikke mere.") A flash is a moment on
+        // top of the look; it does not need the whole rig to be lit first.
+        bool inside = false;
         foreach (const QString &g, info->groups)
         {
-                if (cast.contains(g) == false)
-                    inside = false;
+            if (cast.contains(g))
+                inside = true;
         }
         if (inside)
             ok.append(info);
@@ -4342,15 +4349,25 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // CALM keeps the heads drifting at break pace (Tobias, 2026-09-14) -
         // it stops the lasers, the pulse and the colour changes, not the one
         // slow figure that keeps the room from looking switched off.
-        // NEVER on the laser bars. Their movement is ours now, and all of it
-        // lives in the "Bars Tilt ..." chases: offsets from each bar's own UP
-        // aim, tens of beats a step, the fixture's built-in movement channel
-        // held at zero. An EFX on top of that is a second hand on the same
-        // wheel, and it is what kept the beams wandering (Tobias, 2026-09-15:
-        // "bevaegelserne i full-auto skal du ogsaa 100% selv lave").
+        // The EFX stays on the bars. Tobias, 2026-09-15: "Det maa gerne vaere
+        // en EFX, bare ikke laser-barens indbyggede kanal-bevaegelser." An EFX
+        // writes pan and tilt - that is us steering the mirror, frame by
+        // frame, and we can start it, shape it and stop it. What had to go was
+        // the fixture's own Movement Effect channel, which runs a pattern
+        // inside the bar at its own pace and ignores everything else; that is
+        // held at zero everywhere now (round 41), and AUTO will not pick an
+        // aim scene that switches it on (macroPosition(), round 38).
+        //
+        // It is also the only thing that moves them, deliberately: the pos:
+        // slot underneath holds a STILL aim, so there is one hand on the
+        // wheel. drawSweep() gives the bars 56-80 beats per figure (round 18),
+        // which at 20 m is well under half a metre a second.
+        //
+        // No figure in a break - there the bars sit at the home aim - and CALM
+        // stops the lasers while the heads keep drifting.
         bool wanted = castSet.contains(key) && aimed && userMoves == false && darkGroups.contains(key) == false
-                   && isCalm == false && still == false && m_blackout == false
-                   && g.lasers == false;
+                   && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
+                   && (g.lasers == false || (m_fullAuto && isBreak == false && isCalm == false));
         if (wanted == false)
         {
             if (m_active.contains(slot))
@@ -5043,12 +5060,24 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
 
     // the user's own chases and EFX: the base (heads) sweeps most of the
     // time, effects trade between their chases and the generated patterns
+    // THIS is the door to every chase in the show. If it is shut the group
+    // runs the engine's own generated dimmer pattern instead - a handful of
+    // shapes - and none of the 1700 programmes in the file are reachable.
+    //
+    // It was shut most of the time: an effect group in a groove opened it
+    // 300 * ramp(e, 0.25, 0.75) / 1000 of the time - 15 % at half a fader,
+    // 30 % at the top, and NOTHING below a quarter. So the night ran on the
+    // generated pattern and the programmes were never seen. Tobias, 2026-09-15:
+    // "det er som om den aldrig bruger alle de forskellige programmer paa de
+    // forskellige grupper ... Kan slet ikke forstaa hvis der skulle vaere saa
+    // mange forskellige som du siger der er." He was right, and the count was
+    // not the problem - this line was.
     if (isBase)
         mv.ownChaser = rng->bounded(10) < 7;
     else if (tier == 2)
-        mv.ownChaser = rng->bounded(10) < 6;
+        mv.ownChaser = rng->bounded(10) < 8;
     else
-        mv.ownChaser = rng->bounded(1000) < int(300.0 * qBound(0.0, (e - 0.25) / 0.5, 1.0));
+        mv.ownChaser = rng->bounded(1000) < int(800.0 * qBound(0.15, (e - 0.05) / 0.5, 1.0));
 
     // A linear slider deserves a linear engine: nothing below switches at a
     // threshold. Every chance and depth is a ramp of the energy, so 55 % and
