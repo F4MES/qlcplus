@@ -53,6 +53,11 @@
 #define ENGINE_STEP_PATH      QStringLiteral("AUTO Programs/Steps")
 // How long a group stays dark while its beams walk home at the top of a
 // break. Four bars: long enough for the motor, short enough to be a pause.
+// A break programme may run on the BASE only if it keeps this much of the
+// group lit, averaged over its steps: the room must not go dark because a
+// chase walks one head at a time (Tobias, 2026-09-15: "det jeg skriver med
+// lyset slukker, er basen der slukker").
+#define ENGINE_BREAK_LIT      0.60
 // how far from the home aim a laser position may take the beams before the
 // engine refuses to run it on its own: 24 units is about 17 degrees, and our
 // own tilt figures are clamped to 14 (gen_programs.py, BAR_TILT_REACH)
@@ -847,6 +852,7 @@ void TrackEngine::ensureTable()
 
         QSet<quint32> touched = fixturesOf(func, 0);
         info.fixtureCount = touched.count();
+        info.litShare = litShareOf(func, touched);
         foreach (quint32 fid, touched)
         {
             QString key = groupOfFixture(fid);
@@ -2476,6 +2482,73 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     }
 }
 
+qreal TrackEngine::litShareOf(Function *func, const QSet<quint32> &touched) const
+{
+    if (func == nullptr || touched.isEmpty() || m_doc == nullptr)
+        return 1.0;
+    QList<quint32> steps;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+    }
+    else
+        steps.append(func->id());
+    if (steps.isEmpty())
+        return 1.0;
+
+    qreal sum = 0.0;
+    int counted = 0;
+    foreach (quint32 sid, steps)
+    {
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            return 1.0;                  // not something we can measure: no claim
+        // The MASTER DIMMER decides, where there is one. Red, green, blue and
+        // white are Intensity channels too, and a generated step scene writes
+        // the colour to every fixture and only varies the dimmer - so
+        // "any Intensity channel is non-zero" said every lamp was lit in every
+        // step, and the measure was worthless (caught in the same round it was
+        // written). A fixture with no master dimmer falls back to its colour
+        // channels; a scene that does not write the dimmer at all is not
+        // turning the lamp off, so it counts as lit.
+        QSet<quint32> lit;
+        QSet<quint32> dimmed;
+        foreach (const SceneValue &sv, scene->values())
+        {
+            if (touched.contains(sv.fxi) == false)
+                continue;
+            Fixture *fxi = m_doc->fixture(sv.fxi);
+            if (fxi == nullptr)
+                continue;
+            quint32 dch = dimmerChannel(fxi);
+            if (dch != QLCChannel::invalid() && sv.channel == dch)
+            {
+                dimmed.insert(sv.fxi);
+                if (sv.value > 0)
+                    lit.insert(sv.fxi);
+                continue;
+            }
+            if (dch != QLCChannel::invalid())
+                continue;                // this fixture is judged by its dimmer
+            const QLCChannel *qch = fxi->channel(sv.channel);
+            if (sv.value > 0 && qch != nullptr && qch->group() == QLCChannel::Intensity)
+                lit.insert(sv.fxi);
+        }
+        foreach (quint32 fid, touched)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi != nullptr && dimmerChannel(fxi) != QLCChannel::invalid()
+                && dimmed.contains(fid) == false)
+                lit.insert(fid);         // the step says nothing about it: still lit
+        }
+        sum += qreal(lit.count()) / qreal(touched.count());
+        counted++;
+    }
+    return counted > 0 ? sum / counted : 1.0;
+}
+
 quint32 TrackEngine::dimmerChannel(Fixture *fxi) const
 {
     // QLC's own answer first - but it gives up on definitions that declare
@@ -3604,7 +3677,8 @@ quint32 TrackEngine::motionFunction(const QString &group, const QString &colour,
 
 quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
                                const QSet<QString> &cast, int cursor, int tier,
-                               qreal bpm, int division, bool staticOnly, int maxStars) const
+                               qreal bpm, int division, bool staticOnly, int maxStars,
+                               bool litOnly) const
 {
     Q_UNUSED(bpm)
     Q_UNUSED(division)
@@ -3615,6 +3689,11 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // a static pattern scene is a look and may show in any section; a
         // chase or EFX is movement and belongs to drops and builds
         if (staticOnly && info->type != int(Function::SceneType))
+            continue;
+        // the base in a break: a chase may run, but only one that leaves the
+        // room lit (see ENGINE_BREAK_LIT)
+        if (litOnly && info->type != int(Function::SceneType)
+            && info->litShare < ENGINE_BREAK_LIT)
             continue;
         // energy stars: a three-star chase waits for a full-energy drop
         if (qMax(1, info->stars) > maxStars)
@@ -5098,8 +5177,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // ... except the laser bars in a break, which are only ever in a
         // break's cast to run a slow (tier 0: "break", "slow", "low") chase
         bool breakLasers = isBreak && g.lasers;
+        // The base may run a break programme of the show's own - but only one
+        // that keeps the room lit (litOnly below, ENGINE_BREAK_LIT). Counted
+        // 2026-09-16: of 220 break programmes for the heads, 104 have under a
+        // third of them on at a time and 32 have over sixty per cent. The
+        // first kind is what "in breaks the light just goes out" was; the
+        // second is a swell or a halves trade, which is exactly the slow
+        // movement a break is supposed to have. Not while CALM is held: that
+        // button means "stop changing things".
+        bool breakBase = isBreak && key == base && isCalm == false && still == false;
         bool moving = still == false
-                   && (breakLasers || (mv.ownChaser && isBreak == false && (isBuild == false || prog > 0.5)));
+                   && (breakLasers || breakBase
+                       || (mv.ownChaser && isBreak == false && (isBuild == false || prog > 0.5)));
         int stars = qMin(3, maxStars + (key == base ? 1 : 0));
         // The animation lasers change their pattern where the music turns -
         // the same turn the colours land on - and not only on the section
@@ -5119,7 +5208,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         quint32 mf = Function::invalidId();
         if (isCalm == false)
         {
-            mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, moving == false, stars);
+            mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
+                           moving == false, stars, breakBase);
             if (mf == Function::invalidId() && moving)
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars);
         }

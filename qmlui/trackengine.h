@@ -156,6 +156,7 @@ struct TrackFuncInfo
     int stars = 0;            // energy 1..3: when this may run (0 = not applicable)
     int starsGuess = 0;       // what the engine would say, from tempo and name
     int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
+    qreal litShare = 1.0;     // how much of what it touches is lit, averaged over its steps
 
     /* ---- the operator's verdict, per section kind ---- */
     /** Verdict POINTS, not taps. A spread thumb is worth 1, an aimed one
@@ -562,6 +563,10 @@ protected:
     bool userAllowed(const TrackFuncInfo &info, const QString &group = QString()) const;
     void genFlash(bool on, const QString &colour = QString());
     quint32 dimmerChannel(Fixture *fxi) const;
+    /** How much of `touched` a function lights, averaged over its steps: 1.0
+     *  for a scene that lights all of them, 1/7 for a chase that walks one
+     *  head of seven. Measured once, when the table is built. */
+    qreal litShareOf(Function *func, const QSet<quint32> &touched) const;
     int guessStars(const TrackFuncInfo &info) const;
     qreal stepBeats(const TrackFuncInfo &info, qreal bpm) const;
     int divisionFor(const TrackFuncInfo &info, qreal bpm, int division) const;
@@ -583,7 +588,8 @@ protected:
                            const QSet<QString> &cast, int cursor) const;
     quint32 motionFor(const QString &group, const QString &colour,
                       const QSet<QString> &cast, int cursor, int tier,
-                      qreal bpm, int division, bool staticOnly, int maxStars) const;
+                      qreal bpm, int division, bool staticOnly, int maxStars,
+                      bool litOnly = false) const;
     quint32 positionFunction(const QString &group, int cursor, int tier) const;
     /** True if this scene switches a fixture's own effect/movement macro on. */
     bool macroPosition(quint32 fid) const;
