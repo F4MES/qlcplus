@@ -3647,6 +3647,16 @@ bool TrackEngine::lightsGroup(quint32 fid, const QString &group) const
         const QLCChannel *ch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
         if (ch != nullptr && ch->group() == QLCChannel::Intensity)
             return true;
+        // A COLOUR WHEEL at a non-zero value is light on a fixture like the
+        // laser bars: nought on that channel means no beam, so anything else
+        // means a beam. Their colour scenes carry nothing else since the
+        // dimmer came out of them (gen_programs.py, runde 71) - and without
+        // this line the scenes would depend entirely on the wheel having been
+        // LEARNED as a colour channel below. That learning works today, but
+        // it is one step in a chain, and a broken link there means the bars
+        // stand dark all night with nothing in the log to say why.
+        if (ch != nullptr && ch->group() == QLCChannel::Colour)
+            return true;
         // a learned colour channel is this group's colour, whatever the
         // definition calls it
         if (g.colourValue.value(sv.fxi).contains(sv.channel))
