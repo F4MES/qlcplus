@@ -144,6 +144,7 @@ struct TrackFuncInfo
     QSet<QString> groups;     // fixture groups it touches
     QString colour;           // canonical colour name, or empty
     bool step = false;        // sits inside a chaser or sequence
+    bool frozen = false;      // a chaser that can never step: nothing to run
     bool junk = false;        // blackout / reset / test / copy ...
     bool dimmer = false;      // sets a master dimmer itself (HTP beats the group dimmer)
     int tier = -1;            // tagged for break (0) / groove (1) / drop (2), or any

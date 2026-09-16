@@ -916,6 +916,16 @@ void TrackEngine::ensureTable()
                         info.durationMs = sum / uint(stepCount);
                 }
                 info.oneShot = chaser->runOrder() == Function::SingleShot;
+                // A chaser whose own duration is "infinite" and whose steps
+                // gave no usable time either never advances: press it and the
+                // first step stands there for ever. Two of the show's own
+                // chasers are like that (RoeD CHASE 1, Blaa Chase, both at
+                // 4294964736 ms - found 2026-09-16). AUTO must not pick one:
+                // the group would simply freeze mid-section, which reads as a
+                // fault. It stays in the table and on the Virtual Console -
+                // this is only about what the engine chooses on its own.
+                if (stepCount == 0 && func->duration() >= 600000)
+                    info.frozen = true;
             }
         }
         else if ((t == Function::EFXType || t == Function::RGBMatrixType) && func->duration() < 600000)
@@ -1076,7 +1086,17 @@ int TrackEngine::divisionFor(const TrackFuncInfo &info, qreal bpm, int division)
         return 0;                                   // its own time, retriggered on the beat
     qreal b = stepBeats(info, bpm);
     if (b <= 0.0)
-        return 0;
+    {
+        // The engine could not read a step time out of this chaser at all -
+        // no per-step times and a chaser duration of nought or "infinite".
+        // Started on its own terms, nought means it advances every tick of
+        // the master timer (a flicker: "8eyeChaseBeatWhitePingPongBeat" in
+        // this show) and infinite means it never advances at all. Neither is
+        // a look. One beat a step is the honest reading of a chase nobody
+        // timed, and it is what the rest of the rig is doing anyway.
+        return (info.type == int(Function::ChaserType)
+                || info.type == int(Function::SequenceType)) ? 1000 : 0;
+    }
     static const qreal grid[] = { 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 };
     qreal best = grid[0];
     qreal bestDist = 99.0;
@@ -3426,6 +3446,8 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         // nothing else is left". The operator said never.
         if (info.banned)
             continue;
+        if (info.frozen)
+            continue;                    // it can never step: nothing to follow the music with
         // Per-group slots must never start a whole-room snapshot. Its other
         // groups would bypass cast, colour and intensity decisions. Such
         // looks remain available as START scenes and on the Virtual Console.
