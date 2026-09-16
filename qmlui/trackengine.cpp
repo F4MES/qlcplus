@@ -3517,9 +3517,16 @@ QString TrackEngine::colourForGroup(const QString &group, const QString &colour)
         { "blue",    { "cyan", "purple", "uv", "white" } },
         { "white",   { "cyan", "yellow", "blue" } },
     };
+    // A banned colour is never a substitute. Yellow is banned
+    // (engineBannedColour) because Tobias will not have it as a colour a lamp
+    // stands in - "vi skal aldrig bruge gul som stand-alone farve, det er
+    // simpelthen bare en grim farve" (2026-09-16) - and the first version of
+    // this table handed it to the bars for every orange and amber. The ban is
+    // about a lamp standing in the colour; the yellow inside a two-colour or
+    // per-eye programme is not this, and is untouched.
     foreach (const QString &c, near.value(colour))
     {
-        if (groupHasColour(group, c))
+        if (engineBannedColour(c) == false && groupHasColour(group, c))
             return c;
     }
     // Nothing near it either: any colour of its own, rather than a group that
@@ -3527,6 +3534,7 @@ QString TrackEngine::colourForGroup(const QString &group, const QString &colour)
     foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_COLOR, group))
     {
         if (info->groups.count() == 1 && info->colour.isEmpty() == false
+            && engineBannedColour(info->colour) == false
             && lightsGroup(info->id, group))
             return info->colour;
     }
