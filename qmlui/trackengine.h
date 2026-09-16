@@ -339,6 +339,8 @@ public:
     Q_INVOKABLE void selfTest();
     bool testing() const;
     void testDark();
+    /** kill a pending or running bar echo - AUTO off, blackout, a new track */
+    void stopEcho();
 
     QVariantList groups();
     Q_INVOKABLE void setGroupEnabled(QString key, bool enable);
@@ -527,6 +529,7 @@ protected slots:
     void slotSelfTestStep();
     void slotEchoOn();
     void slotEchoOff();
+
 
 protected:
     /* table building */
@@ -727,6 +730,7 @@ private:
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)
+    int m_kickBeat;           // the beat it last counted - tick() can run twice on one beat
     QTimer m_echoTimer;       // the bars answer a hit half a beat later ...
     QTimer m_echoOffTimer;    // ... and let go a third of a beat after that
     QString m_echoKey;        // the laser group that answers

@@ -128,6 +128,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_logEnabled(true)
     , m_dropStyle(0)
     , m_kickGone(0)
+    , m_kickBeat(-1)
     , m_echoFid(Function::invalidId())
     , m_echoBeat(-100)
     , m_strobeUntil(-1)
@@ -288,6 +289,7 @@ void TrackEngine::slotDocSettled()
     m_accentGroup.clear();
     m_hatsOut = false;
     m_pulseTimer.stop();
+    stopEcho();
     m_fadeTimer.stop();
     // every 'live' property (cast, report, warnings, colour, trims) notifies
     // on liveChanged: without it they keep showing the last project's state
@@ -3211,6 +3213,8 @@ void TrackEngine::setBlackout(bool on)
         return;
     logSignal(on ? QStringLiteral("sig:blackout") : QStringLiteral("sig:blackout-off"));
     m_blackout = on;
+    if (on)
+        stopEcho();
 
     applyGroupOff();          // it owns both masks: the off ones and the black ones
 
@@ -3894,14 +3898,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the house closing takes the energy down whatever the slider says
     qreal closing = closingCap();
     energy = qMin(energy, closing);
-    // how long the kick has been away, in beats - the vocal passage the
-    // analysis did not flag as a break
-    if (kick < 0.0)
-        m_kickGone = 0;
-    else if (kick < 0.20)
-        m_kickGone++;
-    else
-        m_kickGone = 0;
+    // How long the kick has been away, in beats - the vocal passage the
+    // analysis did not flag as a break. Counted once per beat: a section
+    // change runs tick() a second time on the same beat, and that would
+    // have counted the same silent beat twice.
+    if (beat != m_kickBeat)
+    {
+        m_kickBeat = beat;
+        if (kick < 0.0 || kick >= 0.20)
+            m_kickGone = 0;
+        else
+            m_kickGone++;
+    }
     bool still = energy < 0.03;
     QRandomGenerator *rng = QRandomGenerator::global();
     bool hold = (m_hold || still) && forceNext == false;      // NEXT breaks a hold for one beat
@@ -4891,13 +4899,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
         // the base is the light the room stands on: brighter than the
         // effects in a break, where it is often the only thing lit
-        // The kick has been away two beats or more in a groove or a drop -
-        // a vocal over held chords, a passage the analysis did not flag as
-        // a break: the effects come down to little over half while it lasts
-        // and step back up when the kick returns, so the light is heard to
-        // listen. The base is untouched; the room never dims with it.
-        bool duck = m_kickGone >= 2 && isBreak == false && isCalm == false && key != base;
-        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0) * (duck ? 0.55 : 1.0), 1.0);
+        // The kick has been away for a bar or more in a groove or a drop - a
+        // vocal over held chords, a passage the analysis did not flag as a
+        // break: the effects slide down to a little over half and snap back
+        // the moment the kick returns, so the light is heard to listen.
+        // Four beats before anything happens, and four more to the bottom:
+        // two beats would have caught every half-time bar (kick on the one,
+        // nothing on two, three, four) and the room would have pumped
+        // between 55 % and 100 % every bar. The base is untouched; the room
+        // never dims with it. (Tobias, 2026-09-16, forslag 3.)
+        qreal duck = 1.0;
+        if (m_kickGone >= 4 && isBreak == false && isCalm == false && key != base)
+            duck = 1.0 - 0.45 * qBound(0.0, qreal(m_kickGone - 4) / 4.0, 1.0);
+        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0) * duck, 1.0);
         qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_groupTrim.value(key, 1.0) * m_master;
         // run() puts MASTER and the trim on for us now, so the colour scene
         // gets the bare level - or the two would multiply
@@ -5183,7 +5197,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (isBuild && state != QStringLiteral("build")) ev << "riser-build";
         if (m_hatsOut) ev << "hats-out";
         if (closing < 1.0) ev << "closing";
-        if (m_kickGone >= 2 && isBreak == false) ev << "kick-gone";
+        if (m_kickGone >= 4 && isBreak == false) ev << "kick-gone";
         if (isDrop && m_dropStyle > 0) ev << ("drop-" + dropStyleName(m_dropStyle));
         if (isDrop && bar < impactBarsLog) ev << "impact";
         if (mixBarsOut >= 6 && m_nextColour.isEmpty() == false) ev << "mix-turn";
@@ -5547,8 +5561,12 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.pulse *= 0.6;
         if (m_dropStyle == 4)
             mv.pulse = qMin(0.95, mv.pulse * 1.35);       // heavy: the room pumps deep
-        if (m_dropStyle == 5)
-            mv.pulse = 0.0;                                // nervous: no pulse, all chase
+        // nervous: no pulse, all chase - but NOT on the base. The moving
+        // heads pulse with the kick like the 4-eyes do (Tobias, 2026-09-15),
+        // and a nervous drop would otherwise leave the one group the room
+        // stands on sitting flat and bright for thirty-two bars.
+        if (m_dropStyle == 5 && isBase == false)
+            mv.pulse = 0.0;
         mv.pulseOn = chance(0.7) ? 0 : pick({ 1, 2 });
         if (m_dropStyle == 4)
             mv.colourBars = 8;                             // heavy: the colour stays
@@ -7229,6 +7247,7 @@ void TrackEngine::startLook()
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();
+    stopEcho();
     m_report = tr("(start scene)  |  %1  |  master %2 %%")
                .arg(colour.isEmpty() ? tr("(no colour)") : colour)
                .arg(int(m_master * 100));
@@ -7395,6 +7414,7 @@ void TrackEngine::release()
     m_breathe.clear();
     m_flashHeld.clear();
     m_pulseTimer.stop();
+    stopEcho();
     m_report = tr("(released)");
     if (m_fadeAttr.isEmpty() == false)
         m_fadeTimer.start();
@@ -7456,6 +7476,14 @@ void TrackEngine::selfTest()
     m_testIndex = 0;
     m_testTimer.start();
     slotSelfTestStep();
+}
+
+void TrackEngine::stopEcho()
+{
+    m_echoTimer.stop();
+    m_echoOffTimer.stop();
+    if (m_echoKey.isEmpty() == false)
+        stopSlot("echo:" + m_echoKey, false);
 }
 
 void TrackEngine::slotEchoOn()
@@ -7570,6 +7598,7 @@ void TrackEngine::idle()
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();
+    stopEcho();
 
     foreach (TrackFuncInfo *info, list)
     {
@@ -7677,6 +7706,9 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_fillLast = -8;
     m_lookState.clear();
     m_darkUntil.clear();         // its beats belong to the track that just ended
+    m_kickGone = 0;              // the new track is not mid-vocal
+    m_kickBeat = -1;
+    stopEcho();
     m_mixBeat = -1;              // a mix still on now is the mix INTO this track
     m_colourBar = -1;            // hold the colour until the first break or drop
     m_colourSince = -1;
@@ -7983,6 +8015,7 @@ void TrackEngine::stopAll()
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();
+    stopEcho();
     m_flash = false;
     m_flashHeld.clear();         // release() clears it; without this the next
                                  // beat skips the whole out-of-cast teardown
