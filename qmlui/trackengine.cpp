@@ -958,6 +958,14 @@ void TrackEngine::ensureTable()
                 // this is only about what the engine chooses on its own.
                 if (stepCount == 0 && func->duration() >= 600000)
                     info.frozen = true;
+                // ... and a chaser with no steps at all is not a programme
+                // either. The show has two ("New Chaser 1", "New Chaser 406")
+                // - somebody pressed New and walked away. In full auto they
+                // are shut out anyway, but with the operator's own functions
+                // in play one of them would be a motion that does nothing,
+                // and the group would sit still for a whole section.
+                if (chaser->steps().isEmpty())
+                    info.frozen = true;
             }
         }
         else if ((t == Function::EFXType || t == Function::RGBMatrixType) && func->duration() < 600000)
