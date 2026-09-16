@@ -3475,6 +3475,64 @@ bool TrackEngine::lightsGroup(quint32 fid, const QString &group) const
     return false;
 }
 
+bool TrackEngine::groupHasColour(const QString &group, const QString &colour) const
+{
+    if (colour.isEmpty())
+        return false;
+    foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_COLOR, group))
+    {
+        if (info->colour == colour && lightsGroup(info->id, group))
+            return true;
+    }
+    return false;
+}
+
+QString TrackEngine::colourForGroup(const QString &group, const QString &colour) const
+{
+    // A lamp with a colour WHEEL has the colours the wheel has - seven on the
+    // laser bars, four on the animation lasers - while the palette is built
+    // from every colour any group can do. Ask a wheel for orange and nothing
+    // comes back: colourFunction() returns nothing, the colour slot is
+    // stopped, and a group that is in the cast stands dark. That is one more
+    // reason the bars "do not light" (found 2026-09-16), and it is silent -
+    // the group is eligible, it just cannot be that colour tonight.
+    //
+    // So: the room's colour if the group has it, otherwise the nearest one it
+    // does have. Neighbours round the wheel, warm to warm and cold to cold;
+    // white last, because white is punctuation rather than a colour.
+    if (colour.isEmpty() || groupHasColour(group, colour))
+        return colour;
+    static const QMap<QString, QStringList> near =
+    {
+        { "amber",   { "yellow", "orange", "red", "white" } },
+        { "orange",  { "amber", "yellow", "red", "white" } },
+        { "yellow",  { "amber", "orange", "green", "white" } },
+        { "purple",  { "magenta", "uv", "blue", "white" } },
+        { "uv",      { "purple", "blue", "magenta", "white" } },
+        { "pink",    { "magenta", "red", "white" } },
+        { "magenta", { "pink", "purple", "red", "blue" } },
+        { "red",     { "amber", "orange", "magenta", "white" } },
+        { "green",   { "cyan", "yellow", "white" } },
+        { "cyan",    { "blue", "green", "white" } },
+        { "blue",    { "cyan", "purple", "uv", "white" } },
+        { "white",   { "cyan", "yellow", "blue" } },
+    };
+    foreach (const QString &c, near.value(colour))
+    {
+        if (groupHasColour(group, c))
+            return c;
+    }
+    // Nothing near it either: any colour of its own, rather than a group that
+    // is in the cast and contributing nothing.
+    foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_COLOR, group))
+    {
+        if (info->groups.count() == 1 && info->colour.isEmpty() == false
+            && lightsGroup(info->id, group))
+            return info->colour;
+    }
+    return colour;
+}
+
 quint32 TrackEngine::colourFunction(const QString &group, const QString &colour) const
 {
     QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_COLOR, group);
@@ -4989,6 +5047,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // run() puts MASTER and the trim on for us now, so the colour scene
         // gets the bare level - or the two would multiply
         qreal glBase = darkGroups.contains(key) ? 0.0 : groupLevel;
+        // the colour this group can actually show (a wheel has seven, the
+        // palette has more) - and the motion pick below matches on it too,
+        // so a bar programme in the substituted colour is found
+        colour = colourForGroup(key, colour);
         quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
         // colour scenes swap hard: a soft fade left the old colour adding up
         // with the new one on RGB fixtures for a bar - a blend nobody asked for
@@ -5208,6 +5270,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     QString echoHue = opposite.value(m_colour, QStringLiteral("white"));
                     if (m_palette.contains(echoHue) == false || engineBannedColour(echoHue))
                         echoHue = QStringLiteral("white");
+                    echoHue = colourForGroup(echoKey, echoHue);
                     quint32 ef = colourFunction(echoKey, echoHue);
                     if (ef != Function::invalidId())
                     {

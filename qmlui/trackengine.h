@@ -570,6 +570,11 @@ protected:
     /* choosing */
     QList<TrackFuncInfo *> candidates(int role, const QString &group) const;
     quint32 colourFunction(const QString &group, const QString &colour) const;
+    /** true when the group has a scene of its own in exactly this colour */
+    bool groupHasColour(const QString &group, const QString &colour) const;
+    /** The colour this group can actually show: the room's, or the nearest
+     *  one it owns. A colour wheel has seven colours, the palette has more. */
+    QString colourForGroup(const QString &group, const QString &colour) const;
     /** A hidden scene with colour a on the even eyes and b on the odd ones,
      *  for groups whose colour lives on per-eye channels. Made on demand. */
     quint32 splitColourFunction(const QString &group, const QString &a, const QString &b);
