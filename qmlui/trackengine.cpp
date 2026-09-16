@@ -3695,8 +3695,19 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         if (litOnly && info->type != int(Function::SceneType)
             && info->litShare < ENGINE_BREAK_LIT)
             continue;
-        // energy stars: a three-star chase waits for a full-energy drop
-        if (qMax(1, info->stars) > maxStars)
+        // energy stars: a three-star chase waits for a full-energy drop.
+        // A BREAK is always ceiling 1, and that is one rule too many: it also
+        // threw out every break programme whose name happens to carry no cool
+        // word - the operator's own quiet pattern scenes among them. The
+        // animation lasers' "Fladvifteboelge" is exactly the scene Tobias
+        // asked breaks to be able to show (2026-09-10, "animations laser fra
+        // vores egne programmer paa flad vifte"), and it was excluded every
+        // time. A programme the name already files as a BREAK programme may
+        // be two stars in a break; three stays out.
+        int allow = maxStars;
+        if (tier == 0 && info->tier == 0)
+            allow = qMax(allow, 2);
+        if (qMax(1, info->stars) > allow)
             continue;
         // a motion that also lights groups outside the cast is not allowed
         bool inside = true;
@@ -3707,7 +3718,18 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         }
         if (inside == false)
             continue;
-        if (info->colour.isEmpty() || info->colour == colour)
+        // A PATTERN DEVICE - an animation laser - is its scenes: the figure
+        // and the colour are the same file, and the engine has no way to
+        // recolour one. Holding them to the room's colour left the group with
+        // nothing to show whenever the room was a colour they do not have,
+        // and in a BREAK that was every time: their one break scene is
+        // "ANIMATION Flad vifte (hvid default)", tagged white, and white is
+        // never the room's colour. So the scene Tobias asked breaks to be
+        // able to show (2026-09-10, "animations laser ... paa flad vifte")
+        // has never once run. The exact-colour preference below still puts
+        // the right colour first where there is one.
+        if (info->colour.isEmpty() || info->colour == colour
+            || m_groups.value(group).patternDevice)
             ok.append(info);
     }
     if (ok.isEmpty())
@@ -3734,21 +3756,28 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     if (tagged.isEmpty() == false)
         ok = tagged;
 
-    // of what is allowed, the hottest: a drop at full energy takes the
-    // three-star chases, not the one-star ones it could also have had
+    // Of what is allowed, the hottest comes up most often - but it does not
+    // take the whole draw. This used to DISCARD everything below the top
+    // star, and one programme was then enough to empty a pool: the show's own
+    // "ROED CHASE Loop Dobbelt hastighed" is three stars (the word "dobbelt")
+    // and files as a groove, so at the top of the fader a red groove on the
+    // strobes could choose it and nothing else - one chase instead of
+    // forty-four, all night. That is the "it is the same programmes again"
+    // report, from 2026-09-15, with a name on it.
+    // The top star goes in TWICE instead: the same idiom as the tier pool
+    // above, and the same effect where the pools are healthy (219 hot drop
+    // programmes against 42 calm ones is still nine drops in ten).
     int top = 0;
     foreach (TrackFuncInfo *info, ok)
         top = qMax(top, qMax(1, info->stars));
-    QList<TrackFuncInfo *> hot;
+    QList<TrackFuncInfo *> pool = ok;
     foreach (TrackFuncInfo *info, ok)
     {
         if (qMax(1, info->stars) == top)
-            hot.append(info);
+            pool.append(info);
     }
-    if (hot.isEmpty() == false)
-        ok = hot;
 
-    return pickWeighted(ok, cursor);
+    return pickWeighted(pool, cursor);
 }
 
 int TrackEngine::tierOf(const QString &text) const
