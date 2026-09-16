@@ -3778,6 +3778,13 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // chase or EFX is movement and belongs to drops and builds
         if (staticOnly && info->type != int(Function::SceneType))
             continue;
+        // A chase that lights NOTHING in any step cannot be a look, and since
+        // the dimmers are handed to the chase (runde 69) it would hold the
+        // group dark for the whole section. The show had one: "Bars Eyes
+        // Clear", two steps of nothing but zeroes, which is housekeeping
+        // rather than a programme - and it was a candidate in every colour.
+        if (info->type != int(Function::SceneType) && info->litShare <= 0.0)
+            continue;
         // How much of the group a chase has to leave lit. This matters far
         // more since the dimmers were handed over (runde 69): before, the
         // engine's own parts held the light up and a chase that walks one
@@ -5463,8 +5470,30 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
             m_liveMove.insert(key, mv);                  // the shaped move, for the sub-beat steps
             if ((m_flash && m_flashHeld.contains(key)) == false)
-                applyMove(key, (darkGroups.contains(key) || motionOwns) ? 0.0 : groupLevel,
-                          beat, secStart, prog, mv, patterned);
+            {
+                if (motionOwns)
+                {
+                    // STOP the parts, do not drive them to nought. A part
+                    // scene writes with ReplaceBlend, and QLC+ applies faders
+                    // in the order their functions started: a part that
+                    // started AFTER the chase would replace the chase's values
+                    // with its zero and the group would stand dark. That is
+                    // exactly what happens when a group joins the cast on the
+                    // same beat as its chase is drawn - col:, then mot:, then
+                    // the parts. A stopped function has no fader at all, so
+                    // the chase is the only writer whatever the order.
+                    // setPart() starts them again by itself the moment the
+                    // motion stops owning them.
+                    for (int i = 0; i < g.parts.count(); i++)
+                        stopSlot(partSlot(key, i), true);
+                    m_moveLevel.insert(key, groupLevel);
+                }
+                else
+                {
+                    applyMove(key, darkGroups.contains(key) ? 0.0 : groupLevel,
+                              beat, secStart, prog, mv, patterned);
+                }
+            }
             if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1 && (haveCurves == false || turn))
                 moveHit = true;
         }
