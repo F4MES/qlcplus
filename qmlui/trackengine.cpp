@@ -5604,6 +5604,37 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // on the base is what made breaks go dark (round 38).
         mv.colourBars = 0;
         mv.flashBar = false;
+
+        // THE BACKGROUND BETWEEN THE HITS. A pulse only falls to (1 - depth),
+        // and on the base that floor is exactly the "baggrundslys" Tobias saw
+        // (2026-09-16): the heads pump, but from a lit room rather than from
+        // the dark the 4-eyes punch out of. The 4-eyes get there by going
+        // BARE - nothing lit between the blinks - and the base may never do
+        // that (round 38: bare on the base is what made breaks go dark). The
+        // honest version for the base is to take the floor down instead, and
+        // to let the energy decide how far: at a quarter of the fader the
+        // heads keep 60 % between hits - a room still being eaten in, where
+        // a blinking wash would be wrong - and at the top they keep 8 %, as
+        // close to the 4-eyes' punch as the base is allowed to get.
+        //
+        // Never in a break: there the base is often the only thing lit, and
+        // the room does not blink. The build has its own ramp and returned
+        // long before this line.
+        if (tier != 0)
+        {
+            qreal floorWanted = 0.60 - 0.52 * qBound(0.0, (e - 0.25) / 0.70, 1.0);
+            if (m_dropStyle == 2)
+                floorWanted = qMax(floorWanted, 0.45);   // a wide drop keeps its wash
+            if (m_dropStyle == 4)
+                floorWanted = qMin(floorWanted, 0.25);   // a heavy one pumps deeper
+            mv.pulse = qMax(mv.pulse, 1.0 - floorWanted);
+            // A deep pulse that lands on every OTHER beat leaves the room at
+            // the floor for a beat and a half at a time, which at 8 % reads as
+            // the light having failed rather than as a groove. Deep means
+            // every beat.
+            if (mv.pulse > 0.60)
+                mv.pulseOn = 0;
+        }
     }
     // A drop may drop the backdrop too: a random handful of lamps hits each
     // beat and there is nothing lit in between. On the heads that reads as
