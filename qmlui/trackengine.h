@@ -581,6 +581,10 @@ protected:
     quint32 positionFunction(const QString &group, int cursor, int tier) const;
     /** True if this scene switches a fixture's own effect/movement macro on. */
     bool macroPosition(quint32 fid) const;
+    /** A laser aim (scene or chaser) that never leaves the group's home aim
+     *  by more than ENGINE_AIM_REACH, and never writes anything but pan and
+     *  tilt. Safe to run without the operator having promised it by name. */
+    bool laserAimSafe(quint32 fid, const QString &group) const;
     quint32 homePosition(const QString &group) const;
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
     int tierOf(const QString &text) const;

@@ -53,6 +53,10 @@
 #define ENGINE_STEP_PATH      QStringLiteral("AUTO Programs/Steps")
 // How long a group stays dark while its beams walk home at the top of a
 // break. Four bars: long enough for the motor, short enough to be a pause.
+// how far from the home aim a laser position may take the beams before the
+// engine refuses to run it on its own: 24 units is about 17 degrees, and our
+// own tilt figures are clamped to 14 (gen_programs.py, BAR_TILT_REACH)
+#define ENGINE_AIM_REACH      24
 #define ENGINE_DARK_BARS      4
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
@@ -3666,7 +3670,8 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         // the rest are there for the operator to choose by hand
         // "low" as a WORD: "Slow" and "Yellow" are not a promise to stay low
         if (lasers && (info->sweep || info->type == int(Function::ChaserType))
-            && hasWord(info->name.toLower(), QStringList() << "low") == false)
+            && hasWord(info->name.toLower(), QStringList() << "low") == false
+            && (info->sweep || laserAimSafe(info->id, group) == false))
             continue;
         // ... and never one that switches the FIXTURE'S OWN movement macro on
         // (Tobias, 2026-09-15: "de bevaeger sig konstant?? ... du skal bygge
@@ -3697,6 +3702,66 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
     if (pool.isEmpty())
         pool = safe;
     return pickWeighted(pool, cursor);
+}
+
+bool TrackEngine::laserAimSafe(quint32 fid, const QString &group) const
+{
+    // The "low" rule below this is a promise made in a NAME: an aim the
+    // operator called "low" is one they have checked. Our own generated tilt
+    // figures cannot make that promise - "low" is also a break word, and a
+    // figure called "Bars Tilt Sway Low" would file itself as a break
+    // programme - so all nineteen of them were rejected and the bars have
+    // never used one (found 2026-09-16). This is the same promise, measured
+    // instead of spelled: every step stays within ENGINE_AIM_REACH of the
+    // aim the operator set as home, and writes nothing but pan and tilt.
+    if (m_doc == nullptr)
+        return false;
+    quint32 homeFid = homePosition(group);
+    Scene *home = qobject_cast<Scene *>(m_doc->function(homeFid));
+    if (home == nullptr)
+        return false;                    // no home to measure against: no promise
+    QHash<QPair<quint32, quint32>, int> aim;
+    foreach (const SceneValue &sv, home->values())
+        aim.insert(qMakePair(sv.fxi, sv.channel), int(sv.value));
+
+    QList<quint32> steps;
+    Function *func = m_doc->function(fid);
+    if (func == nullptr)
+        return false;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+        if (steps.isEmpty())
+            return false;
+    }
+    else
+        steps.append(fid);
+
+    foreach (quint32 sid, steps)
+    {
+        if (macroPosition(sid))
+            return false;                // writes the fixture's own effect engine
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            return false;
+        foreach (const SceneValue &sv, scene->values())
+        {
+            Fixture *fxi = m_doc->fixture(sv.fxi);
+            const QLCChannel *qch = fxi == nullptr ? nullptr : fxi->channel(sv.channel);
+            if (qch == nullptr)
+                continue;
+            if (qch->group() != QLCChannel::Pan && qch->group() != QLCChannel::Tilt)
+                continue;                // macroPosition() has already judged the rest
+            QPair<quint32, quint32> k = qMakePair(sv.fxi, sv.channel);
+            if (aim.contains(k) == false)
+                return false;            // an axis the home aim says nothing about
+            if (qAbs(int(sv.value) - aim.value(k)) > ENGINE_AIM_REACH)
+                return false;
+        }
+    }
+    return true;
 }
 
 bool TrackEngine::macroPosition(quint32 fid) const
@@ -4599,7 +4664,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         QString slot = "efx:" + key;
         quint32 mf = m_active.value("mot:" + key, Function::invalidId());
         bool userMoves = mf != Function::invalidId() && m_funcs.value(mf).type != int(Function::SceneType);
-        bool aimed = m_active.contains("pos:" + key);
+        quint32 aimFid = m_active.value("pos:" + key, Function::invalidId());
+        bool aimed = aimFid != Function::invalidId();
+        // An aim that MOVES - one of our own tilt figures, now that they are
+        // reachable again (round 56) - is the group's movement. Running the
+        // EFX on top of it would put two hands on the same tilt channel, and
+        // the beams would judder between them. One or the other: the figure
+        // this section drew, or the sweep.
+        bool aimMoves = aimed && m_funcs.value(aimFid).type != int(Function::SceneType);
         // HOLD freezes the figure rather than stopping it; STILL, CALM and a
         // blackout do stop it
         // and no laser figure in a break: there the bars stay in the home
@@ -4623,7 +4695,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         //
         // No figure in a break - there the bars sit at the home aim - and CALM
         // stops the lasers while the heads keep drifting.
-        bool wanted = castSet.contains(key) && aimed && userMoves == false && darkGroups.contains(key) == false
+        bool wanted = castSet.contains(key) && aimed && aimMoves == false
+                   && userMoves == false && darkGroups.contains(key) == false
                    && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
                    && (g.lasers == false || (m_fullAuto && isBreak == false && isCalm == false));
         if (wanted == false)
