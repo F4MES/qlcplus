@@ -858,6 +858,7 @@ void TrackEngine::ensureTable()
         QSet<quint32> touched = fixturesOf(func, 0);
         info.fixtureCount = touched.count();
         info.litShare = litShareOf(func, touched);
+        info.setsColour = setsColourOf(func);
         foreach (quint32 fid, touched)
         {
             QString key = groupOfFixture(fid);
@@ -2500,6 +2501,51 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     }
 }
 
+bool TrackEngine::setsColourOf(Function *func) const
+{
+    if (func == nullptr || m_doc == nullptr)
+        return true;
+    QList<quint32> steps;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+    }
+    else
+        steps.append(func->id());
+    foreach (quint32 sid, steps)
+    {
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            return true;                 // cannot tell: assume it does
+        foreach (const SceneValue &sv, scene->values())
+        {
+            // A ZERO does not impose a colour, it clears one. The laser bars'
+            // dimmer chases write nought to all eight eye channels in every
+            // step (see dim() in gen_programs.py, and the LTP trap it is
+            // there for) - that is housekeeping, not a red programme.
+            if (sv.value == 0)
+                continue;
+            Fixture *fxi = m_doc->fixture(sv.fxi);
+            const QLCChannel *qch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
+            if (qch == nullptr)
+                continue;
+            if (qch->colour() != QLCChannel::NoColour)
+                return true;
+            if (qch->group() == QLCChannel::Colour)
+                return true;             // a colour wheel
+            // a channel this group's colour scenes are known to move
+            foreach (const TrackGroup &g, m_groups)
+            {
+                if (g.colourValue.value(sv.fxi).contains(sv.channel))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
 qreal TrackEngine::litShareOf(Function *func, const QSet<quint32> &touched) const
 {
     if (func == nullptr || touched.isEmpty() || m_doc == nullptr)
@@ -3755,10 +3801,17 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
 
     // the pattern made in this colour beats the colourless one, which would
     // otherwise overwrite the palette with its own colour channel
+    // A programme in this colour, or one that has no colour of its own to
+    // impose: a chase that only moves dimmers takes whatever the room is
+    // wearing, so it belongs in every colour's pool. That is worth a great
+    // deal of file: one dimmer chase does the work of seven coloured ones.
+    // What this still keeps out is the old trap - a chase that writes its own
+    // red over the room's blue without saying "red" in its name.
     QList<TrackFuncInfo *> exact;
     foreach (TrackFuncInfo *info, ok)
     {
-        if (info->colour == colour)
+        if (info->colour == colour
+            || (info->colour.isEmpty() && info->setsColour == false))
             exact.append(info);
     }
     if (exact.isEmpty() == false)
@@ -6308,20 +6361,29 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         return sw;
     }
 
-    // the shape: a gentle few at rest, the whole menu when it is hot
+    // the shape: a gentle few at rest, the whole menu when it is hot.
+    // SquareTrue and SquareChoppy came in 2026-09-16 with the rest of the
+    // figure work - a choppy square is a corner-to-corner snap, which reads
+    // as a figure rather than as a drift, so it stays in the drops.
     QList<int> shapes;
     shapes << int(EFX::Circle) << int(EFX::Line) << int(EFX::Eight);
     if (tier > 0 && (e > 0.30 || tier == 2))
-        shapes << int(EFX::Leaf) << int(EFX::Diamond) << int(EFX::Line2) << int(EFX::Circle);
+        shapes << int(EFX::Leaf) << int(EFX::Diamond) << int(EFX::Line2) << int(EFX::Circle)
+               << int(EFX::SquareTrue);
     if (tier > 0 && (e > 0.55 || tier == 2))
         shapes << int(EFX::Lissajous) << int(EFX::Square) << int(EFX::Lissajous) << int(EFX::Eight);
+    if (tier == 2 && e > 0.45)
+        shapes << int(EFX::SquareChoppy) << int(EFX::Diamond);
     sw.shape = pick(shapes);
     if (sw.shape == int(EFX::Lissajous))
     {
-        sw.fx = pick(QList<int>() << 1 << 2 << 3);
-        sw.fy = pick(QList<int>() << 2 << 3 << 4);
-        if (sw.fx == sw.fy)
-            sw.fy++;
+        // the ratio IS the figure: 1:2 is a bow, 2:3 a pretzel, 3:4 a weave,
+        // 3:2 and 5:4 lean the other way. Eleven pairs where there were six.
+        static const int ratios[][2] = { { 1, 2 }, { 1, 3 }, { 2, 3 }, { 3, 2 }, { 2, 1 },
+                                         { 3, 4 }, { 4, 3 }, { 3, 5 }, { 5, 4 }, { 2, 5 }, { 5, 3 } };
+        int k = int(rng->bounded(11));
+        sw.fx = ratios[k][0];
+        sw.fy = ratios[k][1];
     }
 
     // size: the energy sets the ceiling, the dice the figure. Tilt has less
@@ -6342,7 +6404,12 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // 4 units of tilt is eight degrees - a circle that reads as a flat line
     sw.height = qBound(10, int(size * (0.45 + 0.55 * rng->generateDouble())), 28);
     if (sw.shape == int(EFX::Line) || sw.shape == int(EFX::Line2))
-        sw.rotation = pick(QList<int>() << 0 << 0 << 90 << 30 << 150 << 60 << 120);
+        sw.rotation = pick(QList<int>() << 0 << 0 << 90 << 30 << 150 << 60 << 120 << 15 << 165);
+    else if (sw.shape == int(EFX::Eight) || sw.shape == int(EFX::Leaf)
+             || sw.shape == int(EFX::Diamond) || sw.shape == int(EFX::Lissajous))
+        // a closed figure on its side or on the diagonal is a different
+        // figure, and a deliberate angle reads better than a random one
+        sw.rotation = pick(QList<int>() << 0 << 0 << 45 << 90 << 90 << 135);
     else
         sw.rotation = chance(0.4) ? int(rng->bounded(360)) : 0;
 
@@ -6373,12 +6440,45 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // mirrored, or fanned out around the figure
     if (heads >= 2)
     {
-        int rel = tier == 2 ? pick(QList<int>() << 0 << 1 << 1 << 2 << 3 << 4)
-                            : pick(QList<int>() << 0 << 0 << 1 << 3 << 4);
-        if (rel == 1)      sw.spread = 1;
-        else if (rel == 2) sw.spread = 2;
-        else if (rel == 3) sw.mirror = true;
-        else if (rel == 4) sw.fan = 360 / heads;
+        // HOW THE HEADS RELATE. This used to be one of five, exclusive: all
+        // together, a wave, one after another, mirrored, or fanned evenly
+        // round the figure. Tobias, 2026-09-16: "langt flere stilfulde
+        // figurer til movingheads, baade hvor de foelger hinanden, men ogsaa
+        // hvor de koerer offset ift. hinanden". So the two axes are separate
+        // now and combine freely:
+        //
+        //   propagation  together / a wave through them / one after another
+        //   offset       how far apart they start on the figure:
+        //                  even      360/heads - a ring, every head somewhere
+        //                            else on the shape
+        //                  half      180/heads - they cover half the figure
+        //                            and the row reads as a chevron
+        //                  pairs     180       - every second head opposite
+        //                  trail     45 or 30  - a tight cascade, the row
+        //                            following itself a beat behind
+        //   mirror       every second head runs it backwards (with an offset
+        //                that is a criss-cross; on its own, a breathing in-out)
+        //
+        // Together that is 3 x 6 x 2 = 36 ways for the heads to relate, and
+        // with the shapes and ratios above the figure is rarely the same twice
+        // in a night.
+        sw.spread = tier == 2 ? pick(QList<int>() << 0 << 0 << 1 << 1 << 2)
+                              : pick(QList<int>() << 0 << 0 << 0 << 1 << 2);
+        QList<int> offsets;
+        offsets << 0 << 0 << (360 / heads);
+        if (heads >= 3)
+            offsets << (180 / heads) << 180;
+        if (tier > 0)
+            offsets << 45 << 30;
+        sw.fan = pick(offsets);
+        // Mirroring reads as the row breathing in and out, which is a quiet
+        // figure - so it is common at rest and rarer when it is hot, where the
+        // offsets do the talking instead.
+        sw.mirror = chance(tier == 0 ? 0.35 : (tier == 2 ? 0.20 : 0.30));
+        // ... but not all three at once on a small row: two heads mirrored AND
+        // offset AND serial is not a figure, it is a scribble
+        if (heads <= 3 && sw.mirror && sw.fan > 0 && sw.spread == 2)
+            sw.mirror = false;
     }
 
     // the drop's character: hard = big and fast, wide = big and slow,

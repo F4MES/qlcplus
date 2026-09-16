@@ -144,6 +144,8 @@ struct TrackFuncInfo
     QSet<QString> groups;     // fixture groups it touches
     QString colour;           // canonical colour name, or empty
     bool step = false;        // sits inside a chaser or sequence
+    bool setsColour = true;   // writes a colour channel of its own (a colourless
+                              // dimmer chase does not, and may run under any colour)
     bool frozen = false;      // a chaser that can never step: nothing to run
     bool junk = false;        // blackout / reset / test / copy ...
     bool dimmer = false;      // sets a master dimmer itself (HTP beats the group dimmer)
@@ -567,6 +569,10 @@ protected:
      *  for a scene that lights all of them, 1/7 for a chase that walks one
      *  head of seven. Measured once, when the table is built. */
     qreal litShareOf(Function *func, const QSet<quint32> &touched) const;
+    /** Does this function write a colour of its own? A chase that only moves
+     *  dimmers takes whatever colour the room is in, so it can run under all
+     *  of them; one that writes red is a red programme. */
+    bool setsColourOf(Function *func) const;
     int guessStars(const TrackFuncInfo &info) const;
     qreal stepBeats(const TrackFuncInfo &info, qreal bpm) const;
     int divisionFor(const TrackFuncInfo &info, qreal bpm, int division) const;
