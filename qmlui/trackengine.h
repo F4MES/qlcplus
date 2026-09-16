@@ -646,6 +646,7 @@ private:
     qint64 m_cooldownMs;      // the clock reading the cooldown is judged against: frozen per section
     bool m_accentWasWhite;    // the last accent was white: the next one is not
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
+    bool m_barsLead;          // this section: the laser bars take the first effect place
     int m_castCursor;
     int m_motionCursor;
     QSet<QString> m_cast;

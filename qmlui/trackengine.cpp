@@ -111,6 +111,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_cooldownMs(-1)
     , m_accentWasWhite(false)
     , m_hatsOut(false)
+    , m_barsLead(false)
     , m_castCursor(0)
     , m_motionCursor(0)
     , m_master(1.0)
@@ -4073,6 +4074,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // recent on its second beat, fell out of the list, and the pick moved
         // on - one programme per beat through the whole pool
         m_cooldownMs = m_clock.elapsed();
+        // Do the laser bars lead this section? Drawn once, by the energy:
+        // at a quarter of the fader roughly one drop in seven, at the top
+        // nearly every drop (95 %) and six grooves in ten. Not always - "de
+        // skal vaere der ofte i perioder, jo hoejere energi, jo mere" (Tobias,
+        // 2026-09-16) - and a section they sit out is what makes the one they
+        // come back in read as an arrival.
+        qreal pLead = qBound(0.0, (energy - 0.25) / 0.70, 1.0);
+        pLead = isDrop ? 0.15 + 0.80 * pLead : 0.10 + 0.50 * pLead;
+        m_barsLead = rng->bounded(1000) < int(pLead * 1000.0);
     }
 
     QString base = baseGroup();
@@ -4193,6 +4203,27 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (m_groups.value(priority.at(i)).strobes)
             {
                 priority.prepend(priority.takeAt(i));
+                break;
+            }
+        }
+    }
+    // The laser bars are the room's signature: when this section drew them
+    // as lead (m_barsLead, by the energy - see the section-change block)
+    // they take the first effect place, behind the drop's strobe lead,
+    // inside the same budget. Left to the rotation alone they were in the
+    // cast one section in three whatever the fader said.
+    if (isBreak == false && m_barsLead && hold == false && isCalm == false)
+    {
+        int slot = 0;
+        if ((isDrop || preDrop) && priority.isEmpty() == false && m_groups.value(priority.first()).strobes)
+            slot = 1;
+        for (int i = 0; i < priority.count(); i++)
+        {
+            const TrackGroup &pg = m_groups.value(priority.at(i));
+            if (pg.lasers && pg.patternDevice == false)
+            {
+                if (i > slot)
+                    priority.insert(slot, priority.takeAt(i));
                 break;
             }
         }
@@ -5950,22 +5981,17 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
             sw.dy = 0;
             return sw;
         }
-        bool wide = tier == 2 && chance(0.15 + 0.35 * lw);
-        // The ordinary figure is 12-42 units (5-18 degrees); a "wide" one on a
-        // drop reaches 34-85, which is a third of the travel. That is
-        // deliberate - the bars are meant to take the whole wall now and then
-        // when it lands - and 85 is the agreed ceiling for the mirrors. The
-        // fader decides where inside each band this sits.
-        sw.height = wide ? int(34 + 40 * lw) + int(rng->bounded(12))
-                         : int(12 + 30 * lw) + int(rng->bounded(10));
-        // FIXED, whatever the energy says - and slow. The beams are 8-20 m
-        // long, so what is a small angle at the bar is metres at the far end:
-        // at 28 beats the tip of a 42-unit figure crossed the ceiling at over
-        // 6 m/s, and the wide one at nearly 7. A figure now takes 56 beats
-        // (26 s at 128 bpm) and a wide one 80 (38 s); the tip stays between 1
-        // and 3.3 m/s. Tobias, 2026-09-09: "EKSTREMT langsomme" - and of the
-        // options he kept the big figures and halved the pace, not the reach.
-        sw.beats = wide ? 80 : 56;
+        // SMALL and VERY slow, whatever the energy says. The figure is 8-26
+        // units (3-11 degrees) - the wide 34-85 figure is gone - and one
+        // figure takes 96-128 beats (45-60 s at 128 bpm), so the tip of a 20 m
+        // beam moves at well under half a metre a second. The fader only
+        // decides whether they move at all (above three fifths) and how far
+        // apart the bars run. Tobias, 2026-09-16: "selvom energien er hoej,
+        // skal de fortsat vaere MEGET langsomme og smaa bevaegelser, da
+        // laserne er saa lange. De helt langsomme bevaegelser ser ogsaa
+        // mest stilet ud."
+        sw.height = int(8 + 12 * lw) + int(rng->bounded(7));
+        sw.beats = 96 + int(rng->bounded(33));
         sw.dx = 0;
         sw.dy = int(rng->bounded(9)) - 4;          // barely off the aim
         // One after another along the wall, always - and the higher the fader
