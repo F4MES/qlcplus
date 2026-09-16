@@ -25,6 +25,10 @@ Rectangle
     color: "#262626"
     radius: 4
 
+    // The TrackView page. Set by the Loader that brings this panel up - an id
+    // from the other file is not in scope here, see the note at the Loader.
+    property var host: null
+
     readonly property color cText: "#EEEEEE"
     readonly property color cDim:  "#9A9A9A"
     readonly property color cLine: "#555555"
@@ -270,7 +274,7 @@ Rectangle
                 label: qsTr("CLOSE")
                 activeColor: "#E36B6B"
                 active: true
-                onTapped: trackViewRoot.setupOpen = false
+                onTapped: if (host) host.setupOpen = false
             }
         }
 

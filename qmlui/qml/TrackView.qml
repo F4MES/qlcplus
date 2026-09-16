@@ -1836,6 +1836,7 @@ Rectangle
                 id: setupLoader
                 parent: trackViewRoot        // overlay the whole page
                 z: 100
+                onLoaded: if (item) item.host = trackViewRoot
                 anchors.fill: parent
                 visible: trackViewRoot.setupOpen && trackManager
                          && trackManager.roleMode
