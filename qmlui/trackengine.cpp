@@ -51,6 +51,11 @@
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
 // gen_programs.py files its ~2700 chase step scenes here. See ensureTable().
 #define ENGINE_STEP_PATH      QStringLiteral("AUTO Programs/Steps")
+// The folder gen_programs.py writes into. What is in there is not the
+// operator's hand-made work - it is the engine's own material, generated
+// from this rig's fixtures and named in the engine's own language (tier,
+// colour, stars), and FULL AUTO is what it was built for.
+#define ENGINE_AUTO_PATH      QStringLiteral("AUTO Programs")
 // How long a group stays dark while its beams walk home at the top of a
 // break. Four bars: long enough for the motor, short enough to be a pause.
 // A break programme may run on the BASE only if it keeps this much of the
@@ -1764,6 +1769,19 @@ bool TrackEngine::userAllowed(const TrackFuncInfo &info, const QString &group) c
     // make its own: only pattern devices keep theirs, and laser positions
     // stay in the user's hands - a generated tilt is not a safe tilt.
     if (m_fullAuto == false || info.generated || info.role == ENGINE_ROLE_IDLE)
+        return true;
+    // ... but the "AUTO Programs" folder is not the user's work. It is built
+    // by gen_programs.py from this rig's own fixtures, one group per
+    // programme, tagged with tier, colour and stars in the engine's own
+    // language, and every step locked to the beat. Tobias asked for it in so
+    // many words - 2026-09-15, "saa skal du bygge mange flere programmer til
+    // FULL-AUTO" - and then it was shut out of full auto by the very rule
+    // that keeps hand-made chases from hijacking the engine. 2367 programmes
+    // that the only mode this room runs in could not reach (found 2026-09-16,
+    // after Tobias said "vi kommer nok aldrig til at bruge track uden
+    // full-auto"). The engine's own built-in figures still run: these join
+    // the draw, they do not replace it.
+    if (info.path.startsWith(ENGINE_AUTO_PATH))
         return true;
     if (info.groups.isEmpty())
         return true;
