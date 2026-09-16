@@ -453,7 +453,10 @@ public:
     void setRoom(int room);
     bool roomAuto() const;
     void setRoomAuto(bool on);
-    int roomByClock() const;
+    /** minutes past 21:00 when the house closes: 03:00, 05:00 on New Year's night */
+    static int closingMinutes();
+    /** 1.0 all night, sliding to 0 over the last forty minutes before closing, 0 after */
+    qreal closingCap() const;
     /** The ENERGY percent the clock last handed to TrackManager. */
     Q_INVOKABLE int roomPercent() const;
     /** ENERGY by the clock, a restaurant's night: 0 (still) until 22:00,
@@ -463,6 +466,7 @@ public:
     int clockPercent() const;
     void loadClockCurve(const QSettings &settings);
     static int keyBiasOf(const QString &key);
+    static QString dropStyleName(int style);
     void announceRoom();
     bool hold() const;
     void setHold(bool on);
@@ -521,6 +525,8 @@ protected slots:
     void slotFadeTimer();
     void slotPulseTimer();
     void slotSelfTestStep();
+    void slotEchoOn();
+    void slotEchoOff();
 
 protected:
     /* table building */
@@ -719,7 +725,13 @@ private:
     QMap<QString, QVector<qreal> > m_texture;  // per-fixture spread, drifting slowly
     QMap<QString, QList<quint32> > m_zoomScenes; // head group -> narrow, mid, wide
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
-    int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight
+    int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
+    int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)
+    QTimer m_echoTimer;       // the bars answer a hit half a beat later ...
+    QTimer m_echoOffTimer;    // ... and let go a third of a beat after that
+    QString m_echoKey;        // the laser group that answers
+    quint32 m_echoFid;        // in this colour scene
+    int m_echoBeat;           // the beat of the last echo - at most one every four
     QHash<QString, quint32> m_offScenes;              // group -> the scene that forces it to zero
     QHash<QString, QList<quint32> > m_strobeScenes;   // group -> a scene per rate, slow to fast
     int m_strobeUntil;        // the beat the burst ends on (-1: not strobing)

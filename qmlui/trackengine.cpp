@@ -127,6 +127,9 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_calmUntil(0)
     , m_logEnabled(true)
     , m_dropStyle(0)
+    , m_kickGone(0)
+    , m_echoFid(Function::invalidId())
+    , m_echoBeat(-100)
     , m_strobeUntil(-1)
     , m_strobeSeen(-1)
     , m_strobeRate(0)
@@ -159,6 +162,10 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     connect(&m_pulseTimer, SIGNAL(timeout()), this, SLOT(slotPulseTimer()));
     m_testTimer.setInterval(2000);
     connect(&m_testTimer, SIGNAL(timeout()), this, SLOT(slotSelfTestStep()));
+    m_echoTimer.setSingleShot(true);
+    m_echoOffTimer.setSingleShot(true);
+    connect(&m_echoTimer, SIGNAL(timeout()), this, SLOT(slotEchoOn()));
+    connect(&m_echoOffTimer, SIGNAL(timeout()), this, SLOT(slotEchoOff()));
     // MASTER is deliberately not restored: a night that starts at 40 %
     // because someone dimmed last time is worse than one that starts bright
     m_master = 1.0;
@@ -3884,6 +3891,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // ENERGY at zero is the restaurant: the base stands in its colour and
     // nothing moves or changes - no pulse, no patterns, no colour rotation,
     // no positions. A hold the slider imposes.
+    // the house closing takes the energy down whatever the slider says
+    qreal closing = closingCap();
+    energy = qMin(energy, closing);
+    // how long the kick has been away, in beats - the vocal passage the
+    // analysis did not flag as a break
+    if (kick < 0.0)
+        m_kickGone = 0;
+    else if (kick < 0.20)
+        m_kickGone++;
+    else
+        m_kickGone = 0;
     bool still = energy < 0.03;
     QRandomGenerator *rng = QRandomGenerator::global();
     bool hold = (m_hold || still) && forceNext == false;      // NEXT breaks a hold for one beat
@@ -4304,9 +4322,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
      *      figures; tight = chases and lines ---- */
     if (isDrop && (sectionChanged || m_dropStyle == 0) && hold == false)
     {
+        // hard = strobing and fast; wide = full, slow trades; tight = chases
+        // and lines; heavy = slow, broad, a deep pulse, few colours; nervous
+        // = many small chases, quick colour trades, no pulse. Two more since
+        // 2026-09-16, so two drops in a row read as two different ideas even
+        // to someone who does not know what they are looking at.
         QList<int> styles = { 2, 3, 2, 3, 0 };
+        if (energy > 0.30)
+            styles << 4 << 4;
         if (energy > 0.45)
             styles << 1 << 1;
+        if (energy > 0.55)
+            styles << 5 << 5;
         if (energy > 0.7)
             styles << 1;
         m_dropStyle = styles.at(int(rng->bounded(styles.count())));
@@ -4672,7 +4699,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             {
                 if (isBreak)       want = rng->bounded(4) == 0 ? 1 : 2;
                 else if (isBuild)  want = prog > 0.5 ? 0 : 1;
-                else if (isDrop)   want = m_dropStyle == 2 ? 2 : (m_dropStyle == 3 ? 0 : (m_dropStyle == 1 ? int(rng->bounded(2)) : int(rng->bounded(3))));
+                else if (isDrop)   want = (m_dropStyle == 2 || m_dropStyle == 4) ? 2 : ((m_dropStyle == 3 || m_dropStyle == 5) ? 0 : (m_dropStyle == 1 ? int(rng->bounded(2)) : int(rng->bounded(3))));
                 else               want = rng->bounded(3) == 0 ? 2 : 1;
                 m_zoom.insert(key, want);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
@@ -4864,7 +4891,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
         // the base is the light the room stands on: brighter than the
         // effects in a break, where it is often the only thing lit
-        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0), 1.0);
+        // The kick has been away two beats or more in a groove or a drop -
+        // a vocal over held chords, a passage the analysis did not flag as
+        // a break: the effects come down to little over half while it lasts
+        // and step back up when the kick returns, so the light is heard to
+        // listen. The base is untouched; the room never dims with it.
+        bool duck = m_kickGone >= 2 && isBreak == false && isCalm == false && key != base;
+        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0) * (duck ? 0.55 : 1.0), 1.0);
         qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_groupTrim.value(key, 1.0) * m_master;
         // run() puts MASTER and the trim on for us now, so the colour scene
         // gets the bare level - or the two would multiply
@@ -5050,6 +5083,44 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 run("flash", ff, 1.0, 0, true);
             else
                 genFlash(true, hue);
+
+            // The laser bars answer the hit: half a beat later, once, in the
+            // colour opposite the room's, for a third of a beat - an echo.
+            // In or out of the cast; at most one every four beats; not under
+            // a break, calm or a still room. (Tobias, 2026-09-16, forslag 5.)
+            if (energy >= 0.40 && isBreak == false && isCalm == false && still == false
+                && beat - m_echoBeat >= 4 && m_echoTimer.isActive() == false)
+            {
+                QString echoKey;
+                foreach (const QString &key, m_groupOrder)
+                {
+                    const TrackGroup &eg = m_groups.value(key);
+                    if (eg.lasers && eg.patternDevice == false && m_groupOff.contains(key) == false
+                        && darkGroups.contains(key) == false)
+                    {
+                        echoKey = key;
+                        break;
+                    }
+                }
+                if (echoKey.isEmpty() == false)
+                {
+                    static const QMap<QString, QString> opposite = {
+                        { "red", "cyan" }, { "cyan", "red" }, { "green", "magenta" }, { "magenta", "green" },
+                        { "blue", "yellow" }, { "yellow", "blue" }, { "amber", "blue" }, { "purple", "yellow" },
+                        { "orange", "cyan" }, { "pink", "green" }, { "uv", "yellow" } };
+                    QString echoHue = opposite.value(m_colour, QStringLiteral("white"));
+                    if (m_palette.contains(echoHue) == false || engineBannedColour(echoHue))
+                        echoHue = QStringLiteral("white");
+                    quint32 ef = colourFunction(echoKey, echoHue);
+                    if (ef != Function::invalidId())
+                    {
+                        m_echoKey = echoKey;
+                        m_echoFid = ef;
+                        m_echoBeat = beat;
+                        m_echoTimer.start(int(qMax(120.0, m_beatMs * 0.5)));
+                    }
+                }
+            }
         }
         else
         {
@@ -5111,6 +5182,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (changeColour) ev << (turnUp ? "colour-on-turn" : (holdUp ? "colour-on-clock" : "colour"));
         if (isBuild && state != QStringLiteral("build")) ev << "riser-build";
         if (m_hatsOut) ev << "hats-out";
+        if (closing < 1.0) ev << "closing";
+        if (m_kickGone >= 2 && isBreak == false) ev << "kick-gone";
+        if (isDrop && m_dropStyle > 0) ev << ("drop-" + dropStyleName(m_dropStyle));
         if (isDrop && bar < impactBarsLog) ev << "impact";
         if (mixBarsOut >= 6 && m_nextColour.isEmpty() == false) ev << "mix-turn";
         if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
@@ -5122,7 +5196,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                  : moveNames.join(" + "))
         .arg(m_colour.isEmpty() ? tr("(no colour)") : m_colour)
         .arg(accentColour.isEmpty() ? QString() : QString(" + %1").arg(accentColour))
-        .arg(state + (isDrop && m_dropStyle > 0 ? QString(" %1 %2").arg(QChar(0xb7)).arg(m_dropStyle == 1 ? tr("hard") : (m_dropStyle == 2 ? tr("wide") : tr("tight"))) : QString())
+        .arg(state + (isDrop && m_dropStyle > 0 ? QString(" %1 %2").arg(QChar(0xb7)).arg(dropStyleName(m_dropStyle)) : QString())
              + (landing ? tr(" landing") : (turnaround ? tr(" turn") : QString())))
         .arg(preDrop ? tr("  (drop in %1)").arg(beatsToNext) : QString())
         .arg(isCalm ? tr("  CALM") : QString())
@@ -5451,25 +5525,38 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         if (m_dropStyle == 1)       menu << ENGINE_PAT_SPARKLE << ENGINE_PAT_SPARKLE << ENGINE_PAT_ODDEVEN;
         else if (m_dropStyle == 2)  menu << ENGINE_PAT_STATIC << ENGINE_PAT_HALVES << ENGINE_PAT_STATIC;
         else if (m_dropStyle == 3)  menu << ENGINE_PAT_CHASE << ENGINE_PAT_PINGPONG << ENGINE_PAT_CHASE;
+        else if (m_dropStyle == 4)  menu << ENGINE_PAT_STATIC << ENGINE_PAT_HALVES << ENGINE_PAT_STATIC << ENGINE_PAT_STATIC;
+        else if (m_dropStyle == 5)  menu << ENGINE_PAT_CHASE << ENGINE_PAT_SPARKLE << ENGINE_PAT_PINGPONG << ENGINE_PAT_ODDEVEN;
         mv.pattern = pick(menu);
         mv.stepBeats = chance(wild) ? pick({ 1, 1, 2 }) : pick({ 2, 4 });
         if (m_dropStyle == 2)
             mv.stepBeats = qMax(mv.stepBeats, 2);
-        if (m_dropStyle == 3)
+        if (m_dropStyle == 4)
+            mv.stepBeats = qMax(mv.stepBeats, 2);
+        if (m_dropStyle == 3 || m_dropStyle == 5)
             mv.stepBeats = 1;
         // eighths and sixteenths: the fast patterns run between the beats
         // when it is hot - what makes a drop roll instead of tick
         bool fast = mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG
                  || mv.pattern == ENGINE_PAT_ODDEVEN || mv.pattern == ENGINE_PAT_SPARKLE;
-        if (fast && mv.stepBeats == 1 && chance((m_dropStyle == 2 ? 0.2 : 0.6) * ramp(e, 0.45, 0.95)))
+        if (fast && mv.stepBeats == 1 && m_dropStyle != 4
+            && chance((m_dropStyle == 2 ? 0.2 : (m_dropStyle == 5 ? 0.9 : 0.6)) * ramp(e, 0.45, 0.95)))
             mv.subSteps = m_dropStyle == 1 ? pick({ 2, 4, 4 }) : pick({ 2, 2, 4 });
         mv.pulse = 0.35 + 0.45 * wild * (0.7 + 0.3 * rng->bounded(1000) / 1000.0);
         if (m_dropStyle == 2)
             mv.pulse *= 0.6;
+        if (m_dropStyle == 4)
+            mv.pulse = qMin(0.95, mv.pulse * 1.35);       // heavy: the room pumps deep
+        if (m_dropStyle == 5)
+            mv.pulse = 0.0;                                // nervous: no pulse, all chase
         mv.pulseOn = chance(0.7) ? 0 : pick({ 1, 2 });
-        if (chance((m_dropStyle == 2 ? 0.8 : 0.5) * ramp(e, 0.30, 0.90)))
+        if (m_dropStyle == 4)
+            mv.colourBars = 8;                             // heavy: the colour stays
+        else if (m_dropStyle == 5)
+            mv.colourBars = pick({ 1, 2 });                // nervous: quick trades
+        else if (chance((m_dropStyle == 2 ? 0.8 : 0.5) * ramp(e, 0.30, 0.90)))
             mv.colourBars = pick({ 1, 2, 4 });
-        mv.flashBar = chance((m_dropStyle == 1 ? 0.7 : 0.35) * ramp(e, 0.20, 1.00));
+        mv.flashBar = chance((m_dropStyle == 1 ? 0.7 : (m_dropStyle == 5 ? 0.6 : (m_dropStyle == 4 ? 0.15 : 0.35))) * ramp(e, 0.20, 1.00));
     }
 
     // texture: the groove and the break spread the lit fixtures a little
@@ -5699,7 +5786,8 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
     // but only when it is the thing holding the intensity - otherwise the two
     // would multiply and MASTER would square itself.
     if (slot.startsWith(QStringLiteral("col:")) == false
-        && slot.startsWith(QStringLiteral("idle:")) == false)
+        && slot.startsWith(QStringLiteral("idle:")) == false
+        && slot.startsWith(QStringLiteral("echo:")) == false)
         return 1.0;
     QString group = slotGroup(slot);
     const TrackGroup &g = m_groups.value(group);
@@ -5950,6 +6038,21 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
             sw.shape = chance(0.5) ? int(EFX::Line) : int(EFX::Eight);
         sw.width = qBound(6, int(sw.width * 0.6), 60);
         sw.height = qBound(10, int(sw.height * 0.6), 28);
+        sw.beats = qMax(8, sw.beats);
+    }
+    else if (tier == 2 && m_dropStyle == 4)
+    {
+        // heavy: broad and slow - twice the time for a figure a little bigger
+        sw.width = qBound(6, int(sw.width * 1.2), 127);
+        sw.height = qBound(4, int(sw.height * 1.2), 28);
+        sw.beats = qMax(16, sw.beats * 2);
+    }
+    else if (tier == 2 && m_dropStyle == 5)
+    {
+        // nervous: small figures, still never under eight beats - the
+        // nerves are in the chases, not in the mirrors
+        sw.width = qBound(6, int(sw.width * 0.5), 50);
+        sw.height = qBound(10, int(sw.height * 0.5), 28);
         sw.beats = qMax(8, sw.beats);
     }
 
@@ -6918,7 +7021,12 @@ int TrackEngine::clockPercent() const
     // the ENERGY slider the way the old one did; a hand on the slider still
     // wins (Tobias, 2026-09-15: "det er stadig energi-slideren der skal
     // bestemme").
-    int anchor[8][2] = { { 0, 0 }, { 60, 0 }, { 120, 20 }, { 180, 45 }, { 240, 70 }, { 300, 85 }, { 420, 85 }, { 480, 0 } };
+    // The tail is the house closing: flat at the 02 h value until forty
+    // minutes before closing time, then a straight slide to nought AT
+    // closing - three or four tracks of the room coming down by itself
+    // (Tobias, 2026-09-16: "vi lukker altid kl 03, 05 nytaarsaften").
+    int close = closingMinutes();
+    int anchor[8][2] = { { 0, 0 }, { 60, 0 }, { 120, 20 }, { 180, 45 }, { 240, 70 }, { 300, 85 }, { close - 40, 85 }, { close, 0 } };
     for (int i = 0; i < 6 && i < m_clockCurve.count(); i++)
         anchor[i][1] = m_clockCurve.at(i);
     anchor[6][1] = anchor[5][1];
@@ -6926,8 +7034,8 @@ int TrackEngine::clockPercent() const
     int minutes = now.hour() * 60 + now.minute() - 21 * 60;
     if (minutes < 0)
         minutes += 24 * 60;          // past midnight
-    if (minutes >= 480)
-        return 0;                    // 05:00 - 21:00: a restaurant, still
+    if (minutes >= close)
+        return 0;                    // closed, and a restaurant again until 21:00
     for (int i = 1; i < 8; i++)
     {
         if (minutes <= anchor[i][0])
@@ -6956,19 +7064,34 @@ void TrackEngine::announceRoom()
     emit liveChanged();      // 'room' notifies on this one, and it moves now
 }
 
-int TrackEngine::roomByClock() const
+int TrackEngine::closingMinutes()
 {
-    // a club night, roughly: doors and a thin floor, warming up, full,
-    // peak after midnight; the morning after is empty again
+    // 03:00 every night; 05:00 on New Year's night (the evening of the 31st
+    // and the small hours of the 1st are the same night here)
+    QDate d = QDate::currentDate();
+    bool newYear = (d.month() == 12 && d.day() == 31) || (d.month() == 1 && d.day() == 1);
+    return ((newYear ? 5 : 3) + 24 - 21) * 60;
+}
+
+qreal TrackEngine::closingCap() const
+{
+    // A lid on the ENERGY that comes down by itself over the last forty
+    // minutes, whatever the slider says and whether or not the clock is
+    // still driving it - closing is not a mood, it is the law. After
+    // closing the lid stays at nought until the restaurant opens (05:00),
+    // when the day belongs to the slider again.
+    int close = closingMinutes();
     QTime now = QTime::currentTime();
-    int minutes = now.hour() * 60 + now.minute();
-    if (minutes >= 5 * 60 && minutes < 21 * 60 + 30)
-        return 0;                                    // 05:00 - 21:30 empty
-    if (minutes >= 21 * 60 + 30 && minutes < 23 * 60)
-        return 1;                                    // 21:30 - 23:00 warming
-    if (minutes >= 23 * 60 || minutes < 30)
-        return 2;                                    // 23:00 - 00:30 full
-    return 3;                                        // 00:30 - 05:00 peak
+    int minutes = now.hour() * 60 + now.minute() - 21 * 60;
+    if (minutes < 0)
+        minutes += 24 * 60;
+    if (minutes >= 480)
+        return 1.0;
+    if (minutes >= close)
+        return 0.0;
+    if (minutes >= close - 40)
+        return qreal(close - minutes) / 40.0;
+    return 1.0;
 }
 
 bool TrackEngine::startScene() const { return m_startScene; }
@@ -7321,6 +7444,20 @@ void TrackEngine::selfTest()
     slotSelfTestStep();
 }
 
+void TrackEngine::slotEchoOn()
+{
+    // the stage went dark in the half beat since the hit: no echo
+    if (m_doc == nullptr || m_active.isEmpty() || m_echoFid == Function::invalidId())
+        return;
+    run("echo:" + m_echoKey, m_echoFid, 1.0, 0, true);
+    m_echoOffTimer.start(int(qMax(80.0, m_beatMs * 0.3)));
+}
+
+void TrackEngine::slotEchoOff()
+{
+    stopSlot("echo:" + m_echoKey, false);
+}
+
 void TrackEngine::testDark()
 {
     // the group the last step lit: colour slot and every dimmer part off,
@@ -7452,6 +7589,19 @@ void TrackEngine::idle()
     m_report = list.isEmpty() ? (holdBase ? tr("(idle - base held)") : tr("(idle - no start scene)"))
                               : tr("(start scene)");
     emit liveChanged();
+}
+
+QString TrackEngine::dropStyleName(int style)
+{
+    switch (style)
+    {
+        case 1: return tr("hard");
+        case 2: return tr("wide");
+        case 3: return tr("tight");
+        case 4: return tr("heavy");
+        case 5: return tr("nervous");
+        default: return QString();
+    }
 }
 
 int TrackEngine::keyBiasOf(const QString &key)
