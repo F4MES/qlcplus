@@ -7021,22 +7021,31 @@ int TrackEngine::clockPercent() const
     // the ENERGY slider the way the old one did; a hand on the slider still
     // wins (Tobias, 2026-09-15: "det er stadig energi-slideren der skal
     // bestemme").
+    // Nothing moves before 22:30. The 22 h value HOLDS until half past, and
+    // the climb to the 23 h value runs from there - so a restaurant evening
+    // is still a restaurant at ten past ten (Tobias, 2026-09-16: "lyset skal
+    // ikke bevaege sig foer kl. 22:30. Ikke 21").
     // The tail is the house closing: flat at the 02 h value until forty
     // minutes before closing time, then a straight slide to nought AT
     // closing - three or four tracks of the room coming down by itself
-    // (Tobias, 2026-09-16: "vi lukker altid kl 03, 05 nytaarsaften").
+    // ("vi lukker altid kl 03, 05 nytaarsaften").
     int close = closingMinutes();
-    int anchor[8][2] = { { 0, 0 }, { 60, 0 }, { 120, 20 }, { 180, 45 }, { 240, 70 }, { 300, 85 }, { close - 40, 85 }, { close, 0 } };
-    for (int i = 0; i < 6 && i < m_clockCurve.count(); i++)
-        anchor[i][1] = m_clockCurve.at(i);
-    anchor[6][1] = anchor[5][1];
+    int anchor[9][2] = { { 0, 0 }, { 60, 0 }, { 90, 0 }, { 120, 20 }, { 180, 45 },
+                         { 240, 70 }, { 300, 85 }, { close - 40, 85 }, { close, 0 } };
+    // the six tiles are 21, 22, 23, 00, 01, 02 h; anchor[2] is the 22:30 hold
+    anchor[0][1] = m_clockCurve.value(0, 0);
+    anchor[1][1] = m_clockCurve.value(1, 0);
+    anchor[2][1] = anchor[1][1];
+    for (int i = 2; i < 6 && i < m_clockCurve.count(); i++)
+        anchor[i + 1][1] = m_clockCurve.at(i);
+    anchor[7][1] = anchor[6][1];
     QTime now = QTime::currentTime();
     int minutes = now.hour() * 60 + now.minute() - 21 * 60;
     if (minutes < 0)
         minutes += 24 * 60;          // past midnight
     if (minutes >= close)
         return 0;                    // closed, and a restaurant again until 21:00
-    for (int i = 1; i < 8; i++)
+    for (int i = 1; i < 9; i++)
     {
         if (minutes <= anchor[i][0])
         {
@@ -7076,10 +7085,15 @@ int TrackEngine::closingMinutes()
 qreal TrackEngine::closingCap() const
 {
     // A lid on the ENERGY that comes down by itself over the last forty
-    // minutes, whatever the slider says and whether or not the clock is
-    // still driving it - closing is not a mood, it is the law. After
-    // closing the lid stays at nought until the restaurant opens (05:00),
-    // when the day belongs to the slider again.
+    // minutes - but ONLY while the clock is still driving the slider. A
+    // hand on ENERGY turns "ENERGY by clock" off, and from that moment the
+    // lid is gone: the rig can be tested at four in the morning, and a
+    // night that runs late is the operator's call, not the clock's.
+    // (Tobias, 2026-09-16: "saa laenge vi overrider det ved at traekke i
+    // energi-slideren er det fint ... hvad nu hvis vi vil teste lyset
+    // efter luk?")
+    if (m_roomAuto == false)
+        return 1.0;
     int close = closingMinutes();
     QTime now = QTime::currentTime();
     int minutes = now.hour() * 60 + now.minute() - 21 * 60;
