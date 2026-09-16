@@ -595,7 +595,7 @@ protected:
     quint32 motionFor(const QString &group, const QString &colour,
                       const QSet<QString> &cast, int cursor, int tier,
                       qreal bpm, int division, bool staticOnly, int maxStars,
-                      bool litOnly = false) const;
+                      qreal litFloor = 0.0) const;
     quint32 positionFunction(const QString &group, int cursor, int tier) const;
     /** True if this scene switches a fixture's own effect/movement macro on. */
     bool macroPosition(quint32 fid) const;
@@ -747,6 +747,7 @@ private:
     QMap<QString, TrackMove> m_liveMove;   // the move as shaped for this beat (build, turnaround)
     QMap<QString, qreal> m_moveLevel;      // the level applyMove last gave a group (sub-beat steps)
     QMap<QString, bool> m_patterned;       // whether that group's pattern is live (sub-beat steps)
+    QSet<QString> m_motionDim;             // groups whose MOTION owns the dimmers this beat
     QMap<QString, QVector<qreal> > m_texture;  // per-fixture spread, drifting slowly
     QMap<QString, QList<quint32> > m_zoomScenes; // head group -> narrow, mid, wide
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none

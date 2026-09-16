@@ -302,6 +302,7 @@ void TrackEngine::slotDocSettled()
     m_accentPick.clear();
     m_accentGroup.clear();
     m_hatsOut = false;
+    m_motionDim.clear();
     m_pulseTimer.stop();
     stopEcho();
     m_fadeTimer.stop();
@@ -359,6 +360,25 @@ void TrackEngine::slotPulseTimer()
         if (m_pulseDepth.value(key, 0.0) <= 0.0 && m_breathe.value(key, 0) <= 0)
             continue;
         any = true;
+        // the chase owns the dimmers: the pulse rides on ITS intensity, since
+        // the parts are handing it nought (see tick())
+        if (m_motionDim.contains(key))
+        {
+            QString slot = "mot:" + key;
+            quint32 fid = m_active.value(slot, Function::invalidId());
+            Function *func = fid == Function::invalidId() ? nullptr : m_doc->function(fid);
+            if (func != nullptr)
+            {
+                qreal out = qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(key), 1.0);
+                if (m_blackout)
+                    out = 0.0;
+                int attr = m_activeAttr.value(slot, -1);
+                if (attr >= 0)
+                    func->adjustAttribute(out, attr);
+                m_activeOut.insert(slot, out);
+            }
+            continue;
+        }
         const TrackGroup &g = m_groups.value(key);
         qreal f = pulseFactor(key);
         for (int i = 0; i < g.parts.count(); i++)
@@ -3178,6 +3198,7 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
             m_cast.remove(key);
             m_liveMove.remove(key);
             m_patterned.remove(key);
+            m_motionDim.remove(key);
             m_pulseDepth.remove(key);
             m_breathe.remove(key);
         }
@@ -3659,9 +3680,12 @@ QString TrackEngine::colourForGroup(const QString &group, const QString &colour)
     // So: the room's colour if the group has it, otherwise the nearest one it
     // does have. Neighbours round the wheel, warm to warm and cold to cold;
     // white last, because white is punctuation rather than a colour.
+    // (The table is called `neighbours`, not `near`: `near` and `far` are
+    // legacy Windows macros from windef.h and MinGW rejects them as names.
+    // CI caught it, 2026-09-16.)
     if (colour.isEmpty() || groupHasColour(group, colour))
         return colour;
-    static const QMap<QString, QStringList> near =
+    static const QMap<QString, QStringList> neighbours =
     {
         { "amber",   { "yellow", "orange", "red", "white" } },
         { "orange",  { "amber", "yellow", "red", "white" } },
@@ -3683,7 +3707,7 @@ QString TrackEngine::colourForGroup(const QString &group, const QString &colour)
     // this table handed it to the bars for every orange and amber. The ban is
     // about a lamp standing in the colour; the yellow inside a two-colour or
     // per-eye programme is not this, and is untouched.
-    foreach (const QString &c, near.value(colour))
+    foreach (const QString &c, neighbours.value(colour))
     {
         if (engineBannedColour(c) == false && groupHasColour(group, c))
             return c;
@@ -3742,7 +3766,7 @@ quint32 TrackEngine::motionFunction(const QString &group, const QString &colour,
 quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
                                const QSet<QString> &cast, int cursor, int tier,
                                qreal bpm, int division, bool staticOnly, int maxStars,
-                               bool litOnly) const
+                               qreal litFloor) const
 {
     Q_UNUSED(bpm)
     Q_UNUSED(division)
@@ -3754,10 +3778,16 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // chase or EFX is movement and belongs to drops and builds
         if (staticOnly && info->type != int(Function::SceneType))
             continue;
-        // the base in a break: a chase may run, but only one that leaves the
-        // room lit (see ENGINE_BREAK_LIT)
-        if (litOnly && info->type != int(Function::SceneType)
-            && info->litShare < ENGINE_BREAK_LIT)
+        // How much of the group a chase has to leave lit. This matters far
+        // more since the dimmers were handed over (runde 69): before, the
+        // engine's own parts held the light up and a chase that walks one
+        // head of seven was simply invisible; now it is real, and on the BASE
+        // that is the room going dark - the thing Tobias has reported more
+        // than any other. So the base asks for a floor in every section, not
+        // only in a break, and the floor follows what the engine's own
+        // figures already do (patternMask keeps the heads at 0.35).
+        if (litFloor > 0.0 && info->type != int(Function::SceneType)
+            && info->litShare < litFloor)
             continue;
         // energy stars: a three-star chase waits for a full-energy drop.
         // A BREAK is always ceiling 1, and that is one rule too many: it also
@@ -5308,8 +5338,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         quint32 mf = Function::invalidId();
         if (isCalm == false)
         {
+            // the base must leave the room lit: most in a break, least in a
+            // drop, where a punch is the point
+            qreal litFloor = (key == base) ? (isBreak ? ENGINE_BREAK_LIT
+                                                      : (isDrop ? 0.25 : 0.35))
+                                           : 0.0;
             mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
-                           moving == false, stars, breakBase);
+                           moving == false, stars, litFloor);
             if (mf == Function::invalidId() && moving)
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars);
         }
@@ -5329,7 +5364,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
         else
+        {
             stopSlot("mot:" + key, false);
+            m_motionDim.remove(key);
+        }
 
         if (g.hasDimmer)
         {
@@ -5396,9 +5434,37 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           && (cf == Function::invalidId() || m_funcs.value(cf).dimmer == false)
                           && (mf == Function::invalidId() || m_funcs.value(mf).dimmer == false);
             m_patterned.insert(key, patterned);
+
+            // WHO OWNS THE DIMMERS. The engine's own dimmer parts are written
+            // with Universe::ReplaceBlend - "own this channel while AUTO runs"
+            // - and a chase's step scenes are ordinary HTP. An HTP write that
+            // is LOWER than what is already there is thrown away
+            // (universe.cpp: "if (value < currentValue) return false"), so a
+            // chase could raise a dimmer but never lower one. Every step that
+            // said "this lamp is dark" was ignored, and the whole of the AUTO
+            // programme library was invisible on any group with a master
+            // dimmer: the room only ever showed the engine's own figures.
+            // Found 2026-09-16, two days before the rig had to work.
+            //
+            // So when the motion IS a chase that works the dimmers, the parts
+            // hand the channel over: they write nought, and the chase's own
+            // values are what the room sees. The group level, MASTER and the
+            // trim went into the chase through run() above; the pulse follows
+            // below, on the chase's own intensity.
+            const TrackFuncInfo &mInfo = m_funcs.value(mf);
+            bool motionOwns = mf != Function::invalidId()
+                           && mInfo.type != int(Function::SceneType)
+                           && mInfo.dimmer && mInfo.litShare < 0.99
+                           && darkGroups.contains(key) == false;
+            if (motionOwns)
+                m_motionDim.insert(key);
+            else
+                m_motionDim.remove(key);
+
             m_liveMove.insert(key, mv);                  // the shaped move, for the sub-beat steps
             if ((m_flash && m_flashHeld.contains(key)) == false)
-                applyMove(key, darkGroups.contains(key) ? 0.0 : groupLevel, beat, secStart, prog, mv, patterned);
+                applyMove(key, (darkGroups.contains(key) || motionOwns) ? 0.0 : groupLevel,
+                          beat, secStart, prog, mv, patterned);
             if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1 && (haveCurves == false || turn))
                 moveHit = true;
         }
