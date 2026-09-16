@@ -5004,6 +5004,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (kick < 0.20)
                     pulseBeat = false;
                 strength = 0.5 + 0.5 * qBound(0.0, kick, 1.0);
+                // ... but a DEEP pulse reaches full every time. The peak is
+                // (1 - depth) + depth * strength: with the base's floor down
+                // at 7 % (round 54) a middling kick would have topped out at
+                // half, and a room whose heads never reach full at the top of
+                // the fader is a darker room than the one below it. The kick's
+                // say is how far the light FALLS, and that is the floor's job
+                // now; on a soft-pulsing group it still scales the hit as
+                // before.
+                if (depth > 0.60)
+                    strength = qMax(strength, 0.90);
             }
             // A fixture whose dimmer is a switch is driven by a square gate,
             // and a square gate stays SHUT until something re-opens it. On a
