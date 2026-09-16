@@ -885,6 +885,9 @@ void TrackEngine::ensureTable()
             if (key.isEmpty() == false)
                 info.groups.insert(key);
         }
+        // after the groups are known, not before: this info is still a local
+        // and is not in m_funcs yet, so the helper cannot look itself up
+        info.coversColour = coversColourOf(func, info.groups);
 
         // A scene that carries the master dimmer itself cannot be dimmed by
         // the group dimmer (HTP: the higher value wins), so the engine has to
@@ -2572,6 +2575,85 @@ bool TrackEngine::setsColourOf(Function *func) const
         }
     }
     return false;
+}
+
+bool TrackEngine::coversColourOf(Function *func, const QSet<QString> &groups) const
+{
+    // Does this programme paint a colour on EVERY fixture of its group, in
+    // every step?
+    //
+    // It matters because the engine runs two layers at once: the group's
+    // colour scene in "col:" and the programme in "mot:". Colour channels
+    // sit in QLCChannel::Intensity, which QLC+ blends HTP - universe.cpp
+    // refuses a value lower than the one already there, per channel. So a
+    // room standing in magenta under a programme that paints cyan on half
+    // the lamps does not show magenta and cyan: the cyan lamps get
+    // max(255,0), max(0,255), max(255,255) and come out WHITE. Measured
+    // 2026-09-16 across the twelve pair directions: four survived, four
+    // turned the partner white, two lost the partner altogether.
+    //
+    // When the programme covers the whole group, the colour scene underneath
+    // has nothing left to contribute and the tick stops it. The test is
+    // deliberately strict - EVERY fixture, EVERY step - because a programme
+    // that paints only some lamps still needs the scene for the rest, or a
+    // lamp would stand with its dimmer up and no colour behind it.
+    if (func == nullptr || m_doc == nullptr)
+        return false;
+    if (groups.count() != 1)
+        return false;
+    const TrackGroup &g = m_groups.value(*groups.constBegin());
+    if (g.fixtures.isEmpty())
+        return false;
+
+    QList<quint32> steps;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+    }
+    else
+        steps.append(func->id());
+    if (steps.isEmpty())
+        return false;
+
+    foreach (quint32 sid, steps)
+    {
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            return false;
+        QSet<quint32> painted;
+        foreach (const SceneValue &sv, scene->values())
+        {
+            if (g.fixtures.contains(sv.fxi) == false)
+                continue;
+            Fixture *fxi = m_doc->fixture(sv.fxi);
+            const QLCChannel *qch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
+            if (qch == nullptr)
+                continue;
+            // A lamp this step holds at nought needs no colour behind it -
+            // it is off. Without this a pulse (lit step, dark step) would
+            // never qualify, and the pulse is exactly where the two-colour
+            // programmes live.
+            if (sv.value == 0 && sv.channel == dimmerChannel(fxi))
+            {
+                painted.insert(sv.fxi);
+                continue;
+            }
+            if (sv.value == 0)
+                continue;                // a zero clears a colour, it does not set one
+            if (qch->colour() != QLCChannel::NoColour
+                || qch->group() == QLCChannel::Colour
+                || g.colourValue.value(sv.fxi).contains(sv.channel))
+                painted.insert(sv.fxi);
+        }
+        foreach (quint32 fid, g.fixtures)
+        {
+            if (painted.contains(fid) == false)
+                return false;
+        }
+    }
+    return true;
 }
 
 qreal TrackEngine::litShareOf(Function *func, const QSet<quint32> &touched) const
@@ -5315,13 +5397,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // palette has more) - and the motion pick below matches on it too,
         // so a bar programme in the substituted colour is found
         colour = colourForGroup(key, colour);
-        quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
-        // colour scenes swap hard: a soft fade left the old colour adding up
-        // with the new one on RGB fixtures for a bar - a blend nobody asked for
-        if (cf != Function::invalidId())
-            run("col:" + key, cf, m_funcs.value(cf).dimmer ? glBase : 1.0, 0, true);
-        else
-            stopSlot("col:" + key, false);
 
         // motion: real movement (chases, EFX) in drops, the climbing half of
         // a build, and on the base from the groove onward. Static pattern
@@ -5373,6 +5448,32 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (mf == Function::invalidId() && moving)
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars);
         }
+
+        quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
+        // The programme paints a colour on every lamp in this group, so the
+        // group's colour scene under it has nothing left to say - and it does
+        // not stay silent: colour channels are QLCChannel::Intensity, which
+        // QLC+ blends HTP, so magenta underneath cyan gives max(255,0),
+        // max(0,255), max(255,255) = WHITE. That is what turned the two-
+        // colour programmes into one colour and a white (2026-09-16: of the
+        // twelve pair directions, four survived, four went white, two lost
+        // the partner). The split scene is kept whatever happens: it paints
+        // the bars' per-eye channels, which no programme touches.
+        // ... and only when the programme is actually wearing the colour the
+        // room asked for. motionFor() falls back to another colour when this
+        // one has nothing to offer, and a fallback must not be allowed to
+        // repaint the room: there the scene underneath is the whole point.
+        if (mf != Function::invalidId() && splitScene == Function::invalidId()
+            && m_funcs.value(mf).coversColour
+            && m_funcs.value(mf).colour == colour)
+            cf = Function::invalidId();
+        // colour scenes swap hard: a soft fade left the old colour adding up
+        // with the new one on RGB fixtures for a bar - a blend nobody asked for
+        if (cf != Function::invalidId())
+            run("col:" + key, cf, m_funcs.value(cf).dimmer ? glBase : 1.0, 0, true);
+        else
+            stopSlot("col:" + key, false);
+
         if (mf != Function::invalidId())
         {
             const TrackFuncInfo &mi = m_funcs.value(mf);

@@ -146,6 +146,9 @@ struct TrackFuncInfo
     bool step = false;        // sits inside a chaser or sequence
     bool setsColour = true;   // writes a colour channel of its own (a colourless
                               // dimmer chase does not, and may run under any colour)
+    bool coversColour = false; // paints a colour on EVERY fixture of its group, in
+                              // every step - so the group's own colour scene under
+                              // it is not just redundant, it is HTP-added on top
     bool frozen = false;      // a chaser that can never step: nothing to run
     bool junk = false;        // blackout / reset / test / copy ...
     bool dimmer = false;      // sets a master dimmer itself (HTP beats the group dimmer)
@@ -573,6 +576,7 @@ protected:
      *  dimmers takes whatever colour the room is in, so it can run under all
      *  of them; one that writes red is a red programme. */
     bool setsColourOf(Function *func) const;
+    bool coversColourOf(Function *func, const QSet<QString> &groups) const;
     int guessStars(const TrackFuncInfo &info) const;
     qreal stepBeats(const TrackFuncInfo &info, qreal bpm) const;
     int divisionFor(const TrackFuncInfo &info, qreal bpm, int division) const;
