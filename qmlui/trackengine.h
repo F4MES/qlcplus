@@ -147,6 +147,9 @@ struct TrackFuncInfo
     bool setsColour = true;   // writes a colour channel of its own (a colourless
                               // dimmer chase does not, and may run under any colour)
     QString family;           // the figure, not the name: "Row", "Eyes", "Span" ...
+    quint32 scatter = 0;      // nameScatter(name): the ORDER candidates() sorts by.
+                              // Not the id - see candidates() for why that was
+                              // the reason every section looked like the last
     bool coversColour = false; // paints a colour on EVERY fixture of its group, in
                               // every step - so the group's own colour scene under
                               // it is not just redundant, it is HTP-added on top

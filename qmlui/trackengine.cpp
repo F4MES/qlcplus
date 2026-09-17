@@ -47,6 +47,22 @@
 #include "efx.h"
 #include "doc.h"
 
+/** Scatter a name across the whole 32-bit range. FNV-1a, written out rather
+ *  than taken from qHash() because Qt 6 randomises qHash's seed per process:
+ *  the candidate order would then be different on every launch, and "it chose
+ *  that one last night" would stop being a question anyone could answer.
+ *  Read once per function into TrackFuncInfo::scatter; see candidates(). */
+static quint32 nameScatter(const QString &name)
+{
+    quint32 h = 2166136261u;
+    for (qsizetype i = 0; i < name.length(); i++)
+    {
+        h ^= quint32(name.at(i).unicode() & 0xFF);
+        h *= 16777619u;
+    }
+    return h;
+}
+
 #define ENGINE_INTENSITY_ATTR 0
 #define ENGINE_DIMMER_PREFIX  QStringLiteral("TRACK Dimmer: ")
 // gen_programs.py files its ~2700 chase step scenes here. See ensureTable().
@@ -889,6 +905,10 @@ void TrackEngine::ensureTable()
         // and is not in m_funcs yet, so the helper cannot look itself up
         info.coversColour = coversColourOf(func, info.groups);
         info.family = familyOf(info.name);
+        // Once here, not once per comparison: candidates() sorts on this and
+        // runs several times a beat, on a machine that also has to paint a
+        // waveform.
+        info.scatter = nameScatter(info.name);
 
         // A scene that carries the master dimmer itself cannot be dimmed by
         // the group dimmer (HTP: the higher value wins), so the engine has to
@@ -1630,6 +1650,7 @@ void TrackEngine::ensurePositionScenes()
             TrackFuncInfo info;
             info.id = scene->id();
             info.name = scene->name();
+            info.scatter = nameScatter(info.name);
             info.type = int(Function::SceneType);
             info.role = ENGINE_ROLE_POSITION;
             info.guess = ENGINE_ROLE_POSITION;
@@ -2122,6 +2143,7 @@ void TrackEngine::ensureColourScenes()
             TrackFuncInfo info;
             info.id = scene->id();
             info.name = scene->name();
+            info.scatter = nameScatter(info.name);
             info.type = int(Function::SceneType);
             info.role = ENGINE_ROLE_COLOR;
             info.guess = ENGINE_ROLE_COLOR;
@@ -3709,7 +3731,33 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             continue;
         out.append(const_cast<TrackFuncInfo *>(&info));
     }
-    std::sort(out.begin(), out.end(), [](TrackFuncInfo *a, TrackFuncInfo *b) { return a->id < b->id; });
+    // NOT by id. The order of this list is the order the cursor walks, and
+    // the cursor moves ONE TO THREE PLACES per section (m_motionCursor).
+    // Sorted by id, the list is the order the generator wrote the file in -
+    // and the generator writes a figure's variants next to each other:
+    // "Wash Wave", "Wash Wave Back", "Wash Wave Fade", then "Wash Colour
+    // Cycle", "Wash Colour Cycle Fade", "Wash Colour Random" ... So a step of
+    // one to three lands on a VARIANT OF THE SAME FIGURE. Measured on the
+    // show file of 2026-09-17: in the wash's groove pool, 48 % of the places
+    // one to three ahead carry the same family; in the drop pool 56 %, on the
+    // strobes 46-49 %. That is the report, with arithmetic under it - "de
+    // samme med forskellige farver" and "strobe-lysene ... blinker naesten
+    // altid ens".
+    //
+    // The family rule in motionFor() cannot save it: it drops the family that
+    // just ran, and `cursor % other.count()` then lands in the SAME
+    // neighbourhood - the next figure in file order, whose variants are what
+    // the following sections walk through.
+    //
+    // So neighbours in the list must not be neighbours in the file. Sorted by
+    // a hash of the name, a step of one to three is a step to an unrelated
+    // figure: the same measurement gives 4-15 %. The hash is our own and
+    // fixed, not qHash(): Qt 6 seeds qHash per process, and an order that
+    // changes on every launch cannot be reproduced when a night goes wrong.
+    // Id breaks the tie, so the order is total and stable.
+    std::sort(out.begin(), out.end(), [](TrackFuncInfo *a, TrackFuncInfo *b) {
+        return a->scatter != b->scatter ? a->scatter < b->scatter : a->id < b->id;
+    });
     return out;
 }
 
