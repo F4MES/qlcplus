@@ -2376,6 +2376,10 @@ void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
             row.insert(QStringLiteral("flags"), t.value(QStringLiteral("flags")).toInt());
             row.insert(QStringLiteral("manual"), t.value(QStringLiteral("manual")).toBool(false));
             row.insert(QStringLiteral("version"), t.value(QStringLiteral("version")).toInt());
+            // epoch ms - a track's play time, 0 for an entry from before BLT
+            // kept one. qint64, not int: 2026 in milliseconds does not fit.
+            row.insert(QStringLiteral("playedAt"),
+                       qint64(t.value(QStringLiteral("played-at")).toDouble(0.0)));
             m_cacheList.append(row);
         }
         emit cacheChanged();

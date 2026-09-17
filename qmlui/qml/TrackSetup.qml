@@ -342,17 +342,62 @@ Rectangle
                     boundsBehavior: Flickable.StopAtBounds
                     model: trackManager ? trackManager.cacheList : []
 
-                    delegate: Rectangle
+                    // A date line above the first row of each day. cacheList is
+                    // a plain list, not a model with roles, so ListView's own
+                    // `section` cannot see into it - the delegate compares its
+                    // own day with the row above instead. BLT sends the list
+                    // newest first, so the days come out in order by themselves.
+                    delegate: Column
                     {
                         width: ListView.view.width
-                        height: 42
-                        color: "#1F1F1F"
-                        radius: 3
                         // a model reset re-evaluates the bindings below while
                         // the row is already gone; without a fallback that is a
                         // TypeError per binding per row, on every reset.
                         property var md: modelData ? modelData
-                                                   : ({ title: "", flags: 0, manual: false })
+                                                   : ({ title: "", flags: 0, manual: false, playedAt: 0 })
+
+                        function dayOf(ms)
+                        {
+                            if (!ms || ms <= 0) return ""
+                            return Qt.formatDate(new Date(ms), "yyyy-MM-dd")
+                        }
+                        property string thisDay: dayOf(md.playedAt)
+                        // "\u0000" and not "": an entry with no play time has
+                        // an empty day, and the first of THOSE needs its heading
+                        // too - comparing against "" would swallow it.
+                        property string prevDay:
+                            (index > 0 && trackManager && trackManager.cacheList[index - 1])
+                                ? dayOf(trackManager.cacheList[index - 1].playedAt)
+                                : "\u0000"
+
+                        Text
+                        {
+                            width: parent.width
+                            visible: thisDay !== prevDay
+                            height: visible ? 24 : 0
+                            verticalAlignment: Text.AlignBottom
+                            leftPadding: 4
+                            text:
+                            {
+                                if (thisDay === "")
+                                    return qsTr("earlier - no play time recorded")
+                                var today = Qt.formatDate(new Date(), "yyyy-MM-dd")
+                                var y = new Date(); y.setDate(y.getDate() - 1)
+                                if (thisDay === today) return qsTr("today")
+                                if (thisDay === Qt.formatDate(y, "yyyy-MM-dd")) return qsTr("yesterday")
+                                return thisDay
+                            }
+                            color: "#E3B44F"
+                            font.bold: true
+                            font.pixelSize: 11
+                        }
+
+                        Rectangle
+                        {
+                        width: parent.width
+                        height: 42
+                        color: "#1F1F1F"
+                        radius: 3
 
                         RowLayout
                         {
@@ -410,6 +455,7 @@ Rectangle
                                 }
                                 Timer { id: forgetArm; interval: 4000; onTriggered: forgetTile.armed = false }
                             }
+                        }
                         }
                     }
                 }
