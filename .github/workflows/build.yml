@@ -345,7 +345,18 @@ jobs:
         shell: msys2 {0}
         run: |
           mkdir -p /c/projects/D2XXSDK
-          wget https://qlcplus.org/misc/CDM-v2.12.36.20-WHQL-Certified.zip -O /c/projects/D2XXSDK/cdm.zip
+          # qlcplus.org answers 429 Too Many Requests when several builds ask
+          # at once, and wget gives up on the first try with exit 8 - a whole
+          # Windows build lost to someone else's download (2026-09-17).
+          # A plain loop rather than --retry-on-http-error: that flag needs
+          # wget 1.19+, and a build must not fail on an unknown option either.
+          for try in 1 2 3 4 5; do
+            wget https://qlcplus.org/misc/CDM-v2.12.36.20-WHQL-Certified.zip \
+                 -O /c/projects/D2XXSDK/cdm.zip && break
+            echo "D2XX download failed (attempt $try) - waiting 30 s"
+            sleep 30
+          done
+          test -s /c/projects/D2XXSDK/cdm.zip
           cd /c/projects/D2XXSDK
           unzip cdm.zip
           cd amd64
