@@ -4031,6 +4031,9 @@ QString TrackEngine::familyOf(const QString &name)
     // everything after it is a rhythm.
     static const QStringList skip = {
         "auto", "wash", "bars", "mini", "strobes", "laser", "lasers", "eyes4",
+        // "row" is what the whole shape family calls itself - "Row Walk",
+        // "Row Ripple", "Row Outer In" - so it says nothing about the figure
+        "row",
         "break", "groove", "drop", "normal", "medium", "fan",
         "slow", "fast", "calm", "low", "high", "soft", "wide", "far", "cross",
         "red", "green", "blue", "cyan", "magenta", "orange", "white", "yellow",
@@ -4132,7 +4135,15 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         // a laser sweep runs on its own only when its name says it stays low -
         // the rest are there for the operator to choose by hand
         // "low" as a WORD: "Slow" and "Yellow" are not a promise to stay low
-        if (lasers && (info->sweep || info->type == int(Function::ChaserType))
+        //
+        // EVERY candidate, not just chasers and sweeps. A SCENE went straight
+        // into this pool with no aim check at all, because it is neither -
+        // and the operator's own "LaserDOWN" is a scene, 115 units below the
+        // home aim, pointing at the floor. In the log of 2026-09-17 the
+        // engine chose it for 26 % of the beats. Everything done the day
+        // before to keep the generated tilt figures above the horizontal was
+        // bypassed by one scene that was never measured. (2026-09-17.)
+        if (lasers
             && hasWord(info->name.toLower(), QStringList() << "low") == false
             && (info->sweep || laserAimSafe(info->id, group) == false))
             continue;
@@ -4634,6 +4645,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // programme that is running right now - and motionFor() would walk
         // away from it on the very next beat, changing programme every beat
         // instead of every section.
+        m_sectionMotion.clear();
         m_lastFamily.clear();
         for (QMap<QString, quint32>::const_iterator it = m_active.constBegin();
              it != m_active.constEnd(); ++it)
@@ -5518,10 +5530,31 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             qreal litFloor = (key == base) ? (isBreak ? ENGINE_BREAK_LIT
                                                       : (isDrop ? 0.25 : 0.35))
                                            : 0.0;
-            mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
-                           moving == false, stars, litFloor);
-            if (mf == Function::invalidId() && moving)
-                mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars);
+            // ONE figure for the section. The pick used to run on every
+            // beat, and pickWeighted lands on `cursor % pool.count()` - so
+            // when the star ceiling wobbled with the energy curve and a
+            // single programme entered or left the pool, the modulo moved
+            // and the room got a different figure. Measured in the log of
+            // 2026-09-17: the wash held a programme for a MEDIAN OF FIVE
+            // BEATS and the mini for two. Nothing lasts long enough to be
+            // read as a figure, so a walk, a ripple and a fill all arrive as
+            // the same flicker - "de ser alt for ens ud" (Tobias).
+            //
+            // Held per group and cleared at the section change, beside
+            // m_lastFamily. The group leaving the cast clears it too: the
+            // slot is stopped below, and the next section starts fresh.
+            mf = m_sectionMotion.value(key, Function::invalidId());
+            if (mf != Function::invalidId() && m_funcs.contains(mf) == false)
+                mf = Function::invalidId();
+            if (mf == Function::invalidId())
+            {
+                mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
+                               moving == false, stars, litFloor);
+                if (mf == Function::invalidId() && moving)
+                    mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars);
+                if (mf != Function::invalidId())
+                    m_sectionMotion.insert(key, mf);
+            }
         }
 
         quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
@@ -5568,6 +5601,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             stopSlot("mot:" + key, false);
             m_motionDim.remove(key);
+            m_sectionMotion.remove(key);
         }
 
         if (g.hasDimmer)

@@ -791,6 +791,7 @@ private:
     QStringList m_testLabels;    // "group / colour" for the report
     QStringList m_testSkipped;   // groups with no colour scene to test
     int m_testIndex;
+    QHash<QString, quint32> m_sectionMotion; // group -> the motion it holds for this section
     QHash<QString, QString> m_lastFamily;  // group -> the figure it showed last section
     QString m_logAccent;                   // "group=colour" of this beat's accent, for the log
     QString m_logEvent;                    // what moved this beat: turn, colour, section - for the log
