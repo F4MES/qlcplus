@@ -888,6 +888,7 @@ void TrackEngine::ensureTable()
         // after the groups are known, not before: this info is still a local
         // and is not in m_funcs yet, so the helper cannot look itself up
         info.coversColour = coversColourOf(func, info.groups);
+        info.family = familyOf(info.name);
 
         // A scene that carries the master dimmer itself cannot be dimmed by
         // the group dimmer (HTP: the higher value wins), so the engine has to
@@ -3964,6 +3965,28 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     if (tagged.isEmpty() == false)
         ok = tagged;
 
+    // Not the same FIGURE twice in a row. The per-programme cooldown counts
+    // names, and the eye counts shapes: "Row Outer In" following "Row Trade"
+    // is a new name and the same picture. In the log of 2026-09-17, 88 of
+    // the wash's 110 programme changes were Row to Row.
+    //
+    // Soft, like the cooldown it sits beside: if nothing else is left, the
+    // family comes back in rather than the group standing still. And only
+    // when the group HAS another figure to offer - a group with one family
+    // is not improved by being denied it.
+    const QString lastFam = m_lastFamily.value(group);
+    if (lastFam.isEmpty() == false)
+    {
+        QList<TrackFuncInfo *> other;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (info->family != lastFam)
+                other.append(info);
+        }
+        if (other.count() >= 2)
+            ok = other;
+    }
+
     // Of what is allowed, the hottest comes up most often - but it does not
     // take the whole draw. This used to DISCARD everything below the top
     // star, and one programme was then enough to empty a pool: the show's own
@@ -3986,6 +4009,42 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     }
 
     return pickWeighted(pool, cursor);
+}
+
+QString TrackEngine::familyOf(const QString &name)
+{
+    // The eye does not read names, it reads FIGURES. Measured in the log of
+    // 2026-09-17: the wash changed programme 110 times and 88 of those were
+    // another "Row" figure - "Row Outer In", "Row Inner Out", "Row Trade",
+    // "Row Thirds" - so 82 % of the changes looked like the same thing in a
+    // different colour. Tobias: "Programmerne der kører er de samme med
+    // forskellige farver, de ser alt for ens ud."
+    //
+    // It is arithmetic, not luck. A COLOURLESS programme sits in every
+    // colour's pool; a coloured one sits only in its own. The colourless Row
+    // family is 426 of the wash's 472 colourless programmes, against ~121
+    // coloured ones per colour - so Row is about 72 % of the pool whatever
+    // the room is wearing.
+    //
+    // The family is the first word that says what the SHAPE is: everything
+    // before it is the group, the tier, the colour or a partner tag, and
+    // everything after it is a rhythm.
+    static const QStringList skip = {
+        "auto", "wash", "bars", "mini", "strobes", "laser", "lasers", "eyes4",
+        "break", "groove", "drop", "normal", "medium", "fan",
+        "slow", "fast", "calm", "low", "high", "soft", "wide", "far", "cross",
+        "red", "green", "blue", "cyan", "magenta", "orange", "white", "yellow",
+        "fire", "ember", "lime", "ice", "deep", "rose", "frost",
+        "all", "the", "a" };
+    const QStringList parts = name.toLower().split(QRegularExpression("[^a-z0-9]+"),
+                                                   Qt::SkipEmptyParts);
+    foreach (const QString &w, parts)
+    {
+        if (skip.contains(w))
+            continue;
+        return w;
+    }
+    return QString();
 }
 
 int TrackEngine::tierOf(const QString &text) const
@@ -4569,6 +4628,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // recent on its second beat, fell out of the list, and the pick moved
         // on - one programme per beat through the whole pool
         m_cooldownMs = m_clock.elapsed();
+        // What figure each group showed in the section that just ended. Read
+        // HERE and nowhere else: the pick runs every beat, so if this were
+        // kept up to date continuously it would hold the family of the
+        // programme that is running right now - and motionFor() would walk
+        // away from it on the very next beat, changing programme every beat
+        // instead of every section.
+        m_lastFamily.clear();
+        for (QMap<QString, quint32>::const_iterator it = m_active.constBegin();
+             it != m_active.constEnd(); ++it)
+        {
+            if (it.key().startsWith(QStringLiteral("mot:")) == false)
+                continue;
+            const TrackFuncInfo &fi = m_funcs.value(it.value());
+            if (fi.family.isEmpty() == false)
+                m_lastFamily.insert(it.key().mid(4), fi.family);
+        }
         // Do the laser bars lead this section? Drawn once, by the energy:
         // at a quarter of the fader roughly one drop in seven, at the top
         // nearly every drop (95 %) and six grooves in ten. Not always - "de
@@ -8000,7 +8075,16 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         // by position. Commas and quotes out - the log is read with a plain
         // split(','), not a CSV parser, and a track called "Hello, Again"
         // would have shifted every column after it.
-        << QString(m_trackTitle).replace(',', ' ').remove('"') << ','
+        //
+        // ... and NEWLINES out, which the line above forgot. rekordbox hands
+        // over titles with line breaks in them ("Snoh Aalegra\n - DO 4 LOVE -
+        // Onderkoffer Remix\n(DJcity Intro)"), and one of those does not
+        // shift a column - it splits the ROW, and every reader after it is
+        // reading fields from the wrong place. In the log of 2026-09-17 it
+        // tore 284 of 2717 rows into four lines each, and the report counted
+        // event flags as section types.
+        << QString(m_trackTitle).replace(',', ' ').remove('"')
+               .replace('\n', ' ').replace('\r', ' ').simplified() << ','
         // runde 47, appended again: the accent ("Strobes All=white") and what
         // moved on this beat (section / turn / colour-on-turn / ...)
         << m_logAccent << ',' << m_logEvent << '\n';

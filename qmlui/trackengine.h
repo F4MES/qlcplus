@@ -146,6 +146,7 @@ struct TrackFuncInfo
     bool step = false;        // sits inside a chaser or sequence
     bool setsColour = true;   // writes a colour channel of its own (a colourless
                               // dimmer chase does not, and may run under any colour)
+    QString family;           // the figure, not the name: "Row", "Eyes", "Span" ...
     bool coversColour = false; // paints a colour on EVERY fixture of its group, in
                               // every step - so the group's own colour scene under
                               // it is not just redundant, it is HTP-added on top
@@ -610,6 +611,9 @@ protected:
     quint32 homePosition(const QString &group) const;
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
     int tierOf(const QString &text) const;
+    /** The FIGURE a programme belongs to - "Row", "Eyes", "Span" ...
+        Two names from the same family look the same on the rig. */
+    static QString familyOf(const QString &name);
     QString accentFor(const QString &colour, bool allowWhite) const;
     QString drawColour(const QStringList &pool, int keyBias, QRandomGenerator *rng) const;
     qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;
@@ -787,6 +791,7 @@ private:
     QStringList m_testLabels;    // "group / colour" for the report
     QStringList m_testSkipped;   // groups with no colour scene to test
     int m_testIndex;
+    QHash<QString, QString> m_lastFamily;  // group -> the figure it showed last section
     QString m_logAccent;                   // "group=colour" of this beat's accent, for the log
     QString m_logEvent;                    // what moved this beat: turn, colour, section - for the log
     QMap<QString, int> m_turnCursor;       // pattern devices: extra draw offset, bumped on a turn
