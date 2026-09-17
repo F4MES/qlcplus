@@ -8103,10 +8103,12 @@ void TrackEngine::selfTest()
     // the colours a rig is most likely to have, and the one that fails most
     // often (white: a lamp with no white channel and nothing learned sits it out)
     static const char *const testColours[] = { "red", "green", "blue", "white" };
+    m_testSkipped.clear();
     foreach (const QString &key, m_groupOrder)
     {
         if (m_groupOff.contains(key))
             continue;
+        int before = m_testSteps.count();
         for (int i = 0; i < 4; i++)
         {
             QString colour = QString::fromLatin1(testColours[i]);
@@ -8117,6 +8119,14 @@ void TrackEngine::selfTest()
             m_testGroups.append(key);
             m_testLabels.append(key + " / " + colour);
         }
+        // A group with no colour scene at all gets no steps - and a group
+        // that is silently absent from the test reads exactly like a group
+        // that passed it. The animation lasers are that group here: their
+        // colour lives in their own pattern scenes, so ensureColourScenes()
+        // skips them (patternDevice) and the operator has none either. Name
+        // them at the end instead of leaving a hole. (2026-09-17.)
+        if (m_testSteps.count() == before)
+            m_testSkipped.append(key);
     }
     if (m_testSteps.isEmpty())
     {
@@ -8177,7 +8187,10 @@ void TrackEngine::slotSelfTestStep()
     if (m_testIndex >= m_testSteps.count())
     {
         selfTest();                       // the stopping half
-        m_report = tr("self test done");
+        m_report = m_testSkipped.isEmpty()
+                       ? tr("self test done")
+                       : tr("self test done - NOT tested (no colour scene): %1")
+                             .arg(m_testSkipped.join(", "));
         emit liveChanged();
         return;
     }

@@ -784,7 +784,8 @@ private:
     QTimer m_testTimer;                    // SELF TEST: one colour scene every 2 s
     QList<quint32> m_testSteps;            // the scenes it walks through
     QStringList m_testGroups;              // ... and the group each belongs to
-    QStringList m_testLabels;              // "group / colour" for the report
+    QStringList m_testLabels;    // "group / colour" for the report
+    QStringList m_testSkipped;   // groups with no colour scene to test
     int m_testIndex;
     QString m_logAccent;                   // "group=colour" of this beat's accent, for the log
     QString m_logEvent;                    // what moved this beat: turn, colour, section - for the log
