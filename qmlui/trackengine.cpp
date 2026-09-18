@@ -5415,7 +5415,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (isBreak)       want = rng->bounded(4) == 0 ? 1 : 2;
                 else if (isBuild)  want = prog > 0.5 ? 0 : 1;
                 else if (isDrop)   want = (m_dropStyle == 2 || m_dropStyle == 4) ? 2 : ((m_dropStyle == 3 || m_dropStyle == 5) ? 0 : (m_dropStyle == 1 ? int(rng->bounded(2)) : int(rng->bounded(3))));
-                else               want = rng->bounded(3) == 0 ? 2 : 1;
+                else
+                {
+                    // a groove: the fader picks the beam. Wide and soft at
+                    // the bottom, mid through the middle, and from half a
+                    // fader up more and more often TIGHT - a hard beam is
+                    // what makes the big, quick figure (runde 100) read as a
+                    // beam travelling and not as a wash breathing.
+                    qreal ez = qBound(0.0, energy, 1.0);
+                    int roll = int(rng->bounded(1000));
+                    if (roll < int(600.0 * qBound(0.0, (ez - 0.50) / 0.50, 1.0)))
+                        want = 0;
+                    else if (roll < int(600.0 * qBound(0.0, (ez - 0.50) / 0.50, 1.0)) + int(500.0 * (1.0 - ez)))
+                        want = 2;
+                    else
+                        want = 1;
+                }
                 m_zoom.insert(key, want);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
                 total += weight;
