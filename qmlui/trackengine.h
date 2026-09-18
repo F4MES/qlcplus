@@ -651,7 +651,8 @@ protected:
                       const QSet<QString> &cast, int cursor, int tier,
                       qreal bpm, int division, bool staticOnly, int maxStars,
                       qreal litFloor = 0.0) const;
-    quint32 positionFunction(const QString &group, int cursor, int tier, qreal energy) const;
+    /** fader: the slider as the operator reads it (tick() recovers it), not the section-scaled energy */
+    quint32 positionFunction(const QString &group, int cursor, int tier, qreal fader) const;
     /** True if this scene switches a fixture's own effect/movement macro on. */
     bool macroPosition(quint32 fid) const;
     /** A laser aim (scene or chaser) that never leaves the group's home aim
@@ -755,7 +756,8 @@ private:
     int m_mixBeat;                        // the beat a mix began DURING this track (-1: none) - the mix-out fade counts from it
     QMap<QString, quint32> m_splitScenes;  // "group|a|b" -> hidden two-colour scene
     int m_speed;                          // -1 half, 0 as the music, +1 double
-    qreal m_energyNow = 0.0;              // this beat's energy, for the paths tick() does not hand it to
+    qreal m_faderNow = 0.0;               // this beat's FADER (the slider, before the section scaled it),
+                                          // for the hard thresholds and the paths tick() does not hand it to
     QMap<QString, qreal> m_groupTrim;     // the DJ's fader per group, 1.0 when untouched
     bool m_flash;
     QString m_lastState;

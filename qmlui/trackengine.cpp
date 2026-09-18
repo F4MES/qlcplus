@@ -1187,7 +1187,7 @@ int TrackEngine::divisionFor(const TrackFuncInfo &info, qreal bpm, int division)
     // The quiet hour: under ENGINE_DROP_SHOW every programme walks at half
     // its pace - "hjem position med en langsom beatchase henover lamperne"
     // is what a still effect is (Tobias, 2026-09-18). The 2x tile still wins.
-    else if (m_energyNow < ENGINE_DROP_SHOW)
+    else if (m_faderNow < ENGINE_DROP_SHOW)
         best *= 2.0;
     return int(best * 1000.0);
 }
@@ -2505,7 +2505,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
             want = int(qRound(into * qreal(rateCount - 1)));
             beats = 1;
         }
-        else if (isDrop && bar == 0 && beatInBar == 0 && e >= ENGINE_DROP_SHOW)
+        else if (isDrop && bar == 0 && beatInBar == 0 && m_faderNow >= ENGINE_DROP_SHOW)
         {
             want = drawn;                                // the drop lands
             beats = 1 + int(qRound(2.0 * w));
@@ -4241,7 +4241,7 @@ quint32 TrackEngine::homePosition(const QString &group) const
     return best != nullptr ? best->id : Function::invalidId();
 }
 
-quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier, qreal energy) const
+quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier, qreal fader) const
 {
     QList<TrackFuncInfo *> all = candidates(ENGINE_ROLE_POSITION, group);
     bool lasers = m_groups.value(group).lasers;
@@ -4252,7 +4252,7 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
     // the downward allowance: nought below 60 %, then a straight line to
     // the full reach at 100 %. A figure that dips 14 units (the drop dives
     // from gen_programs) is therefore reachable from about 83 %.
-    const int down = lasers ? laserDownAllowed(energy) : -1;
+    const int down = lasers ? laserDownAllowed(fader) : -1;
 
     QList<TrackFuncInfo *> safe;
     foreach (TrackFuncInfo *info, all)
@@ -4635,6 +4635,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the house closing takes the energy down whatever the slider says
     qreal closing = closingCap();
     energy = qMin(energy, closing);
+    // THE FADER, as the operator reads it. `energy` is the slider scaled by
+    // the section's loudness (trackmanager: x 0.80..1.0), and that is right
+    // for everything continuous - size, pace, level, depth. The hard lines
+    // are another matter: "under 30 % vises et drop ikke", "under 40 % staar
+    // barerne stille", "fra 60 % maa de pege nedad" are promises about the
+    // NUMBER ON THE SCREEN. At slider 35 in a quiet section the scaled energy
+    // is 0.29, and a drop would have hidden under a fader that read 35. So
+    // the lines are drawn on the slider itself, recovered here; the closing
+    // cap still applies (the house coming down is a real ceiling).
+    qreal fader = energy;
+    if (sectionEnergy >= 0.0)
+        fader = qMin(closing, qMin(1.0, energy / (0.80 + 0.20 * qBound(0.0, sectionEnergy, 1.0))));
+    m_faderNow = fader;
     // How long the kick has been away, in beats - the vocal passage the
     // analysis did not flag as a break. Counted once per beat: a section
     // change runs tick() a second time on the same beat, and that would
@@ -4684,11 +4697,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         isBuild = false;
         tier = 1;
     }
-    m_energyNow = energy;
     // A drop under ENGINE_DROP_SHOW is a groove with a louder record on. The
     // state stays "drop" for the log and the verdicts; everything that
     // decides what the room DOES reads isDrop / tier, and those say groove.
-    bool dropHidden = isDrop && energy < ENGINE_DROP_SHOW;
+    bool dropHidden = isDrop && fader < ENGINE_DROP_SHOW;
     if (dropHidden)
     {
         isDrop = false;
@@ -4726,7 +4738,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     // ... and nothing builds towards, or blinks before, a drop that will
     // not be shown (see dropHidden above)
-    if (energy < ENGINE_DROP_SHOW)
+    if (fader < ENGINE_DROP_SHOW)
     {
         isBuild = false;
         preDrop = false;
@@ -5027,7 +5039,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (isBreak && m_groups.value(key).lasers == false && m_groups.value(key).patternDevice == false)
             continue;
         // the strobes are the club; under ENGINE_DROP_SHOW this is a restaurant
-        if (energy < ENGINE_DROP_SHOW && m_groups.value(key).strobes)
+        if (fader < ENGINE_DROP_SHOW && m_groups.value(key).strobes)
             continue;
         pool.append(key);
     }
@@ -5305,7 +5317,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // in the cast or not. Dark bars go home and stand still.
             // 40 %, not 60: from 40 % the bars may take a figure that lifts
             // them, from 60 % one that dips them (positionFunction / laserAimSafe)
-            bool mayRoam = inCast && energy >= 0.40 && isBreak == false && isBuild == false
+            bool mayRoam = inCast && fader >= 0.40 && isBreak == false && isBuild == false
                         && isCalm == false && still == false;
             quint32 home = mayRoam ? Function::invalidId() : homePosition(key);
             if (home != Function::invalidId())
@@ -5342,7 +5354,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // has been sent home above, and this is only reached with no home
         if (want == Function::invalidId() || (mayMove && sectionChanged && (g.lasers == false || inCast)))
         {
-            quint32 np = positionFunction(key, m_castCursor, tier, energy);
+            quint32 np = positionFunction(key, m_castCursor, tier, fader);
             if (np != want && (mayMove || want == Function::invalidId()))
             {
                 if (inCast && g.lasers)
@@ -5375,7 +5387,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && beatInBar == 0 && bar > 0 && (bar % walkBars) == 0)
         {
             // one step per walk, through the tier's own pool
-            quint32 np = positionFunction(key, m_castCursor + bar / walkBars, tier, energy);
+            quint32 np = positionFunction(key, m_castCursor + bar / walkBars, tier, fader);
             if (np != Function::invalidId() && np != want)
             {
                 want = np;
@@ -7225,7 +7237,8 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // it they open up, and the only thing that grows is how far apart
         // they get: the pace is fixed, because the mirrors are the most
         // delicate thing in the rig and nothing here is ever allowed to hurry.
-        qreal lw = qBound(0.0, (e - 0.40) / 0.60, 1.0);
+        // the 40 % line is the slider's, not the section-scaled energy's (see tick)
+        qreal lw = qBound(0.0, (m_faderNow - 0.40) / 0.60, 1.0);
         if (lw <= 0.0 || tier == 0 || build)
         {
             sw.shape = -1;
@@ -7307,7 +7320,7 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     // may reach. Drawn up-only (dy = -height); the fader slides it down.
     int dy = sw.dy;
     if (laser && sw.shape >= 0)
-        dy = -sw.height + qMin(2 * sw.height, laserDownAllowed(energy));
+        dy = -sw.height + qMin(2 * sw.height, laserDownAllowed(m_faderNow));
     if (laser == false && sw.shape >= 0)
     {
         qreal e = qBound(0.0, energy, 1.0);
