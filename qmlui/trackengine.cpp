@@ -4646,7 +4646,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // cap still applies (the house coming down is a real ceiling).
     qreal fader = energy;
     if (sectionEnergy >= 0.0)
-        fader = qMin(closing, qMin(1.0, energy / (0.80 + 0.20 * qBound(0.0, sectionEnergy, 1.0))));
+        // + 1e-6: the division lands a hair under the slider's own value, and
+        // a slider on exactly 30 must count as 30, not 29.999
+        fader = qMin(closing, qMin(1.0, energy / (0.80 + 0.20 * qBound(0.0, sectionEnergy, 1.0)) + 1e-6));
     m_faderNow = fader;
     // How long the kick has been away, in beats - the vocal passage the
     // analysis did not flag as a break. Counted once per beat: a section
@@ -4660,7 +4662,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         else
             m_kickGone++;
     }
-    bool still = energy < 0.03;
+    bool still = fader < 0.03;         // the slider's bottom, whatever the section says (round 112)
     QRandomGenerator *rng = QRandomGenerator::global();
     bool hold = (m_hold || still) && forceNext == false;      // NEXT breaks a hold for one beat
     if (forceNext)
