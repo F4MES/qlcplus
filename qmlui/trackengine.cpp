@@ -4348,7 +4348,10 @@ bool TrackEngine::laserSweepSafe(quint32 fid, const QString &group, int downAllo
         }
         if (homeTilt < 0)
             return false;                    // a bar the home aim says nothing about
-        int centre = efx->isRelative() ? homeTilt : efx->yOffset();
+        // a relative EFX adds (yOffset - 127) to whatever is under it -
+        // Universe::writeRelative, RELATIVE_ZERO_8BIT - so its own offset
+        // counts on top of the home aim; an absolute one names its centre
+        int centre = efx->isRelative() ? homeTilt + (efx->yOffset() - 127) : efx->yOffset();
         int top = centre - amp - homeTilt;   // negative = above the aim
         int bottom = centre + amp - homeTilt;
         if (top < -ENGINE_AIM_REACH || bottom > qMax(0, downAllowed))
@@ -4951,8 +4954,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // this the drop look collects credit under "break" - and then gets
     // favoured in breaks, where nothing ever chose it. HOLD is the button you
     // press when you like what you see, so this is not a corner case.
+    // A hidden drop (under ENGINE_DROP_SHOW) was CHOSEN with groove rules, so
+    // its verdicts belong to the groove bucket, not the drop's
     if (hold == false)
-        m_lookState = state;
+        m_lookState = dropHidden ? QStringLiteral("normal") : state;
     m_lastState = state;
 
     int effects = m_effects;
