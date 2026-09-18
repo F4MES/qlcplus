@@ -4693,6 +4693,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         isDrop = false;
         tier = 1;
+        division = 0;          // not the drop's SETUP step either: the programmes keep their own
     }
 
     // a flag edited to sit ahead of us, or a jump back in the track, makes
