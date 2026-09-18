@@ -4016,7 +4016,13 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         int allow = maxStars;
         if (tier == 0 && info->tier == 0)
             allow = qMax(allow, 2);
-        if (qMax(1, info->stars) > allow)
+        // ... except on a PATTERN DEVICE. Its scenes are its only light: an
+        // animation laser with every pattern above the ceiling is in the cast
+        // and dark, which is the one thing this engine promises never to do.
+        // At the bottom of the fader (ceiling 1) all of its scenes are two
+        // stars, so the group had nothing to show - check_reach: "Animation
+        // Laser groove ceil 1: EMPTY". It shows its calmest instead.
+        if (qMax(1, info->stars) > allow && m_groups.value(group).patternDevice == false)
             continue;
         // a motion that also lights groups outside the cast is not allowed
         bool inside = true;
