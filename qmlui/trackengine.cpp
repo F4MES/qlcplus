@@ -4790,19 +4790,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // three groups on a drop and two in a groove, not two and one.
         // four groups on a drop at the stop, three in a groove: the fader's
         // last quarter has to add rig, not just brightness
-        qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.15) / 0.75, 1.0)
-                          : 2.0 * qBound(0.0, (energy - 0.25) / 0.65, 1.0);
+        // The ramps start low and run the whole fader: a groove began adding
+        // rig at 0.25, so the bottom third of the fader was the base alone
+        // and only brightness told you it was moving (Tobias, 2026-09-18).
+        qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0)
+                          : 2.0 * qBound(0.0, (energy - 0.10) / 0.75, 1.0);
         want += 1.0 * qBound(0.0, (energy - 0.80) / 0.20, 1.0);
         int whole = int(want);
         qreal frac = want - whole;
         return whole + (rng->bounded(1000) < int(frac * 1000.0) ? 1 : 0);
     };
-    // A hand on the ENERGY fader: a quarter of it or more since the moves
+    // A hand on the ENERGY fader: a fifth of it or more since the moves
     // were last drawn, read on the bar line. Used here for the cast and
     // further down for the moves, the figure, the zoom, the star ceiling and
     // the held programme - see the comment at `redraw`.
     bool faderJump = hold == false && beatInBar == 0 && m_movesEnergy >= 0.0
-                  && qAbs(energy - m_movesEnergy) >= 0.25;
+                  && qAbs(energy - m_movesEnergy) >= 0.20;
     if ((sectionChanged || m_lastState.isEmpty()) && hold == false)
     {
         m_effectsBefore = m_effects;
@@ -4840,7 +4843,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             effects = qMax(effects, m_effectsBefore + 1);
     }
     if (preDrop)     // no dice here: four beats of joining and leaving would flicker
-        effects = qMax(effects, int(qRound(3.0 * qBound(0.0, (energy - 0.15) / 0.75, 1.0))));
+        effects = qMax(effects, int(qRound(3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0))));
     if (isCalm || still)
         effects = 0;
     // Mix-out: the track on its way out hands the room over in steps, not in
@@ -5025,7 +5028,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // next section line - up to 32 bars - before anything but the strobes
     // answered it (driveStrobe reads the fader every beat; the moves, the
     // figure, the zoom and the star ceiling were all drawn once per section).
-    // A quarter of the fader or more since the last draw redraws all of them
+    // A fifth of the fader or more since the last draw redraws all of them
     // on the next bar line, and lets go of the held programme too: at 100 %
     // the room should not be running the one-star walk it drew at 40 %.
     // The sweep's SIZE and PACE follow the fader every beat regardless
@@ -5197,7 +5200,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // heads without a sweep of the user's (or in FULL AUTO): walk through
         // the positions every four bars in the groove, every two in a drop -
         // the pan/tilt speed channel turns each step into a slow sweep
-        int walkBars = qMax(1, (isDrop ? 2 : 4) * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1));
+        // How often the heads take a new aim: the fader decides. At the
+        // bottom a groove keeps an aim for eight bars and a drop for four; at
+        // the top every two bars and every bar. It was a flat 4 / 2 whatever
+        // the fader said, so half of what "more energy" should look like on
+        // the heads - they travel more - never happened. The SPEED tiles
+        // still halve or double it.
+        qreal eWalk = qBound(0.0, energy, 1.0);
+        int walkBase = isDrop ? qMax(1, int(qRound(4.0 - 3.0 * eWalk)))
+                              : qMax(2, int(qRound(8.0 - 6.0 * eWalk)));
+        int walkBars = qMax(1, walkBase * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1));
         if (g.heads && inCast && hold == false && isBreak == false
             && (m_fullAuto || (m_moves.value(key).ownChaser
                                && candidates(ENGINE_ROLE_MOTION, key).isEmpty()))
@@ -5258,8 +5270,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // per section from ramps of the energy, not read off a step
     if (redraw || m_starCeil <= 0)
     {
-        qreal p2 = isDrop ? qBound(0.0, (energy - 0.15) / 0.35, 1.0) : qBound(0.0, (energy - 0.30) / 0.35, 1.0);
-        qreal p3 = isDrop ? qBound(0.0, (energy - 0.45) / 0.35, 1.0) : qBound(0.0, (energy - 0.60) / 0.35, 1.0);
+        // two stars from a fifth of the fader, three from the middle: the
+        // hot programmes used to wait for 0.60 in a groove, so the pool the
+        // room drew from did not change between 30 % and 60 % of the fader
+        qreal p2 = isDrop ? qBound(0.0, (energy - 0.10) / 0.35, 1.0) : qBound(0.0, (energy - 0.20) / 0.35, 1.0);
+        qreal p3 = isDrop ? qBound(0.0, (energy - 0.40) / 0.35, 1.0) : qBound(0.0, (energy - 0.50) / 0.40, 1.0);
         m_starCeil = 1;
         if (rng->bounded(1000) < int(p2 * 1000.0))
         {

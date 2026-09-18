@@ -858,7 +858,7 @@ qreal TrackManager::appliedEnergy() const
     // decides how much of it we use.
     qreal se = sectionEnergy(m_currentBeat);
     if (se >= 0.0)
-        e *= 0.65 + 0.35 * se;
+        e *= 0.80 + 0.20 * se;    // ENERGY_APPLIED_V2
 
     return qBound(0.0, e, 1.0);
 }
@@ -1505,7 +1505,7 @@ void TrackManager::runEngine(bool sectionChanged)
     qreal se = sectionEnergy(stateBeat);
     qreal en = energy();
     if (se >= 0.0)
-        en *= 0.65 + 0.35 * se;
+        en *= 0.80 + 0.20 * se;   // ENERGY_SE_V2: the fader keeps its top fifth
     qreal levelScale = qreal(stateIntensity(state)) / 100.0;
 
     // what the analysis heard on this very beat (0..1), -1 when BLT did not
