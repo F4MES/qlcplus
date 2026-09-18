@@ -4220,10 +4220,18 @@ quint32 TrackEngine::homePosition(const QString &group) const
     return best != nullptr ? best->id : Function::invalidId();
 }
 
-quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier) const
+quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier, qreal energy) const
 {
     QList<TrackFuncInfo *> all = candidates(ENGINE_ROLE_POSITION, group);
     bool lasers = m_groups.value(group).lasers;
+    // The laser bars and the fader (Tobias, 2026-09-18): "de skal ikke pege
+    // nedad foer energi-slideren er over minimum 60 %, og jo hoejere
+    // derefter, jo mere nedad. Indtil 40 % energi skal de slet ikke
+    // bevaege sig." The 40 % is the roam gate in tick() (mayRoam); this is
+    // the downward allowance: nought below 60 %, then a straight line to
+    // the full reach at 100 %. A figure that dips 14 units (the drop dives
+    // from gen_programs) is therefore reachable from about 83 %.
+    const int down = lasers ? laserDownAllowed(energy) : -1;
 
     QList<TrackFuncInfo *> safe;
     foreach (TrackFuncInfo *info, all)
@@ -4239,9 +4247,14 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         // engine chose it for 26 % of the beats. Everything done the day
         // before to keep the generated tilt figures above the horizontal was
         // bypassed by one scene that was never measured. (2026-09-17.)
-        if (lasers
-            && hasWord(info->name.toLower(), QStringList() << "low") == false
-            && (info->sweep || laserAimSafe(info->id, group) == false))
+        // No word is a pass any more - "low" used to be, and the operator's
+        // "LasermovingTest LOW" (an absolute EFX, tilt 130-150 = 4-24 units
+        // under the aim) walked through it at any energy. Every laser
+        // candidate is MEASURED against the fader's allowance: a scene or a
+        // chaser by its steps (laserAimSafe), an EFX by its offset and
+        // amplitude (laserSweepSafe).
+        if (lasers && (info->sweep ? laserSweepSafe(info->id, group, down) == false
+                                   : laserAimSafe(info->id, group, down) == false))
             continue;
         // ... and never one that switches the FIXTURE'S OWN movement macro on
         // (Tobias, 2026-09-15: "de bevaeger sig konstant?? ... du skal bygge
@@ -4274,7 +4287,64 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
     return pickWeighted(pool, cursor);
 }
 
-bool TrackEngine::laserAimSafe(quint32 fid, const QString &group) const
+bool TrackEngine::laserSweepSafe(quint32 fid, const QString &group, int downAllowed) const
+{
+    if (m_doc == nullptr)
+        return false;
+    EFX *efx = qobject_cast<EFX *>(m_doc->function(fid));
+    if (efx == nullptr)
+        return false;
+    Scene *home = qobject_cast<Scene *>(m_doc->function(homePosition(group)));
+    if (home == nullptr)
+        return false;
+    // A relative EFX rides on whatever aim is under it; measured against the
+    // home aim, which is where the bars stand when nothing else has them.
+    // An absolute one names its own centre. Either way the tilt travels
+    // centre +- height (rotation 0; a rotated laser figure is the standing-
+    // still bug of round 96, and nothing here makes one).
+    int amp = qMax(efx->height(), efx->width());
+    foreach (EFXFixture *ef, efx->fixtures())
+    {
+        Fixture *fxi = m_doc->fixture(ef->head().fxi);
+        if (fxi == nullptr)
+            continue;
+        int tiltCh = -1, homeTilt = -1;
+        for (quint32 i = 0; i < fxi->channels(); i++)
+        {
+            const QLCChannel *qch = fxi->channel(i);
+            if (qch != nullptr && qch->group() == QLCChannel::Tilt && qch->controlByte() == QLCChannel::MSB)
+            {
+                tiltCh = int(i);
+                break;
+            }
+        }
+        if (tiltCh < 0)
+            continue;
+        foreach (const SceneValue &sv, home->values())
+        {
+            if (sv.fxi == fxi->id() && int(sv.channel) == tiltCh)
+                homeTilt = int(sv.value);
+        }
+        if (homeTilt < 0)
+            return false;                    // a bar the home aim says nothing about
+        int centre = efx->isRelative() ? homeTilt : efx->yOffset();
+        int top = centre - amp - homeTilt;   // negative = above the aim
+        int bottom = centre + amp - homeTilt;
+        if (top < -ENGINE_AIM_REACH || bottom > qMax(0, downAllowed))
+            return false;
+    }
+    return true;
+}
+
+int TrackEngine::laserDownAllowed(qreal energy)
+{
+    qreal e = qBound(0.0, energy, 1.0);
+    if (e < 0.60)
+        return 0;
+    return int(qRound(ENGINE_AIM_REACH * (e - 0.60) / 0.40));
+}
+
+bool TrackEngine::laserAimSafe(quint32 fid, const QString &group, int downAllowed) const
 {
     // The "low" rule below this is a promise made in a NAME: an aim the
     // operator called "low" is one they have checked. Our own generated tilt
@@ -4327,7 +4397,15 @@ bool TrackEngine::laserAimSafe(quint32 fid, const QString &group) const
             QPair<quint32, quint32> k = qMakePair(sv.fxi, sv.channel);
             if (aim.contains(k) == false)
                 return false;            // an axis the home aim says nothing about
-            if (qAbs(int(sv.value) - aim.value(k)) > ENGINE_AIM_REACH)
+            // UP is a smaller tilt value, DOWN a bigger one (LaserUPP 126,
+            // LaserDOWN 242 - the operator's own scenes, and the log of
+            // 2026-09-17 confirmed the direction on the rig). Upward the
+            // reach is always the full one; downward it is what the caller
+            // allows - the fader's decision, see laserDownAllowed().
+            int dev = int(sv.value) - aim.value(k);
+            bool tilt = qch->group() == QLCChannel::Tilt;
+            int belowMax = (tilt && downAllowed >= 0) ? downAllowed : ENGINE_AIM_REACH;
+            if (dev < -ENGINE_AIM_REACH || dev > belowMax)
                 return false;
         }
     }
@@ -5146,7 +5224,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // (Tobias, 2026-09-15: "laser bars staar stadig og bevaeger sig,
             // selvom de ikke lyser"): the pos: slot runs whether the group is
             // in the cast or not. Dark bars go home and stand still.
-            bool mayRoam = inCast && energy >= 0.60 && isBreak == false && isBuild == false
+            // 40 %, not 60: from 40 % the bars may take a figure that lifts
+            // them, from 60 % one that dips them (positionFunction / laserAimSafe)
+            bool mayRoam = inCast && energy >= 0.40 && isBreak == false && isBuild == false
                         && isCalm == false && still == false;
             quint32 home = mayRoam ? Function::invalidId() : homePosition(key);
             if (home != Function::invalidId())
@@ -5183,7 +5263,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // has been sent home above, and this is only reached with no home
         if (want == Function::invalidId() || (mayMove && sectionChanged && (g.lasers == false || inCast)))
         {
-            quint32 np = positionFunction(key, m_castCursor, tier);
+            quint32 np = positionFunction(key, m_castCursor, tier, energy);
             if (np != want && (mayMove || want == Function::invalidId()))
             {
                 if (inCast && g.lasers)
@@ -5216,7 +5296,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && beatInBar == 0 && bar > 0 && (bar % walkBars) == 0)
         {
             // one step per walk, through the tier's own pool
-            quint32 np = positionFunction(key, m_castCursor + bar / walkBars, tier);
+            quint32 np = positionFunction(key, m_castCursor + bar / walkBars, tier, energy);
             if (np != Function::invalidId() && np != want)
             {
                 want = np;
@@ -7032,7 +7112,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // it they open up, and the only thing that grows is how far apart
         // they get: the pace is fixed, because the mirrors are the most
         // delicate thing in the rig and nothing here is ever allowed to hurry.
-        qreal lw = qBound(0.0, (e - 0.60) / 0.40, 1.0);
+        qreal lw = qBound(0.0, (e - 0.40) / 0.60, 1.0);
         if (lw <= 0.0 || tier == 0 || build)
         {
             sw.shape = -1;
@@ -7049,10 +7129,19 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // skal de fortsat vaere MEGET langsomme og smaa bevaegelser, da
         // laserne er saa lange. De helt langsomme bevaegelser ser ogsaa
         // mest stilet ud."
-        sw.height = int(8 + 12 * lw) + int(rng->bounded(7));
+        // Half the old amplitude: the figure used to straddle the aim (+-h,
+        // 8-26 units of travel); it now lies on one side of it, so h is
+        // halved to keep the travel - and the promise of SMALL - the same.
+        sw.height = int(4 + 6 * lw) + int(rng->bounded(4));
         sw.beats = 96 + int(rng->bounded(33));
         sw.dx = 0;
-        sw.dy = int(rng->bounded(9)) - 4;          // barely off the aim
+        // The figure is a line of +-height around aim + dy. It is drawn
+        // UP-ONLY: dy = -height puts its lowest point exactly on the home
+        // aim, so between 40 and 60 % the beams lift off the ceiling and
+        // never dip under it. applySweep() slides dy down again, live, by
+        // laserDownAllowed(energy) - nought below 60 %, the whole figure
+        // below the aim near 100 %. (Tobias, 2026-09-18.)
+        sw.dy = -sw.height;
         // One after another along the wall, always - and the higher the fader
         // the further apart they run. At the top neighbouring bars are in
         // opposite directions, one up while the next goes down, which is the
@@ -7101,6 +7190,11 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     int width = sw.width;
     int height = sw.height;
     int beats = sw.beats;
+    // the lasers' one live control: how far under the home aim the figure
+    // may reach. Drawn up-only (dy = -height); the fader slides it down.
+    int dy = sw.dy;
+    if (laser && sw.shape >= 0)
+        dy = -sw.height + qMin(2 * sw.height, laserDownAllowed(energy));
     if (laser == false && sw.shape >= 0)
     {
         qreal e = qBound(0.0, energy, 1.0);
@@ -7133,6 +7227,8 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             efx->setWidth(width);
         if (sw.shape >= 0 && efx->height() != height)
             efx->setHeight(height);
+        if (laser && sw.shape >= 0 && efx->yOffset() != qBound(0, 127 + dy, 255))
+            efx->setYOffset(qBound(0, 127 + dy, 255));
         return;
     }
     // reconfigured live: a stop and a start in the same tick would leave the
@@ -7144,7 +7240,7 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     efx->setHeight(sw.shape < 0 ? 0 : height);
     efx->setRotation(sw.rotation);
     efx->setXOffset(qBound(0, 127 + sw.dx, 255));
-    efx->setYOffset(qBound(0, 127 + sw.dy, 255));
+    efx->setYOffset(qBound(0, 127 + dy, 255));
     efx->setIsRelative(true);
     efx->setXFrequency(sw.fx);
     efx->setYFrequency(sw.fy);

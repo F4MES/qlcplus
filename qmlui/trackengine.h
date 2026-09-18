@@ -651,13 +651,21 @@ protected:
                       const QSet<QString> &cast, int cursor, int tier,
                       qreal bpm, int division, bool staticOnly, int maxStars,
                       qreal litFloor = 0.0) const;
-    quint32 positionFunction(const QString &group, int cursor, int tier) const;
+    quint32 positionFunction(const QString &group, int cursor, int tier, qreal energy) const;
     /** True if this scene switches a fixture's own effect/movement macro on. */
     bool macroPosition(quint32 fid) const;
     /** A laser aim (scene or chaser) that never leaves the group's home aim
      *  by more than ENGINE_AIM_REACH, and never writes anything but pan and
      *  tilt. Safe to run without the operator having promised it by name. */
-    bool laserAimSafe(quint32 fid, const QString &group) const;
+    /** downAllowed: how far BELOW the home aim (a bigger tilt value) a step
+     *  may go, in units; -1 = the same reach as upward. */
+    bool laserAimSafe(quint32 fid, const QString &group, int downAllowed = -1) const;
+    /** How far below the home aim the laser bars may point at this energy:
+     *  nothing under 60 %, then a straight line up to ENGINE_AIM_REACH at 100 %. */
+    static int laserDownAllowed(qreal energy);
+    /** The same question for an EFX: does its tilt travel stay within the
+     *  reach upward and within downAllowed downward, on every bar it drives? */
+    bool laserSweepSafe(quint32 fid, const QString &group, int downAllowed) const;
     quint32 homePosition(const QString &group) const;
     quint32 flashFunction(const QSet<QString> &cast, const QString &colour) const;
     int tierOf(const QString &text) const;
