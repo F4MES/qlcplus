@@ -83,6 +83,12 @@ static quint32 nameScatter(const QString &name)
 // engine refuses to run it on its own: 24 units is about 17 degrees, and our
 // own tilt figures are clamped to 14 (gen_programs.py, BAR_TILT_REACH)
 #define ENGINE_AIM_REACH      24
+// Below this much of the ENERGY fader a DROP is not shown as one: no drop
+// programmes, no strobes, no flashes, no landing - it runs as a groove. And
+// no build or pre-drop blink towards one. Tobias, 2026-09-18: "under 30 %
+// energi skal et drop aldrig visualiseres ... det er en restaurant der
+// bliver til en klub." From here up the drop machinery ramps with the fader.
+#define ENGINE_DROP_SHOW      0.30
 #define ENGINE_DARK_BARS      4
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
@@ -1178,6 +1184,11 @@ int TrackEngine::divisionFor(const TrackFuncInfo &info, qreal bpm, int division)
         best *= 2.0;
     else if (m_speed > 0)
         best = qMax(0.125, best / 2.0);
+    // The quiet hour: under ENGINE_DROP_SHOW every programme walks at half
+    // its pace - "hjem position med en langsom beatchase henover lamperne"
+    // is what a still effect is (Tobias, 2026-09-18). The 2x tile still wins.
+    else if (m_energyNow < ENGINE_DROP_SHOW)
+        best *= 2.0;
     return int(best * 1000.0);
 }
 
@@ -2490,7 +2501,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
             want = int(qRound(into * qreal(rateCount - 1)));
             beats = 1;
         }
-        else if (isDrop && bar == 0 && beatInBar == 0 && e > 0.25)
+        else if (isDrop && bar == 0 && beatInBar == 0 && e >= ENGINE_DROP_SHOW)
         {
             want = drawn;                                // the drop lands
             beats = 1 + int(qRound(2.0 * w));
@@ -4660,6 +4671,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         isBuild = false;
         tier = 1;
     }
+    m_energyNow = energy;
+    // A drop under ENGINE_DROP_SHOW is a groove with a louder record on. The
+    // state stays "drop" for the log and the verdicts; everything that
+    // decides what the room DOES reads isDrop / tier, and those say groove.
+    bool dropHidden = isDrop && energy < ENGINE_DROP_SHOW;
+    if (dropHidden)
+    {
+        isDrop = false;
+        tier = 1;
+    }
 
     // a flag edited to sit ahead of us, or a jump back in the track, makes
     // beat - secStart negative: bar and beatInBar go with it, every downbeat
@@ -4688,6 +4709,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         isBuild = true;
         prog = qBound(0.0, 1.0 - qreal(beatsToNext) / 32.0, 1.0);
+    }
+    // ... and nothing builds towards, or blinks before, a drop that will
+    // not be shown (see dropHidden above)
+    if (energy < ENGINE_DROP_SHOW)
+    {
+        isBuild = false;
+        preDrop = false;
     }
 
     /* ---- palette: one colour, changed rarely. A fresh track keeps the colour
@@ -4949,6 +4977,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // lasers on their flat fan (tier 0 favours "vifte", see tierOf()).
         // Heads, strobes and the rest sit a break out.
         if (isBreak && m_groups.value(key).lasers == false && m_groups.value(key).patternDevice == false)
+            continue;
+        // the strobes are the club; under ENGINE_DROP_SHOW this is a restaurant
+        if (energy < ENGINE_DROP_SHOW && m_groups.value(key).strobes)
             continue;
         pool.append(key);
     }
@@ -6138,6 +6169,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_hatsOut) ev << "hats-out";
         if (closing < 1.0) ev << "closing";
         if (m_kickGone >= 4 && isBreak == false) ev << "kick-gone";
+        if (dropHidden) ev << "drop-hidden";
         if (isDrop && m_dropStyle > 0) ev << ("drop-" + dropStyleName(m_dropStyle));
         if (isDrop && bar < impactBarsLog) ev << "impact";
         if (mixBarsOut >= 6 && m_nextColour.isEmpty() == false) ev << "mix-turn";
@@ -6470,9 +6502,9 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     {
         // drop: always moving; how fast, how deep, how wild follows the
         // energy - and the drop's character leans the menu
-        qreal wild = ramp(e, 0.05, 1.00);        // the whole fader, not a slice
+        qreal wild = ramp(e, ENGINE_DROP_SHOW, 1.00);   // a drop exists from 30 % (dropHidden); wild grows from there
         QList<int> menu = { ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES, ENGINE_PAT_STATIC };
-        if (chance(ramp(e, 0.05, 0.55)))
+        if (chance(ramp(e, ENGINE_DROP_SHOW, 0.70)))
             menu << ENGINE_PAT_CHASE << ENGINE_PAT_PINGPONG;
         if (chance(ramp(e, 0.35, 1.00)))
             menu << ENGINE_PAT_SPARKLE << ENGINE_PAT_CHASE;
@@ -6514,7 +6546,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.colourBars = pick({ 1, 2 });                // nervous: quick trades
         else if (chance((m_dropStyle == 2 ? 0.8 : 0.5) * ramp(e, 0.30, 0.90)))
             mv.colourBars = pick({ 1, 2, 4 });
-        mv.flashBar = chance((m_dropStyle == 1 ? 0.7 : (m_dropStyle == 5 ? 0.6 : (m_dropStyle == 4 ? 0.15 : 0.35))) * ramp(e, 0.20, 1.00));
+        mv.flashBar = chance((m_dropStyle == 1 ? 0.7 : (m_dropStyle == 5 ? 0.6 : (m_dropStyle == 4 ? 0.15 : 0.35))) * ramp(e, ENGINE_DROP_SHOW, 1.00));
     }
 
     // texture: the groove and the break spread the lit fixtures a little

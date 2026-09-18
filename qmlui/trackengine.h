@@ -755,6 +755,7 @@ private:
     int m_mixBeat;                        // the beat a mix began DURING this track (-1: none) - the mix-out fade counts from it
     QMap<QString, quint32> m_splitScenes;  // "group|a|b" -> hidden two-colour scene
     int m_speed;                          // -1 half, 0 as the music, +1 double
+    qreal m_energyNow = 0.0;              // this beat's energy, for the paths tick() does not hand it to
     QMap<QString, qreal> m_groupTrim;     // the DJ's fader per group, 1.0 when untouched
     bool m_flash;
     QString m_lastState;
