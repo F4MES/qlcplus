@@ -2489,7 +2489,11 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // of them is inside the usable band, so what the energy buys is how
         // often the strobe comes and how long it stays, not how fast it runs.
         // Drawing it means two bursts in a row are never quite the same.
-        int drawn = int(rng->bounded(rateCount));
+        // The RATE follows the fader too, not only how often: at a third of
+        // the fader the draw stays in the slow half of the six rates, at the
+        // top it has them all. A slow hardware strobe at low energy is a
+        // flicker; the fast one is the club (Tobias, 2026-09-18).
+        int drawn = qBound(0, int(qRound(qreal(rng->bounded(rateCount)) * (0.35 + 0.65 * w))), rateCount - 1);
         // The riser starts earlier in the build the higher the fader is: at a
         // quarter it only arrives in the last eighth, at the top it runs the
         // last third of the build - and there it does climb, because a riser
@@ -4760,7 +4764,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         m_colourSince = beat;
         static const qreal stretch[4] = { 0.5, 0.75, 1.0, 1.5 };
-        m_holdNow = qMax(4, int(qRound(m_holdBars * stretch[rng->bounded(4)])));
+        // ... and the ENERGY fader leans it: the SETUP value is the middle
+        // of the road, a quiet room holds a colour a third longer, a hot one
+        // lets it go a third sooner. Colour changes are one of the few things
+        // the whole room sees at once, so they carry a lot of "energy" on
+        // their own. Never under four bars.
+        qreal lean = 1.30 - 0.60 * qBound(0.0, energy, 1.0);
+        m_holdNow = qMax(4, int(qRound(m_holdBars * stretch[rng->bounded(4)] * lean)));
     }
 
     if (engineBannedColour(m_override))
