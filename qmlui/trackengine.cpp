@@ -291,7 +291,18 @@ void TrackEngine::slotDocSettled()
     m_strobeSpent = 0;
     m_mixBeat = -1;
     // setHaze/setFan early-return on an unchanged value, so a stale reading
-    // here left the slider dead until it was moved somewhere else first
+    // here left the slider dead until it was moved somewhere else first.
+    // And the HAZER ITSELF is put at nought before the reading is: the
+    // "TRACK Haze" scene is not in m_active, so stopAll() below does not
+    // touch it, and after a rebuild the slider read 0 while the machine kept
+    // hazing at the level it had (an LTP channel holds its last value). A
+    // Function Manager edit mid-set was enough to trigger this. If the scene
+    // is already gone with the project, applyAtmos() finds nothing and does
+    // nothing.
+    if (m_haze > 0.0)
+        applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
+    if (m_fan > 0.0)
+        applyAtmos(m_fanScene, m_fanChannels, 0.0);
     m_haze = 0.0;
     m_fan = 0.0;
     m_flash = false;
@@ -2985,14 +2996,23 @@ void TrackEngine::applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32
                         false, false);
     }
 
-    // stop() is deferred to the MasterTimer thread, so a scene that has just
-    // been told to stop still says it is running. Push the slider back up
-    // inside that tick and the start would be skipped and the queued stop
-    // would land: the hazer sits off with the slider up.
-    if (value > 0 && (scene->isRunning() == false || scene->stopped()))
+    // NEVER stop this scene once it has run. "Haze Volume" and "Blower
+    // Speed" are Effect / Speed channels - LTP - and an LTP channel KEEPS
+    // its last value when the function that wrote it goes away. Stopping at
+    // nought was the fault Tobias hit on 2026-09-17 ("haze-output sad fast,
+    // maatte manuelt skrue ned paa kanalen"): stop() is deferred to the
+    // MasterTimer thread, and its tick handles a stopped function with
+    // postRun() INSTEAD of a final write - so the nought that setValue() had
+    // just put into the fader (replace, above) never reached the universe,
+    // dismissAllFaders() dropped the channel, and the hazer stood at the
+    // value it had when the slider was still up. A running scene at nought
+    // is the only thing that holds an LTP channel at nought: so the scene
+    // starts the first time the slider is touched and stays up, writing
+    // whatever the slider says - including off - on every frame. It is one
+    // fader on two channels nothing else in AUTO writes; a hand scene of the
+    // operator's started later still wins under LTP while it runs.
+    if (scene->isRunning() == false || scene->stopped())
         scene->start(m_doc->masterTimer(), FunctionParent::master());
-    else if (value == 0 && scene->stopped() == false)
-        scene->stop(FunctionParent::master());   // ... and the same the other way
 }
 
 void TrackEngine::setHaze(qreal level)
