@@ -4898,7 +4898,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     // how many effect groups join the base: a ramp of the energy, with the
     // fraction decided by dice once per section - 55 % and 65 % differ
-    auto effectsFor = [&energy, rng](bool drop, bool brk) {
+    auto effectsWant = [&energy](bool drop) -> qreal {
+        qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0)
+                          : 2.0 * qBound(0.0, (energy - 0.10) / 0.75, 1.0);
+        want += 1.0 * qBound(0.0, (energy - 0.80) / 0.20, 1.0);
+        return want;
+    };
+    auto effectsFor = [&effectsWant, rng](bool drop, bool brk) {
         // a break used to empty the room down to the base. Late in the night
         // it keeps one group as well - quieter than a groove, not dark.
         // A break is a quiet section, not an empty one. It always keeps one
@@ -4918,13 +4924,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // The ramps start low and run the whole fader: a groove began adding
         // rig at 0.25, so the bottom third of the fader was the base alone
         // and only brightness told you it was moving (Tobias, 2026-09-18).
-        qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0)
-                          : 2.0 * qBound(0.0, (energy - 0.10) / 0.75, 1.0);
-        want += 1.0 * qBound(0.0, (energy - 0.80) / 0.20, 1.0);
+        qreal want = effectsWant(drop);
         int whole = int(want);
         qreal frac = want - whole;
         return whole + (rng->bounded(1000) < int(frac * 1000.0) ? 1 : 0);
     };
+    // A NUDGE: a twentieth of the fader since the last decision, read on
+    // the bar line. Smaller than a jump (0.20, which redraws the whole look)
+    // and deterministic - no dice - so it moves the room IN THE DIRECTION OF
+    // THE FADER by one step: a group joins or leaves, the star ceiling moves
+    // a notch and a programme that is now too cold or too hot gives way.
+    // Tobias, 2026-09-18: "hvis man f.eks. skifter den 2 % sker der jo
+    // ikke rigtigt noget." Two per cent is inside the live curves (level,
+    // figure, pace, pulse); five is where a discrete step is owed.
+    bool faderNudge = hold == false && beatInBar == 0 && isBreak == false
+                   && m_castEnergy >= 0.0 && qAbs(energy - m_castEnergy) >= 0.05;
     // A hand on the ENERGY fader: a fifth of it or more since the moves
     // were last drawn, read on the bar line. Used here for the cast and
     // further down for the moves, the figure, the zoom, the star ceiling and
@@ -4947,6 +4961,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_effectsBefore = m_effects;
         m_effects = effectsFor(isDrop, false);
     }
+    else if (faderNudge)
+    {
+        // one step towards what the fader asks for - rounded, not diced
+        int want = int(qRound(effectsWant(isDrop)));
+        if (want != m_effects)
+        {
+            m_effectsBefore = m_effects;
+            m_effects = qBound(m_effects - 1, want, m_effects + 1);
+        }
+    }
+    if (sectionChanged || faderJump || faderNudge || m_castEnergy < 0.0)
+        m_castEnergy = energy;
     // Every re-pick below sits behind `hold == false`, so this is exactly the
     // moment the look on stage may change. A verdict belongs in the section
     // the look was CHOSEN for, not the one the track happens to have reached:
@@ -5400,21 +5426,34 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     // how hot a chase may be right now: the stars a motion needs. Drawn once
     // per section from ramps of the energy, not read off a step
-    if (redraw || m_starCeil <= 0)
+    // ... and on a fader NUDGE (see faderNudge) the ceiling is re-read
+    // deterministically - the ramp's midpoint decides, no dice - so a hand
+    // pushing the fader up meets a hotter pool on the next bar and never a
+    // colder one by luck. The dice stay for the section draw, where the
+    // variety is wanted.
+    bool ceilNudge = hold == false && beatInBar == 0 && isBreak == false
+                  && m_ceilEnergy >= 0.0 && qAbs(energy - m_ceilEnergy) >= 0.05;
+    int ceilBefore = m_starCeil;
+    if (redraw || ceilNudge || m_starCeil <= 0)
     {
         // two stars from a fifth of the fader, three from the middle: the
         // hot programmes used to wait for 0.60 in a groove, so the pool the
         // room drew from did not change between 30 % and 60 % of the fader
         qreal p2 = isDrop ? qBound(0.0, (energy - 0.10) / 0.35, 1.0) : qBound(0.0, (energy - 0.20) / 0.35, 1.0);
         qreal p3 = isDrop ? qBound(0.0, (energy - 0.40) / 0.35, 1.0) : qBound(0.0, (energy - 0.50) / 0.40, 1.0);
+        bool diced = redraw || m_starCeil <= 0;
         m_starCeil = 1;
-        if (rng->bounded(1000) < int(p2 * 1000.0))
+        if (diced ? (rng->bounded(1000) < int(p2 * 1000.0)) : (p2 >= 0.5))
         {
             m_starCeil = 2;
-            if (rng->bounded(1000) < int(p3 * 1000.0))
+            if (diced ? (rng->bounded(1000) < int(p3 * 1000.0)) : (p3 >= 0.5))
                 m_starCeil = 3;
         }
+        m_ceilEnergy = energy;
     }
+    // the ceiling moved under a hand on the fader: a held programme that is
+    // now above it, or two notches below it, gives way on this bar
+    bool ceilMoved = ceilNudge && m_starCeil != ceilBefore;
     int maxStars = isBreak ? 1 : m_starCeil;
 
     /* ---- sweeps: the heads draw a figure around their aim - circle, eight,
@@ -5849,6 +5888,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (worn.isEmpty() == false && worn != colour)
                     mf = Function::invalidId();
             }
+            // The fader moved the ceiling (ceilMoved): a programme hotter
+            // than the new ceiling, or two notches colder, is not what the
+            // hand asked for. One notch colder stays - the pool doubles the
+            // top star, so the next pick will most likely be hotter anyway.
+            if (mf != Function::invalidId() && ceilMoved)
+            {
+                int have = qMax(1, m_funcs.value(mf).stars);
+                if (have > stars || stars - have >= 2)
+                    mf = Function::invalidId();
+            }
             if (mf == Function::invalidId())
             {
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
@@ -5916,6 +5965,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           || (mv.pulseOn == 2 && (beatInBar == 1 || beatInBar == 3))
                           || (mv.pulseOn == 3 && beatInBar == 0);
             qreal depth = darkGroups.contains(key) ? 0.0 : mv.pulse;
+            // The fader, live, on the kick: the move drew its depth at
+            // m_movesEnergy; between draws the fader scales it by the ratio
+            // of a gentle curve (half depth at the bottom, full at the top),
+            // so two per cent on the fader is two per cent on the pulse -
+            // on this beat. Never past 0.95 (a switch-dimmer reads that as off).
+            if (depth > 0.0 && m_movesEnergy >= 0.0)
+            {
+                qreal eRef = qBound(0.0, m_movesEnergy, 1.0);
+                depth = qMin(0.95, depth * (0.5 + 0.5 * eNow) / (0.5 + 0.5 * eRef));
+            }
             // The bass sets how far the light FALLS between two beats: a
             // heavy sub and the room pumps deep, a thin bass and it rides
             // light. The kick (below) is the hit, the bass is the weight
