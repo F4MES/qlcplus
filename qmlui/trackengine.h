@@ -146,6 +146,9 @@ struct TrackFuncInfo
     bool step = false;        // sits inside a chaser or sequence
     bool setsColour = true;   // writes a colour channel of its own (a colourless
                               // dimmer chase does not, and may run under any colour)
+    bool aims = false;        // writes a pan or tilt channel in some step: it steers
+                              // the heads itself, so the engine's sweep steps aside.
+                              // A dimmer walk does not, and the sweep runs under it.
     QString family;           // the figure, not the name: "Row", "Eyes", "Span" ...
     quint32 scatter = 0;      // nameScatter(name): the ORDER candidates() sorts by.
                               // Not the id - see candidates() for why that was
@@ -220,6 +223,14 @@ struct TrackSweep
     int fy = 3;
     int dx = 0;               // aim jitter: the figure's centre off the aimed position, pan / tilt
     int dy = 0;
+    // What the figure was drawn FOR, so applySweep() can rescale it live:
+    // width, height and beats above are the size and pace at `drawnE`; the
+    // fader is read every beat and the running EFX is stretched or shrunk
+    // by the ratio of the tier's reach and pace curves at the two energies.
+    // Until 2026-09-18 a figure kept the size it was born with for the whole
+    // section, and the fader did nothing visible until the next one.
+    int tier = 1;             // 0 break, 1 groove / build, 2 drop
+    qreal drawnE = 0.5;       // the energy the size and pace were drawn at
     bool operator==(const TrackSweep &o) const
     {
         return shape == o.shape && width == o.width && height == o.height && rotation == o.rotation
@@ -227,6 +238,40 @@ struct TrackSweep
             && fx == o.fx && fy == o.fy && dx == o.dx && dy == o.dy;
     }
 };
+
+/** The deterministic half of drawSweep()'s size and pace - the part the
+ *  fader decides - kept out here so applySweep() can follow the fader live
+ *  with the same curves. The dice multiply on top, once, at draw time.
+ *  Reach is pan units (0..127 is the whole travel); pace is beats per figure. */
+inline qreal sweepReach(int tier, qreal e)
+{
+    // A straight line from bottom to top in every tier, and a long one: at
+    // the bottom of the fader a groove figure is a nudge of 10 units, at the
+    // top it is 44 - more than four times the travel - and a drop goes from
+    // 14 to 60, nearly half the pan range either side of the aim. It used
+    // to be 16..30 and 24..42 with a 0.5..1.0 dice on top, so half a fader
+    // moved the figure less than the dice did (Tobias, 2026-09-18: "det er
+    // svaert at se den store forskel paa energi-slideren").
+    e = qBound(0.0, e, 1.0);
+    if (tier == 0)
+        return 30.0 + 22.0 * e;              // a break: big and very slow, as before
+    if (tier == 2)
+        return 14.0 + 46.0 * e;
+    return 10.0 + 34.0 * e;
+}
+
+inline qreal sweepPace(int tier, qreal e)
+{
+    // beats per figure. A drop at the top of the fader draws a whole circle
+    // in four beats - one bar - which is as quick as a head this size can be
+    // asked to travel a figure this big and still read as a figure.
+    e = qBound(0.0, e, 1.0);
+    if (tier == 0)
+        return 128.0 - 96.0 * e;             // a break: a minute down to a quarter of it
+    if (tier == 2)
+        return 24.0 - 20.0 * e;              // a drop: 24 -> 4
+    return 40.0 - 32.0 * e;                  // a groove: 40 -> 8
+}
 
 /** One fixture group as the engine sees it. */
 struct TrackGroup
@@ -566,7 +611,7 @@ protected:
     void ensureZoomScenes();
     QVector<qreal> patternMask(const QString &group, const TrackMove &move, int step, qreal prog) const;
     TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads, bool laser) const;
-    void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm);
+    void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm, qreal energy);
     QString sweepName(const TrackSweep &sweep) const;
     void stopSweeps();
     bool userAllowed(const TrackFuncInfo &info, const QString &group = QString()) const;
@@ -580,6 +625,8 @@ protected:
      *  dimmers takes whatever colour the room is in, so it can run under all
      *  of them; one that writes red is a red programme. */
     bool setsColourOf(Function *func) const;
+    /** Does this function write a pan or tilt channel in any of its steps? */
+    bool aimsOf(Function *func) const;
     bool coversColourOf(Function *func, const QSet<QString> &groups) const;
     int guessStars(const TrackFuncInfo &info) const;
     qreal stepBeats(const TrackFuncInfo &info, qreal bpm) const;
@@ -744,6 +791,7 @@ private:
 
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group
+    qreal m_movesEnergy = -1.0;            // the energy the moves were last drawn at (a fader jump redraws)
     QSet<QString> m_blendSkipped;         // functions left out for building on a mask
     QMap<QString, quint32> m_sweepFunc;    // head group -> its hidden relative EFX
     QMap<QString, TrackSweep> m_sweep;     // this section's figure per head group

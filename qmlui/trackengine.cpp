@@ -895,6 +895,7 @@ void TrackEngine::ensureTable()
         info.fixtureCount = touched.count();
         info.litShare = litShareOf(func, touched);
         info.setsColour = setsColourOf(func);
+        info.aims = aimsOf(func);
         foreach (quint32 fid, touched)
         {
             QString key = groupOfFixture(fid);
@@ -2595,6 +2596,53 @@ bool TrackEngine::setsColourOf(Function *func) const
                 if (g.colourValue.value(sv.fxi).contains(sv.channel))
                     return true;
             }
+        }
+    }
+    return false;
+}
+
+bool TrackEngine::aimsOf(Function *func) const
+{
+    // Does the programme steer the heads itself? Only then does the engine's
+    // own sweep have to step aside. The test used to be "is it a chaser" -
+    // and every AUTO dimmer walk is a chaser, so for as long as a programme
+    // ran on the heads (70 % of every groove and drop on the base) the sweep
+    // was OFF and the heads stood still on their aim. Measured in the
+    // tracklog of 2026-09-17: in drops the wash had a chase and no EFX on 592
+    // beats against 144 with one; in grooves 379 against 428. That is the
+    // heads not moving for most of the night, and "energien gaar ikke
+    // igennem rummet" (Tobias, 2026-09-18) has that as its first cause.
+    if (func == nullptr || m_doc == nullptr)
+        return false;
+    if (func->type() == Function::EFXType)
+        return true;
+    QList<quint32> steps;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+    }
+    else
+        steps.append(func->id());
+    foreach (quint32 sid, steps)
+    {
+        Function *sf = m_doc->function(sid);
+        if (sf == nullptr)
+            continue;
+        if (sf->type() == Function::EFXType)
+            return true;
+        Scene *scene = qobject_cast<Scene *>(sf);
+        if (scene == nullptr)
+            continue;
+        foreach (const SceneValue &sv, scene->values())
+        {
+            Fixture *fxi = m_doc->fixture(sv.fxi);
+            const QLCChannel *qch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
+            if (qch == nullptr)
+                continue;
+            if (qch->group() == QLCChannel::Pan || qch->group() == QLCChannel::Tilt)
+                return true;
         }
     }
     return false;
@@ -4749,11 +4797,27 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         qreal frac = want - whole;
         return whole + (rng->bounded(1000) < int(frac * 1000.0) ? 1 : 0);
     };
+    // A hand on the ENERGY fader: a quarter of it or more since the moves
+    // were last drawn, read on the bar line. Used here for the cast and
+    // further down for the moves, the figure, the zoom, the star ceiling and
+    // the held programme - see the comment at `redraw`.
+    bool faderJump = hold == false && beatInBar == 0 && m_movesEnergy >= 0.0
+                  && qAbs(energy - m_movesEnergy) >= 0.25;
     if ((sectionChanged || m_lastState.isEmpty()) && hold == false)
     {
         m_effectsBefore = m_effects;
         int want = effectsFor(isDrop, isBreak);
         m_effects = qBound(m_effects - 1, want, m_effects + 1);
+    }
+    else if (faderJump && isBreak == false)
+    {
+        // The one-step-per-section rule is for the music moving the room;
+        // it is not for the operator. From 20 % to 100 % it took three or
+        // four sections - up to two minutes - before the room was full, and
+        // in that time the fader looked broken. A jump is a decision: the
+        // cast goes straight to what the new energy asks for, on this bar.
+        m_effectsBefore = m_effects;
+        m_effects = effectsFor(isDrop, false);
     }
     // Every re-pick below sits behind `hold == false`, so this is exactly the
     // moment the look on stage may change. A verdict belongs in the section
@@ -4957,9 +5021,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
      *      Long sections redraw every 16 bars, half the time. A pattern the
      *      group ran in its last two sections is not drawn again if the
      *      dice can help it. ---- */
+    // A hand on the ENERGY fader is a decision, and it used to wait for the
+    // next section line - up to 32 bars - before anything but the strobes
+    // answered it (driveStrobe reads the fader every beat; the moves, the
+    // figure, the zoom and the star ceiling were all drawn once per section).
+    // A quarter of the fader or more since the last draw redraws all of them
+    // on the next bar line, and lets go of the held programme too: at 100 %
+    // the room should not be running the one-star walk it drew at 40 %.
+    // The sweep's SIZE and PACE follow the fader every beat regardless
+    // (applySweep); this is for the rest.
     bool redraw = hold == false
-               && (sectionChanged || m_moves.isEmpty()
+               && (sectionChanged || m_moves.isEmpty() || faderJump
                    || (bar > 0 && bar % 8 == 0 && beatInBar == 0 && rng->bounded(3) > 0));
+    if (redraw)
+        m_movesEnergy = energy;
+    if (faderJump)
+        m_sectionMotion.clear();
     foreach (const QString &key, castSorted)
     {
         if (redraw == false && m_moves.contains(key))
@@ -5202,7 +5279,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         const TrackGroup &g = m_groups.value(key);
         QString slot = "efx:" + key;
         quint32 mf = m_active.value("mot:" + key, Function::invalidId());
-        bool userMoves = mf != Function::invalidId() && m_funcs.value(mf).type != int(Function::SceneType);
+        // Only a programme that steers pan or tilt itself sends the sweep
+        // away (aimsOf). A dimmer walk on the heads is not a reason for the
+        // heads to stand still - it was, for most of the night; see aimsOf().
+        bool userMoves = mf != Function::invalidId() && m_funcs.value(mf).aims;
         quint32 aimFid = m_active.value("pos:" + key, Function::invalidId());
         bool aimed = aimFid != Function::invalidId();
         // An aim that MOVES - one of our own tilt figures, now that they are
@@ -5286,7 +5366,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_sweepHistory.insert(key, history);
             }
         }
-        applySweep(key, m_sweep.value(key), bpm);
+        applySweep(key, m_sweep.value(key), bpm, energy);
     }
 
     /* ---- zoom: a move of its own on the heads. Wide in a break, mid in
@@ -6777,11 +6857,17 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // A break's figure is BIG - the room is quiet, so the one thing moving
     // has all the attention and it may as well travel. It is the pace that
     // makes a break a break, not the size.
-    qreal reach = tier == 0 ? (30.0 + 22.0 * e)
-                : (tier == 2 ? 24.0 + 18.0 * e : 16.0 + 14.0 * e);
+    // The fader's half of the size lives in sweepReach() (trackengine.h), so
+    // applySweep() can follow the fader live with the same curve. The dice
+    // are 0.75..1.0 now, not 0.5..1.0: at 0.5 a groove figure at the top of
+    // the fader could come out SMALLER than one at the bottom, and the fader
+    // was not readable through it.
+    sw.tier = build ? 1 : tier;
+    sw.drawnE = e;
+    qreal reach = sweepReach(sw.tier, e);
     if (build)
         reach = 26.0 + 30.0 * prog;
-    qreal size = reach * (0.5 + 0.5 * rng->generateDouble());
+    qreal size = reach * (0.75 + 0.25 * rng->generateDouble());
     // pan has the whole room, tilt has the floor: the heads hang from the
     // ceiling and a figure must not climb the walls
     sw.width = qBound(6, int(size), 127);
@@ -6802,23 +6888,17 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // the quickest, in every section type, so 100 % feels different from
     // 50 % everywhere and not only in a drop. Nothing here is fast: even the
     // top of a drop is six beats for a whole circle.
-    auto beatsFor = [rng, e](int slow, int quick) {
-        qreal f = qreal(slow) + (qreal(quick) - qreal(slow)) * e;
-        f *= 0.85 + 0.30 * rng->generateDouble();      // the dice, but not much
+    // The pace curves live in sweepPace() (trackengine.h) for the same
+    // reason as the size: a break is a minute per figure at the bottom of
+    // the fader and a quarter of that at the top; a groove 40 -> 8 beats; a
+    // drop 24 -> 4. The dice are +-10 %, so the fader is what the eye reads.
+    auto beatsFor = [rng](qreal f) {
+        f *= 0.90 + 0.20 * rng->generateDouble();
         return qMax(3, int(qRound(f)));
     };
-    // A break: a whole minute for one figure at the bottom of the fader
-    // (128 beats at 128 bpm), a quarter of that at the top. Slow enough that
-    // the eye reads it as drift, not as a move; the fader is the only thing
-    // that hurries it. It used to be 48 -> 20.
-    if (tier == 0)
-        sw.beats = beatsFor(128, 32);
-    else if (tier == 2)
-        sw.beats = beatsFor(24, 6);       // a drop: 11 s down to under 3
-    else
-        sw.beats = beatsFor(36, 10);      // a groove: in between
+    sw.beats = beatsFor(sweepPace(sw.tier, e));
     if (build)
-        sw.beats = beatsFor(28, 8) / (prog > 0.5 ? 2 : 1);
+        sw.beats = beatsFor(28.0 - 20.0 * e) / (prog > 0.5 ? 2 : 1);
 
     // how the heads relate: in unison, as a wave, one after another,
     // mirrored, or fanned out around the figure
@@ -6961,7 +7041,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     return sw;
 }
 
-void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal bpm)
+void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal bpm, qreal energy)
 {
     quint32 fid = m_sweepFunc.value(group, Function::invalidId());
     EFX *efx = m_doc ? qobject_cast<EFX *>(m_doc->function(fid)) : nullptr;
@@ -6978,13 +7058,33 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     // the EFX counts milliseconds, the music beats: one figure = beats x the
     // DJ's beat, halved or doubled by the SPEED tiles
     qreal beatMs = bpm > 0.0 ? 60000.0 / bpm : 468.75;
+    // The fader, LIVE. The figure was drawn at sw.drawnE; the room is at
+    // `energy` now. Size and pace follow the tier's own curves (sweepReach /
+    // sweepPace) by ratio, so a figure drawn at 40 % and pushed to 100 %
+    // grows and quickens exactly as one drawn at 100 % would have been - on
+    // this very beat, not at the next section line. Width, height and
+    // duration are EFX attributes read on every frame (rotateAndScale,
+    // durationChanged), so the running figure stretches without a restart.
+    // Not the lasers: their pace is fixed on purpose (below, and drawSweep),
+    // and their amplitude is the small, slow one Tobias asked for.
+    bool laser = m_groups.value(group).lasers;
+    int width = sw.width;
+    int height = sw.height;
     int beats = sw.beats;
+    if (laser == false && sw.shape >= 0)
+    {
+        qreal e = qBound(0.0, energy, 1.0);
+        qreal grow = sweepReach(sw.tier, e) / qMax(1.0, sweepReach(sw.tier, sw.drawnE));
+        qreal pace = sweepPace(sw.tier, e) / qMax(1.0, sweepPace(sw.tier, sw.drawnE));
+        width = qBound(6, int(qRound(sw.width * grow)), 127);
+        height = qBound(4, int(qRound(sw.height * grow)), 28);
+        beats = qMax(3, int(qRound(sw.beats * pace)));
+    }
     // Not for the lasers. drawSweep() fixes their pace - "nothing here is ever
     // allowed to hurry" - and then this halved it whenever the DJ hit 2x. The
     // beams are 8-20 m long, so a 42-unit figure at half period puts the tip
     // past 6 m/s across the ceiling: a whip, not a sweep. The SPEED tile may
     // make them SLOWER (1/2x still applies); faster is not on offer.
-    bool laser = m_groups.value(group).lasers;
     if (m_speed < 0)
         beats *= 2;
     else if (m_speed > 0 && laser == false)
@@ -6995,9 +7095,14 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
                 && efx->isRunning() && efx->stopped() == false;
     if (running && m_sweepShown.value(group) == sw)
     {
-        // the pitch fader drifts the clock: keep the figure on the beat
+        // the pitch fader drifts the clock: keep the figure on the beat -
+        // and the ENERGY fader resizes it (the live ratio above)
         if (qAbs(int(efx->duration()) - int(ms)) > int(ms / 50))
             efx->setDuration(ms);
+        if (sw.shape >= 0 && efx->width() != width)
+            efx->setWidth(width);
+        if (sw.shape >= 0 && efx->height() != height)
+            efx->setHeight(height);
         return;
     }
     // reconfigured live: a stop and a start in the same tick would leave the
@@ -7005,8 +7110,8 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
 
     // no figure but a jitter: a figure of size zero is a still point off the aim
     efx->setAlgorithm(sw.shape < 0 ? EFX::Circle : EFX::Algorithm(sw.shape));
-    efx->setWidth(sw.shape < 0 ? 0 : sw.width);
-    efx->setHeight(sw.shape < 0 ? 0 : sw.height);
+    efx->setWidth(sw.shape < 0 ? 0 : width);
+    efx->setHeight(sw.shape < 0 ? 0 : height);
     efx->setRotation(sw.rotation);
     efx->setXOffset(qBound(0, 127 + sw.dx, 255));
     efx->setYOffset(qBound(0, 127 + sw.dy, 255));
