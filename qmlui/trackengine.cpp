@@ -5594,6 +5594,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mf = m_sectionMotion.value(key, Function::invalidId());
             if (mf != Function::invalidId() && m_funcs.contains(mf) == false)
                 mf = Function::invalidId();
+            // The colour changes INSIDE a section too - on the hold timer and
+            // on a musical turn (above, holdUp / turnUp). A programme that
+            // wears its own colour and was picked for the red room must not
+            // be held through the change to blue: it keeps painting red, the
+            // coversColour test below no longer matches, so the blue scene
+            // runs under it, and HTP adds them up to magenta. A colourless
+            // programme takes the new colour from the scene and may stay.
+            if (mf != Function::invalidId())
+            {
+                const QString worn = m_funcs.value(mf).colour;
+                if (worn.isEmpty() == false && worn != colour)
+                    mf = Function::invalidId();
+            }
             if (mf == Function::invalidId())
             {
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
