@@ -4258,6 +4258,36 @@ quint32 TrackEngine::homePosition(const QString &group) const
         if (isHome(info) && (best == nullptr || info.fixtureCount > best->fixtureCount))
             best = &info;
     }
+    if (best != nullptr)
+        return best->id;
+
+    // Still nothing - and this is the case the rig has been in ALL ALONG.
+    // "LaserUPP" is a STEP in two of the operator's chasers (UPDOWbeatlaser,
+    // UPDOWbeatlaserDOWN). A scene that sits inside a chaser gets role -1
+    // ("not used": chase steps must not be drawn as programmes), so it is
+    // never a POSITION candidate, and the two loops above never saw it. The
+    // bars had no home: below the roam line they fell through to the
+    // generic pick (2026-09-17: LaserDOWN, 553 beats at the floor), and once
+    // laserAimSafe() started measuring against the home (runde 96b/103)
+    // every laser aim failed the measurement and the bars got NO aim at all
+    // (2026-09-19: not one pos:LaserBars in 3088 beats). Being a step is
+    // not a reason for a scene not to be where the beams park: a home is
+    // found by its NAME and its values, and by nothing else. Role and ban
+    // are ignored here too - the only thing that still has to hold is that
+    // it is a scene of this one group, and that it says UP.
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin();
+         it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &info = it.value();
+        if (info.junk || info.generated)
+            continue;
+        if (info.groups.count() != 1 || info.groups.contains(group) == false)
+            continue;
+        if (m_doc == nullptr || m_doc->function(info.id) == nullptr)
+            continue;
+        if (isHome(info) && (best == nullptr || info.fixtureCount > best->fixtureCount))
+            best = &info;
+    }
     return best != nullptr ? best->id : Function::invalidId();
 }
 
@@ -5377,6 +5407,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (want == Function::invalidId() || (mayMove && sectionChanged && (g.lasers == false || inCast)))
         {
             quint32 np = positionFunction(key, m_castCursor, tier, fader);
+            // a laser group with nothing safe to roam to parks at home rather
+            // than keeping whatever tilt the channel happens to hold
+            if (np == Function::invalidId() && g.lasers)
+                np = homePosition(key);
             if (np != want && (mayMove || want == Function::invalidId()))
             {
                 if (inCast && g.lasers)
@@ -5920,7 +5954,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (mf != Function::invalidId())
             {
                 const QString worn = m_funcs.value(mf).colour;
-                if (worn.isEmpty() == false && worn != colour)
+                // ... but NOT for the accent group's own trade. In a drop the
+                // accent group flips between the accent colour and the room's
+                // every colourBars bars (above), and the bars are the accent
+                // group more often than not: every flip released the held
+                // programme, and the bars changed programme every 2-4 bars
+                // all night (2026-09-19: 21 of 33 bar changes were this,
+                // median life 4 beats). The accent flip is a trade WITHIN one
+                // look, so the programme stays through it; a change of the
+                // ROOM colour (changeColour, the beat it happens) still lets
+                // it go.
+                if (worn.isEmpty() == false && worn != colour
+                    && (key != accentGroup || changeColour))
                     mf = Function::invalidId();
             }
             // The fader moved the ceiling (ceilMoved): a programme hotter
@@ -7512,6 +7557,9 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
         // the row says BANNED and the bars keep going there. Say it out loud
         // rather than leave him hunting for it.
         quint32 home = g.lasers ? homePosition(key) : Function::invalidId();
+        if (g.lasers && m_groupOff.contains(key) == false && home == Function::invalidId())
+            found << tr("%1 has no HOME aim - no scene of the group says UP/UPP; "
+                        "the beams cannot park and no aim can be measured").arg(key);
         if (home != Function::invalidId() && m_funcs.value(home).banned)
             found << tr("%1: the home aim is banned, but it is still used - "
                         "the beams have to park somewhere").arg(key);
