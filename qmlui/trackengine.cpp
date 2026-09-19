@@ -4736,6 +4736,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // lower and neither gets the hardware strobe.
     bool isIntro = (state == QStringLiteral("intro"));
     bool isOutro = (state == QStringLiteral("outro"));
+    // A DRIVE is a groove high in the track's own range - BLT's analyser names
+    // it (qlc-section-type, analysis version 7), after Time-line's taxonomy:
+    // "a steady, high-energy groove that maintains momentum without actively
+    // building or releasing tension". It stays TIER 1 - the programme pool,
+    // the colour rules and the section machinery are a groove's - but the
+    // curves that a groove and a drop disagree about are read half way
+    // between the two. An older BLT never sends it and nothing changes.
+    bool isDrive = (state == QStringLiteral("drive"));
     bool isBreak = (state == QStringLiteral("break")) || isIntro || isOutro;
     bool isBuild = (state == QStringLiteral("build"));
     bool isDrop  = (state == QStringLiteral("drop"));
@@ -4966,6 +4974,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     auto effectsWant = [&energy](bool drop) -> qreal {
         qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0)
                           : 2.0 * qBound(0.0, (energy - 0.10) / 0.75, 1.0);
+        if (drop == false && isDrive)
+            want = 2.5 * qBound(0.0, (energy - 0.08) / 0.78, 1.0);
         want += 1.0 * qBound(0.0, (energy - 0.80) / 0.20, 1.0);
         return want;
     };
@@ -5435,6 +5445,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // still halve or double it.
         qreal eWalk = qBound(0.0, energy, 1.0);
         int walkBase = isDrop ? qMax(1, int(qRound(4.0 - 3.0 * eWalk)))
+                     : isDrive ? qMax(1, int(qRound(6.0 - 4.5 * eWalk)))
                               : qMax(2, int(qRound(8.0 - 6.0 * eWalk)));
         int walkBars = qMax(1, walkBase * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1));
         if (g.heads && inCast && hold == false && isBreak == false
@@ -5510,6 +5521,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // room drew from did not change between 30 % and 60 % of the fader
         qreal p2 = isDrop ? qBound(0.0, (energy - 0.10) / 0.35, 1.0) : qBound(0.0, (energy - 0.20) / 0.35, 1.0);
         qreal p3 = isDrop ? qBound(0.0, (energy - 0.40) / 0.35, 1.0) : qBound(0.0, (energy - 0.50) / 0.40, 1.0);
+        if (isDrive)
+        {
+            p2 = qBound(0.0, (energy - 0.15) / 0.35, 1.0);
+            p3 = qBound(0.0, (energy - 0.45) / 0.38, 1.0);
+        }
         bool diced = redraw || m_starCeil <= 0;
         m_starCeil = 1;
         if (diced ? (rng->bounded(1000) < int(p2 * 1000.0)) : (p2 >= 0.5))
@@ -5603,9 +5619,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             int samples = m_fullAuto && m_ratingOn && isCalm == false ? 6 : 1;
             for (int sample = 0; sample < samples; sample++)
             {
-                TrackSweep candidate = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers);
+                TrackSweep candidate = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers, isDrive);
                 for (int attempt = 0; attempt < 4 && candidate.shape >= 0 && history.contains(candidate.shape); attempt++)
-                    candidate = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers);
+                    candidate = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers, isDrive);
                 m_sweep.insert(key, candidate);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
                 total += weight;
@@ -7091,7 +7107,7 @@ QString TrackEngine::moveName(const TrackMove &move) const
  *********************************************************************/
 
 
-TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy, int heads, bool laser) const
+TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy, int heads, bool laser, bool drive) const
 {
     // The heads' figure for a section. The energy decides whether they move
     // at all, how big and how fast; the dice pick the shape and how the
@@ -7166,7 +7182,8 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // was not readable through it.
     sw.tier = build ? 1 : tier;
     sw.drawnE = e;
-    qreal reach = sweepReach(sw.tier, e);
+    sw.drive = drive && sw.tier == 1;
+    qreal reach = sweepReach(sw.tier, e, sw.drive);
     if (build)
         reach = 26.0 + 30.0 * prog;
     qreal size = reach * (0.75 + 0.25 * rng->generateDouble());
@@ -7198,7 +7215,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         f *= 0.90 + 0.20 * rng->generateDouble();
         return qMax(3, int(qRound(f)));
     };
-    sw.beats = beatsFor(sweepPace(sw.tier, e));
+    sw.beats = beatsFor(sweepPace(sw.tier, e, sw.drive));
     if (build)
         sw.beats = beatsFor(28.0 - 20.0 * e) / (prog > 0.5 ? 2 : 1);
 
@@ -7411,8 +7428,8 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     if (laser == false && sw.shape >= 0)
     {
         qreal e = qBound(0.0, energy, 1.0);
-        qreal grow = sweepReach(sw.tier, e) / qMax(1.0, sweepReach(sw.tier, sw.drawnE));
-        qreal pace = sweepPace(sw.tier, e) / qMax(1.0, sweepPace(sw.tier, sw.drawnE));
+        qreal grow = sweepReach(sw.tier, e, sw.drive) / qMax(1.0, sweepReach(sw.tier, sw.drawnE, sw.drive));
+        qreal pace = sweepPace(sw.tier, e, sw.drive) / qMax(1.0, sweepPace(sw.tier, sw.drawnE, sw.drive));
         width = qBound(6, int(qRound(sw.width * grow)), 127);
         height = qBound(4, int(qRound(sw.height * grow)), 28);
         beats = qMax(3, int(qRound(sw.beats * pace)));

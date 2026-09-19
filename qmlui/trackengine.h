@@ -230,6 +230,8 @@ struct TrackSweep
     // Until 2026-09-18 a figure kept the size it was born with for the whole
     // section, and the fader did nothing visible until the next one.
     int tier = 1;             // 0 break, 1 groove / build, 2 drop
+    bool drive = false;       // a groove high in the track's own range: the
+                              // curves are read half way towards the drop's
     qreal drawnE = 0.5;       // the energy the size and pace were drawn at
     bool operator==(const TrackSweep &o) const
     {
@@ -243,7 +245,7 @@ struct TrackSweep
  *  fader decides - kept out here so applySweep() can follow the fader live
  *  with the same curves. The dice multiply on top, once, at draw time.
  *  Reach is pan units (0..127 is the whole travel); pace is beats per figure. */
-inline qreal sweepReach(int tier, qreal e)
+inline qreal sweepReach(int tier, qreal e, bool drive = false)
 {
     // A straight line from bottom to top in every tier, and a long one: at
     // the bottom of the fader a groove figure is a nudge of 10 units, at the
@@ -257,10 +259,13 @@ inline qreal sweepReach(int tier, qreal e)
         return 30.0 + 22.0 * e;              // a break: big and very slow, as before
     if (tier == 2)
         return 14.0 + 46.0 * e;
+    // a DRIVE sits half way between the groove and the drop
+    if (drive)
+        return 12.0 + 40.0 * e;
     return 10.0 + 34.0 * e;
 }
 
-inline qreal sweepPace(int tier, qreal e)
+inline qreal sweepPace(int tier, qreal e, bool drive = false)
 {
     // beats per figure. A drop at the top of the fader draws a whole circle
     // in four beats - one bar - which is as quick as a head this size can be
@@ -270,6 +275,8 @@ inline qreal sweepPace(int tier, qreal e)
         return 128.0 - 96.0 * e;             // a break: a minute down to a quarter of it
     if (tier == 2)
         return 24.0 - 20.0 * e;              // a drop: 24 -> 4
+    if (drive)
+        return 32.0 - 26.0 * e;              // a drive: 32 -> 6
     return 40.0 - 32.0 * e;                  // a groove: 40 -> 8
 }
 
@@ -610,7 +617,10 @@ protected:
     void ensureSweeps();
     void ensureZoomScenes();
     QVector<qreal> patternMask(const QString &group, const TrackMove &move, int step, qreal prog) const;
-    TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads, bool laser) const;
+    /** drive: a groove high in the track's own range - the size and pace curves
+     *  are read half way towards the drop's. See tick(), isDrive. */
+    TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads,
+                         bool laser, bool drive = false) const;
     void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm, qreal energy);
     QString sweepName(const TrackSweep &sweep) const;
     void stopSweeps();
