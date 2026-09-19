@@ -7326,7 +7326,27 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // 8-26 units of travel); it now lies on one side of it, so h is
         // halved to keep the travel - and the promise of SMALL - the same.
         sw.height = int(4 + 6 * lw) + int(rng->bounded(4));
-        sw.beats = 96 + int(rng->bounded(33));
+        // The PERIOD is what made them read as still - not the size. The
+        // travel is 2 x height = 20-26 units at the top of the fader, and the
+        // operator's own scenes put a unit at about 0.78 degrees (LaserUPP
+        // 126 -> LaserDOWN 242 is 116 units from horizontal to the floor), so
+        // the beams already swing 16-20 degrees. Over 96-128 beats that is
+        // 0.7 degrees a second: below what an eye reads as movement, and in a
+        // drop, with the strobes and the heads going, invisible. Tobias,
+        // 2026-09-19: "synes heller aldrig at barene bevaegede sig paa drops
+        // i de hoeje energi vaerdier."
+        //
+        // So a DROP - and only a drop - shortens it with the fader: 96 beats
+        // at two fifths, 64 at the top. 64 beats is 30 s a cycle at 128 bpm,
+        // 15 s to cross the 20 degrees, which puts the tip of a 20 m beam at
+        // 0.5 m/s - the limit the rest of this block is built around, and
+        // still a drift rather than a sweep. A groove and a break keep the
+        // 96-128 they had: "MEGET langsomme og smaa bevaegelser" (Tobias,
+        // 2026-09-16) is the rule, and the drop is the exception to it.
+        qreal period = 96.0 + 32.0 * rng->generateDouble();
+        if (tier == 2)
+            period = (96.0 - 32.0 * lw) * (0.90 + 0.20 * rng->generateDouble());
+        sw.beats = qMax(48, int(qRound(period)));
         sw.dx = 0;
         // The figure is a line of +-height around aim + dy. It is drawn
         // UP-ONLY: dy = -height puts its lowest point exactly on the home
