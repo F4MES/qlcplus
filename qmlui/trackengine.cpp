@@ -4738,6 +4738,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         return;
     ensureTable();
     tickFades();
+    // idle/release clear the state. Resuming the same marker span must still
+    // invalidate the old section's programmes and delayed-drop offset.
+    sectionChanged = sectionChanged || m_lastState.isEmpty();
     if (beat < m_lastBeat || beat - m_lastBeat > 8)
     {
         m_fillUntil = -1;
@@ -5017,7 +5020,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         if (m_groupOff.contains(key))
             continue;
-        if (candidates(ENGINE_ROLE_COLOR, key).isEmpty())
+        // Pattern devices carry colour in their motion scenes; requiring a
+        // separate colour scene excludes an otherwise usable animation laser.
+        if (candidates(ENGINE_ROLE_COLOR, key).isEmpty()
+            && (m_groups.value(key).patternDevice == false
+                || candidates(ENGINE_ROLE_MOTION, key).isEmpty()))
             continue;
         eligible.append(key);
     }
@@ -5365,8 +5372,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         foreach (const QString &key, priority)
             if (castSet.contains(key) && m_groups.value(key).strobes == false) leads << key;
         if (leads.isEmpty())
+        {
             foreach (const QString &key, castSorted)
+            {
                 if (key != base) leads << key;
+            }
+        }
         const QString lead = leads.isEmpty() ? QString() : leads.first();
         compositionChanged = lead != m_rhythmLead || roleContextChanged;
         if (compositionChanged)
@@ -8863,7 +8874,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     QStringList castSorted = m_cast.values();
     castSorted.sort();
     const QString build = QCoreApplication::applicationVersion()
-                        + QStringLiteral(" / TRACK-r125.1 / " __DATE__ " " __TIME__);
+                        + QStringLiteral(" / TRACK-r126 / " __DATE__ " " __TIME__);
     const QByteArray currentSettings = logSettings();
     QString snapshot;
     if (currentSettings != m_logSettingsLast)

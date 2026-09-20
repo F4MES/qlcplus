@@ -188,12 +188,6 @@ void TrackManager::slotNewConnection()
 
 void TrackManager::slotDisconnected()
 {
-    if (m_playing && m_linkStale == false)
-    {
-        m_linkStale = true;
-        emit linkChanged();
-    }
-
     QTcpSocket *sock = qobject_cast<QTcpSocket *>(sender());
     if (sock == nullptr)
         return;
@@ -323,7 +317,11 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     m_lastSecStart = -1;
     m_lastSecEnd = -1;
     if (m_nextTitle == m_title)
+    {
         m_nextTitle.clear();
+        m_nextMarkers.clear();
+        emit mixChanged(); // the preview now belongs to the playing deck
+    }
     if (m_engine != nullptr)
         m_engine->trackLoaded(m_title, m_key);
 
@@ -2370,6 +2368,7 @@ void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
         {
             m_nextTitle.clear();         // it is this track, not the next
             m_nextMarkers.clear();       // ... so these are not its flags either
+            if (m_engine != nullptr) m_engine->setNextKey(QString());
         }
         emit mixChanged();
     }
