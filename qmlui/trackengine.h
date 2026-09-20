@@ -53,6 +53,7 @@
 #include <QHash>
 #include <QList>
 #include <QFile>
+#include <QByteArray>
 #include <QMap>
 #include <QSet>
 
@@ -698,6 +699,8 @@ protected:
     qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;
     void checkConflicts(const QSet<QString> &cast);
     void logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy);
+    QByteArray logSettings() const;
+    TrackMove composeMove(const QString &group, TrackMove move, int tier) const;
     /** A marker line in the tracklog at the numbers of the last beat: the
      *  operator did something. Same columns as a beat, so one parser reads
      *  both, and the funcs column already says what was on stage. */
@@ -795,6 +798,8 @@ private:
     QTimer m_docTimer;        // coalesces a burst of document signals into one rebuild
     bool m_logEnabled;
     QFile m_log;
+    QByteArray m_logSettingsLast;
+    QString m_logSettingsId;
     // The context of the last line written, so a rating can be logged with the
     // same numbers the beat had. Inline-initialised on purpose: added to the
     // constructor's list they would have to sit in declaration order too, and
@@ -823,6 +828,9 @@ private:
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group
     qreal m_movesEnergy = -1.0;            // the energy the moves were last drawn at (a fader jump redraws)
+    QString m_rhythmLead;                 // one leading effect, other groups support it
+    QString m_compositionBase;
+    int m_compositionTier = 0;
     int m_dropLand = 0;                    // FAKE DROP: the bar of the drop the kick actually arrived on
     qreal m_castEnergy = -1.0;             // the energy the cast size was last decided at (a nudge steps it)
     qreal m_ceilEnergy = -1.0;             // the energy the star ceiling was last drawn at (a nudge redraws it)

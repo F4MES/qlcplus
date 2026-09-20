@@ -16,6 +16,8 @@
 #include <functional>
 #include <algorithm>
 
+#include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QStandardPaths>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -4169,6 +4171,31 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             ok = other;
     }
 
+    // Composition also applies to real show programmes, not just the masks.
+    // Foundation/support favour broad, slow pictures; only the rhythmic lead
+    // draws freely from the full menu. An empty shortlist uses the generated
+    // look, rather than introducing a second fast chase to fill a slot.
+    if (m_fullAuto && m_compositionTier > 0 && group != m_rhythmLead)
+    {
+        QList<TrackFuncInfo *> support;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (info->type == int(Function::SceneType)
+                || (info->litShare >= (group == m_compositionBase ? 0.60 : 0.50)
+                    && stepBeats(*info, bpm) >= 2.0))
+                support.append(info);
+        }
+        if (support.isEmpty())
+        {
+            // Pattern devices have no generated substitute: keep an eligible
+            // pattern rather than turning a selected group dark.
+            if (m_groups.value(group).patternDevice == false)
+                return Function::invalidId();
+        }
+        else
+            ok = support;
+    }
+
     // Of what is allowed, the hottest comes up most often - but it does not
     // take the whole draw. This used to DISCARD everything below the top
     // star, and one programme was then enough to empty a pool: the show's own
@@ -4794,14 +4821,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool isDrop  = (state == QStringLiteral("drop"));
     int tier = isBreak ? 0 : (isDrop ? 2 : 1);
     bool isCalm = beat < m_calmUntil;
-    // a mix: two decks on air. Whatever the analysis says, this is groove
-    // at most - the drop belongs to the outgoing track
-    if (m_mixing && isBreak == false)
-    {
-        isDrop = false;
-        isBuild = false;
-        tier = 1;
-    }
+    // MIX hands colour over; musical state and ENERGY still drive activity.
     // A drop under ENGINE_DROP_SHOW is a groove with a louder record on. The
     // state stays "drop" for the log and the verdicts; everything that
     // decides what the room DOES reads isDrop / tier, and those say groove.
@@ -4846,12 +4866,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // previous drop's offset - dropBar = 0 - 3 = -3, and the landing lost.
     if (isDrop == false || sectionChanged)
         m_dropLand = 0;
-    else if (kick >= 0.0 && hold == false && beatInBar == 0
-             && bar == m_dropLand && m_dropLand < 8 && kick < 0.20)
+    if (isDrop && kick >= 0.0 && hold == false && beatInBar == 0
+        && bar == m_dropLand && m_dropLand < 8 && kick < 0.20)
         m_dropLand++;
     const int dropBar = isDrop ? bar - m_dropLand : bar;
+    const bool dropWaiting = isDrop && dropBar < 0;
+    if (dropWaiting)
+    {
+        isDrop = false;
+        isBuild = true;
+        tier = 1;
+        prog = qMin(prog, 0.75); // tension, never the final build's automatic hits
+    }
+    else if (isDrop && m_dropLand > 0 && dropBar == 0 && beatInBar == 0 && hold == false)
+        sectionChanged = true;  // draw the drop look WHEN the kick lands
 
-    bool preDrop = isDrop == false && m_mixing == false && hold == false
+    bool preDrop = isDrop == false && dropWaiting == false && hold == false
                 && nextState == QStringLiteral("drop")
                 && beatsToNext > 0 && beatsToNext <= 4;
 
@@ -4861,7 +4891,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // everything shaped by prog (pulse depth, the bare blink, the sweep)
     // reaches its top as the drop lands. (Tobias, 2026-09-15: "musikken
     // foelger waveformen mere ift. hvordan det blinker, skifter".)
-    if (isDrop == false && isBreak == false && isBuild == false && m_mixing == false
+    if (isDrop == false && isBreak == false && isBuild == false
         && riser > 0.15 && nextState == QStringLiteral("drop")
         && beatsToNext > 0 && beatsToNext <= 32)
     {
@@ -5131,7 +5161,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // A hidden drop (under ENGINE_DROP_SHOW) was CHOSEN with groove rules, so
     // its verdicts belong to the groove bucket, not the drop's
     if (hold == false)
-        m_lookState = dropHidden ? QStringLiteral("normal") : state;
+        m_lookState = dropWaiting ? QStringLiteral("build")
+                    : (dropHidden ? QStringLiteral("normal") : state);
     m_lastState = state;
 
     int effects = m_effects;
@@ -5147,15 +5178,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         effects = qMax(effects, int(qRound(3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0))));
     if (isCalm || still)
         effects = 0;
-    // Mix-out: the track on its way out hands the room over in steps, not in
-    // a cut - two groups for six bars, one for six more, then the base alone
-    // until the next track's own look arrives. The colour is frozen for the
-    // same stretch (above), so the picture thins out; it does not change.
-    if (m_mixing && m_mixBeat >= 0)
-    {
-        int mixBars = qMax(0, beat - m_mixBeat) / 4;
-        effects = qMin(effects, mixBars < 6 ? 2 : (mixBars < 12 ? 1 : 0));
-    }
+    // A long blend keeps its musical activity budget. There is no elapsed-
+    // mix countdown to the base: the section and ENERGY decide when it rests.
     // One budget for the whole cast. Breaks never inherit a peak's groups;
     // the top of ENERGY can use four effects plus the base on a drop.
     effects = qBound(0, effects, isBreak ? 1 : (isDrop || preDrop ? 4 : 3));
@@ -5324,6 +5348,30 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     else if (isDrop == false)
         m_dropStyle = 0;
 
+    // Stable roles for this room picture: base / rhythmic lead / support.
+    // Keep the lead under HOLD and through a mix; replace it only when it
+    // leaves the cast or the music starts a new section.
+    const bool roleContextChanged = m_compositionBase != base || m_compositionTier != tier;
+    m_compositionBase = base;
+    m_compositionTier = tier;
+    bool compositionChanged = false;
+    if (m_fullAuto && (((sectionChanged || roleContextChanged) && hold == false)
+        || (m_rhythmLead.isEmpty() == false && castSet.contains(m_rhythmLead) == false)
+        || (m_rhythmLead.isEmpty() && castSet.count() > (castSet.contains(base) ? 1 : 0))))
+    {
+        QStringList leads;
+        foreach (const QString &key, priority)
+            if (castSet.contains(key) && m_groups.value(key).strobes == false) leads << key;
+        if (leads.isEmpty())
+            foreach (const QString &key, castSorted)
+                if (key != base) leads << key;
+        const QString lead = leads.isEmpty() ? QString() : leads.first();
+        compositionChanged = lead != m_rhythmLead || roleContextChanged;
+        if (compositionChanged)
+            m_sectionMotion.clear(); // programmes must obey the new roles too
+        m_rhythmLead = lead;
+    }
+
     /* ---- moves: every group in the cast draws how it moves this section.
      *      Long sections redraw every 16 bars, half the time. A pattern the
      *      group ran in its last two sections is not drawn again if the
@@ -5338,7 +5386,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // The sweep's SIZE and PACE follow the fader every beat regardless
     // (applySweep); this is for the rest.
     bool redraw = hold == false
-               && (sectionChanged || m_moves.isEmpty() || faderJump
+               && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump
                    || (bar > 0 && bar % 8 == 0 && beatInBar == 0 && rng->bounded(3) > 0));
     if (redraw)
         m_movesEnergy = energy;
@@ -5357,6 +5405,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             TrackMove candidate = drawMove(key, tier, isBuild, energy, key == base, prog);
             for (int attempt = 0; attempt < 4 && candidate.pattern != ENGINE_PAT_STATIC && history.contains(candidate.pattern); attempt++)
                 candidate = drawMove(key, tier, isBuild, energy, key == base, prog);
+            if (m_fullAuto)
+                candidate = composeMove(key, candidate, tier);
             m_moves.insert(key, candidate);
             int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
             total += weight;
@@ -5695,6 +5745,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 TrackSweep candidate = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers, isDrive);
                 for (int attempt = 0; attempt < 4 && candidate.shape >= 0 && history.contains(candidate.shape); attempt++)
                     candidate = drawSweep(sweepTier, isBuild && isCalm == false, prog, energy, sweepHeads, g.lasers, isDrive);
+                if (m_fullAuto && g.lasers == false && sweepTier > 0 && key != m_rhythmLead)
+                {
+                    candidate.beats = qMax(candidate.beats, key == base ? 16 : 24);
+                    candidate.spread = 0;
+                    candidate.mirror = true;
+                    candidate.fan = 0;
+                }
                 m_sweep.insert(key, candidate);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
                 total += weight;
@@ -5775,7 +5832,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     /* ---- musical fills; the eight-bar clock is only a no-curves fallback ---- */
     int phraseBar = bar % 8;
     bool phraseAllowed = hold == false && isCalm == false && still == false
-                      && m_mixing == false && (isDrop || (tier == 1 && energy > 0.5));
+                      && (isDrop || (tier == 1 && energy > 0.5));
     bool fillSignal = haveCurves && (turn || (high > 0.65 && kick < 0.35 && riser > 0.08));
     if (phraseAllowed && fillSignal && beat - m_fillLast >= 8)
     {
@@ -5828,6 +5885,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
 
         TrackMove mv = m_moves.value(key);
+        if (m_fullAuto)
+            mv = composeMove(key, mv, tier);
         if (isCalm || still)
             mv = TrackMove();
         // The drop's first bar (two, from three fifths of the fader) is the
@@ -5839,7 +5898,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // (animation lasers) and the base sit it out; the bars step on the
         // beat, never between (they never do).
         int impactBars = energy >= 0.60 ? 2 : 1;
-        if (isDrop && dropBar >= 0 && dropBar < impactBars && key != base && hold == false && isCalm == false
+        if (isDrop && dropBar >= 0 && dropBar < impactBars && key != base
+            && (m_fullAuto == false || key == m_rhythmLead || g.strobes)
+            && hold == false && isCalm == false
             && still == false && g.patternDevice == false && darkGroups.contains(key) == false)
         {
             mv.pattern = ENGINE_PAT_CHASE;
@@ -5885,7 +5946,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // eighths and sixteenths when it is hot. The landing bar stands still
         else if (key != base && landing)
             mv.pattern = ENGINE_PAT_STATIC;
-        else if (key != base && turnaround && mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_FILL)
+        else if (key != base && (m_fullAuto == false || key == m_rhythmLead) && turnaround && mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_FILL)
         {
             if (mv.stepBeats > 1)
                 mv.stepBeats = qMax(1, mv.stepBeats / 2);
@@ -5894,7 +5955,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         // a hats-only passage (highs up, no kick) sparkles rather than sits
         if (high > 0.65 && kick >= 0.0 && kick < 0.35 && mv.pattern == ENGINE_PAT_STATIC
-            && key != base && isCalm == false && still == false && g.parts.count() >= 3)
+            && key != base && (m_fullAuto == false || key == m_rhythmLead)
+            && isCalm == false && still == false && g.parts.count() >= 3)
         {
             mv.pattern = ENGINE_PAT_SPARKLE;
             mv.stepBeats = 2;
@@ -5926,6 +5988,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // whole beat or slower), so the two halves now agree.
         if (g.strobes)
             mv.subSteps = qMin(mv.subSteps, tier == 2 ? 2 : 1);
+
+        if (m_fullAuto && tier > 0 && key != m_rhythmLead && g.strobes)
+        {
+            mv.pattern = ENGINE_PAT_STATIC;
+            mv.subSteps = 1;
+            mv.pulseOn = turn ? 0 : 3;
+            mv.flashBar = false;
+        }
 
         QString colour = m_colour;
         // the mix's second half: the base stands in the incoming track's colour
@@ -5962,7 +6032,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         qreal duck = 1.0;
         if (m_kickGone >= 4 && isBreak == false && isCalm == false && key != base)
             duck = 1.0 - 0.45 * qBound(0.0, qreal(m_kickGone - 4) / 4.0, 1.0);
-        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0) * duck, 1.0);
+        qreal support = (m_fullAuto && tier > 0 && key != base && key != m_rhythmLead)
+                      ? (g.strobes ? 0.55 : 0.70) : 1.0;
+        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0) * duck * support, 1.0);
         qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_groupTrim.value(key, 1.0) * m_master;
         // run() puts MASTER and the trim on for us now, so the colour scene
         // gets the bare level - or the two would multiply
@@ -6285,7 +6357,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // dropBar, not bar: the landing burst waits for the kick (see m_dropLand).
     // In a drop the only thing driveStrobe reads `bar` for IS the landing.
     driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, isDrop ? dropBar : bar, beatInBar,
-                isCalm || still || m_mixing || m_flash || m_blackout
+                isCalm || still || dropWaiting || m_flash || m_blackout
                 || isIntro || isOutro);       // nobody strobes an intro
 
     /* ---- hits ---- */
@@ -6305,7 +6377,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     int hitGap = qMax(1, int(qRound(8.0 - 7.0 * eNow)));
     bool crowded = m_hitBeats.count() >= hitCeil
                 || (m_hitBeats.isEmpty() == false && beat - m_hitBeats.last() < hitGap);
-    bool hit = isCalm == false && still == false && m_mixing == false
+    bool hit = isCalm == false && still == false && dropWaiting == false
             && ((isBuild && prog > 0.82 && crowded == false
                  && (haveCurves == false || turn || (kick > 0.45 && riser > 0.08)))
                 || (isDrop && dropBar == 0 && beatInBar < 2)
@@ -6318,7 +6390,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // white on the downbeat of a drop - that is the one moment it
             // reads as a punch rather than as a lamp somebody forgot to
             // colour. Everywhere else the accent is in the room's colour.
-            QString hue = (isDrop && bar == 0 && beatInBar == 0) ? QStringLiteral("white") : m_colour;
+            QString hue = (isDrop && dropBar == 0 && beatInBar == 0) ? QStringLiteral("white") : m_colour;
             quint32 ff = flashFunction(castSet, hue);
             if (ff != Function::invalidId())
                 run("flash", ff, 1.0, 0, true);
@@ -6428,10 +6500,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (closing < 1.0) ev << "closing";
         if (m_kickGone >= 4 && isBreak == false) ev << "kick-gone";
         if (dropHidden) ev << "drop-hidden";
+        if (dropWaiting) ev << "drop-wait";
         if (fakeDrop) ev << QString("drop-late@%1").arg(m_dropLand);
         if (isDrop && m_dropStyle > 0) ev << ("drop-" + dropStyleName(m_dropStyle));
         if (isDrop && dropBar >= 0 && dropBar < impactBarsLog) ev << "impact";
         if (mixBarsOut >= 6 && m_nextColour.isEmpty() == false) ev << "mix-turn";
+        if (m_fullAuto && m_rhythmLead.isEmpty() == false)
+            ev << "lead=" + QString::fromLatin1(m_rhythmLead.toUtf8().toHex());
+        if (m_mixing) ev << "mix-energy";
         if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
         m_logEvent = ev.join('+');
     }
@@ -6454,6 +6530,32 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 /*********************************************************************
  * Generated motion
  *********************************************************************/
+
+TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tier) const
+{
+    if (tier == 0)
+        return move; // the existing break's base and occasional fan are deliberate
+    move.phase = 0;  // one rhythmic origin across the room
+    if (group == m_rhythmLead)
+        return move;
+    move.flashBar = false;
+    move.subSteps = 1;
+    move.stepBeats = qMax(4, move.stepBeats);
+    move.colourBars = 0;
+    if (group == m_compositionBase)
+    {
+        move.pattern = ENGINE_PAT_STATIC;
+        move.bare = false;
+        return move; // keep the base's requested deep kick pulse and floor
+    }
+    const TrackGroup &g = m_groups.value(group);
+    move.pattern = ENGINE_PAT_STATIC;
+    move.pulseOn = 3;
+    move.bare = g.strobes;
+    move.pulse = g.strobes ? 0.95 : qMin(0.30, move.pulse);
+    if (g.strobes) move.ownChaser = false;
+    return move;
+}
 
 TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qreal energy, bool isBase, qreal prog) const
 {
@@ -8059,10 +8161,10 @@ QMap<QString, QString> TrackEngine::autoLookKeys(const QSet<QString> &cast, qrea
     QStringList rig;
     foreach (const QString &group, groups)
         rig << QString::fromLatin1(group.toUtf8().toHex()) + ':' + QString::number(m_groups.value(group).fixtures.count());
-    QString context = QString("v1|%1|e%2|%3|%4|%5|d%6")
+    QString context = QString("v1|%1|e%2|%3|%4|%5|d%6|lead=%7")
         .arg(rateBucket()).arg(qMin(3, int(qBound(0.0, energy, 1.0) * 4)))
         .arg(m_colour).arg(m_accent && m_dropStyle > 0 ? m_accentPick : QString())
-        .arg(rig.join(';')).arg(m_dropStyle);
+        .arg(rig.join(';')).arg(m_dropStyle).arg(QString::fromLatin1(m_rhythmLead.toUtf8().toHex()));
     QStringList room;
     foreach (const QString &group, groups)
     {
@@ -8672,6 +8774,40 @@ void TrackEngine::setLogEnabled(bool on)
     emit tableChanged();
 }
 
+QByteArray TrackEngine::logSettings() const
+{
+    QJsonObject stored;
+    QSettings settings;
+    foreach (const QString &key, settings.allKeys())
+    {
+        if (key.startsWith("trackengine/") || key.startsWith("trackmanager/"))
+            stored.insert(key, QJsonValue::fromVariant(settings.value(key)));
+    }
+    QJsonObject live;
+    live.insert("fullAuto", m_fullAuto);
+    live.insert("master", m_master);
+    live.insert("speed", m_speed);
+    live.insert("hold", m_hold);
+    live.insert("blackout", m_blackout);
+    live.insert("accent", m_accent);
+    live.insert("colourOverride", m_override);
+    live.insert("roomAuto", m_roomAuto);
+    live.insert("rating", m_ratingOn);
+    QJsonObject trims, disabled;
+    foreach (const QString &group, m_groupOrder)
+    {
+        trims.insert(group, m_groupTrim.value(group, 1.0));
+        disabled.insert(group, m_groupOff.contains(group));
+    }
+    live.insert("groupTrim", trims);
+    live.insert("groupOff", disabled);
+    QJsonObject context;
+    context.insert("schema", 2);
+    context.insert("stored", stored);
+    context.insert("live", live);
+    return QJsonDocument(context).toJson(QJsonDocument::Compact);
+}
+
 void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy)
 {
     if (m_logEnabled == false)
@@ -8686,7 +8822,8 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
                       + QDir::separator() + "QLC+";
         QDir().mkpath(dir);
-        m_log.setFileName(dir + QDir::separator() + "tracklog-" + today + ".csv");
+        m_log.setFileName(dir + QDir::separator() + "tracklog-" + today + "-v2.csv");
+        m_logSettingsLast.clear(); // first row of every file/session carries its snapshot
         bool fresh = m_log.exists() == false || m_log.size() == 0;
         if (m_log.open(QIODevice::Append | QIODevice::Text) == false)
         {
@@ -8698,7 +8835,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
             QTextStream head(&m_log);
             // funcs is APPENDED, never inserted: bane B's tracklog_report.py
             // reads the older columns by position and must keep working.
-            head << "time,beat,state,cast,colour,level,energy,section_energy,master,moves,funcs,track,accent,event\n";
+            head << "time,beat,state,cast,colour,level,energy,section_energy,master,moves,funcs,track,accent,event,build,settings_id,settings_json\n";
         }
     }
 
@@ -8717,6 +8854,21 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 
     QStringList castSorted = m_cast.values();
     castSorted.sort();
+    const QString build = QCoreApplication::applicationVersion()
+                        + QStringLiteral(" / TRACK-r125 / " __DATE__ " " __TIME__);
+    const QByteArray currentSettings = logSettings();
+    QString snapshot;
+    if (currentSettings != m_logSettingsLast)
+    {
+        m_logSettingsLast = currentSettings;
+        m_logSettingsId = QString::fromLatin1(QCryptographicHash::hash(currentSettings, QCryptographicHash::Sha256).toHex());
+        snapshot = QString::fromUtf8(currentSettings);
+    }
+    // Standard CSV quoting, including commas, quotes and any embedded newline.
+    auto csv = [](QString value) {
+        value.replace('"', QStringLiteral("\"\""));
+        return QStringLiteral("\"") + value + QStringLiteral("\"");
+    };
     QTextStream out(&m_log);
     out << QDateTime::currentDateTime().toString(Qt::ISODateWithMs) << ','
         << beat << ',' << state << ','
@@ -8743,7 +8895,8 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
                .replace('\n', ' ').replace('\r', ' ').simplified() << ','
         // runde 47, appended again: the accent ("Strobes All=white") and what
         // moved on this beat (section / turn / colour-on-turn / ...)
-        << m_logAccent << ',' << m_logEvent << '\n';
+        << m_logAccent << ',' << m_logEvent << ',' << csv(build) << ','
+        << m_logSettingsId << ',' << csv(snapshot) << '\n';
     out.flush();
     m_log.flush();                       // the report script reads while we play
 }
