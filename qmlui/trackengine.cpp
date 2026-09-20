@@ -3395,10 +3395,11 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
 {
     // Already precise: it names the group, so it blames exactly the program
     // that was on it. No tapping required.
-    if (enable != (m_groupOff.contains(key) == false))
-        logSignal((enable ? QStringLiteral("sig:group-on:") : QStringLiteral("sig:group-off:")) + key);
+    const bool changed = enable != (m_groupOff.contains(key) == false);
     if (enable) m_groupOff.remove(key); else m_groupOff.insert(key);
     saveRoles();
+    if (changed)
+        logSignal((enable ? QStringLiteral("sig:group-on:") : QStringLiteral("sig:group-off:")) + key);
     // right now, not on the next beat - and stop whatever of ours is on it
     if (m_doc != nullptr)
     {
@@ -3447,6 +3448,7 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
     level = qBound(0.0, level, 1.0);
     if (qFuzzyCompare(level + 1.0, m_groupTrim.value(key, 1.0) + 1.0))
         return;
+    m_groupTrim.insert(key, level); // the signal's settings snapshot must contain the new trim
     // A fader is dragged, not tapped, so this would write a line per frame.
     // One per group per logged beat is enough to see the gesture and where it
     // ended, and the beat lines around it carry the rest.
@@ -3456,7 +3458,6 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
         logSignal(QStringLiteral("sig:trim:") + key
                   + QLatin1Char('=') + QString::number(level, 'f', 2));
     }
-    m_groupTrim.insert(key, level);
 
     // straight onto everything that is lit for this group - the dimmer parts
     // and the colour scene alike - without waiting for the beat
@@ -3570,9 +3571,9 @@ void TrackEngine::setColourOverride(QString colour)
         colour.clear();
     if (colour == m_override)
         return;
+    m_override = colour;
     logSignal(colour.isEmpty() ? QStringLiteral("sig:colour-auto")
                                : QStringLiteral("sig:colour:") + colour);
-    m_override = colour;
     m_startColour = false;               // a tile the DJ tapped is theirs
     if (colour.isEmpty() == false)
         m_colour = colour;
@@ -3614,8 +3615,8 @@ void TrackEngine::setBlackout(bool on)
 {
     if (on == m_blackout)
         return;
-    logSignal(on ? QStringLiteral("sig:blackout") : QStringLiteral("sig:blackout-off"));
     m_blackout = on;
+    logSignal(on ? QStringLiteral("sig:blackout") : QStringLiteral("sig:blackout-off"));
     if (on)
         stopEcho();
 
@@ -4876,6 +4877,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         isDrop = false;
         isBuild = true;
         tier = 1;
+        division = 0; // do not run the waiting build at the drop's forced step speed
         prog = qMin(prog, 0.75); // tension, never the final build's automatic hits
     }
     else if (isDrop && m_dropLand > 0 && dropBar == 0 && beatInBar == 0 && hold == false)
@@ -6192,7 +6194,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      && m_active.value("mot:" + key, Function::invalidId()) == mf;
             if (wait == false)
             {
-                run("mot:" + key, mf, mi.dimmer ? gl : 1.0, divisionFor(mi, bpm, division), hard);
+                int motionDivision = divisionFor(mi, bpm, division);
+                // Enforce the support pace AFTER SETUP and SPEED overrides.
+                // Scenes and EFX do not use the chaser's step-beat scale.
+                if (m_fullAuto && tier > 0 && key != m_rhythmLead
+                    && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType)))
+                    motionDivision = qMax(2000, motionDivision);
+                run("mot:" + key, mf, mi.dimmer ? gl : 1.0, motionDivision, hard);
                 m_recentUse.insert(mf, m_clock.elapsed());     // the cooldown starts from its last beat
             }
         }
@@ -8753,8 +8761,8 @@ void TrackEngine::setHold(bool on)
         return;
     // The one free signal that is positive: freezing a look is asking it to
     // stay. Everything else the operator reaches for means "not this".
-    logSignal(on ? QStringLiteral("sig:hold") : QStringLiteral("sig:hold-off"));
     m_hold = on;
+    logSignal(on ? QStringLiteral("sig:hold") : QStringLiteral("sig:hold-off"));
     emit liveChanged();
 }
 
@@ -8855,7 +8863,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     QStringList castSorted = m_cast.values();
     castSorted.sort();
     const QString build = QCoreApplication::applicationVersion()
-                        + QStringLiteral(" / TRACK-r125 / " __DATE__ " " __TIME__);
+                        + QStringLiteral(" / TRACK-r125.1 / " __DATE__ " " __TIME__);
     const QByteArray currentSettings = logSettings();
     QString snapshot;
     if (currentSettings != m_logSettingsLast)
