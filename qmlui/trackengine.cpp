@@ -4971,7 +4971,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     // how many effect groups join the base: a ramp of the energy, with the
     // fraction decided by dice once per section - 55 % and 65 % differ
-    auto effectsWant = [&energy](bool drop) -> qreal {
+    // isDrive by value, energy by reference: the lambda has no capture-default
+    auto effectsWant = [&energy, isDrive](bool drop) -> qreal {
         qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0)
                           : 2.0 * qBound(0.0, (energy - 0.10) / 0.75, 1.0);
         if (drop == false && isDrive)

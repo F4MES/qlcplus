@@ -2074,10 +2074,25 @@ bool TrackManager::refineMarkers()
                 nearby = true;
         if (nearby)
             continue;
+        auto borrow = [&flags](const QString &type, bool loudest) -> qreal {
+            qreal same = -1.0, any = -1.0;
+            foreach (const Flag &f, flags)
+            {
+                if (f.energy < 0.0)
+                    continue;
+                if (any < 0.0 || (loudest ? f.energy > any : f.energy < any))
+                    any = f.energy;
+                if (f.type != type)
+                    continue;
+                if (same < 0.0 || (loudest ? f.energy > same : f.energy < same))
+                    same = f.energy;
+            }
+            return same >= 0.0 ? same : any;
+        };
         Flag drop;
         drop.beat = b;
         drop.type = QStringLiteral("drop");
-        drop.energy = -1.0;
+        drop.energy = borrow(QStringLiteral("drop"), true);
         flags.append(drop);
         // and the break that led into it, if none is flagged
         int start = b;
@@ -2093,7 +2108,7 @@ bool TrackManager::refineMarkers()
             Flag brk;
             brk.beat = start;
             brk.type = QStringLiteral("break");
-            brk.energy = -1.0;
+            brk.energy = borrow(QStringLiteral("break"), false);
             flags.append(brk);
         }
         std::sort(flags.begin(), flags.end(), [](const Flag &x, const Flag &y) { return x.beat < y.beat; });
