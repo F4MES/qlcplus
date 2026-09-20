@@ -259,9 +259,12 @@ inline qreal sweepReach(int tier, qreal e, bool drive = false)
         return 30.0 + 22.0 * e;              // a break: big and very slow, as before
     if (tier == 2)
         return 14.0 + 46.0 * e;
-    // a DRIVE sits half way between the groove and the drop
+    // A DRIVE sits half way between the groove and the drop - at BOTH ends.
+    // Raising the groove floor to 20 (below) without moving this left a drive
+    // and a groove identical at the bottom of the fader; 17 -> 52 is the real
+    // midpoint of groove 20 -> 44 and drop 14 -> 60.
     if (drive)
-        return 20.0 + 32.0 * e;
+        return 17.0 + 35.0 * e;
     // A groove starts at TWENTY units, not ten. Tobias, 2026-09-20: "synes
     // ikke der er nok bevaegelse paa movingheads foer man kommer op i 100 %
     // energi". The straight line is what makes the fader readable, but the
@@ -281,7 +284,7 @@ inline qreal sweepPace(int tier, qreal e, bool drive = false)
     if (tier == 2)
         return 24.0 - 20.0 * e;              // a drop: 24 -> 4
     if (drive)
-        return 28.0 - 22.0 * e;              // a drive: 28 -> 6
+        return 26.0 - 20.0 * e;              // a drive: 26 -> 6, between 28 -> 8 and 24 -> 4
     // ... and quicker at the bottom too: 28 beats a figure, not 40. Same
     // reason - a 20-unit figure over 40 beats still reads as a still head.
     return 28.0 - 20.0 * e;                  // a groove: 28 -> 8

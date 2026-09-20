@@ -1803,9 +1803,28 @@ void TrackEngine::ensureSweeps()
         if (efx->isRunning())
             continue;                       // the heads are changed at rest only
 
-        // the heads it drives: every pan/tilt head of every fixture in the group
+        // The heads it drives: every pan/tilt head of every fixture in the
+        // group, IN DMX ADDRESS ORDER - which is the order they hang in.
+        //
+        // The order is not cosmetic: drawSweep gives head i a start offset of
+        // fan x i, so i IS the position in the row. g.fixtures is whatever
+        // order Doc lists the fixtures in (by id), and on this rig that is
+        // not the physical order - the laser bars came out 319, 300, 338,
+        // 357, 376 and the wash 1, 59, 132, 96, 23, 41, 179. Every "wave
+        // across the row" this engine has ever drawn was therefore a
+        // scramble. Found 2026-09-20 while checking the wave Tobias asked
+        // for: "det skal vaere et offset ift. den laser der er ved siden af
+        // ... saa de 'foelger' hinanden."
         QList<QPair<quint32, int> > want;
-        foreach (quint32 fid, g.fixtures)
+        QList<quint32> ordered = g.fixtures;
+        std::sort(ordered.begin(), ordered.end(), [this](quint32 a, quint32 b) {
+            Fixture *fa = m_doc->fixture(a);
+            Fixture *fb = m_doc->fixture(b);
+            quint32 aa = fa != nullptr ? fa->address() : 0;
+            quint32 ab = fb != nullptr ? fb->address() : 0;
+            return aa != ab ? aa < ab : a < b;
+        });
+        foreach (quint32 fid, ordered)
         {
             Fixture *fxi = m_doc->fixture(fid);
             if (fxi == nullptr)
@@ -4082,17 +4101,29 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // deal of file: one dimmer chase does the work of seven coloured ones.
     // What this still keeps out is the old trap - a chase that writes its own
     // red over the room's blue without saying "red" in its name.
+    // The colour the group can actually SHOW, which is not always the one the
+    // room asked for: a laser bar's wheel has no orange, so colourFunction()
+    // hands it red. A programme named "... Red ..." is then the right
+    // programme for an orange room on THIS group, and matching the room's
+    // name alone would have left the bars with nothing in orange - measured
+    // 2026-09-20: nought bar programmes carry the colour "orange", in every
+    // tier and at every ceiling.
+    QString shown = colour;
+    const quint32 cfid = colourFunction(group, colour);
+    if (cfid != Function::invalidId() && m_funcs.value(cfid).colour.isEmpty() == false)
+        shown = m_funcs.value(cfid).colour;
+
     QList<TrackFuncInfo *> exact;
     foreach (TrackFuncInfo *info, ok)
     {
-        if (info->colour == colour
+        if (info->colour == colour || info->colour == shown
             || (info->colour.isEmpty() && info->setsColour == false))
             exact.append(info);
     }
     if (exact.isEmpty() == false)
         ok = exact;
     // ... and on a group whose colour IS a channel value - the laser bars,
-    // the per-eye lamps - a fallback to another colour is not a compromise,
+    // the per-eye lamps - a fallback to a THIRD colour is not a compromise,
     // it is the wrong colour on stage. The value is LTP, so it overwrites
     // the group's colour scene outright. Measured in the log of 2026-09-20:
     // the room stood in BLUE while the bars ran "Bars Red Drop Row Ripple
@@ -5992,7 +6023,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // look, so the programme stays through it; a change of the
                 // ROOM colour (changeColour, the beat it happens) still lets
                 // it go.
-                if (worn.isEmpty() == false && worn != colour
+                // ... and against the colour the group can SHOW, not the one
+                // the room asked for. motionFor() hands a laser bar a "red"
+                // programme when the room is orange, because the bar's wheel
+                // has no orange and its colour scene is red too. Comparing
+                // against the room's name alone made that held programme fail
+                // this test on EVERY beat, so the "one figure per section"
+                // cache was thrown away and motionFor() re-ran per beat for
+                // exactly the groups the orange rule was written for.
+                QString wear = colour;
+                const quint32 wcf = colourFunction(key, colour);
+                if (wcf != Function::invalidId() && m_funcs.value(wcf).colour.isEmpty() == false)
+                    wear = m_funcs.value(wcf).colour;
+                if (worn.isEmpty() == false && worn != colour && worn != wear
                     && (key != accentGroup || changeColour))
                     mf = Function::invalidId();
             }
@@ -7406,8 +7449,11 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
             // bar is one step behind the first - is a wave travelling along
             // the ceiling. The fader opens it: near the bottom the row moves
             // almost as one, at the top the wave is fully spread.
+            // qBound(10, x, even) would INVERT if a row ever had more than
+            // 36 bars - Qt's qBound is qMax(min, qMin(max, v)) with no assert,
+            // so min > max silently returns min, the opposite of a clamp.
             int even = qMax(1, 360 / qMax(1, heads));
-            sw.fan = qBound(10, int(qRound(even * (0.35 + 0.65 * lw))), even);
+            sw.fan = qMax(1, qMin(even, int(qRound(even * (0.35 + 0.65 * lw)))));
         }
     }
     return sw;
