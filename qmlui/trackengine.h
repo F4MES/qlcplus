@@ -261,8 +261,13 @@ inline qreal sweepReach(int tier, qreal e, bool drive = false)
         return 14.0 + 46.0 * e;
     // a DRIVE sits half way between the groove and the drop
     if (drive)
-        return 12.0 + 40.0 * e;
-    return 10.0 + 34.0 * e;
+        return 20.0 + 32.0 * e;
+    // A groove starts at TWENTY units, not ten. Tobias, 2026-09-20: "synes
+    // ikke der er nok bevaegelse paa movingheads foer man kommer op i 100 %
+    // energi". The straight line is what makes the fader readable, but the
+    // bottom of it has to be a figure you can SEE: ten units is a nudge,
+    // twenty is a movement. The top is unchanged.
+    return 20.0 + 24.0 * e;
 }
 
 inline qreal sweepPace(int tier, qreal e, bool drive = false)
@@ -276,8 +281,10 @@ inline qreal sweepPace(int tier, qreal e, bool drive = false)
     if (tier == 2)
         return 24.0 - 20.0 * e;              // a drop: 24 -> 4
     if (drive)
-        return 32.0 - 26.0 * e;              // a drive: 32 -> 6
-    return 40.0 - 32.0 * e;                  // a groove: 40 -> 8
+        return 28.0 - 22.0 * e;              // a drive: 28 -> 6
+    // ... and quicker at the bottom too: 28 beats a figure, not 40. Same
+    // reason - a 20-unit figure over 40 beats still reads as a still head.
+    return 28.0 - 20.0 * e;                  // a groove: 28 -> 8
 }
 
 /** One fixture group as the engine sees it. */

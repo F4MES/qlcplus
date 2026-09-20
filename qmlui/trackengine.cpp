@@ -4091,6 +4091,17 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     }
     if (exact.isEmpty() == false)
         ok = exact;
+    // ... and on a group whose colour IS a channel value - the laser bars,
+    // the per-eye lamps - a fallback to another colour is not a compromise,
+    // it is the wrong colour on stage. The value is LTP, so it overwrites
+    // the group's colour scene outright. Measured in the log of 2026-09-20:
+    // the room stood in BLUE while the bars ran "Bars Red Drop Row Ripple
+    // Fast" for eighteen beats. Tobias: "laser-bars farver er lidt for
+    // random. Vi har hele tiden snakket om at farverne der spiller, skal
+    // passe sammen." Better no programme at all: the group keeps its colour
+    // scene and its figure, lit and moving in the right colour.
+    else if (m_groups.value(group).perEye || m_groups.value(group).lasers)
+        return Function::invalidId();
 
     // this tier's motions first
     QList<TrackFuncInfo *> tagged;
@@ -7384,8 +7395,19 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
             // put two bars opposite at the bottom of the fader and 60 degrees
             // apart at the top - the fader ran the wrong way
             sw.spread = 0;
-            int spread = int(qRound(60.0 + 120.0 * lw));
-            sw.fan = qBound(60, spread, 180);
+            // A WAVE DOWN THE ROW, not a scatter. 60-180 degrees per bar put
+            // every second bar in antiphase at the top, which from the floor
+            // reads as six bars doing unrelated things. Tobias, 2026-09-20:
+            // "offset er fint, men det skal vaere et offset ift. den laser
+            // der er ved siden af, ikke bare random offset, saa de 'foelger'
+            // hinanden."
+            //
+            // One figure spread evenly over the row - 360/heads, so the last
+            // bar is one step behind the first - is a wave travelling along
+            // the ceiling. The fader opens it: near the bottom the row moves
+            // almost as one, at the top the wave is fully spread.
+            int even = qMax(1, 360 / qMax(1, heads));
+            sw.fan = qBound(10, int(qRound(even * (0.35 + 0.65 * lw))), even);
         }
     }
     return sw;
