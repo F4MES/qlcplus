@@ -304,9 +304,14 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     // cache (as automatic)
     m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
     if (m_markersManual == false && refineMarkers())
+    {
+        // measure the new flags BEFORE the correction goes back to the
+        // cache, or BLT stores a -1 and hands it straight back next time
+        fillMarkerEnergies(false);
         sendMarkers(false);
-    // flags from the cache, from rekordbox or from the second pass without an
-    // energy get one now, before the engine or the page reads them
+    }
+    // flags from the cache or from rekordbox without an energy get one
+    // now, before the engine or the page reads them
     fillMarkerEnergies(false);
 
     m_currentBeat = 0;
@@ -2074,25 +2079,14 @@ bool TrackManager::refineMarkers()
                 nearby = true;
         if (nearby)
             continue;
-        auto borrow = [&flags](const QString &type, bool loudest) -> qreal {
-            qreal same = -1.0, any = -1.0;
-            foreach (const Flag &f, flags)
-            {
-                if (f.energy < 0.0)
-                    continue;
-                if (any < 0.0 || (loudest ? f.energy > any : f.energy < any))
-                    any = f.energy;
-                if (f.type != type)
-                    continue;
-                if (same < 0.0 || (loudest ? f.energy > same : f.energy < same))
-                    same = f.energy;
-            }
-            return same >= 0.0 ? same : any;
-        };
+        // -1 is the SENTINEL for "measure me": fillMarkerEnergies() reads the
+        // real value off the curves (curveEnergy) once the flags are in. Do
+        // not guess one here - the ordering in handleTrack() is what let
+        // these -1s survive into the cache, and that is fixed there.
         Flag drop;
         drop.beat = b;
         drop.type = QStringLiteral("drop");
-        drop.energy = borrow(QStringLiteral("drop"), true);
+        drop.energy = -1.0;
         flags.append(drop);
         // and the break that led into it, if none is flagged
         int start = b;
@@ -2108,7 +2102,7 @@ bool TrackManager::refineMarkers()
             Flag brk;
             brk.beat = start;
             brk.type = QStringLiteral("break");
-            brk.energy = borrow(QStringLiteral("break"), false);
+            brk.energy = -1.0;          // measured by fillMarkerEnergies()
             flags.append(brk);
         }
         std::sort(flags.begin(), flags.end(), [](const Flag &x, const Flag &y) { return x.beat < y.beat; });
