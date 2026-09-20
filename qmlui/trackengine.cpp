@@ -3397,6 +3397,8 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
     // that was on it. No tapping required.
     const bool changed = enable != (m_groupOff.contains(key) == false);
     if (enable) m_groupOff.remove(key); else m_groupOff.insert(key);
+    if (enable == false && key == m_echoKey)
+        stopEcho();
     saveRoles();
     if (changed)
         logSignal((enable ? QStringLiteral("sig:group-on:") : QStringLiteral("sig:group-off:")) + key);
@@ -7921,6 +7923,8 @@ void TrackEngine::calm(int bars)
     // bars <= 0 ends it early
     logSignal(bars <= 0 ? QStringLiteral("sig:calm-off") : QStringLiteral("sig:calm"));
     m_calmUntil = bars <= 0 ? 0 : m_lastBeat + bars * 4;
+    if (bars > 0)
+        stopEcho(); // a pending half-beat accent must not fire after CALM
     // the heads' figure is redrawn at the new pace on the next beat: calm
     // slows it to a break's drift, and calm-off lets the section draw again.
     // (A calm that simply runs out keeps the slow figure until the next
@@ -8874,7 +8878,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     QStringList castSorted = m_cast.values();
     castSorted.sort();
     const QString build = QCoreApplication::applicationVersion()
-                        + QStringLiteral(" / TRACK-r126 / " __DATE__ " " __TIME__);
+                        + QStringLiteral(" / TRACK-r127 / " __DATE__ " " __TIME__);
     const QByteArray currentSettings = logSettings();
     QString snapshot;
     if (currentSettings != m_logSettingsLast)
@@ -8922,6 +8926,8 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 
 void TrackEngine::release()
 {
+    if (m_testTimer.isActive())
+        selfTest(); // cancel the test before releasing its output
     // AUTO went off: let everything fade out over a bar instead of clipping,
     // and let the dimmers fall back to the sliders. Positions stay where they
     // are - stopping a laser position is a move, and a slider may still have
@@ -9064,12 +9070,16 @@ void TrackEngine::stopEcho()
     m_echoOffTimer.stop();
     if (m_echoKey.isEmpty() == false)
         stopSlot("echo:" + m_echoKey, false);
+    m_echoKey.clear();
+    m_echoFid = Function::invalidId();
 }
 
 void TrackEngine::slotEchoOn()
 {
     // the stage went dark in the half beat since the hit: no echo
-    if (m_doc == nullptr || m_active.isEmpty() || m_echoFid == Function::invalidId())
+    if (m_doc == nullptr || m_active.isEmpty() || m_echoFid == Function::invalidId()
+        || m_echoKey.isEmpty() || m_groupOff.contains(m_echoKey)
+        || m_blackout || m_startScene || m_lastBeat < m_calmUntil)
         return;
     run("echo:" + m_echoKey, m_echoFid, 1.0, 0, true);
     m_echoOffTimer.start(int(qMax(80.0, m_beatMs * 0.3)));
@@ -9552,6 +9562,8 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
 
 void TrackEngine::stopAll()
 {
+    if (m_testTimer.isActive())
+        selfTest(); // no later test step may relight a stopped/replaced show
     foreach (const QString &slot, m_active.keys())
         stopSlot(slot, true);
 
