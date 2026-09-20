@@ -4105,36 +4105,35 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // deal of file: one dimmer chase does the work of seven coloured ones.
     // What this still keeps out is the old trap - a chase that writes its own
     // red over the room's blue without saying "red" in its name.
-    // The colour the group can actually SHOW, which is not always the one the
-    // room asked for: a laser bar's wheel has no orange, so colourFunction()
-    // hands it red. A programme named "... Red ..." is then the right
-    // programme for an orange room on THIS group, and matching the room's
-    // name alone would have left the bars with nothing in orange - measured
-    // 2026-09-20: nought bar programmes carry the colour "orange", in every
-    // tier and at every ceiling.
-    QString shown = colour;
-    const quint32 cfid = colourFunction(group, colour);
-    if (cfid != Function::invalidId() && m_funcs.value(cfid).colour.isEmpty() == false)
-        shown = m_funcs.value(cfid).colour;
-
+    // `colour` is ALREADY the colour this group can show: tick() runs it
+    // through colourForGroup() before calling here, so a wheel that has no
+    // orange has been handed red. Do not substitute again - a second lookup
+    // here was added on 2026-09-20 and was a pure no-op that cost a whole
+    // candidates() sweep per group per beat.
     QList<TrackFuncInfo *> exact;
     foreach (TrackFuncInfo *info, ok)
     {
-        if (info->colour == colour || info->colour == shown
+        if (info->colour == colour
             || (info->colour.isEmpty() && info->setsColour == false))
             exact.append(info);
     }
     if (exact.isEmpty() == false)
         ok = exact;
-    // ... and on a group whose colour IS a channel value - the laser bars,
-    // the per-eye lamps - a fallback to a THIRD colour is not a compromise,
-    // it is the wrong colour on stage. The value is LTP, so it overwrites
-    // the group's colour scene outright. Measured in the log of 2026-09-20:
-    // the room stood in BLUE while the bars ran "Bars Red Drop Row Ripple
-    // Fast" for eighteen beats. Tobias: "laser-bars farver er lidt for
-    // random. Vi har hele tiden snakket om at farverne der spiller, skal
-    // passe sammen." Better no programme at all: the group keeps its colour
-    // scene and its figure, lit and moving in the right colour.
+    // What is left when `exact` is empty is not another colour - the loop
+    // above only ever let in this colour and the colourless - it is the
+    // programmes with NO colour word in the name that paint colours of their
+    // own anyway: "Bars Colour Cycle", "Bars Eyes Rainbow", "Bars Colour
+    // Random". On a group whose colour IS a channel value those are LTP and
+    // overwrite the group's colour scene outright, so the room asks for blue
+    // and the bars run a rainbow. Better no programme at all: the group keeps
+    // its colour scene and its figure, lit and moving in the right colour.
+    //
+    // (This is NOT what Tobias saw on 2026-09-20 - "laser-bars farver er
+    // lidt for random". Measured in that night's log the bars followed the
+    // room on every beat except the wheel substitution orange -> red, and
+    // the 37 beats they were the accent group. Both are by design. The
+    // guard stays because the rainbow case is real; the report is not
+    // explained by it, and nothing was changed on the strength of it.)
     else if (m_groups.value(group).perEye || m_groups.value(group).lasers)
         return Function::invalidId();
 
@@ -6054,19 +6053,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // look, so the programme stays through it; a change of the
                 // ROOM colour (changeColour, the beat it happens) still lets
                 // it go.
-                // ... and against the colour the group can SHOW, not the one
-                // the room asked for. motionFor() hands a laser bar a "red"
-                // programme when the room is orange, because the bar's wheel
-                // has no orange and its colour scene is red too. Comparing
-                // against the room's name alone made that held programme fail
-                // this test on EVERY beat, so the "one figure per section"
-                // cache was thrown away and motionFor() re-ran per beat for
-                // exactly the groups the orange rule was written for.
-                QString wear = colour;
-                const quint32 wcf = colourFunction(key, colour);
-                if (wcf != Function::invalidId() && m_funcs.value(wcf).colour.isEmpty() == false)
-                    wear = m_funcs.value(wcf).colour;
-                if (worn.isEmpty() == false && worn != colour && worn != wear
+                // `colour` here is already the accent colour where there is
+                // one, and already through colourForGroup() - so comparing
+                // the held programme against it is comparing against what the
+                // group is actually wearing. A second lookup was added on
+                // 2026-09-20 and removed the same day: a no-op that cost a
+                // candidates() sweep per group per beat.
+                if (worn.isEmpty() == false && worn != colour
                     && (key != accentGroup || changeColour))
                     mf = Function::invalidId();
             }
