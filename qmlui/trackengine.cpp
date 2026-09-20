@@ -2540,7 +2540,11 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
             want = drawn;                                // the drop lands
             beats = 1 + int(qRound(2.0 * w));
         }
-        else if (isDrop && w > 0.0 && beatInBar == 0 && roll(0.05 + 0.70 * w)
+        // bar >= 0 too: a drop whose kick has not arrived yet is handed a
+        // NEGATIVE bar (see m_dropLand in tick). The landing above already
+        // waits for it; without this the "and again" bursts fired straight
+        // through the delay, which is the fake drop given away by the strobes.
+        else if (isDrop && bar >= 0 && w > 0.0 && beatInBar == 0 && roll(0.05 + 0.70 * w)
                  && affordable(1 + int(qRound(3.0 * w))))
         {
             want = drawn;                                // and again, more of it
@@ -4821,6 +4825,33 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     int beatInBar = (beat - secStart) % 4;
 
     // the drop is one bar away: pull the cast in now so the hit lands lit
+    // A FAKE DROP: the analysis says the release is here, the kick says it is
+    // not. Time-line calls it "a moment where the music intentionally delays
+    // the expected release, maintaining tension instead of delivering the
+    // Drop" - and it is the one thing that makes a light show look foolish,
+    // because everything has already committed: the blackout beat, the white
+    // hit, the strobe burst, two bars of impact.
+    //
+    // We cannot predict it - their model is trained for that and ours is not
+    // - but we can refuse to fire until the kick is actually there. The
+    // landing waits, a bar at a time, up to eight bars; the build's look
+    // holds meanwhile, which is exactly what a delayed release wants. Without
+    // curves nothing changes: `kick` is -1 when BLT sent none, so the test
+    // never fires and the drop lands on bar 0 as before. (kick >= 0.0 spelled
+    // out rather than haveCurves - that local is declared further down.)
+    //
+    // m_dropLand is the bar the drop is treated as landing on. Everything
+    // that fires "on the landing" reads dropBar below, not bar.
+    // Reset HERE, not in the section-change block forty lines down: that one
+    // runs after this and would leave the first beat of a new drop reading a
+    // previous drop's offset - dropBar = 0 - 3 = -3, and the landing lost.
+    if (isDrop == false || sectionChanged)
+        m_dropLand = 0;
+    else if (kick >= 0.0 && hold == false && beatInBar == 0
+             && bar == m_dropLand && m_dropLand < 8 && kick < 0.20)
+        m_dropLand++;
+    const int dropBar = isDrop ? bar - m_dropLand : bar;
+
     bool preDrop = isDrop == false && m_mixing == false && hold == false
                 && nextState == QStringLiteral("drop")
                 && beatsToNext > 0 && beatsToNext <= 4;
@@ -5754,7 +5785,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     bool turnaround = phraseAllowed && (haveCurves ? beat <= m_fillUntil
                                       : (bar >= 6 && (phraseBar == 6 || phraseBar == 7)));
-    bool landing = isDrop && bar == 0 && isCalm == false;
+    bool landing = isDrop && dropBar == 0 && isCalm == false;
     // With curves a blackout accent needs a real gap. Never blank the kick
     // as it returns. The explicit pre-drop cue above remains unchanged.
     bool phraseDark = haveCurves ? (kick < 0.20 && high >= 0.0 && high < 0.20)
@@ -5809,7 +5840,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // (animation lasers) and the base sit it out; the bars step on the
         // beat, never between (they never do).
         int impactBars = energy >= 0.60 ? 2 : 1;
-        if (isDrop && bar < impactBars && key != base && hold == false && isCalm == false
+        if (isDrop && dropBar >= 0 && dropBar < impactBars && key != base && hold == false && isCalm == false
             && still == false && g.patternDevice == false && darkGroups.contains(key) == false)
         {
             mv.pattern = ENGINE_PAT_CHASE;
@@ -6258,7 +6289,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     m_cast = castSet;
 
     applyGroupOff();
-    driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, bar, beatInBar,
+    // dropBar, not bar: the landing burst waits for the kick (see m_dropLand).
+    // In a drop the only thing driveStrobe reads `bar` for IS the landing.
+    driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, isDrop ? dropBar : bar, beatInBar,
                 isCalm || still || m_mixing || m_flash || m_blackout
                 || isIntro || isOutro);       // nobody strobes an intro
 
@@ -6282,7 +6315,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool hit = isCalm == false && still == false && m_mixing == false
             && ((isBuild && prog > 0.82 && crowded == false
                  && (haveCurves == false || turn || (kick > 0.45 && riser > 0.08)))
-                || (isDrop && bar == 0 && beatInBar < 2)
+                || (isDrop && dropBar == 0 && beatInBar < 2)
                 || (moveHit && crowded == false));
     if (m_flash == false)
     {
@@ -6349,7 +6382,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     checkConflicts(castSet);
 
     m_autoStageKeys.clear();
-    bool impactActive = isDrop && bar < (energy >= 0.60 ? 2 : 1);
+    bool impactActive = isDrop && dropBar >= 0 && dropBar < (energy >= 0.60 ? 2 : 1);
     if (m_fullAuto && m_blackout == false && m_flash == false && m_mixing == false
         && isCalm == false && still == false && m_override.isEmpty()
         && darkGroups.isEmpty() && hit == false && impactActive == false && turnaround == false)
@@ -6390,6 +6423,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // much white on the strobes" can be read off a log instead of guessed
     m_logAccent = accentColour.isEmpty() ? QString() : accentGroup + "=" + accentColour;
     int impactBarsLog = energy >= 0.60 ? 2 : 1;
+    const bool fakeDrop = isDrop && m_dropLand > 0;
     {
         QStringList ev;
         if (sectionChanged) ev << "section";
@@ -6401,8 +6435,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (closing < 1.0) ev << "closing";
         if (m_kickGone >= 4 && isBreak == false) ev << "kick-gone";
         if (dropHidden) ev << "drop-hidden";
+        if (fakeDrop) ev << QString("drop-late@%1").arg(m_dropLand);
         if (isDrop && m_dropStyle > 0) ev << ("drop-" + dropStyleName(m_dropStyle));
-        if (isDrop && bar < impactBarsLog) ev << "impact";
+        if (isDrop && dropBar >= 0 && dropBar < impactBarsLog) ev << "impact";
         if (mixBarsOut >= 6 && m_nextColour.isEmpty() == false) ev << "mix-turn";
         if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
         m_logEvent = ev.join('+');

@@ -823,6 +823,7 @@ private:
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group
     qreal m_movesEnergy = -1.0;            // the energy the moves were last drawn at (a fader jump redraws)
+    int m_dropLand = 0;                    // FAKE DROP: the bar of the drop the kick actually arrived on
     qreal m_castEnergy = -1.0;             // the energy the cast size was last decided at (a nudge steps it)
     qreal m_ceilEnergy = -1.0;             // the energy the star ceiling was last drawn at (a nudge redraws it)
     QSet<QString> m_blendSkipped;         // functions left out for building on a mask
