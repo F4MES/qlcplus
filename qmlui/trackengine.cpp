@@ -6234,8 +6234,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_sequenceGroups.clear();
     if (!m_sequenceGroups.isEmpty())
     {
-        for (const QString &key : m_sequenceGroups)
-            if (!castSet.contains(key)) { m_sequenceGroups.clear(); break; }
+        // (decided first, cleared after: clearing the list from inside a
+        // range-for over that same list frees the storage the loop is
+        // walking. The break made it survive; a later edit would not.)
+        bool castLeft = false;
+        for (const QString &key : std::as_const(m_sequenceGroups))
+            if (!castSet.contains(key)) { castLeft = true; break; }
+        if (castLeft)
+            m_sequenceGroups.clear();
         if (stageNow - m_sequenceStart >= m_sequenceGroups.size() * 4 * m_sequenceBeatMs)
             m_sequenceGroups.clear();
     }
@@ -6510,6 +6516,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             qreal litFloor = (key == base) ? (isBreak ? ENGINE_BREAK_LIT
                                                       : (isDrop ? 0.25 : 0.35))
                                            : 0.0;
+            // The quiet foundation (point 8, runde 162) wants the wash to keep
+            // every head lit. Asked HERE, so the pick lands on a programme that
+            // qualifies and is held for the section. Runde 162 only threw the
+            // wrong one away after the pick - and m_sectionMotion went with it,
+            // so the next beat picked the same programme at the same cursor and
+            // threw it away again: a motionFor() sweep per beat, and the wash
+            // with no AUTO programme at all for most of a groove. (Runde 164.)
+            // Not in a drop - see patternMask().
+            if (ambientBase(key) && m_compositionTier != 2)
+                litFloor = qMax(litFloor, 0.99);
             // ONE figure for the section. The pick used to run on every
             // beat, and pickWeighted lands on `cursor % pool.count()` - so
             // when the star ceiling wobbled with the energy curve and a
@@ -6571,7 +6587,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
                                moving == false, stars, litFloor);
                 if (mf == Function::invalidId() && moving)
-                    mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars);
+                    mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars, litFloor);
                 if (mf != Function::invalidId())
                     m_sectionMotion.insert(key, mf);
             }
@@ -6580,7 +6596,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // The foundation uses generated intensity masks, whose minimum is
         // known. An opaque dimmer chase cannot promise a continuous floor.
         // Position-only programmes and all effect-group programmes stay intact.
-        if (ambientBase(key) && mf != Function::invalidId() && m_funcs.value(mf).dimmer
+        // (not in a drop: there the wash keeps its whole library - see
+        // patternMask(), runde 164)
+        if (ambientBase(key) && m_compositionTier != 2
+            && mf != Function::invalidId() && m_funcs.value(mf).dimmer
             && m_funcs.value(mf).litShare < 0.99)
         {
             mf = Function::invalidId();
@@ -7700,13 +7719,26 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
     }
     // A generated wash keeps a quiet foundation even under a bare pattern.
     // MASTER/trim/blackout and dark re-aim are applied later, so zero stays zero.
-    if (ambientBase(group))
+    // NOT IN A DROP (runde 164). Point 8 as Tobias put it: "naar musikken gaar
+    // i breakdown, eller effekterne holder pause, skal rummet stadig have en
+    // bevidst belysning fra wash/basegruppen". Runde 162 applied the floors in
+    // every section, and a drop is where they do harm: the pulse floor capped
+    // the heads' drop pump at a 60 % dip where the drop is built to fall to
+    // 8-12 %, and the chase filter took 976 of the wash's 1384 AUTO chases
+    // away - every walk, comet, fill and ripple - the round after the AUTO
+    // library was given half the night. m_compositionTier is this beat's tier,
+    // set every tick before the group loop; a drop hidden under
+    // ENGINE_DROP_SHOW is tier 1 and keeps the floor, which is right.
+    if (ambientBase(group) && m_compositionTier != 2)
         for (qreal &value : mask) value = qMax(0.45, value);
     return mask;
 }
 
 bool TrackEngine::ambientBase(const QString &group) const
 {
+    // Is this the wash-base the rest of the show stands on? Used by the three
+    // floors below (never in a drop - see there) and by the room sequences,
+    // which ask whether the base takes part in the conversation.
     const TrackGroup &g = m_groups.value(group);
     return m_fullAuto && group == m_compositionBase && g.heads && g.hasDimmer
         && !g.lasers && !g.strobes && !g.patternDevice && !m_groupOff.contains(group);
@@ -7835,7 +7867,8 @@ qreal TrackEngine::pulseFactor(const QString &group) const
         qreal pos = (qreal(m_beatIndex) + within) / (qreal(bars) * 4.0);
         factor *= 0.70 + 0.30 * (0.5 + 0.5 * std::sin(pos * 6.283185307179586));
     }
-    if (ambientBase(group)) factor = qMax(0.40, factor);
+    // the foundation's floor - not in a drop, see patternMask()
+    if (ambientBase(group) && m_compositionTier != 2) factor = qMax(0.40, factor);
     const int sequenceIndex = m_sequenceGroups.indexOf(group);
     if (sequenceIndex >= 0)
         factor *= TrackStage::sequenceGain(qreal(now - m_sequenceStart) / m_sequenceBeatMs,
@@ -8238,11 +8271,13 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             efx->setYOffset(qBound(0, 127 + dy, 255));
         return;
     }
-    // r162: only TRACK's non-laser relative figures opt into point blending.
-    // The running phase survives; a second change starts at the actual output.
-    if (running && !laser)
-        for (EFXFixture *ef : efx->fixtures())
-            ef->requestPointTransition(uint(qBound(600.0, beatMs * 4.0, 3000.0)));
+    // (Point 4 - a new figure taking over from where the heads actually are -
+    // was begun in runde 162 as a call to EFXFixture::requestPointTransition()
+    // here. The method was never written, so the tree did not build. Taken
+    // out in runde 164: it needs its own round, on the EFX engine, with the
+    // laser limits checked, and it cannot be judged without the rig. The hook
+    // point is right - non-laser relative figures only, a blend of about four
+    // beats clamped to 0.6-3 s - so this is where it goes back in.)
     // reconfigured live: a stop and a start in the same tick would leave the
     // EFX stopped (stop() only asks; the timer thread does it later)
 

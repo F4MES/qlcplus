@@ -1145,12 +1145,14 @@ void Function::start(MasterTimer* timer, FunctionParent source, quint32 startTim
 
     Q_ASSERT(timer != NULL);
 
-    // TRACK owns the output: a button, a slider, a cue stack or the simple
-    // desk cannot start a function over the top of it. The timer's own
-    // Master parent still may - that is how TRACK stops things itself.
+    // TRACK owns the output: nothing on the Virtual Console - a button, a
+    // slider, a cue list, an XY pad, an audio trigger - can start a function
+    // over the top of it. Only the console is refused: a chaser's steps, a
+    // collection's members and a show's tracks are started by their parent
+    // FUNCTION, and TRACK runs chasers all night.
     if (timer != NULL && timer->trackControl()
-        && source.type() != FunctionParent::Track
-        && source.type() != FunctionParent::Master)
+        && (source.type() == FunctionParent::ManualVCWidget
+            || source.type() == FunctionParent::AutoVCWidget))
     {
         qDebug() << "Function start() refused while TRACK controls the output:" << m_name;
         return;
@@ -1221,12 +1223,13 @@ bool Function::stopped() const
     return m_stop;
 }
 
-bool Function::startedByTrack() const
+bool Function::startedByConsole() const
 {
     QMutexLocker sourcesLocker(const_cast<QMutex*>(&m_sourcesMutex));
     foreach (FunctionParent source, m_sources)
     {
-        if (source.type() == FunctionParent::Track)
+        if (source.type() == FunctionParent::ManualVCWidget
+            || source.type() == FunctionParent::AutoVCWidget)
             return true;
     }
     return false;

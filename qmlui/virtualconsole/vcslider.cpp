@@ -1835,7 +1835,16 @@ void VCSlider::writeDMXStrobe(MasterTimer* timer, QList<Universe *> universes)
 
 void VCSlider::writeDMXLevel(MasterTimer* timer, QList<Universe *> universes)
 {
-    Q_UNUSED(timer);
+    // TRACK owns the output: a Level slider left up from busking does not
+    // write under the show. Its faders go (this is the timer thread, the
+    // only thread that fills m_fadersMap), and come back on their own when
+    // TRACK lets go. Runde 164.
+    if (timer != nullptr && timer->trackControl())
+    {
+        if (m_fadersMap.isEmpty() == false)
+            removeActiveFaders();
+        return;
+    }
 
     QMutexLocker locker(&m_levelValueMutex);
 

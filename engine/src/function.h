@@ -810,10 +810,13 @@ public:
      */
     void stop(FunctionParent parent, bool preserveAttributes = false);
 
-    /** Was this function started by the TRACK engine? Mirrors
+    /** Was this function started from the Virtual Console - a button, a
+     *  slider, a cue list, an XY pad, an audio trigger, a clock? Mirrors
      *  startedAsChild(): the sources are private and behind a mutex, and the
-     *  timer needs the answer when TRACK takes the output over. */
-    bool startedByTrack() const;
+     *  timer needs the answer when TRACK takes the output over. The children
+     *  of such a function are started by the function, not the console, and
+     *  stop with it. */
+    bool startedByConsole() const;
 
     /**
      * Check, whether the function should be stopped ASAP. Functions can use this

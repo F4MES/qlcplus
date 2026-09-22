@@ -250,26 +250,31 @@ bool MasterTimer::trackControl() const
     return m_trackControl;
 }
 
-void MasterTimer::setTrackControl(bool on)
+void MasterTimer::setTrackControl(bool on, bool force)
 {
-    if (m_trackControl == on)
+    // TrackEngine::release() called this with two arguments from runde 162
+    // on, and the definition took one: the tree did not build. `force` is
+    // what it wanted - SHOW OFF keeps TRACK as owner and sweeps again.
+    if (m_trackControl == on && force == false)
         return;
     m_trackControl = on;
     if (on == false)
         return;
-    // Taking over: everything that is not TRACK's goes, so nothing of the
-    // busking side is left holding a channel. TRACK's own functions are
-    // untouched - it is mid-show.
-    QList<Function *> others;
+    // Taking over: every function the CONSOLE started goes, so nothing of
+    // the busking side is left holding a channel. Not "everything that is
+    // not TRACK's": TRACK's own chasers run their steps as children with a
+    // Function parent, and that rule would have stopped them mid-show. A
+    // console function's children stop with it.
+    QList<Function *> console;
     {
         QMutexLocker locker(&m_functionListMutex);
         foreach (Function *f, m_functionList)
         {
-            if (f != NULL && f->startedByTrack() == false)
-                others.append(f);
+            if (f != NULL && f->startedByConsole())
+                console.append(f);
         }
     }
-    foreach (Function *f, others)
+    foreach (Function *f, console)
         f->stop(FunctionParent::master());
 }
 
