@@ -4246,6 +4246,26 @@ QString TrackEngine::familyOf(const QString &name)
         // "row" is what the whole shape family calls itself - "Row Walk",
         // "Row Ripple", "Row Outer In" - so it says nothing about the figure
         "row",
+        // ... and "eyes" is the same kind of word: it says the figure lives
+        // in the laser bars' per-eye channels rather than in whole bars, not
+        // what the figure IS. "eyes4" was already here; plain "eyes" was
+        // missed, and it cost more than the omission looks.
+        //
+        // Measured on the show file 2026-09-22 (runde 129): 1112 of the
+        // bars' 1904 programmes - 58 % - came back as one family called
+        // "eyes", while the 792 whole-bar ones spread over 34. So the rule
+        // right below ("not the same FIGURE twice in a row") did the exact
+        // opposite of its job for the bars: after any eye programme it had
+        // 34 other families to prefer and would never pick a second one,
+        // even though "Row Run" (one beam travelling the room) and "Mirror
+        // Out" (every bar opening from its centre) are not remotely the same
+        // picture. It pushed the bars back towards the whole-bar blinking
+        // that runde 125 was written to get rid of.
+        //
+        // With "eyes" skipped the family becomes the shape word - run,
+        // comet, diagonal, mirror, middle, edges, sparkle, snake - which is
+        // what this function says it is looking for.
+        "eyes",
         "break", "groove", "drop", "normal", "medium", "fan",
         "slow", "fast", "calm", "low", "high", "soft", "wide", "far", "cross",
         "red", "green", "blue", "cyan", "magenta", "orange", "white", "yellow",
