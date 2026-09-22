@@ -896,19 +896,20 @@ void TrackManager::setBpmHigh(int bpm)
 
 bool TrackManager::autoRun() const { return m_autoRun; }
 
-void TrackManager::setControlOwned(bool enable)
-{
-    if (!m_engine || m_engine->controlOwned() == enable) return;
-    setAutoRun(false);
-    m_engine->setControlOwned(enable);
-}
-
 void TrackManager::setAutoRun(bool enable)
 {
-    if (enable && m_engine && !m_engine->controlOwned()) setControlOwned(true);
     if (enable == m_autoRun)
         return;
     m_autoRun = enable;
+
+    // SHOW_ONOFF_OWNS_V1: SHOW ON takes QLC+ from busking - every Virtual
+    // Console function stops and the console is locked while the show
+    // runs. SHOW OFF gives it back, just below - and only there: the
+    // engine's release() also runs from applyLook() and setRoleMode()
+    // with the show still on. External Art-Net (the Light Rider box) is
+    // beyond QLC+: it is switched at the node.
+    if (m_autoRun && m_engine != nullptr)
+        m_engine->setControlOwned(true);
 
     // the evening's opening picture is a hand-held look: switching the
     // show on ends it
@@ -917,6 +918,8 @@ void TrackManager::setAutoRun(bool enable)
 
     if (m_autoRun) applyLook();
     else stopLook();
+    if (m_autoRun == false && m_engine != nullptr)
+        m_engine->setControlOwned(false);    // SHOW OFF: busking again
 
     emit autoRunChanged();
 }

@@ -9241,7 +9241,6 @@ bool TrackEngine::startScene() const { return m_startScene; }
 
 void TrackEngine::setStartScene(bool on)
 {
-    if (on && !controlOwned()) setControlOwned(true);
     if (on == m_startScene)
         return;
     m_startScene = on;
@@ -9524,18 +9523,14 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 
 void TrackEngine::release()
 {
-    // SHOW OFF is dark but still exclusive. Only the explicit busking switch
-    // releases ownership. Reset at the frame boundary also clears LTP haze.
-    if (controlOwned())
-    {
-        stopAll();
-        m_startScene = false;
-        m_haze = m_fan = 0.0;
-        m_blackout = false;
-        m_doc->masterTimer()->setTrackControl(true, true);
-        emit liveChanged();
-        return;
-    }
+    // This fades the show out over a bar exactly as it did before round 162.
+    // It does NOT hand the console back: release() is reached from more than
+    // SHOW OFF - TrackManager::stopLook() calls it, and stopLook() runs from
+    // applyLook() on the legacy path and from setRoleMode() too, both with the
+    // show still on. The console is unlocked in TrackManager::setAutoRun(false)
+    // and nowhere else: "Det er bare SHOW on/OFF der skal styre skift mellem
+    // busking og autoshow" (Tobias, 2026-09-22). (Round 162 had this function
+    // cut hard and keep the console locked; that is gone too.)
     m_sequenceGroups.clear();
     m_restUntil = -1;
     if (m_testTimer.isActive())
@@ -9888,14 +9883,13 @@ bool TrackEngine::controlOwned() const
 
 void TrackEngine::setControlOwned(bool on)
 {
+    // Lock or unlock the Virtual Console - nothing else. Called from exactly
+    // two places: SHOW ON (TrackManager::setAutoRun) and SHOW OFF (release()).
+    // It does not stop the show, and it does not touch HAZE, FAN or BLACKOUT:
+    // round 162's version reset all three, so an operator who set the haze
+    // before pressing SHOW ON had it switched off by the button.
     if (!m_doc || controlOwned() == on) return;
-    stopAll();
-    m_startScene = false;
-    m_haze = m_fan = 0.0;
-    m_blackout = false;
     m_doc->masterTimer()->setTrackControl(on);
-    m_report = on ? tr("TRACK controls QLC+; stop external Light Rider output")
-                  : tr("QLC+ busking released; external Art-Net is selected at the node");
     emit liveChanged();
 }
 

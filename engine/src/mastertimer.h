@@ -112,7 +112,8 @@ public:
      *  Virtual Console may run. Switching it on stops every function the
      *  console started, so no button, slider or cue list of the busking side
      *  is left holding a channel. `force` runs that sweep again even when
-     *  TRACK already owns the output - SHOW OFF uses it. */
+     *  TRACK already owns the output. SHOW ON switches it on, SHOW OFF off -
+     *  nothing else (TrackManager::setAutoRun). */
     bool trackControl() const;
     void setTrackControl(bool on, bool force = false);
 

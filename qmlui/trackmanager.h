@@ -153,7 +153,6 @@ public:
 
     bool autoRun() const;
     void setAutoRun(bool enable);
-    Q_INVOKABLE void setControlOwned(bool enable);
     int quantize() const;
     void setQuantize(int beats);
     int slotCount() const;

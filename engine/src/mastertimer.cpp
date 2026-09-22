@@ -252,9 +252,10 @@ bool MasterTimer::trackControl() const
 
 void MasterTimer::setTrackControl(bool on, bool force)
 {
-    // TrackEngine::release() called this with two arguments from runde 162
-    // on, and the definition took one: the tree did not build. `force` is
-    // what it wanted - SHOW OFF keeps TRACK as owner and sweeps again.
+    // `force` sweeps the console again even when TRACK already owns the
+    // output. No caller needs it since SHOW ON/OFF became the only switch
+    // (runde 165); it stays because it costs nothing and changing the
+    // signature again is a risk this week does not need.
     if (m_trackControl == on && force == false)
         return;
     m_trackControl = on;
