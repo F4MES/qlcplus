@@ -2049,7 +2049,19 @@ bool TrackManager::refineMarkers()
         if (k < 0.0)
             continue;
         QString was = flags.at(i).type;
-        if (was == QStringLiteral("drop") && k < m_dropKick * 0.6)
+        // A DRIVE is demoted on the same evidence as a drop. Analysis version
+        // 7 renames the roughly half of BLT's drops that never earned the name
+        // to "drive" (qlc_shared_functions.clj: 996 -> 525 drops + 471 drives),
+        // and a drive is played nearly as hot: its star ceiling sits halfway
+        // between a groove's and a drop's. Before version 7 those same
+        // sections arrived here as "drop" and a kick well under the room's
+        // drop threshold demoted them to a plain groove. Without this word
+        // the upgrade would quietly take that net away from every one of
+        // them. Nothing else changes: promotion still wants "normal", because
+        // a drive is the analysis saying it looked for a build and found
+        // none, and that is not ours to overrule from the kick alone.
+        if ((was == QStringLiteral("drop") || was == QStringLiteral("drive"))
+            && k < m_dropKick * 0.6)
             flags[i].type = QStringLiteral("normal");
         else if (was == QStringLiteral("break") && k > qMax(0.6, m_breakKick * 2.0))
             flags[i].type = QStringLiteral("normal");
