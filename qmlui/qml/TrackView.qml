@@ -1137,7 +1137,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V22_START)
+        // =============================================== live controls  (LIVE_V23_START)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -1461,20 +1461,26 @@ Rectangle
                 id: blackoutTile
                 property bool armed: false          // this press is the one holding it
 
+                // TrackTile's own look, value for value (radius 3, #3A3A3A,
+                // border #555555, 13 px, bold and dark text when active), so
+                // the row is unchanged to the eye and only the BEHAVIOUR is
+                // different. It cannot BE a TrackTile: that one has a
+                // TapHandler and no press/release of its own.
                 Layout.preferredWidth: trackViewRoot.touchH * 2.2
                 Layout.fillHeight: true
-                radius: 4
-                color: (trackEngine && trackEngine.blackout) ? "#B03030" : "#2A2A2A"
+                radius: 3
+                color: (trackEngine && trackEngine.blackout) ? "#B03030" : "#3A3A3A"
                 border.width: 1
-                border.color: "#4A4A4A"
+                border.color: (trackEngine && trackEngine.blackout)
+                              ? Qt.lighter("#B03030", 1.3) : "#555555"
 
                 Text
                 {
                     anchors.centerIn: parent
                     text: qsTr("BLACKOUT")
-                    color: (trackEngine && trackEngine.blackout) ? "#FFFFFF" : "#C8C8C8"
-                    font.bold: true
-                    font.pixelSize: 16
+                    color: (trackEngine && trackEngine.blackout) ? "#101010" : "#EEEEEE"
+                    font.bold: trackEngine ? trackEngine.blackout : false
+                    font.pixelSize: 13
                 }
 
                 MouseArea

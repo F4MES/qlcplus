@@ -6638,8 +6638,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             quint32 ff = flashFunction(castSet, hue);
             if (ff != Function::invalidId())
                 run("flash", ff, 1.0, 0, true);
-            else
-                genFlash(true, hue);
+            // ... and the generated flash as well, not only as a fallback -
+            // the same correction the manual button got in runde 131, for
+            // the same reason. Measured on the show file (runde 134), every
+            // flash scene in this show:
+            //
+            //   Flash Strobes WHITE     3 of 3 8+8 (white lamp), 0 of 3 80seg
+            //   Strob 4 white 80 %      1 of 3 8+8 (white lamp), 0 of 3 80seg
+            //   Flash Strobes RED       3 of 3 8+8 (RGB),        0 of 3 80seg
+            //   Flash Strobes BLUE      3 of 3 8+8 (RGB),        0 of 3 80seg
+            //
+            // The three 80-segment strobes are in none of them, so HALF THE
+            // STROBES HAVE NEVER FLASHED on a hit - and only red, blue and
+            // white exist, so a hit in cyan, magenta, green or orange fell
+            // through the ranking onto one of those and punched in the wrong
+            // colour. genFlash() covers the whole group in the hit's own
+            // colour; the operator's scene still runs on top of it.
+            genFlash(true, hue);
 
             // The laser bars answer the hit: half a beat later, once, in the
             // colour opposite the room's, for a third of a beat - an echo.
@@ -9738,13 +9753,21 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // the level the beat sets already includes where the breath stands, so
     // an off-beat never bumps the light back up
     //
-    // A HELD FLASH IGNORES THE GROUP'S TRIM (Tobias, 2026-09-22: "flash
-    // knappen skal ogsaa override hvad end lysstyrken staar paa
+    // THE HELD FLASH BUTTON IGNORES THE GROUP'S TRIM (Tobias, 2026-09-22:
+    // "flash knappen skal ogsaa override hvad end lysstyrken staar paa
     // strobe-lampe gruppen"). The trim is where the group sits all night;
-    // the flash is the one moment it should not. The MASTER still applies -
+    // the button is the one moment it should not. The MASTER still applies -
     // that is the fader for the whole room and pulling it down has to mean
     // something - and so does BLACKOUT, which is a safety.
-    qreal trim = m_flashHeld.contains(group) ? 1.0 : m_groupTrim.value(group, 1.0);
+    //
+    // m_flash, not m_flashHeld alone: the set is shared with the engine's
+    // OWN accent hits on a drop (tick(), genFlash(true, hue)), and those are
+    // not what he asked to override. A group the operator has turned down
+    // stays down through an automatic hit - that fader is how a group is
+    // quietened for the night - and only his thumb on the button overrules
+    // it. Caught reviewing runde 131 rather than on the rig.
+    qreal trim = (m_flash && m_flashHeld.contains(group)) ? 1.0
+                                                          : m_groupTrim.value(group, 1.0);
     qreal applied = qBound(0.0, level * pulseFactor(group) * trim * m_master, 1.0);
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
