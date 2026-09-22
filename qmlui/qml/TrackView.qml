@@ -100,30 +100,26 @@ Rectangle
     Connections
     {
         target: trackManager
-        // lastBeat reset with the track: a new track can open on the same
-        // beat number as the old one stopped at, and the gate below would
-        // then skip the repaint that puts the playhead in the right place
-        function onTrackChanged() { wfArea.release(); wfCanvas.lastBeat = -1; wfCanvas.requestPaint() }
+        function onTrackChanged() { wfArea.release(); wfCanvas.requestPaint() }
         function onMarkersChanged() { wfCanvas.requestPaint() }
-        // ONLY WHEN THE BEAT ACTUALLY MOVED (runde 143).
+        // positionChanged arrives once per beat and not more (see below),
+        // so this repaints once per beat.
         //
-        // positionChanged comes from two places: Beat Link Trigger's position
-        // packets, and TrackManager's own 200 ms energy timer, which emits it
-        // unconditionally - so this canvas repainted at least FIVE TIMES A
-        // SECOND, awake or idle, track or no track. The only thing on it that
-        // the position moves is the white playhead line, and that moves once
-        // a beat: half a second at 120 BPM. Three repaints in five were
-        // redrawing the same picture.
+        // Runde 143 put a gate here - only repaint when currentBeat changed -
+        // on the reading that TrackManager's 200 ms energy timer emitted
+        // positionChanged unconditionally, five times a second. That reading
+        // was wrong, and runde 144 measured it: slotEnergyTick() emits
+        // positionChanged only in its thirty-second-dead branch, and
+        // handlePosition() returns early unless the beat or the playing flag
+        // changed. Beat Link Trigger sends no `time` field at all, so the
+        // third term of that guard is 0 == 0 for ever. Counted on the log of
+        // 2026-09-20: 11172 rows, 11112 beat changes - 1.01 rows per change.
         //
-        // It is a full-width canvas and runde 139 made it nearly twice as
-        // tall (226 -> 416 px), so the waste had just doubled with it.
-        function onPositionChanged()
-        {
-            if (trackViewRoot.currentBeat === wfCanvas.lastBeat)
-                return
-            wfCanvas.lastBeat = trackViewRoot.currentBeat
-            wfCanvas.requestPaint()
-        }
+        // The gate was therefore dead code, and two tests were holding it in
+        // place. Both are gone. If the protocol ever gains a `time` field -
+        // the C++ already parses one - this is where the guard goes, and the
+        // paragraph above is why.
+        function onPositionChanged() { wfCanvas.requestPaint() }
     }
 
     Timer
@@ -478,10 +474,6 @@ Rectangle
                 z: 1
                 renderStrategy: Canvas.Threaded
 
-                // as on wfCanvas, and written on the GUI thread for the
-                // same reason
-                property int lastBeat: -1
-
                 // the selected flag (an index into trackManager.markers), -1 = none
                 property int selected: -1
 
@@ -627,7 +619,7 @@ Rectangle
                 Connections
                 {
                     target: trackManager
-                    function onTrackChanged() { wfOverlay.selected = -1; wfOverlay.lastBeat = -1; wfOverlay.requestPaint() }
+                    function onTrackChanged() { wfOverlay.selected = -1; wfOverlay.requestPaint() }
                     function onMarkersChanged()
                     {
                         // only drop the selection when the flag is actually
@@ -638,15 +630,7 @@ Rectangle
                             wfOverlay.selected = -1
                         wfOverlay.requestPaint()
                     }
-                    // the overlay is a full-size canvas too, and the only
-                    // thing the position moves on it is the same playhead
-                    function onPositionChanged()
-                    {
-                        if (trackViewRoot.currentBeat === wfOverlay.lastBeat)
-                            return
-                        wfOverlay.lastBeat = trackViewRoot.currentBeat
-                        wfOverlay.requestPaint()
-                    }
+                    function onPositionChanged() { wfOverlay.requestPaint() }
                 }
                 Connections
                 {
@@ -974,12 +958,6 @@ Rectangle
                 anchors.margins: 1
                 anchors.bottomMargin: 56
                 renderStrategy: Canvas.Threaded
-
-                // the beat the last repaint was asked for. It is written by
-                // the handler above, on the GUI thread - NOT from onPaint:
-                // both canvases run Canvas.Threaded, so the paint handler is
-                // on the render thread and must not reach into other objects.
-                property int lastBeat: -1
 
                 onPaint:
                 {
