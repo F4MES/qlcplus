@@ -3943,6 +3943,15 @@ void TrackEngine::setFlash(bool pressed)
         quint32 fid = flashFunction(strobeGroups, "white");
         if (fid == Function::invalidId())
             fid = flashFunction(allOn, "white");
+        // the same colour guard as the automatic hit: the ranking may hand
+        // back a RED scene when there is no white one, and that must not be
+        // laid over the generated white below
+        if (fid != Function::invalidId())
+        {
+            const QString fc = m_funcs.value(fid).colour;
+            if (fc.isEmpty() == false && fc != QStringLiteral("white"))
+                fid = Function::invalidId();
+        }
         if (fid != Function::invalidId())
             run("flash", fid, 1.0, 0, true);
         // ... and the generated white ALWAYS, not only when no scene of the
@@ -6636,6 +6645,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // colour. Everywhere else the accent is in the room's colour.
             QString hue = (isDrop && dropBar == 0 && beatInBar == 0) ? QStringLiteral("white") : m_colour;
             quint32 ff = flashFunction(castSet, hue);
+            // ... but only if his scene is actually in this colour. The
+            // ranking in flashFunction() falls back to white and then to
+            // "anything", which was harmless while it was the ONLY thing
+            // that ran - it was the hit. Now that the generated flash runs
+            // alongside it (below), a cyan hit would fire "Flash Strobes
+            // RED" on top of the generated cyan and the three 8+8 strobes
+            // would HTP-mix the two into a muddle. A colourless scene still
+            // runs: it imposes no colour of its own.
+            if (ff != Function::invalidId())
+            {
+                const QString fc = m_funcs.value(ff).colour;
+                if (fc.isEmpty() == false && fc != hue)
+                    ff = Function::invalidId();
+            }
             if (ff != Function::invalidId())
                 run("flash", ff, 1.0, 0, true);
             // ... and the generated flash as well, not only as a fallback -
