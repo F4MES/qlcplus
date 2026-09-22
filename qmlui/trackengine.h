@@ -699,6 +699,7 @@ protected:
     /** The FIGURE a programme belongs to - "Row", "Eyes", "Span" ...
         Two names from the same family look the same on the rig. */
     static QString familyOf(const QString &name);
+    QString firstRoomColour() const;      // the palette's first entry that is not white
     QString accentFor(const QString &colour, bool allowWhite) const;
     QString drawColour(const QStringList &pool, int keyBias, QRandomGenerator *rng) const;
     qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;

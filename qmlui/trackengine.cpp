@@ -2038,13 +2038,54 @@ void TrackEngine::ensureColourScenes()
 
                 bool coloured = false;
                 bool isWhite = colour == QStringLiteral("white");
-                if (isWhite && wcs.isEmpty() == false)
+
+                // THE FIXTURE'S WHITE LAMP (Tobias, 2026-09-22: "3 af
+                // stroberne har altsaa en hvid lampe. Naar de er hvide, skal
+                // de 3 bruge den hvide lampe, hvor resten skal bruge RGB
+                // kanalerne for hvid").
+                //
+                // Measured on the show file: the three 8+8 strobes' white
+                // scenes write red, green, blue AND channel 8; the three
+                // 80-segment ones write red, green and blue only. Channel 8
+                // is the lamp, and those three should use it alone.
+                //
+                // The definition's own White tag is the first source. The
+                // second is the channel's NAME - the same trick this file
+                // already uses on the shutter channels a few hundred lines
+                // down - because the definitions for these two strobes are
+                // not in our tree and cannot be checked here.
+                //
+                // g.colourValue is deliberately NOT a source: it only learns
+                // a channel when at least two different COLOURS write it
+                // differently, and channel 8 is written by the white scenes
+                // and nothing else. It would always come back empty.
+                QList<quint32> whiteLamp = wcs;
+                if (isWhite)
+                {
+                    for (quint32 i = 0; i < fxi->channels(); i++)
+                    {
+                        const QLCChannel *qch = fxi->channel(i);
+                        if (qch == nullptr || qch->group() != QLCChannel::Intensity)
+                            continue;
+                        // a white SHUTTER is not a white lamp, and it is not
+                        // an Intensity channel either - the group test above
+                        // keeps it out
+                        if (qch->name().contains(QStringLiteral("white"), Qt::CaseInsensitive) == false)
+                            continue;
+                        if (rcs.contains(i) || gcs.contains(i) || bcs.contains(i)
+                            || whiteLamp.contains(i))
+                            continue;
+                        whiteLamp.append(i);
+                    }
+                }
+
+                if (isWhite && whiteLamp.isEmpty() == false)
                 {
                     // A real white channel: use it alone. R+G+B on top only
                     // makes it colder and dirtier.
                     // And on a strobe it is capped: those three lamps at a
                     // full white channel are painful to stand in front of.
-                    foreach (quint32 c, wcs) values.append(SceneValue(fid, c, uchar(g.strobes ? ENGINE_STROBE_WHITE : 255)));
+                    foreach (quint32 c, whiteLamp) values.append(SceneValue(fid, c, uchar(g.strobes ? ENGINE_STROBE_WHITE : 255)));
                     foreach (quint32 c, rcs) values.append(SceneValue(fid, c, uchar(0)));
                     foreach (quint32 c, gcs) values.append(SceneValue(fid, c, uchar(0)));
                     foreach (quint32 c, bcs) values.append(SceneValue(fid, c, uchar(0)));
@@ -3610,7 +3651,7 @@ void TrackEngine::setColourOverride(QString colour)
     if (colour.isEmpty() == false)
         m_colour = colour;
     else if (engineBannedColour(m_colour))
-        m_colour = m_palette.isEmpty() ? QString() : m_palette.first();
+        m_colour = firstRoomColour();
     if (m_startScene)
         startLook();                     // the opening picture follows the tiles
     else
@@ -4287,6 +4328,27 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     }
 
     return pickWeighted(pool, cursor);
+}
+
+QString TrackEngine::firstRoomColour() const
+{
+    // The palette's first entry, but never WHITE. White is punctuation, not
+    // a colour the room wears - the draw in tick() has skipped it since
+    // 2026-09-10 ("hvid kun til hits og accenter; en hvid base ser ud som
+    // arbejdslys"), and Tobias sharpened it on 2026-09-22: "Hvid (RGB hvid)
+    // generelt skal kun bruges i drops."
+    //
+    // These two fallbacks did not skip it. They only fire when the current
+    // colour is banned or empty, and the palette happens to come out
+    // alphabetical, so white sits last and they have never landed on it -
+    // but that is luck, not a rule, and on the three 80-segment strobes a
+    // white base would now be red, green and blue at 70 %.
+    foreach (const QString &c, m_palette)
+    {
+        if (c != QStringLiteral("white"))
+            return c;
+    }
+    return m_palette.isEmpty() ? QString() : m_palette.first();
 }
 
 QString TrackEngine::familyOf(const QString &name)
@@ -5079,7 +5141,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_colour = drawColour(pool, m_keyBias, rng);
     }
     else if (m_colour.isEmpty() && m_palette.isEmpty() == false)
-        m_colour = m_palette.first();
+        m_colour = firstRoomColour();
 
     // A mix going out: the incoming track's colour is drawn the moment the
     // mix begins, and the BASE takes it over the mix's second half (below,
