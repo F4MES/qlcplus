@@ -2237,6 +2237,35 @@ void TrackEngine::ensureColourScenes()
                 const QMap<quint32, uchar> base = g.baseValue.value(fid);
                 for (QMap<quint32, uchar>::const_iterator bit = base.constBegin(); bit != base.constEnd(); ++bit)
                     values.append(SceneValue(fid, bit.key(), bit.value()));
+
+                // ... AND ON EVERY OTHER COLOUR THE WHITE LAMP GOES OUT.
+                //
+                // The white branch above drives the learned white channel to
+                // 70 % and takes red, green and blue down to nought. Nothing
+                // did the reverse: DMX is LTP, so once channel 8 on the three
+                // 8+8 strobes had been lifted - by that white scene, or by one
+                // of the operator's own white flashes, which put 180 to 255 on
+                // it ("Flash Strobes WHITE", "Strob 5 white 100 %", "Strob 3
+                // white 80 %") - it stayed there. From the first white of the
+                // night those three strobes blinked WHITE under every colour
+                // the room asked for, while the three 80-segment ones blinked
+                // in the colour. Six lamps in a row, three of them wrong.
+                //
+                // Found 2026-09-22 (runde 161) by asking, for every lamp on
+                // the rig, which of its channels anything ever writes: channel
+                // 8 on the 8+8 strobes was written by five hand scenes and by
+                // the engine's white, and by nothing else, ever.
+                //
+                // Last, deliberately: scene->setValue takes the last write, so
+                // this cannot be undone by the base above.
+                // (braces: Qt's foreach expands to nested loops and an if,
+                // and an unbraced outer if is -Wdangling-else on MinGW, which
+                // is an error in CI. verify_track_r126 caught this one.)
+                if (isWhite == false)
+                {
+                    foreach (quint32 c, whiteLamp)
+                        values.append(SceneValue(fid, c, uchar(0)));
+                }
                 // The fixture's own effect engine, at 0. A laser bar has
                 // "Effect", "Effect Speed", "Movement Effect" and "Movement
                 // Effect Speed" channels; put a value on one and the bar runs
