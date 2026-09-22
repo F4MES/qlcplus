@@ -6109,6 +6109,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     m_beatIndex = beat - secStart;
     bool anyPulse = false;
     bool moveHit = false;
+    // runde 153: did a strobe group draw one of the show's chases this beat?
+    // On the log so the trial can be measured instead of remembered.
+    bool strobeChase = false;
 
     foreach (const QString &key, m_groupOrder)
     {
@@ -6236,7 +6239,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (g.strobes)
             mv.subSteps = qMin(mv.subSteps, tier == 2 ? 2 : 1);
 
-        if (m_fullAuto && tier > 0 && key != m_rhythmLead && g.strobes)
+        // ... and the third place (runde 153): when the strobes have drawn one
+        // of the show's chases for this drop, pinning the generated picture to
+        // STATIC and the pulse to the downbeat would run underneath it and put
+        // back exactly the wobble the chase replaced. The chase IS the picture
+        // in that case.
+        if (m_fullAuto && tier > 0 && key != m_rhythmLead && g.strobes
+            && mv.ownChaser == false)
         {
             mv.pattern = ENGINE_PAT_STATIC;
             mv.subSteps = 1;
@@ -6439,6 +6448,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      && m_active.value("mot:" + key, Function::invalidId()) == mf;
             if (wait == false)
             {
+                if (g.strobes)
+                    strobeChase = true;
                 int motionDivision = divisionFor(mi, bpm, division);
                 // Enforce the support pace AFTER SETUP and SPEED overrides.
                 // Scenes and EFX do not use the chaser's step-beat scale.
@@ -6789,6 +6800,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (mixBarsOut >= 6 && m_nextColour.isEmpty() == false) ev << "mix-turn";
         if (m_fullAuto && m_rhythmLead.isEmpty() == false)
             ev << "lead=" + QString::fromLatin1(m_rhythmLead.toUtf8().toHex());
+        if (strobeChase) ev << "strobe-chase";
         if (m_mixing) ev << "mix-energy";
         if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
         m_logEvent = ev.join('+');
@@ -6835,7 +6847,12 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
     move.pulseOn = 3;
     move.bare = g.strobes;
     move.pulse = g.strobes ? 0.95 : qMin(0.30, move.pulse);
-    if (g.strobes) move.ownChaser = false;
+    // A strobe group is never the rhythm lead (chooseLead leaves it out), so
+    // this line used to be the second of three places that shut the door on
+    // the show's strobe chases. drawMove has already made that call - a drop,
+    // above half the fader, one section in four - and it is narrow enough to
+    // survive the composition rule. Everything else here still applies: the
+    // generated picture underneath stays static and slow.
     return move;
 }
 
@@ -6947,7 +6964,22 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         mv.breatheBars = 0;
         mv.texture = 0.0;
         mv.colourBars = 0;
-        mv.ownChaser = false;
+        // THE DOOR, ON THE LATCH (runde 153, Tobias' decision 2026-09-22).
+        //
+        // This was an unconditional false, and it is why the strobes have
+        // never once run one of the show's programmes: measured on the night
+        // of 2026-09-20 they were on stage for 5516 beats and got a `mot:`
+        // exactly nought times, while 940 AUTO chases - a fifth of the whole
+        // file - sat unreachable. The reason for the false is good and it
+        // stands: a strobe is a rhythm instrument, and a chase running
+        // underneath is what made them read as ugly floodlights.
+        //
+        // So this is deliberately the narrowest opening that is still worth
+        // seeing: A DROP ONLY, above half the fader, one section in four. The
+        // ENERGY slider is its off switch - under 50 % this never fires - and
+        // a drop is where a coloured row across the strobes is a look rather
+        // than a wobble. Everything else about them is unchanged.
+        mv.ownChaser = tier == 2 && e >= 0.50 && chance(0.25);
         // near-total at the bottom of the fader, total at the top: either way
         // there is nothing between the blinks
         mv.pulse = 0.85 + 0.15 * e;
