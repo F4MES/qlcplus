@@ -5812,7 +5812,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         quint32 want = m_position.value(key, Function::invalidId());
         // a laser group out of the cast never draws a fresh aim either: it
         // has been sent home above, and this is only reached with no home
-        if (want == Function::invalidId() || (mayMove && sectionChanged && (g.lasers == false || inCast)))
+        // AN AIM LIVES A BAR (runde 158). Measured on the night of
+        // 2026-09-20: the wash took 963 fresh aims in 73 minutes - one every
+        // 4.6 seconds - and NINETY-ONE of them came less than a bar after the
+        // one before, seventy-four of those on a section change. Seven heads
+        // swinging twice inside one bar is the busiest thing in the room, and
+        // "the heads stay slow whatever the fader says" is written three
+        // times in this file. The walk below already only fires on a bar
+        // line; this branch did not, and it is the one that offends.
+        //
+        // The first aim of a group is never held back (m_aimSince is absent,
+        // and `want` is invalid anyway).
+        const bool aimSettled = m_aimSince.contains(key) == false
+                             || beat - m_aimSince.value(key) >= 4;
+        if (want == Function::invalidId()
+            || (mayMove && sectionChanged && aimSettled && (g.lasers == false || inCast)))
         {
             quint32 np = positionFunction(key, m_castCursor, tier, fader);
             // a laser group with nothing safe to roam to parks at home rather
@@ -5829,6 +5843,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 }
                 want = np;
                 m_position.insert(key, want);
+                m_aimSince.insert(key, beat);
                 m_headMoveBeats.insert(key, -8);     // our own move: grace before the Light Rider check
             }
         }
@@ -5857,6 +5872,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             {
                 want = np;
                 m_position.insert(key, want);
+                m_aimSince.insert(key, beat);
                 m_headMoveBeats.insert(key, -8);
             }
         }
@@ -9704,6 +9720,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_mixBeat = -1;              // a mix still on now is the mix INTO this track
     m_colourBar = -1;            // hold the colour until the first break or drop
     m_colourSince = -1;
+    m_aimSince.clear();          // a fresh track aims where it likes
     m_castCursor++;
     m_moves.clear();             // the new track draws its own moves
     m_sweep.clear();

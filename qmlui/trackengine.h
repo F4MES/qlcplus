@@ -778,6 +778,10 @@ private:
     int m_motionCursor;
     QSet<QString> m_cast;
     QMap<QString, quint32> m_position;   // sticky position pick per group
+    // the beat each group's aim was last set on. A guard, nothing else:
+    // without it a section change could swing a head that had just moved
+    // (runde 158). Cleared with the rest in trackLoaded().
+    QMap<QString, int> m_aimSince;
     QHash<QString, int> m_darkUntil;     // group -> last beat of a planned dark stretch
     qreal m_master;
     bool m_blackout;
