@@ -367,8 +367,8 @@ private:
 
     QMap<QString, quint32> m_lookFunctions;
     QMap<QString, bool> m_lookRandom;
-    QMap<QString, int> m_stateIntensity;
-    QMap<QString, int> m_stateDivision;
+    // LEVEL and STEP per section were retired in runde 150 - see
+    // TrackManager::stateIntensity(). The maps are gone with them.
 
     QList<quint32> m_runningFunctions;
     QMap<quint32, int> m_runningAttrIds;

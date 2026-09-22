@@ -683,17 +683,17 @@ void TrackManager::setStateIntensity(QString state, int percent)
 {
     if (stateNames().contains(state) == false || percent < 0 || percent > 100)
         return;
-    m_stateIntensity.insert(state, percent);
-    saveLooks();
-    emit energyChanged();
-    applyEnergy();
+    // RETIRED (runde 150): kept so the invokable signature does not
+    // change under any QML that still names it. It does nothing.
 }
 
 int TrackManager::stateIntensity(QString state) const
 {
-    // the engine sets the level per tier itself; this is a trim on top
-    int dflt = 100;
-    return m_stateIntensity.value(state, dflt);
+    // RETIRED (runde 150). The slider this trimmed was removed from the
+    // Track page; a stored value from before that could still darken the
+    // room with nothing on screen to say so. Full, for every section.
+    Q_UNUSED(state)
+    return 100;
 }
 
 void TrackManager::setStateDivision(QString state, int milliBeats)
@@ -703,25 +703,17 @@ void TrackManager::setStateDivision(QString state, int milliBeats)
     if (milliBeats < 0 || milliBeats > 16000)
         return;
 
-    m_stateDivision.insert(state, milliBeats);
-    saveLooks();
-    emit looksChanged();
-
-    if (state == currentState() && m_autoRun)
-        applyLook();
+    // RETIRED (runde 150), with the LEVEL setter above.
 }
 
 int TrackManager::stateDivision(QString state) const
 {
-    // calm defaults for a minimal style: a chase steps once a beat in the
-    // groove, twice a beat in builds and drops, and runs at its own pace
-    // (tempo-matched by the engine) in a break
-    // 0 = the function's own tempo, snapped to the beat grid by the
-    // engine (a halftime chase stays halftime, a fast one stays fast);
-    // a value forces one step length on everything
-    int dflt = 0;
+    // RETIRED (runde 150), with LEVEL. 0 = the programme's own tempo,
+    // snapped to the beat grid by the engine - a halftime chase stays
+    // halftime, a fast one stays fast. Nothing can force a step length
+    // on everything any more; the old comment here said it could.
     Q_UNUSED(state)
-    return m_stateDivision.value(state, dflt);
+    return 0;
 }
 
 /*********************************************************************
@@ -760,21 +752,8 @@ void TrackManager::loadSettingsMaps()
                                   .split(',', Qt::SkipEmptyParts))
         m_lookRandom.insert(key, true);
 
-    foreach (QString pair, settings.value(SETTINGS_TRACK_INTENSITY).toString()
-                                   .split(',', Qt::SkipEmptyParts))
-    {
-        QStringList parts = pair.split(':');
-        if (parts.count() == 2 && stateNames().contains(parts.at(0)))
-            m_stateIntensity.insert(parts.at(0), parts.at(1).toInt());
-    }
-
-    foreach (QString pair, settings.value(SETTINGS_TRACK_DIVISION).toString()
-                                   .split(',', Qt::SkipEmptyParts))
-    {
-        QStringList parts = pair.split(':');
-        if (parts.count() == 2 && stateNames().contains(parts.at(0)))
-            m_stateDivision.insert(parts.at(0), parts.at(1).toInt());
-    }
+    // LEVEL and STEP per section are retired (runde 150): not read back,
+    // and the two keys are dropped below on the next save.
 }
 
 void TrackManager::saveLooks()
@@ -793,17 +772,10 @@ void TrackManager::saveLooks()
         if (rit.value()) rnd.append(rit.key()); }
     settings.setValue(SETTINGS_TRACK_RANDOM, rnd.join(','));
 
-    QStringList ints;
-    QMapIterator<QString, int> iit(m_stateIntensity);
-    while (iit.hasNext()) { iit.next();
-        ints.append(QString("%1:%2").arg(iit.key()).arg(iit.value())); }
-    settings.setValue(SETTINGS_TRACK_INTENSITY, ints.join(','));
-
-    QStringList divs;
-    QMapIterator<QString, int> dit(m_stateDivision);
-    while (dit.hasNext()) { dit.next();
-        divs.append(QString("%1:%2").arg(dit.key()).arg(dit.value())); }
-    settings.setValue(SETTINGS_TRACK_DIVISION, divs.join(','));
+    // ... and the old keys go, so a build from before runde 150 cannot
+    // pick them up again either
+    settings.remove(SETTINGS_TRACK_INTENSITY);
+    settings.remove(SETTINGS_TRACK_DIVISION);
 }
 
 /*********************************************************************
