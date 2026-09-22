@@ -58,6 +58,7 @@ Rectangle
         if (type === "break") return "#2F7FD0"
         if (type === "intro") return "#5FB37A"
         if (type === "outro") return "#8C6BB1"
+        if (type === "drive") return "#C2566E"   // between a groove's grey and a drop's red
         return "#9AA0A6"
     }
 
@@ -682,8 +683,10 @@ Rectangle
                         // every type the engine understands, so a flag of any
                         // kind can be put down and taken away again by hand.
                         // NORMAL was missing, and rekordbox' phrase analysis
-                        // adds INTRO and OUTRO on top of our own four.
-                        model: [ "normal", "break", "build", "drop", "intro", "outro" ]
+                        // adds INTRO and OUTRO on top of our own four. DRIVE
+                        // (runde 169) is the analysis' high groove, which the
+                        // engine plays hotter than NORMAL.
+                        model: [ "normal", "drive", "break", "build", "drop", "intro", "outro" ]
                         TrackTile
                         {
                             objectName: "addFlag:"+modelData
@@ -714,7 +717,7 @@ Rectangle
                         {
                             var mk = trackManager.markers[wfOverlay.selected]
                             if (mk === undefined) { wfOverlay.selected = -1; return }
-                            var order = [ "normal", "break", "build", "drop", "intro", "outro" ]
+                            var order = [ "normal", "drive", "break", "build", "drop", "intro", "outro" ]
                             var next = order[(order.indexOf(mk.type) + 1) % order.length]
                             trackManager.setMarkerType(wfOverlay.selected, next)
                         }

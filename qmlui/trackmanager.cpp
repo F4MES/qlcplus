@@ -137,7 +137,9 @@ QStringList TrackManager::stateNames()
                          << QStringLiteral("build")
                          << QStringLiteral("drop")
                          << QStringLiteral("intro")
-                         << QStringLiteral("outro");
+                         << QStringLiteral("outro")
+                         // a high groove / a drop with no build (BLT analysis 7): R169_DRIVE_STATE
+                         << QStringLiteral("drive");
 }
 
 int TrackManager::slotCount() const { return TRACK_SLOT_COUNT; }
