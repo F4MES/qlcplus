@@ -207,6 +207,15 @@ Rectangle
             } else if (kind === "hold") { c.fillRect(6,4,4,16); c.fillRect(14,4,4,16) }
             else if (kind === "nextLook") { c.beginPath(); c.moveTo(4,4); c.lineTo(16,12); c.lineTo(4,20); c.closePath(); c.fill(); line(19,4,19,20) }
             else if (kind === "blackout") { circle(12,12,9); line(6,18,18,6) }
+            // "give it back to the music": an arrow curving anticlockwise
+            // back to where it started. A sun says "automatic"; on the
+            // SECTION row what the button does is HAND THE SECTION BACK, so
+            // it gets the revert arrow instead. (Tobias, 2026-09-22.)
+            else if (kind === "revert") {
+                c.beginPath(); c.arc(12, 12.5, 7, Math.PI * 0.78, Math.PI * 2.25); c.stroke()
+                c.beginPath(); c.moveTo(5.2, 8.4); c.lineTo(5.0, 14.2); c.lineTo(10.6, 12.4)
+                c.closePath(); c.fill()
+            }
             else if (kind === "flash" || kind === "autoColour") {
                 circle(12,12,4)
                 for(var i=0;i<8;i++){var a=i*Math.PI/4;line(12+7*Math.cos(a),12+7*Math.sin(a),12+10*Math.cos(a),12+10*Math.sin(a))}
@@ -1158,27 +1167,30 @@ Rectangle
         }
 Rectangle
         {
+            // SECTION is built like COLOUR now (runde 141): the heading on
+            // its own line at the top left, the buttons in a row underneath,
+            // 48 tall - the same shape, the same height, the same margins.
+            // Two rows of the same kind of choice should not be laid out two
+            // different ways, and until now SECTION had its title inline on
+            // the left, which pushed its AUTO one label's width to the right
+            // of the AUTO in COLOUR directly below it. Now they line up
+            // because they are the same thing built the same way.
             Layout.fillWidth: true
-            Layout.preferredHeight: 60
-            Layout.minimumHeight: 60
-            Layout.maximumHeight: 60
+            Layout.preferredHeight: trackViewRoot.compactLayout ? 88 : 112
+            Layout.minimumHeight: trackViewRoot.compactLayout ? 88 : 112
+            Layout.maximumHeight: trackViewRoot.compactLayout ? 88 : 112
             color: trackViewRoot.cPanel
             radius: 4
 
+            Text { x: 12; y: 8; text: "SECTION"; color: trackViewRoot.cText
+                   font.pixelSize: trackViewRoot.compactLayout ? 16 : 20 }
+
             RowLayout
             {
-                anchors.fill: parent
-                anchors.margins: 6
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.bottom: parent.bottom; anchors.margins: 10
+                height: 48
                 spacing: 6
-
-                Text
-                {
-                    Layout.preferredWidth: 90
-                    text: qsTr("SECTION")
-                    color: trackViewRoot.cDim
-                    font.bold: true
-                    font.pixelSize: 14
-                }
 
                 // AUTO, not FOLLOW, and on the LEFT (runde 140, Tobias:
                 // "maaske hedde AUTO ligesom paa farverne, og saa rykke den
@@ -1189,7 +1201,12 @@ Rectangle
                 // words for it in two places.
                 TrackTile
                 {
-                    Layout.preferredWidth: 110
+                    // exactly as wide as AUTO in the COLOUR row below, by
+                    // asking that row rather than guessing a number: both
+                    // panels start at the same x, so binding the width makes
+                    // the two buttons line up to the pixel and keeps them
+                    // lined up if the palette ever gains or loses a colour
+                    Layout.preferredWidth: colourRow.cellW
                     Layout.fillHeight: true
                     objectName: "followMusic"
                     label: qsTr("AUTO")
@@ -1203,7 +1220,7 @@ Rectangle
                         anchors.verticalCenter: parent.verticalCenter
                         width: 16; height: 16
                         ink: (trackManager && trackManager.overrideState === "") ? "#101010" : "#DDDDDD"
-                        kind: "autoColour"
+                        kind: "revert"
                     }
                 }
 
@@ -1277,88 +1294,6 @@ RowLayout {
             spacing: 10
             visible: trackManager && trackEngine && trackManager.roleMode && !trackViewRoot.setupOpen
 Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                Layout.preferredWidth: dialsRow.width * 0.40
-                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
-                    // Just the title. The 62-pixel percentage that used to sit
-                    // in the middle of this box is gone (Tobias, 2026-09-22:
-                    // "Energi har alt for meget tomt plads med den store
-                    // procent tegn, det skal fjernes") - it said the same
-                    // number as the fader directly below it, and the Item it
-                    // was centred in was a fillHeight spacer, so the box was
-                    // mostly air to make room for one duplicate figure.
-                    Text { Layout.fillWidth: true; text: "ENERGY"; color: trackViewRoot.cText
-                           font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
-Rectangle
-            {
-                Layout.fillWidth: true
-                // The fader FILLS the box (runde 139). Taking the big
-                // percentage out left the box with a title and a 62-pixel
-                // bar in 148 pixels of space - the air moved rather than
-                // went away. The fader takes it instead, which also makes
-                // the one control Tobias calls "rimelig essentiel" the
-                // easiest thing on the page to hit.
-                Layout.fillHeight: true
-                radius: 4
-                color: "#141414"
-                border.width: 1
-                border.color: "#555555"
-
-                objectName: "energy"
-                property real trim: trackManager ? Math.min(1, trackManager.energyTrim / 100) : 0.5
-
-                Rectangle
-                {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    anchors.margins: 3
-                    width: (parent.width - 6) * parent.trim
-                    radius: 3
-                    color: "#E3B44F"
-                }
-
-                SliderTicks { anchors.fill: parent }
-                SliderGrip
-                {
-                    x: Math.max(1, Math.min(parent.width - width - 1,
-                                            3 + (parent.width - 6) * parent.trim - width / 2))
-                    height: parent.height
-                    ink: "#F6D98A"; pressed: energyArea.pressed
-                }
-
-                Text
-                {
-                    anchors.centerIn: parent
-                    text: qsTr("ENERGY") + "  " + (trackManager ? Math.round(Math.min(100, trackManager.energyTrim)) : 50) + "%"
-                    color: "#EEEEEE"
-                    font.bold: true
-                    font.pixelSize: 15
-                }
-
-                MouseArea
-                {
-                    id: energyArea
-                    objectName: "energyDrag"
-                    anchors.fill: parent
-                    function apply(x)
-                    {
-                        // the fill is inset three pixels: read the finger the same
-                        // way, or full is unreachable at the right edge
-                        var v = Math.round(Math.max(0, Math.min(1, (x - 3) / (width - 6))) * 100)
-                        if (trackManager) trackManager.energyTrim = v
-                    }
-                    // a hand on the bar takes over from the clock - also when it
-                    // lands exactly where the clock already put it (the setter
-                    // only infers a touch from a CHANGE of value)
-                    onPressed: (mouse) => { if (trackEngine && trackEngine.roomAuto) trackEngine.roomAuto = false; apply(mouse.x) }
-                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
-                }
-            }
-                }
-            }
-            Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.preferredWidth: dialsRow.width * 0.34
                 color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
@@ -1454,6 +1389,88 @@ Rectangle
                             }
                         }
                     }
+                }
+            }
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                Layout.preferredWidth: dialsRow.width * 0.40
+                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
+                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
+                    // Just the title. The 62-pixel percentage that used to sit
+                    // in the middle of this box is gone (Tobias, 2026-09-22:
+                    // "Energi har alt for meget tomt plads med den store
+                    // procent tegn, det skal fjernes") - it said the same
+                    // number as the fader directly below it, and the Item it
+                    // was centred in was a fillHeight spacer, so the box was
+                    // mostly air to make room for one duplicate figure.
+                    Text { Layout.fillWidth: true; text: "ENERGY"; color: trackViewRoot.cText
+                           font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
+Rectangle
+            {
+                Layout.fillWidth: true
+                // The fader FILLS the box (runde 139). Taking the big
+                // percentage out left the box with a title and a 62-pixel
+                // bar in 148 pixels of space - the air moved rather than
+                // went away. The fader takes it instead, which also makes
+                // the one control Tobias calls "rimelig essentiel" the
+                // easiest thing on the page to hit.
+                Layout.fillHeight: true
+                radius: 4
+                color: "#141414"
+                border.width: 1
+                border.color: "#555555"
+
+                objectName: "energy"
+                property real trim: trackManager ? Math.min(1, trackManager.energyTrim / 100) : 0.5
+
+                Rectangle
+                {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 3
+                    width: (parent.width - 6) * parent.trim
+                    radius: 3
+                    color: "#E3B44F"
+                }
+
+                SliderTicks { anchors.fill: parent }
+                SliderGrip
+                {
+                    x: Math.max(1, Math.min(parent.width - width - 1,
+                                            3 + (parent.width - 6) * parent.trim - width / 2))
+                    height: parent.height
+                    ink: "#F6D98A"; pressed: energyArea.pressed
+                }
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("ENERGY") + "  " + (trackManager ? Math.round(Math.min(100, trackManager.energyTrim)) : 50) + "%"
+                    color: "#EEEEEE"
+                    font.bold: true
+                    font.pixelSize: 15
+                }
+
+                MouseArea
+                {
+                    id: energyArea
+                    objectName: "energyDrag"
+                    anchors.fill: parent
+                    function apply(x)
+                    {
+                        // the fill is inset three pixels: read the finger the same
+                        // way, or full is unreachable at the right edge
+                        var v = Math.round(Math.max(0, Math.min(1, (x - 3) / (width - 6))) * 100)
+                        if (trackManager) trackManager.energyTrim = v
+                    }
+                    // a hand on the bar takes over from the clock - also when it
+                    // lands exactly where the clock already put it (the setter
+                    // only infers a touch from a CHANGE of value)
+                    onPressed: (mouse) => { if (trackEngine && trackEngine.roomAuto) trackEngine.roomAuto = false; apply(mouse.x) }
+                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                }
+            }
                 }
             }
 
@@ -1572,58 +1589,7 @@ TrackTile
                 }
             }
         }
-Item
-            {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 28
-                Layout.maximumHeight: 28
-                Layout.leftMargin: 12
-                Layout.rightMargin: 12
 
-                Column
-                {
-                anchors.verticalCenter: parent.verticalCenter
-                width: parent.width
-                spacing: 2
-
-                Text
-                {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text: trackEngine ? trackEngine.report.split("  |  ")[0] : ""
-                    color: "#CCCCCC"
-                    font.pixelSize: 14
-                    font.bold: true
-                }
-                Text
-                {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text:
-                    {
-                        if (!trackEngine || !trackManager) return ""
-                        var parts = trackEngine.report.split("  |  ")
-                        var colour = parts.length > 1 ? parts[1] : ""
-                        var state = parts.length > 2 ? parts[2] : ""
-                        // the next section, in bars
-                        var cur = trackManager.currentBeat
-                        var mk = trackManager.markers
-                        var next = null
-                        for (var i = 0; i < mk.length; i++)
-                            if (mk[i].beat > cur && (next === null || mk[i].beat < next.beat)) next = mk[i]
-                        var count = (next && trackManager.playing) ? "   \u2192 " + next.type.toUpperCase() + " " + Math.ceil((next.beat - cur) / 4) : ""
-                        // the other deck, analysed ahead of time
-                        var nxt = (trackManager.nextTitle !== undefined && trackManager.nextTitle !== "")
-                                  ? "     " + qsTr("NEXT") + ": " + trackManager.nextTitle
-                                    + (trackManager.nextFirstDrop > 0 ? " (" + qsTr("drop at bar") + " " + trackManager.nextFirstDrop + ")" : "")
-                                  : ""
-                        return colour + "   \u00b7   " + state + count + nxt
-                    }
-                    color: "#8A8A8A"
-                    font.pixelSize: 12
-                }
-                }
-            }
 Rectangle
         {
             Layout.fillWidth: true
@@ -2216,6 +2182,32 @@ RowLayout {
 
 Rectangle
             {
+                Layout.preferredWidth: 190
+                Layout.fillHeight: true
+                radius: 4
+                objectName: "flash"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; ink: "#101010"; kind: "flash" }
+                color: (trackEngine && trackEngine.flashing) ? "#FFFFFF" : "#E36B6B"
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("FLASH WHITE")
+                    color: "#101010"
+                    font.bold: true
+                    font.pixelSize: 18
+                }
+
+                MouseArea
+                {
+                    anchors.fill: parent
+                    onPressed: trackEngine.setFlash(true)
+                    onReleased: trackEngine.setFlash(false)
+                    onCanceled: trackEngine.setFlash(false)
+                }
+            }
+Rectangle
+            {
                 id: blackoutTile
                 objectName: "blackout"
                 ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "blackout" }
@@ -2280,32 +2272,6 @@ Rectangle
                     // the grab taken away from us counts as "finger left the
                     // button": latched, not released
                     onCanceled: blackoutTile.armed = false
-                }
-            }
-Rectangle
-            {
-                Layout.preferredWidth: 190
-                Layout.fillHeight: true
-                radius: 4
-                objectName: "flash"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; ink: "#101010"; kind: "flash" }
-                color: (trackEngine && trackEngine.flashing) ? "#FFFFFF" : "#E36B6B"
-
-                Text
-                {
-                    anchors.centerIn: parent
-                    text: qsTr("FLASH WHITE")
-                    color: "#101010"
-                    font.bold: true
-                    font.pixelSize: 18
-                }
-
-                MouseArea
-                {
-                    anchors.fill: parent
-                    onPressed: trackEngine.setFlash(true)
-                    onReleased: trackEngine.setFlash(false)
-                    onCanceled: trackEngine.setFlash(false)
                 }
             }
 
@@ -2398,5 +2364,64 @@ RowLayout
         }
 
         }
+
+// The engine's own line, moved to the BOTTOM of the page (runde 141,
+// Tobias: "(released) linjen skal staa nederst, saa bruger vi den til at
+// faa lidt afstand til windows linjen"). It is the least urgent thing on
+// the page and it now does a second job: twenty-eight pixels of air
+// between FLASH and the Windows taskbar, so a thumb going for the flash
+// cannot catch the clock instead. The height is unchanged.
+Item
+            {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 28
+                Layout.maximumHeight: 28
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
+
+                Column
+                {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                spacing: 2
+
+                Text
+                {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text: trackEngine ? trackEngine.report.split("  |  ")[0] : ""
+                    color: "#CCCCCC"
+                    font.pixelSize: 14
+                    font.bold: true
+                }
+                Text
+                {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text:
+                    {
+                        if (!trackEngine || !trackManager) return ""
+                        var parts = trackEngine.report.split("  |  ")
+                        var colour = parts.length > 1 ? parts[1] : ""
+                        var state = parts.length > 2 ? parts[2] : ""
+                        // the next section, in bars
+                        var cur = trackManager.currentBeat
+                        var mk = trackManager.markers
+                        var next = null
+                        for (var i = 0; i < mk.length; i++)
+                            if (mk[i].beat > cur && (next === null || mk[i].beat < next.beat)) next = mk[i]
+                        var count = (next && trackManager.playing) ? "   \u2192 " + next.type.toUpperCase() + " " + Math.ceil((next.beat - cur) / 4) : ""
+                        // the other deck, analysed ahead of time
+                        var nxt = (trackManager.nextTitle !== undefined && trackManager.nextTitle !== "")
+                                  ? "     " + qsTr("NEXT") + ": " + trackManager.nextTitle
+                                    + (trackManager.nextFirstDrop > 0 ? " (" + qsTr("drop at bar") + " " + trackManager.nextFirstDrop + ")" : "")
+                                  : ""
+                        return colour + "   \u00b7   " + state + count + nxt
+                    }
+                    color: "#8A8A8A"
+                    font.pixelSize: 12
+                }
+                }
+            }
     }
 }
