@@ -39,7 +39,8 @@ Rectangle
     property var divValues: [ 0, 4000, 2000, 1000, 500, 250, 125 ]
     property var divLabels: [ "-", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8" ]
 
-    // TRACK_TOUCH_LAYOUT_R137
+    // TRACK_TOUCH_LAYOUT_R137 — original controls, layout-only revision r138.
+    readonly property bool compactLayout: height < 950
     property bool setupOpen: false
     property real touchH: Math.max(UISettings.iconSizeMedium * 1.4, 50)
 
@@ -128,272 +129,238 @@ Rectangle
         }
     }
 
-
-            function swatch(name)
-            {
-                switch (name)
-                {
-                case "red":     return "#E03030"
-                case "green":   return "#30C050"
-                case "blue":    return "#3060E0"
-                case "cyan":    return "#30C0D0"
-                case "magenta": return "#D040C0"
-                case "yellow":  return "#E0D030"
-                case "orange":  return "#E08030"
-                case "amber":   return "#E0A040"
-                case "uv":      return "#7030C0"
-                case "white":   return "#E8E8E8"
-                }
-                return "#4A4A4A"
-            }
-
-
-    component TouchFader: Rectangle {
-        id: fader
-        property string caption: ""
-        property real value: 0
-        property color accent: "#4FA3E3"
-        property bool prominent: false
-        signal edited(real amount)
-        color: trackViewRoot.cPanel; radius: 4
-        border.color: trackViewRoot.cLine
-        implicitHeight: prominent ? 126 : 82
-        Text { x: 14; y: 10; text: fader.caption; color: trackViewRoot.cText; font.bold: true; font.pixelSize: fader.prominent ? 22 : 15 }
-        Text { anchors.right: parent.right; anchors.rightMargin: 14; y: 5; text: Math.round(fader.value * 100) + "%"; color: fader.prominent ? fader.accent : trackViewRoot.cText; font.bold: true; font.pixelSize: fader.prominent ? 38 : 24 }
-        Rectangle {
-            x: 20; y: parent.height - 33; width: parent.width - 40; height: 8; radius: 4; color: "#555555"
-            Rectangle { width: parent.width * Math.max(0, Math.min(1, fader.value)); height: 8; radius: 4; color: fader.accent }
-            Rectangle { x: (parent.width * Math.max(0, Math.min(1, fader.value))) - width/2; y: -9; width: 26; height: 26; radius: 13; color: "#EEEEEE"; border.color: fader.accent; border.width: 2 }
-        }
-        MouseArea {
-            objectName: fader.objectName + "Drag"
-            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 56
-            enabled: fader.enabled; preventStealing: true
-            function apply(x) { fader.edited(Math.max(0, Math.min(1, (x-20)/Math.max(1,width-40)))) }
-            onPressed: (mouse) => apply(mouse.x)
-            onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
-        }
-    }
-    component TouchButton: Button {
-        id: control
-        property color selectedColor: "#4FA3E3"
-        implicitHeight: 56; implicitWidth: 130
-        contentItem: Text { text: control.text; color: control.checked ? "#101010" : trackViewRoot.cText; font.pixelSize: 15; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
-        background: Rectangle { radius: 4; color: control.checked ? control.selectedColor : (control.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn); border.width: control.checked ? 2 : 1; border.color: control.checked ? Qt.lighter(control.selectedColor,1.3) : trackViewRoot.cLine; opacity: control.enabled ? 1 : 0.5 }
-    }
-    component FixtureIcon: Canvas {
-        property string kind: "head"
-        width: 28; height: 28
+    // Small vector icons: no font symbols that change between Windows and macOS.
+    component ControlIcon: Canvas {
+        property string kind: ""
+        property color ink: "#DDDDDD"
+        width: 22; height: 22
         onKindChanged: requestPaint()
+        onInkChanged: requestPaint()
         onPaint: {
-            var c=getContext("2d"); c.reset(); c.strokeStyle="#CCCCCC"; c.lineWidth=2
-            if (kind === "laser") { c.strokeRect(3,20,22,5); for(var i=0;i<4;i++){c.beginPath();c.moveTo(6+i*5,18);c.lineTo(3+i*7,3);c.stroke()} }
-            else if(kind === "strobe") { c.strokeRect(3,3,22,22); for(var j=0;j<4;j++){c.beginPath();c.arc(9+(j%2)*10,9+Math.floor(j/2)*10,2,0,6.283);c.stroke()} }
-            else { c.beginPath();c.arc(14,10,7,0,6.283);c.stroke();c.strokeRect(4,22,20,4);c.beginPath();c.moveTo(4,10);c.lineTo(4,18);c.lineTo(24,18);c.lineTo(24,10);c.stroke() }
+            var c = getContext("2d"); c.reset(); c.scale(width / 24, height / 24)
+            c.strokeStyle = ink; c.fillStyle = ink; c.lineWidth = 1.7
+            c.lineCap = "round"; c.lineJoin = "round"
+            function line(x,y,x2,y2) { c.beginPath(); c.moveTo(x,y); c.lineTo(x2,y2); c.stroke() }
+            function circle(x,y,r) { c.beginPath(); c.arc(x,y,r,0,Math.PI*2); c.stroke() }
+            if (kind === "calm") {
+                c.beginPath(); c.moveTo(5,19); c.bezierCurveTo(1,9,15,10,19,3); c.bezierCurveTo(22,16,13,21,5,19); c.stroke(); line(4,21,15,11)
+            } else if (kind === "hold") { c.fillRect(6,4,4,16); c.fillRect(14,4,4,16) }
+            else if (kind === "nextLook") { c.beginPath(); c.moveTo(4,4); c.lineTo(16,12); c.lineTo(4,20); c.closePath(); c.fill(); line(19,4,19,20) }
+            else if (kind === "blackout") { circle(12,12,9); line(6,18,18,6) }
+            else if (kind === "flash" || kind === "autoColour") {
+                circle(12,12,4)
+                for(var i=0;i<8;i++){var a=i*Math.PI/4;line(12+7*Math.cos(a),12+7*Math.sin(a),12+10*Math.cos(a),12+10*Math.sin(a))}
+            } else if (kind === "setupSwitch") {
+                circle(12,12,6); circle(12,12,2)
+                for(var j=0;j<8;j++){var b=j*Math.PI/4;line(12+6*Math.cos(b),12+6*Math.sin(b),12+9*Math.cos(b),12+9*Math.sin(b))}
+            } else if (kind === "showSwitch") { c.fillRect(5,5,14,14) }
+            else if (kind === "laser") { c.strokeRect(3,18,18,4); line(5,15,2,4); line(10,15,8,2); line(15,15,16,2); line(20,15,23,4) }
+            else if (kind === "strobe") { c.strokeRect(3,2,18,20); circle(8,7,2); circle(16,7,2); circle(8,17,2); circle(16,17,2) }
+            else if (kind === "eyes") { circle(12,6,5); circle(6,17,5); circle(18,17,5); circle(12,6,1.5); circle(6,17,1.5); circle(18,17,1.5) }
+            else if (kind === "animation") {
+                circle(12,12,2)
+                for(var k=0;k<4;k++){c.save();c.translate(12,12);c.rotate(k*Math.PI/2);c.beginPath();c.moveTo(0,-3);c.bezierCurveTo(-7,-13,6,-13,3,-3);c.stroke();c.restore()}
+            } else { circle(12,8,6); c.strokeRect(3,21,18,2); c.beginPath(); c.moveTo(3,8); c.lineTo(3,18); c.lineTo(21,18); c.lineTo(21,8); c.stroke() }
         }
     }
-    Rectangle {
-        id: headerPanel
-        anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 8
-        height: 76; color: trackViewRoot.cPanel; radius: 4
-        RowLayout {
-            anchors.fill: parent; anchors.margins: 10; spacing: 12
-            ColumnLayout {
-                Layout.fillWidth: true; spacing: 3
-                Text { Layout.fillWidth: true; elide: Text.ElideRight; text: trackManager && trackManager.title !== "" ? trackManager.title : qsTr("Waiting for music"); font.pixelSize: 21; font.bold: true; color: trackViewRoot.cText }
-                Text { Layout.fillWidth: true; elide: Text.ElideRight; text: (trackManager && trackManager.autoRun ? (trackEngine && trackEngine.fullAuto ? qsTr("FULL AUTO ACTIVE") : qsTr("SHOW ACTIVE")) : qsTr("SHOW STOPPED")) + "   ·   " + (trackManager && trackManager.connected ? (trackManager.linkStale ? qsTr("BLT STALE") : "BLT OK") : qsTr("NO BLT")) + "   ·   " + (trackManager ? trackManager.liveBpm : 0) + " BPM"; font.pixelSize: 14; color: trackManager && trackManager.autoRun ? "#7ED07E" : trackViewRoot.cDim }
-            }
-            TouchButton { objectName: "startScene"; implicitWidth: 158; text: "◉  " + qsTr("START SCENE"); checked: trackEngine ? trackEngine.startScene : false; selectedColor: "#E3B44F"; visible: trackManager && trackManager.roleMode; onClicked: if(trackEngine) trackEngine.startScene = !checked }
-            TouchButton { objectName: "showSwitch"; implicitWidth: 160; text: trackManager && trackManager.autoRun ? "■  " + qsTr("STOP SHOW") : "▶  " + qsTr("START SHOW"); checked: trackManager ? trackManager.autoRun : false; selectedColor: "#7ED07E"; onClicked: if(trackManager) trackManager.autoRun = !checked }
-            TouchButton { objectName: "setupSwitch"; implicitWidth: 110; text: "⚙  " + (trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")); onClicked: trackViewRoot.setupOpen = !trackViewRoot.setupOpen }
-        }
-    }
-    Rectangle {
-        id: actionPanel
-        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 8
-        height: 64; color: trackViewRoot.cPanel; radius: 4
-        visible: trackManager && trackEngine && trackManager.roleMode && !trackViewRoot.setupOpen
-        RowLayout { anchors.fill: parent; anchors.margins: 4; spacing: 10
-            // ---- calm: panic button. Base group only, one colour, no motion,
-            //      for 16 bars - then back to automatic. Tap again to end it.
-            TrackTile
+
+    ColumnLayout {
+        anchors.fill: parent; anchors.margins: 6; spacing: 6
+Rectangle
+        {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 56
+            Layout.maximumHeight: 56
+            color: trackViewRoot.cPanel
+            radius: 4
+
+            Row
             {
-                Layout.preferredWidth: 120
-                Layout.fillHeight: true
-                objectName: "calm"
-                label: (trackEngine && trackEngine.calmBarsLeft > 0)
-                       ? "≈  " + qsTr("CALM") + " " + trackEngine.calmBarsLeft : "≈  " + qsTr("CALM")
-                active: trackEngine ? trackEngine.calmBarsLeft > 0 : false
-                activeColor: "#4FA3E3"
-                onTapped: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
-            }
+                anchors.left: parent.left
+                anchors.right: statusRight.left
+                anchors.rightMargin: 14
+                anchors.leftMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 14
 
-            // ---- hold: freeze the look - colour, cast, moves - until released
-            TrackTile
-            {
-                Layout.preferredWidth: 120
-                Layout.fillHeight: true
-                objectName: "hold"
-                label: "Ⅱ  " + qsTr("HOLD")
-                active: trackEngine ? trackEngine.hold : false
-                activeColor: "#E3B44F"
-                onTapped: trackEngine.hold = !trackEngine.hold
-            }
-
-            // ---- next look: a new colour, cast and moves right now - the
-            //      DJ's "something else, please"
-            TrackTile
-            {
-                Layout.preferredWidth: 155
-                Layout.fillHeight: true
-                objectName: "nextLook"
-                label: "↻  " + qsTr("NEXT LOOK")
-                active: false
-                onTapped: trackEngine.next()
-            }
-
-            Item { Layout.fillWidth: true }
-            // ---- blackout: HOLD, and it latches if your finger leaves the
-            //      button (Tobias, 2026-09-22 - "ligesom det fungerer i
-            //      lightrider"). Press and hold: dark. Let go on the button:
-            //      light. Slide off the button and let go: it stays dark
-            //      until you tap it again. Which is the useful shape - you
-            //      can hold a blackout through a breakdown without your
-            //      thumb having to stay perfectly still, and you can park it.
-            //
-            //      The engine keeps following the track underneath the
-            //      whole time, so the lights come back on the right look.
-            Rectangle
-            {
-                id: blackoutTile
-                objectName: "blackout"
-                property bool armed: false          // this press is the one holding it
-
-                // TrackTile's own look, value for value (radius 3, #3A3A3A,
-                // border #555555, 13 px, bold and dark text when active), so
-                // the row is unchanged to the eye and only the BEHAVIOUR is
-                // different. It cannot BE a TrackTile: that one has a
-                // TapHandler and no press/release of its own.
-                Layout.preferredWidth: 165
-                Layout.fillHeight: true
-                radius: 3
-                color: (trackEngine && trackEngine.blackout) ? "#B03030" : "#3A3A3A"
-                border.width: 1
-                border.color: (trackEngine && trackEngine.blackout)
-                              ? Qt.lighter("#B03030", 1.3) : "#555555"
-
-                Text
+                Rectangle
                 {
-                    anchors.centerIn: parent
-                    text: "■  " + qsTr("BLACKOUT")
-                    color: (trackEngine && trackEngine.blackout) ? "#101010" : "#EEEEEE"
-                    font.bold: trackEngine ? trackEngine.blackout : false
-                    font.pixelSize: 13
-                }
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 120
+                    height: 48
+                    radius: 5
+                    color: trackViewRoot.markerColor(trackViewRoot.liveState)
+                    border.width: trackManager && trackManager.overrideState !== "" ? 3 : 0
+                    border.color: "#FFFFFF"
 
-                MouseArea
-                {
-                    anchors.fill: parent
-                    // do not let a Flickable under this steal the press: a
-                    // stolen grab would fire onCanceled and leave the room
-                    // dark with nothing holding it
-                    preventStealing: true
-                    onPressed:
+                    Text
                     {
-                        if (!trackEngine)
-                            return
-                        if (trackEngine.blackout)
-                        {
-                            // latched on: this tap lets it go
-                            trackEngine.blackout = false
-                            blackoutTile.armed = false
-                        }
-                        else
-                        {
-                            trackEngine.blackout = true
-                            blackoutTile.armed = true
-                        }
+                        anchors.centerIn: parent
+                        text: trackViewRoot.liveState.toUpperCase()
+                        color: "#000000"
+                        font.bold: true
+                        font.pixelSize: 20
                     }
-                    onReleased: (mouse) =>
+                }
+
+                Column
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 3
+
+                    Text
                     {
-                        if (!trackEngine || !blackoutTile.armed)
-                            return
-                        blackoutTile.armed = false
-                        // released ON the button: a momentary hold, let go.
-                        // released off it: leave it latched.
-                        if (mouse.x >= 0 && mouse.y >= 0
-                            && mouse.x <= width && mouse.y <= height)
-                            trackEngine.blackout = false
+                        width: Math.max(0, parent.parent.width - 134)
+                        elide: Text.ElideRight
+                        text: trackManager && trackManager.title !== ""
+                              ? trackManager.title : qsTr("No track loaded")
+                        color: trackViewRoot.cText
+                        font.pixelSize: 18
                     }
-                    // the grab taken away from us counts as "finger left the
-                    // button": latched, not released
-                    onCanceled: blackoutTile.armed = false
+                    Text
+                    {
+                        property var nm: trackViewRoot.nextMarker()
+                        text:
+                        {
+                            if (nm === null) return qsTr("No further points")
+                            var d = nm.beat - trackViewRoot.currentBeat
+                            return qsTr("Next") + ": " + nm.type.toUpperCase()
+                                   + " " + qsTr("in") + " " + d + " " + qsTr("beats")
+                                   + "  (" + Math.round(d / 4) + " " + qsTr("bars") + ")"
+                        }
+                        color: nm === null ? trackViewRoot.cDim
+                                           : trackViewRoot.markerColor(nm.type)
+                        font.pixelSize: 15
+                    }
                 }
             }
-            // ---- flash: hold to strobe
-            Rectangle
+
+            Row
             {
-                objectName: "flash"
-                Layout.preferredWidth: 190
-                Layout.fillHeight: true
-                radius: 4
-                color: (trackEngine && trackEngine.flashing) ? "#FFFFFF" : "#E36B6B"
+                id: statusRight
+                anchors.right: parent.right
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 14
 
-                Text
+                Column
                 {
-                    anchors.centerIn: parent
-                    text: "ϟ  " + qsTr("FLASH WHITE") + "\n" + qsTr("Hold to flash")
-                    horizontalAlignment: Text.AlignHCenter
-                    color: "#101010"
-                    font.bold: true
-                    font.pixelSize: 16
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 3
+
+                    Text
+                    {
+                        text: trackViewRoot.fmtTime(trackManager ? trackManager.positionMs : 0)
+                              + " / "
+                              + trackViewRoot.fmtTime(trackManager ? trackManager.durationMs : 0)
+                        color: trackViewRoot.cText
+                        font.pixelSize: 17
+                    }
+                    Text
+                    {
+                        text: (trackManager && trackManager.playing
+                               ? qsTr("PLAYING") : qsTr("PAUSED"))
+                              + "   " + (trackManager ? trackManager.liveBpm : 0) + " BPM"
+                              + "   " + (trackManager && trackManager.connected
+                                         ? qsTr("BLT ok") : qsTr("no BLT"))
+                        color: trackManager && trackManager.playing ? "#3FBF3F"
+                                                                    : trackViewRoot.cDim
+                        font.pixelSize: 14
+                    }
                 }
 
-                MouseArea
+Button
                 {
-                    anchors.fill: parent
-                    onPressed: trackEngine.setFlash(true)
-                    onReleased: trackEngine.setFlash(false)
-                    onCanceled: trackEngine.setFlash(false)
+                    width: 160
+                    height: 48
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: trackManager ? trackManager.roleMode : false
+                    checked: trackEngine ? trackEngine.startScene : false
+                    objectName: "startScene"
+                    text: qsTr("START SCENE")
+                    onClicked: if (trackEngine) trackEngine.startScene = !checked
+
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: parent.checked ? "#101010" : trackViewRoot.cText
+                        font.bold: true
+                        font.pixelSize: 15
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle
+                    {
+                        radius: 5
+                        color: parent.checked ? "#E3B44F" : trackViewRoot.cBtn
+                        border.width: parent.checked ? 3 : 1
+                        border.color: parent.checked ? "#E3B44F" : trackViewRoot.cLine
+                    }
+                }
+Button
+                {
+                    width: 196
+                    height: 48
+                    anchors.verticalCenter: parent.verticalCenter
+                    checked: trackManager ? trackManager.autoRun : false
+                    objectName: "showSwitch"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "showSwitch" }
+                    text: checked ? qsTr("SHOW ON") : qsTr("SHOW OFF")
+                    onClicked: trackManager.autoRun = !checked
+
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: parent.checked ? "#0A2A0A" : "#FFC8C8"
+                        font.bold: true
+                        font.pixelSize: 22
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle
+                    {
+                        radius: 5
+                        color: parent.checked ? "#3FBF3F" : "#4A1E1E"
+                        border.width: 3
+                        border.color: parent.checked ? "#9BE89B" : "#B03030"
+                    }
+                }
+                Button
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 110
+                    height: 48
+                    objectName: "setupSwitch"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "setupSwitch" }
+                    text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
+                    onClicked: trackViewRoot.setupOpen = !trackViewRoot.setupOpen
+
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: trackViewRoot.cText
+                        font.bold: true
+                        font.pixelSize: 15
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle
+                    {
+                        radius: 5
+                        color: parent.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn
+                        border.width: 1
+                        border.color: trackViewRoot.cLine
+                    }
                 }
             }
-
         }
-    }
-            RowLayout {
-                id: sectionPanel
-                anchors.top: headerPanel.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 8
-                height: 56; spacing: 8
-                visible: !trackViewRoot.setupOpen
-                Repeater { model: trackViewRoot.states
-                    TouchButton { objectName: "section:"+modelData; Layout.fillWidth: true; text: modelData.toUpperCase(); checked: trackManager ? trackManager.overrideState === modelData : false; selectedColor: trackViewRoot.markerColor(modelData); onClicked: if(trackManager) trackManager.overrideState = checked ? "" : modelData }
-                }
-                TouchButton { objectName: "followMusic"; implicitWidth: 180; text: "↻  " + qsTr("FOLLOW MUSIC"); checked: trackManager ? trackManager.overrideState === "" : true; onClicked: if(trackManager) trackManager.overrideState = "" }
-            }
-    Flickable {
-        id: bodyScroll
-        objectName: "bodyScroll"
-        anchors.top: sectionPanel.visible ? sectionPanel.bottom : headerPanel.bottom; anchors.bottom: actionPanel.visible ? actionPanel.top : parent.bottom
-        anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 8
-        clip: true; contentWidth: width; contentHeight: bodyLayout.height; boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar { }
-        ColumnLayout {
-            id: bodyLayout
-            width: bodyScroll.width
-            height: Math.max(bodyScroll.height, implicitHeight)
-            spacing: 8
-            RowLayout {
-                Layout.fillWidth: true; Layout.preferredHeight: 26
-                Text { Layout.fillWidth: true; elide: Text.ElideRight; property var nm: trackViewRoot.nextMarker(); text: trackManager && trackManager.beatCount > 0 ? trackViewRoot.liveState.toUpperCase() + (nm ? "   →   " + nm.type.toUpperCase() + " " + qsTr("IN") + " " + Math.ceil((nm.beat-trackViewRoot.currentBeat)/4) + " " + qsTr("BARS") : "") : qsTr("Track data appears here when music is loaded"); color: "#E3B44F"; font.pixelSize: 16; font.bold: true }
-                Text { text: trackViewRoot.fmtTime(trackManager ? trackManager.positionMs : 0) + " / " + trackViewRoot.fmtTime(trackManager ? trackManager.durationMs : 0); color: trackViewRoot.cDim; font.pixelSize: 16 }
-            }
-        // =============================================== waveform strip
-        Rectangle
+Rectangle
         {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumHeight: 330
-            Layout.preferredHeight: Math.max(330, bodyScroll.height * 0.34)
+            Layout.minimumHeight: trackViewRoot.compactLayout ? 130 : 180
+            Layout.preferredHeight: trackViewRoot.height * 0.20
+            Layout.maximumHeight: Math.max(130, trackViewRoot.height * 0.22)
             color: "#101010"
             border.width: 1
             border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cLine
@@ -410,7 +377,7 @@ Rectangle
                 id: wfOverlay
                 anchors.fill: parent
                 anchors.margins: 1
-                anchors.bottomMargin: 116
+                anchors.bottomMargin: 56
                 z: 1
                 renderStrategy: Canvas.Threaded
 
@@ -492,7 +459,7 @@ Rectangle
 
                     // section bands at the top, with the analysed energy
                     var sorted = sortedMarkers()
-                    ctx.font = "bold 13px sans-serif"
+                    ctx.font = "bold 11px sans-serif"
                     ctx.textBaseline = "top"
                     for (var j = 0; j < sorted.length; j++)
                     {
@@ -531,7 +498,7 @@ Rectangle
                         }
                         if (trackEngine && trackEngine.currentColour !== "")
                         {
-                            var c = Qt.color(trackViewRoot.swatch(trackEngine.currentColour))
+                            var c = Qt.color(liveRow.swatch(trackEngine.currentColour))
                             ctx.fillStyle = Qt.rgba(c.r, c.g, c.b, 0.10)
                             ctx.fillRect(beatX(secStart, first, count), 7, beatX(cur, first, count) - beatX(secStart, first, count), h - 7)
                         }
@@ -588,16 +555,12 @@ Rectangle
             // ---- flag tools: a flag on the bar the track is at, the selected
             //      flag retyped or deleted. What the operator sets is the truth -
             //      it goes to BLT's cache as manual and teaches the second pass.
-            Flickable
+            Item
             {
-                id: flagScroll
-                contentWidth: flagTools.width
-                clip: true
-                flickableDirection: Flickable.HorizontalFlick
                 anchors.left: parent.left
                 anchors.bottom: parent.bottom
                 anchors.margins: 8
-                width: parent.width - 16
+                width: flagTools.width
                 height: flagTools.height
                 z: 3
                 // ... and out of the way while a verdict is being aimed. The
@@ -611,6 +574,8 @@ Rectangle
 
                 // a press that misses a tile must not reach the waveform
                 // underneath and clear the selection the tiles depend on
+                MouseArea { anchors.fill: parent }
+
                 Row
                 {
                     id: flagTools
@@ -626,8 +591,8 @@ Rectangle
                         TrackTile
                         {
                             objectName: "addFlag:"+modelData
-                            width: 100
-                            height: 48
+                            width: 74
+                            height: 44
                             label: "+ " + modelData.substring(0, 5).toUpperCase()
                             activeColor: trackViewRoot.markerColor(modelData)
                             active: true                  // in its section colour, like the SECTION row
@@ -641,7 +606,7 @@ Rectangle
                     TrackTile
                     {
                         width: 84
-                        height: 48
+                        height: 44
                         objectName: "retypeFlag"
                         label: qsTr("RETYPE")
                         // greyed rather than hidden: hiding these re-flowed the
@@ -662,7 +627,7 @@ Rectangle
                     TrackTile
                     {
                         width: 84
-                        height: 48
+                        height: 44
                         objectName: "deleteFlag"
                         label: qsTr("DELETE")
                         // greyed rather than hidden: hiding these re-flowed the
@@ -681,7 +646,7 @@ Rectangle
                     TrackTile
                     {
                         width: 88
-                        height: 48
+                        height: 44
                         objectName: "undoFlag"
                         label: qsTr("UNDO")
                         visible: trackManager ? trackManager.canUndoMarkers : false
@@ -709,7 +674,6 @@ Rectangle
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: 8
-                anchors.bottomMargin: 64
                 z: 3
                 visible: trackManager && trackEngine && trackManager.beatCount > 0
                          && !trackViewRoot.setupOpen
@@ -741,7 +705,7 @@ Rectangle
                             id: thumb
                             objectName: "rating:"+modelData
                             width: 62
-                            height: 48
+                            height: 44
                             radius: 6
                             // a press flashes the tile for a moment: the only
                             // receipt there is, since nothing else changes
@@ -860,7 +824,7 @@ Rectangle
                         TrackTile
                         {
                             width: blameRow.cellW
-                            height: 48
+                            height: 44
                             label: modelData.group
                             active: true
                             activeColor: verdictTools.blaming > 0 ? "#3E7E4E" : "#8E3A3A"
@@ -878,7 +842,7 @@ Rectangle
                     TrackTile
                     {
                         width: 44
-                        height: 48
+                        height: 44
                         label: "\u00d7"
                         opacity: 0.7
                         onTapped: { verdictTools.blaming = 0; blameTimeout.stop() }
@@ -899,7 +863,7 @@ Rectangle
                 id: wfCanvas
                 anchors.fill: parent
                 anchors.margins: 1
-                anchors.bottomMargin: 116
+                anchors.bottomMargin: 56
                 renderStrategy: Canvas.Threaded
 
                 onPaint:
@@ -918,7 +882,7 @@ Rectangle
                     var vc = trackViewRoot.viewCount()
                     var px = w / vc
                     var wf = trackManager.waveform
-                    var lane = 60
+                    var lane = Math.min(48, Math.round(h * 0.32))
                     var base = h - 4
 
                     function xOf(beat) { return (beat - vf) * px }
@@ -968,7 +932,7 @@ Rectangle
                         ctx.lineTo(mx, base)
                         ctx.stroke()
 
-                        ctx.font = "bold 13px sans-serif"
+                        ctx.font = "bold 11px sans-serif"
                         var tw = ctx.measureText(label).width + 10
                         var bx = Math.min(Math.max(mx, 0), w - tw)
 
@@ -1018,10 +982,9 @@ Rectangle
             {
                 id: wfArea
                 objectName: "waveformInput"
-                preventStealing: pressIndex >= 0
                 anchors.fill: parent
                 anchors.margins: 1
-                anchors.bottomMargin: 116          // the canvases are inset by one: pick where we draw
+                anchors.bottomMargin: 56          // the canvases are inset by one: pick where we draw
                 enabled: trackViewRoot.beatCount > 0
 
                 // A finger on a flag: press = select it (RETYPE / DELETE appear),
@@ -1126,9 +1089,428 @@ Rectangle
                 font.pixelSize: 15
             }
         }
+Rectangle
+        {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 60
+            Layout.minimumHeight: 60
+            Layout.maximumHeight: 60
+            color: trackViewRoot.cPanel
+            radius: 4
 
-        // =============================================== warnings
-        Rectangle
+            RowLayout
+            {
+                anchors.fill: parent
+                anchors.margins: 6
+                spacing: 6
+
+                Text
+                {
+                    Layout.preferredWidth: 90
+                    text: qsTr("SECTION")
+                    color: trackViewRoot.cDim
+                    font.bold: true
+                    font.pixelSize: 14
+                }
+
+                Repeater
+                {
+                    model: trackViewRoot.states
+
+                    Button
+                    {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        objectName: "section:"+modelData
+                        // not checkable: a click would write 'checked' and
+                        // break the binding, leaving two sections lit
+                        checked: trackManager ? trackManager.overrideState === modelData : false
+                        onClicked: trackManager.overrideState =
+                                   (trackManager.overrideState === modelData) ? "" : modelData
+
+                        contentItem: Text
+                        {
+                            text: modelData.toUpperCase()
+                            color: (parent.checked || trackViewRoot.liveState === modelData)
+                                   ? "#000000" : trackViewRoot.cText
+                            font.bold: true
+                            font.pixelSize: 19
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle
+                        {
+                            radius: 5
+                            color: parent.checked
+                                   ? trackViewRoot.markerColor(modelData)
+                                   : (trackViewRoot.liveState === modelData
+                                      ? Qt.darker(trackViewRoot.markerColor(modelData), 1.15)
+                                      : trackViewRoot.cBtn)
+                            border.width: parent.checked ? 3 : 1
+                            border.color: parent.checked ? "#FFFFFF" : trackViewRoot.cLine
+                        }
+                    }
+                }
+
+                Button
+                {
+                    Layout.preferredWidth: 95
+                    Layout.fillHeight: true
+                    objectName: "followMusic"
+                    text: qsTr("FOLLOW")
+                    enabled: trackManager ? trackManager.overrideState !== "" : false
+                    onClicked: trackManager.overrideState = ""
+
+                    contentItem: Text
+                    {
+                        text: parent.text
+                        color: parent.enabled ? trackViewRoot.cText : "#666666"
+                        font.bold: true
+                        font.pixelSize: 15
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle
+                    {
+                        radius: 5
+                        color: parent.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn
+                        border.width: 1
+                        border.color: trackViewRoot.cLine
+                    }
+                }
+
+                // the evening's opening picture: the START scene on its
+                // own, engine standing still. Switching the show on
+                // takes it off again
+
+
+                // the show switch: the biggest thing in the row, red
+                // when the engine is not running, green when it is
+
+            }
+        }
+RowLayout {
+            id: dialsRow
+            Layout.fillWidth: true; Layout.fillHeight: true
+            Layout.minimumHeight: 128
+            Layout.preferredHeight: trackViewRoot.height * 0.20
+            Layout.maximumHeight: Math.max(104, trackViewRoot.height * 0.23)
+            spacing: 10
+            visible: trackManager && trackEngine && trackManager.roleMode && !trackViewRoot.setupOpen
+Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                Layout.preferredWidth: dialsRow.width * 0.65
+                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
+                ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 6
+                    Item { Layout.fillWidth: true; Layout.fillHeight: true
+                        Text { anchors.left: parent.left; anchors.top: parent.top; text: "ENERGY"; color: trackViewRoot.cText; font.pixelSize: trackViewRoot.compactLayout ? 20 : 28; font.bold: true }
+                        Text { anchors.centerIn: parent; text: (trackManager ? trackManager.energyTrim : 0) + "%"; color: "#E3B44F"; font.pixelSize: trackViewRoot.compactLayout ? 32 : 62; font.bold: true }
+                    }
+Rectangle
+            {
+                Layout.fillWidth: true
+                Layout.minimumHeight: trackViewRoot.touchH * 1.25
+                Layout.preferredHeight: trackViewRoot.touchH * 1.25
+                Layout.maximumHeight: trackViewRoot.touchH * 1.25
+                Layout.fillHeight: false
+                radius: 4
+                color: "#1B1B1B"
+                border.width: 1
+                border.color: "#555555"
+
+                objectName: "energy"
+                property real trim: trackManager ? Math.min(1, trackManager.energyTrim / 100) : 0.5
+
+                Rectangle
+                {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 3
+                    width: (parent.width - 6) * parent.trim
+                    radius: 3
+                    color: "#E3B44F"
+                }
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("ENERGY") + "  " + (trackManager ? Math.round(Math.min(100, trackManager.energyTrim)) : 50) + "%"
+                    color: "#EEEEEE"
+                    font.bold: true
+                    font.pixelSize: 15
+                }
+
+                MouseArea
+                {
+                    objectName: "energyDrag"
+                    anchors.fill: parent
+                    function apply(x)
+                    {
+                        // the fill is inset three pixels: read the finger the same
+                        // way, or full is unreachable at the right edge
+                        var v = Math.round(Math.max(0, Math.min(1, (x - 3) / (width - 6))) * 100)
+                        if (trackManager) trackManager.energyTrim = v
+                    }
+                    // a hand on the bar takes over from the clock - also when it
+                    // lands exactly where the clock already put it (the setter
+                    // only infers a touch from a CHANGE of value)
+                    onPressed: (mouse) => { if (trackEngine && trackEngine.roomAuto) trackEngine.roomAuto = false; apply(mouse.x) }
+                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                }
+            }
+                }
+            }
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                Layout.preferredWidth: dialsRow.width * 0.35
+                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
+                ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 6
+                    Text { text: "MASTER"; color: trackViewRoot.cText; font.pixelSize: 20; font.bold: true; visible: !trackViewRoot.compactLayout }
+                    Item { Layout.fillHeight: true; visible: !trackViewRoot.compactLayout }
+Rectangle
+            {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 50
+                Layout.maximumHeight: 76
+                radius: 4
+                color: "#1B1B1B"
+                border.width: 1
+                border.color: "#555555"
+
+                Rectangle
+                {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 3
+                    width: (parent.width - 6) * (trackEngine ? trackEngine.master : 1)
+                    radius: 3
+                    color: "#4FA3E3"
+                }
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("MASTER") + "  " + Math.round((trackEngine ? trackEngine.master : 1) * 100) + "%"
+                    color: "#EEEEEE"
+                    font.bold: true
+                    font.pixelSize: 15
+                }
+
+                MouseArea
+                {
+                    objectName: "masterDrag"
+                    anchors.fill: parent
+                    function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
+                    onPressed: (mouse) => apply(mouse.x)
+                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                }
+            }
+RowLayout
+            {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 48
+                Layout.maximumHeight: 56
+                spacing: 6
+
+                Text
+                {
+                    Layout.alignment: Qt.AlignVCenter
+                    text: qsTr("SPEED")
+                    color: "#9A9A9A"
+                    font.bold: true
+                    font.pixelSize: 13
+                }
+
+                Repeater
+                {
+                    model: [ "\u00bd\u00d7", "1\u00d7", "2\u00d7" ]
+
+                    TrackTile
+                    {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        objectName: "speed"+index
+                        label: modelData
+                        active: trackEngine ? trackEngine.speed === index - 1 : index === 1
+                        activeColor: [ "#5A7A9A", "#4FA3E3", "#E3B44F" ][index]
+                        onTapped: trackEngine.speed = index - 1
+                    }
+                }
+            }
+
+                }
+            }
+        }
+RowLayout {
+            id: liveRow
+            Layout.fillWidth: true; Layout.minimumHeight: trackViewRoot.compactLayout ? 88 : 112; Layout.preferredHeight: trackViewRoot.compactLayout ? 88 : 112
+            Layout.maximumHeight: trackViewRoot.compactLayout ? 88 : 112
+            spacing: 10
+            visible: trackManager && trackEngine && trackManager.roleMode && !trackViewRoot.setupOpen
+            function swatch(name)
+            {
+                switch (name)
+                {
+                case "red":     return "#E03030"
+                case "green":   return "#30C050"
+                case "blue":    return "#3060E0"
+                case "cyan":    return "#30C0D0"
+                case "magenta": return "#D040C0"
+                case "yellow":  return "#E0D030"
+                case "orange":  return "#E08030"
+                case "amber":   return "#E0A040"
+                case "uv":      return "#7030C0"
+                case "white":   return "#E8E8E8"
+                }
+                return "#4A4A4A"
+            }
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: liveRow.width * 0.65
+                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
+                Text { x: 12; y: 8; text: "COLOUR"; color: trackViewRoot.cText; font.pixelSize: trackViewRoot.compactLayout ? 16 : 20 }
+Row
+            {
+                id: colourRow
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 10
+                height: 48
+                spacing: 6
+
+                property int cells: 1 + (trackEngine ? trackEngine.palette.length : 0)
+                property real cellW: Math.max(48, (width - spacing * (cells - 1)) / cells)
+
+                TrackTile
+                {
+                    width: colourRow.cellW
+                    height: colourRow.height
+                    objectName: "autoColour"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; ink: "#101010";width: 16; height: 16; kind: "autoColour" }
+                    label: qsTr("AUTO")
+                    active: trackEngine ? trackEngine.colourOverride === "" : true
+                    activeColor: "#7ED07E"
+                    onTapped: trackEngine.colourOverride = ""
+                }
+
+                Repeater
+                {
+                    model: trackEngine ? trackEngine.palette : []
+
+                    // lit = locked to this colour. A ring only = this is what
+                    // AUTO happens to be running right now.
+                    TrackTile
+                    {
+                        width: colourRow.cellW
+                        height: colourRow.height
+                        objectName: "colour:"+modelData
+                        label: modelData.toUpperCase()
+                        activeColor: liveRow.swatch(modelData)
+                        active: trackEngine ? trackEngine.colourOverride === modelData : false
+                        border.width: (trackEngine && trackEngine.colourOverride === ""
+                                       && trackEngine.currentColour === modelData) ? 3 : 1
+                        border.color: (trackEngine && trackEngine.currentColour === modelData)
+                                      ? liveRow.swatch(modelData) : "#555555"
+                        onTapped: trackEngine.colourOverride =
+                                      (trackEngine.colourOverride === modelData) ? "" : modelData
+                    }
+                }
+            }
+            }
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: liveRow.width * 0.35
+                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
+                Text { x: 12; y: 8; text: "INTERVENTION"; color: trackViewRoot.cText; font.pixelSize: trackViewRoot.compactLayout ? 16 : 20 }
+                RowLayout { anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 10; height: 48; spacing: 8
+TrackTile
+            {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                objectName: "calm"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "calm" }
+                label: (trackEngine && trackEngine.calmBarsLeft > 0)
+                       ? qsTr("CALM") + " " + trackEngine.calmBarsLeft : qsTr("CALM")
+                active: trackEngine ? trackEngine.calmBarsLeft > 0 : false
+                activeColor: "#4FA3E3"
+                onTapped: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
+            }
+TrackTile
+            {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                objectName: "hold"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "hold" }
+                label: qsTr("HOLD")
+                active: trackEngine ? trackEngine.hold : false
+                activeColor: "#E3B44F"
+                onTapped: trackEngine.hold = !trackEngine.hold
+            }
+TrackTile
+            {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                objectName: "nextLook"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "nextLook" }
+                label: qsTr("NEXT LOOK")
+                active: false
+                onTapped: trackEngine.next()
+            }
+                }
+            }
+        }
+Item
+            {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 28
+                Layout.maximumHeight: 28
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
+
+                Column
+                {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                spacing: 2
+
+                Text
+                {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text: trackEngine ? trackEngine.report.split("  |  ")[0] : ""
+                    color: "#CCCCCC"
+                    font.pixelSize: 14
+                    font.bold: true
+                }
+                Text
+                {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text:
+                    {
+                        if (!trackEngine || !trackManager) return ""
+                        var parts = trackEngine.report.split("  |  ")
+                        var colour = parts.length > 1 ? parts[1] : ""
+                        var state = parts.length > 2 ? parts[2] : ""
+                        // the next section, in bars
+                        var cur = trackManager.currentBeat
+                        var mk = trackManager.markers
+                        var next = null
+                        for (var i = 0; i < mk.length; i++)
+                            if (mk[i].beat > cur && (next === null || mk[i].beat < next.beat)) next = mk[i]
+                        var count = (next && trackManager.playing) ? "   \u2192 " + next.type.toUpperCase() + " " + Math.ceil((next.beat - cur) / 4) : ""
+                        // the other deck, analysed ahead of time
+                        var nxt = (trackManager.nextTitle !== undefined && trackManager.nextTitle !== "")
+                                  ? "     " + qsTr("NEXT") + ": " + trackManager.nextTitle
+                                    + (trackManager.nextFirstDrop > 0 ? " (" + qsTr("drop at bar") + " " + trackManager.nextFirstDrop + ")" : "")
+                                  : ""
+                        return colour + "   \u00b7   " + state + count + nxt
+                    }
+                    color: "#8A8A8A"
+                    font.pixelSize: 12
+                }
+                }
+            }
+Rectangle
         {
             Layout.fillWidth: true
             Layout.preferredHeight: visible ? 30 : 0
@@ -1160,79 +1542,262 @@ Rectangle
                 }
             }
         }
+Rectangle
+        {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.preferredHeight: trackViewRoot.height * 0.20
+            Layout.maximumHeight: Math.max(190, trackViewRoot.height * 0.23)
+            Layout.minimumHeight: trackViewRoot.compactLayout ? 190 : 210
+            color: trackViewRoot.cPanel
+            radius: 4
 
-
-            RowLayout {
-                id: dialsRow
-                Layout.fillWidth: true; Layout.preferredHeight: 134; spacing: 10
-                visible: trackManager && trackEngine && trackManager.roleMode
-                TouchFader { objectName: "energy"; Layout.fillWidth: true; Layout.preferredWidth: bodyScroll.width * 0.64; Layout.fillHeight: true; caption: "ϟ  ENERGY"; prominent: true; accent: "#E3B44F"; value: trackManager ? trackManager.energyTrim/100 : 0; onEdited: (amount) => { if(trackEngine && trackEngine.roomAuto) trackEngine.roomAuto=false; if(trackManager) trackManager.energyTrim=Math.round(amount*100) } }
-                ColumnLayout { Layout.fillWidth: true; Layout.preferredWidth: bodyScroll.width * 0.36; spacing: 4
-                    TouchFader { objectName: "master"; Layout.fillWidth: true; Layout.preferredHeight: 78; caption: qsTr("MASTER"); value: trackEngine ? trackEngine.master : 1; onEdited: (amount) => { if(trackEngine) trackEngine.master=amount } }
-                    RowLayout { Layout.fillWidth: true; spacing: 6
-                        Text { text: "SPEED"; color: trackViewRoot.cDim; font.pixelSize: 13 }
-                        Repeater { model: ["½×", "1×", "2×"]
-                            TouchButton { objectName: "speed"+index; Layout.fillWidth: true; implicitWidth: 62; implicitHeight: 52; text: modelData; checked: trackEngine ? trackEngine.speed === index-1 : index===1; onClicked: if(trackEngine) trackEngine.speed=index-1 }
-                        }
-                    }
-                }
-            }
-            Flickable {
-                id: paletteScroll
-                Layout.fillWidth: true; Layout.preferredHeight: 62
-                contentWidth: paletteButtons.width; clip: true; flickableDirection: Flickable.HorizontalFlick
-                visible: trackManager && trackEngine && trackManager.roleMode
-                Row { id: paletteButtons; spacing: 8
-                    TouchButton { objectName: "autoColour"; width: 165; height: 58; text: "↻  " + qsTr("AUTO COLOUR"); checked: trackEngine ? trackEngine.colourOverride === "" : true; selectedColor: "#7ED07E"; onClicked: if(trackEngine) trackEngine.colourOverride="" }
-                    Repeater { model: trackEngine ? trackEngine.palette : []
-                        TouchButton { objectName: "colour:"+modelData; width: 108; height: 58; text: "   " + modelData.toUpperCase(); checked: trackEngine ? trackEngine.colourOverride === modelData : false; selectedColor: modelData === "uv" ? "#7030C0" : modelData; onClicked: if(trackEngine) trackEngine.colourOverride=checked ? "" : modelData
-                            Rectangle { x: 9; anchors.verticalCenter: parent.verticalCenter; width: 12; height: 24; radius: 3; color: modelData === "uv" ? "#7030C0" : modelData; border.color: "#CCCCCC" }
-                        }
-                    }
-                }
-            }
-            Text { Layout.fillWidth: true; elide: Text.ElideRight; text: (trackEngine ? trackEngine.report : "") + (trackManager && trackManager.nextTitle !== "" ? "    NEXT: " + trackManager.nextTitle + (trackManager.nextFirstDrop > 0 ? " · DROP " + trackManager.nextFirstDrop : "") : ""); color: trackViewRoot.cDim; font.pixelSize: 13 }
-
-            Rectangle {
-                Layout.fillWidth: true; Layout.preferredHeight: 210; color: trackViewRoot.cPanel; radius: 4
+            Text { x: 12; y: 6; text: "LIGHT GROUPS"; color: trackViewRoot.cText; font.pixelSize: 18 }
+            // The cast: the groups side by side across the panel, exactly
+            // where they have always been - but each one's fader now fills
+            // from the LEFT (0 %) to the RIGHT (100 %), the way MASTER and
+            // ENERGY do, instead of from the bottom up. The DJ's trim sits on
+            // top of everything the engine does, and the switch in the top
+            // right corner leaves a group out for the night.
+            // A group whose dimmer is a switch (an animation laser) gets no
+            // fader at all: the whole row is its on/off button, because a
+            // fader that only has two positions is a lie.
+            // (CAST_V10_MD_GUARD)
+            Column
+            {
+                id: castPanel
+                anchors.fill: parent
+                anchors.margins: 6
+                anchors.topMargin: 30
+                spacing: 4
                 visible: !trackViewRoot.setupOpen
-                Flickable {
-                    id: groupScroll
-                    objectName: "groupScroll"
-                    anchors.fill: parent; anchors.margins: 6; clip: true
-                    contentWidth: castRow.width; flickableDirection: Flickable.HorizontalFlick
-                    Row { id: castRow; spacing: 8; height: groupScroll.height
-                        property int n: trackEngine ? Math.max(1,trackEngine.groups.length) : 1
-                        Repeater { model: trackEngine ? trackEngine.groups : []
-                            Rectangle {
-                                id: castTile
-                                property var md: modelData ? modelData : ({key:"",enabled:true,base:false,switchOnly:false})
-                                property bool off: !md.enabled
-                                property bool lit: trackEngine ? trackEngine.cast.indexOf(md.key)>=0 : false
-                                property real trim: trackEngine && trackEngine.trims[md.key] !== undefined ? trackEngine.trims[md.key] : 1
-                                width: Math.max(225,(groupScroll.width-(castRow.n-1)*8)/castRow.n); height: castRow.height
-                                color: off ? "#1B1B1B" : "#303030"; radius: 5; border.width: md.base ? 2 : 1; border.color: md.base ? "#4FA3E3" : trackViewRoot.cLine
-                                FixtureIcon { x: 12; y: 16; kind: md.lasers ? "laser" : md.strobes ? "strobe" : "head" }
-                                Text { x: 48; y: 12; width: parent.width-60; height: 40; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; text: md.key; color: trackViewRoot.cText; font.pixelSize: 16; font.bold: true }
-                                Text { x: 12; y: 68; width: parent.width-114; elide: Text.ElideRight; text: (castTile.off ? qsTr("DISABLED") : castTile.lit ? qsTr("ACTIVE NOW") : qsTr("READY")); color: castTile.off ? trackViewRoot.cDim : castTile.lit ? "#7ED07E" : "#BBBBBB"; font.pixelSize: 12 }
-                                TouchButton { objectName: "groupSwitch:"+md.key; anchors.right: parent.right; anchors.rightMargin: 10; y: 52; width: 86; height: 52; implicitWidth: 86; text: md.base ? "BASE" : (castTile.off ? "○  OFF" : "●  ON"); enabled: !md.base; checked: !castTile.off; selectedColor: "#7ED07E"; onClicked: if(trackEngine) trackEngine.setGroupEnabled(md.key,castTile.off) }
-                                TouchFader { objectName: "groupTrim:"+md.key; x: 8; anchors.bottom: parent.bottom; anchors.bottomMargin: 6; width: parent.width-16; height: 76; caption: qsTr("LEVEL"); visible: !md.switchOnly; enabled: !castTile.off; opacity: enabled ? 1 : 0.5; value: castTile.trim; onEdited: (amount) => { if(trackEngine) trackEngine.setGroupTrim(md.key,amount) } }
-                                Text { visible: md.switchOnly; anchors.bottom: parent.bottom; anchors.bottomMargin: 28; x: 12; text: qsTr("ON / OFF CONTROL"); color: trackViewRoot.cDim; font.pixelSize: 13 }
+
+                Row
+                {
+                    id: castRow
+                    // once, here - not once per tile. trackEngine.groups is a
+                    // full rebuild of the function table, not a cheap getter.
+                    property int n: trackEngine ? Math.max(1, trackEngine.groups.length) : 1
+                    width: parent.width
+                    height: parent.height
+                    spacing: 6
+
+                    Repeater
+                    {
+                        model: trackEngine ? trackEngine.groups : []
+
+                        Rectangle
+                        {
+                            id: castTile
+                            objectName: "groupTrim:"+md.key
+                            ControlIcon {
+                                x: 12; y: 14; width: trackViewRoot.compactLayout ? 36 : 48; height: width; z: 2
+                                ink: castTile.off ? "#666666" : "#CCCCCC"
+                                kind: md.switchOnly ? "animation" : md.strobes ? "strobe" : md.lasers ? "laser" : md.key.toLowerCase().indexOf("eyes") >= 0 ? "eyes" : "head"
+                            }
+                            // same fallback as the track list: a groups rebuild
+                            // re-evaluates every tile binding with modelData gone
+                            property var md: modelData ? modelData
+                                                       : ({ key: "", enabled: true,
+                                                            switchOnly: false, base: false })
+                            property bool lit: trackEngine ? trackEngine.cast.indexOf(md.key) >= 0 : false
+                            property bool off: !md.enabled
+                            property bool switchOnly: md.switchOnly === true
+                            property real trim: (trackEngine && trackEngine.trims[md.key] !== undefined)
+                                                ? trackEngine.trims[md.key] : 1.0
+                            width: (castRow.width - (castRow.n - 1) * castRow.spacing) / castRow.n
+                            height: castRow.height
+                            radius: 6
+                            color: off ? "#161616" : "#1E1E1E"
+                            border.width: md.base ? 2 : 1
+                            border.color: lit ? "#9FD3FF" : (md.base ? "#4FA3E3" : "#3A3A3A")
+                            clip: true
+
+                            // the scale: 25, 50, 75 % as ticks along the top and
+                            // bottom edges, the way a horizontal fader is read
+                            Repeater
+                            {
+                                model: castTile.switchOnly ? [] : [ 0.25, 0.5, 0.75 ]
+                                Item
+                                {
+                                    x: 3 + (castTile.width - 6) * modelData - 1
+                                    y: 0
+                                    width: 2
+                                    height: 54
+                                    anchors.bottom: parent.bottom
+                                    Rectangle { y: 0; width: 2; height: 10; color: "#3A3A3A" }
+                                    Rectangle { y: parent.height - 10; width: 2; height: 10; color: "#3A3A3A" }
+                                }
+                            }
+
+                            // the fader: the trim fills from the LEFT, with a
+                            // bright edge where the level stands
+                            Rectangle
+                            {
+                                id: castFill
+                                visible: !castTile.switchOnly
+                                anchors.left: parent.left
+                                                                anchors.bottom: parent.bottom
+                                anchors.margins: 3
+                                height: 48
+                                width: (parent.width - 6) * (castTile.off ? 0 : castTile.trim)
+                                radius: 4
+                                color: castTile.lit ? (md.base ? "#2E6FA8" : "#3D86C4")
+                                                    : (castArea.pressed ? "#3A3A3A" : "#303030")
+                                Behavior on color { ColorAnimation { duration: 150 } }
+
+                                Rectangle
+                                {
+                                    anchors.right: parent.right
+                                                                        anchors.bottom: parent.bottom
+                                    width: castArea.pressed ? 4 : 3
+                                    radius: 2
+                                    visible: parent.width > 4
+                                    color: castTile.lit ? "#BFE3FF" : (castArea.pressed ? "#DDDDDD" : "#8A8A8A")
+                                }
+                            }
+
+                            Text {
+                                anchors.bottom: parent.bottom; anchors.bottomMargin: 18
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: Math.round(castTile.trim * 100) + "%"
+                                visible: !castTile.switchOnly
+                                color: "#EEEEEE"; font.pixelSize: 13; z: 2
+                            }
+                            // an on/off group fills its whole row when it is on -
+                            // there is nothing in between to show
+                            Rectangle
+                            {
+                                visible: castTile.switchOnly && !castTile.off
+                                anchors.fill: parent
+                                anchors.margins: 3
+                                radius: 4
+                                color: castTile.lit ? (md.base ? "#2E6FA8" : "#3D86C4") : "#303030"
+                                Behavior on color { ColorAnimation { duration: 150 } }
+                            }
+
+                            // drag anywhere: the trim. A switch-only group toggles
+                            // instead - one tap, on or off.
+                            MouseArea
+                            {
+                                id: castArea
+                                objectName: "groupTrim:"+md.key+"Drag"
+                                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                                height: castTile.switchOnly ? parent.height : 54
+                                // the base group is always in the show, switch-only
+                                // or not - the comment on the switch below says so
+                                // and this is the path that could have broken it
+                                enabled: (castTile.switchOnly && !md.base) || !castTile.off
+                                // The switch is in the header; this MouseArea covers only the trim.
+                                property bool hasSwitch: false
+                                function onSwitch(x, y)
+                                {
+                                    return hasSwitch && width > 96 && x > width - 69 && y < 41
+                                }
+                                function apply(x)
+                                {
+                                    var v = (x - 3) / (width - 6)
+                                    v = Math.max(0, Math.min(1, v))
+                                    if (v > 0.97) v = 1
+                                    if (v < 0.03) v = 0
+                                    if (trackEngine) trackEngine.setGroupTrim(md.key, v)
+                                }
+                                // decided on the press alone: a drag that began on
+                                // the fader keeps working when the finger wanders
+                                // into the halo - testing every move froze the
+                                // fader at about half on the right-hand side
+                                property bool dragging: false
+                                onPressed: (mouse) =>
+                                {
+                                    dragging = false
+                                    if (castTile.switchOnly)
+                                        return
+                                    if (!onSwitch(mouse.x, mouse.y))
+                                    {
+                                        dragging = true
+                                        apply(mouse.x)
+                                    }
+                                }
+                                onPositionChanged: (mouse) =>
+                                {
+                                    if (pressed && dragging)
+                                        apply(mouse.x)
+                                }
+                                onReleased: dragging = false
+                                onClicked: (mouse) =>
+                                {
+                                    if (castTile.switchOnly && !md.base && trackEngine)
+                                        trackEngine.setGroupEnabled(md.key, castTile.off)
+                                }
+                            }
+
+                            Column
+                            {
+                                x: trackViewRoot.compactLayout ? 58 : 76; y: 14; width: parent.width - x - 8
+                                spacing: 4
+
+                                Text
+                                {
+                                    width: parent.width
+                                    elide: Text.ElideRight
+                                    text: md.key.toUpperCase()
+                                    color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#8A8A8A")
+                                    font.bold: true
+                                    font.pixelSize: 14
+                                }
+                                Text
+                                {
+                                    width: parent.width
+                                    elide: Text.ElideRight
+                                    text: castTile.off ? qsTr("OFF")
+                                        : castTile.switchOnly ? qsTr("ON")
+                                        : (md.base ? qsTr("BASE") + "  " : "")
+                                          + Math.round(castTile.trim * 100) + "%"
+                                    color: castTile.lit ? "#E0F0FF" : "#6A6A6A"
+                                    font.bold: castTile.switchOnly
+                                    font.pixelSize: 12
+                                }
+                            }
+
+                            Text {
+                                x: 12; anchors.bottom: parent.bottom; anchors.bottomMargin: 64
+                                visible: !trackViewRoot.compactLayout
+                                text: castTile.off ? qsTr("OFF") : (md.base ? qsTr("BASE") + " · " : "") + (castTile.lit ? qsTr("ACTIVE NOW") : qsTr("READY"))
+                                color: castTile.lit ? "#7ED07E" : trackViewRoot.cDim
+                                font.pixelSize: 13
+                            }
+                            // the switch: in or out of tonight's show. The base
+                            // (the heads) is always in; SETUP decides which one it
+                            // is. A switch-only group is its own switch.
+                            Rectangle
+                            {
+                                x: trackViewRoot.compactLayout ? 58 : 76; y: 56
+                                objectName: "groupSwitch:"+md.key
+                                width: 86
+                                height: 40
+                                radius: 20
+                                visible: !md.base
+                                color: castTile.off ? "#3A3A3A" : "#7ED07E"
+
+                                Text
+                                {
+                                    anchors.centerIn: parent
+                                    text: castTile.off ? qsTr("OFF") : qsTr("ON")
+                                    color: castTile.off ? "#9A9A9A" : "#102010"
+                                    font.bold: true
+                                    font.pixelSize: 12
+                                }
+
+                                MouseArea
+                                {
+                                    anchors.fill: parent
+                                    onClicked: trackEngine.setGroupEnabled(md.key, castTile.off)
+                                }
                             }
                         }
                     }
                 }
             }
-            RowLayout {
-                Layout.fillWidth: true; Layout.preferredHeight: 82
-                visible: trackManager && trackManager.roleMode && trackEngine && trackEngine.hazeAvailable
-                Repeater { model: ["haze","fan"]
-                    TouchFader { objectName: modelData; Layout.fillWidth: true; Layout.fillHeight: true; caption: modelData === "haze" ? "≈  HAZE" : "↻  FAN SPEED"; value: trackEngine ? (modelData === "haze" ? trackEngine.haze : trackEngine.fan) : 0; accent: "#8A8A8A"; onEdited: (amount) => { if(trackEngine){ if(modelData === "haze") trackEngine.haze=amount; else trackEngine.fan=amount } } }
-                }
-            }
-            Rectangle {
-                Layout.fillWidth: true; Layout.preferredHeight: trackViewRoot.setupOpen && trackManager && !trackManager.roleMode ? 500 : 0
-                visible: trackViewRoot.setupOpen
             // The role picker owns setup now: one tap per function decides
             // what it does, and the engine handles the rest.
             // Loaded indirectly so a fault in TrackSetup cannot take the whole
@@ -1498,6 +2063,175 @@ Rectangle
                 }
             }
         }
+RowLayout {
+            id: footerRow
+            Layout.fillWidth: true; Layout.preferredHeight: 56; Layout.maximumHeight: 56
+            spacing: 10
+RowLayout
+        {
+            id: atmosRow
+            Layout.fillWidth: true
+            Layout.preferredWidth: footerRow.width * 0.53
+            Layout.fillHeight: false
+            Layout.preferredHeight: 56
+            Layout.maximumHeight: 56
+            spacing: 10
+            visible: trackManager && trackManager.roleMode && trackEngine
+                     && trackEngine.hazeAvailable && !trackViewRoot.setupOpen
+
+            Repeater
+            {
+                model: [ "haze", "fan" ]
+
+                Rectangle
+                {
+                    id: atmosSlider
+                    objectName: modelData
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: 4
+                    color: "#1B1B1B"
+                    border.width: 1
+                    border.color: "#555555"
+
+                    property bool isHaze: modelData === "haze"
+                    property real level: trackEngine
+                                         ? (isHaze ? trackEngine.haze : trackEngine.fan) : 0
+
+                    Rectangle
+                    {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 3
+                        width: (parent.width - 6) * atmosSlider.level
+                        radius: 3
+                        color: atmosSlider.isHaze ? "#8A8A8A" : "#6A8AA0"
+                    }
+
+                    Text
+                    {
+                        anchors.centerIn: parent
+                        text: (atmosSlider.isHaze ? qsTr("HAZE") : qsTr("FAN SPEED"))
+                              + "  " + Math.round(atmosSlider.level * 100) + "%"
+                        color: "#CCCCCC"
+                        font.bold: true
+                        font.pixelSize: 13
+                    }
+
+                    MouseArea
+                    {
+                        objectName: atmosSlider.objectName+"Drag"
+                        anchors.fill: parent
+                        function apply(x)
+                        {
+                            var v = Math.max(0, Math.min(1, (x - 3) / (width - 6)))
+                            if (v < 0.03) v = 0
+                            if (atmosSlider.isHaze) trackEngine.haze = v
+                            else trackEngine.fan = v
+                        }
+                        onPressed: (mouse) => apply(mouse.x)
+                        onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                    }
+                }
+            }
+        }
+ Item { Layout.fillWidth: true }
+Rectangle
+            {
+                id: blackoutTile
+                objectName: "blackout"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "blackout" }
+                property bool armed: false          // this press is the one holding it
+
+                // TrackTile's own look, value for value (radius 3, #3A3A3A,
+                // border #555555, 13 px, bold and dark text when active), so
+                // the row is unchanged to the eye and only the BEHAVIOUR is
+                // different. It cannot BE a TrackTile: that one has a
+                // TapHandler and no press/release of its own.
+                Layout.preferredWidth: 150
+                Layout.fillHeight: true
+                radius: 3
+                color: (trackEngine && trackEngine.blackout) ? "#B03030" : "#3A3A3A"
+                border.width: 1
+                border.color: (trackEngine && trackEngine.blackout)
+                              ? Qt.lighter("#B03030", 1.3) : "#555555"
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("BLACKOUT")
+                    color: (trackEngine && trackEngine.blackout) ? "#101010" : "#EEEEEE"
+                    font.bold: trackEngine ? trackEngine.blackout : false
+                    font.pixelSize: 13
+                }
+
+                MouseArea
+                {
+                    anchors.fill: parent
+                    // do not let a Flickable under this steal the press: a
+                    // stolen grab would fire onCanceled and leave the room
+                    // dark with nothing holding it
+                    preventStealing: true
+                    onPressed:
+                    {
+                        if (!trackEngine)
+                            return
+                        if (trackEngine.blackout)
+                        {
+                            // latched on: this tap lets it go
+                            trackEngine.blackout = false
+                            blackoutTile.armed = false
+                        }
+                        else
+                        {
+                            trackEngine.blackout = true
+                            blackoutTile.armed = true
+                        }
+                    }
+                    onReleased: (mouse) =>
+                    {
+                        if (!trackEngine || !blackoutTile.armed)
+                            return
+                        blackoutTile.armed = false
+                        // released ON the button: a momentary hold, let go.
+                        // released off it: leave it latched.
+                        if (mouse.x >= 0 && mouse.y >= 0
+                            && mouse.x <= width && mouse.y <= height)
+                            trackEngine.blackout = false
+                    }
+                    // the grab taken away from us counts as "finger left the
+                    // button": latched, not released
+                    onCanceled: blackoutTile.armed = false
+                }
+            }
+Rectangle
+            {
+                Layout.preferredWidth: 190
+                Layout.fillHeight: true
+                radius: 4
+                objectName: "flash"
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; ink: "#101010"; kind: "flash" }
+                color: (trackEngine && trackEngine.flashing) ? "#FFFFFF" : "#E36B6B"
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("FLASH WHITE")
+                    color: "#101010"
+                    font.bold: true
+                    font.pixelSize: 18
+                }
+
+                MouseArea
+                {
+                    anchors.fill: parent
+                    onPressed: trackEngine.setFlash(true)
+                    onReleased: trackEngine.setFlash(false)
+                    onCanceled: trackEngine.setFlash(false)
+                }
+            }
+
         }
     }
 }
