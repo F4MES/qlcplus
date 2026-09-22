@@ -91,6 +91,17 @@ static quint32 nameScatter(const QString &name)
 // energi skal et drop aldrig visualiseres ... det er en restaurant der
 // bliver til en klub." From here up the drop machinery ramps with the fader.
 #define ENGINE_DROP_SHOW      0.30
+// The strobes do not light at all until there is a dance floor, and from
+// there they follow the slider up. Tobias, 2026-09-22: "de skal heller ikke
+// lyse overhovedet foer energien er der hvor der er dansegulv, og saa skal de
+// selvfoelgelig foelge slideren op og blive vildere og vildere." Six very
+// powerful lamps hung across the ceiling two to three metres apart: on a room
+// that is still a bar, they are the wrong instrument entirely.
+//
+// This ONE number is the whole line between a bar and a club. It used to be
+// ENGINE_DROP_SHOW (0.30), which let them in from a third of the way up.
+// Everything else about them ramps from here to the top of the slider.
+#define ENGINE_STROBE_ON      0.55
 #define ENGINE_DARK_BARS      4
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
@@ -5440,8 +5451,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // Heads, strobes and the rest sit a break out.
         if (isBreak && m_groups.value(key).lasers == false && m_groups.value(key).patternDevice == false)
             continue;
-        // the strobes are the club; under ENGINE_DROP_SHOW this is a restaurant
-        if (fader < ENGINE_DROP_SHOW && m_groups.value(key).strobes)
+        // the strobes are the club; under ENGINE_STROBE_ON this is a bar
+        if (fader < ENGINE_STROBE_ON && m_groups.value(key).strobes)
             continue;
         pool.append(key);
     }
@@ -6986,16 +6997,25 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // What was here drew a still picture SIX TIMES IN TEN - the 40 % dice
         // below, and under 0.60 on the fader it was static every time. That is
         // the thing he is describing.
+        // HOW WILD. Nought at the moment they come on, one at the top of the
+        // slider - so every dial below is a ramp across the half of the fader
+        // the strobes actually live in, not across the whole of it. A ramp
+        // measured from 0 would have them nearly at full the instant they
+        // appeared, which is the opposite of following the slider up.
+        const qreal wild = qBound(0.0, (e - ENGINE_STROBE_ON) / (1.0 - ENGINE_STROBE_ON), 1.0);
         mv.bare = g.parts.count() >= 2;      // one lamp at a time, nothing between
         if (mv.bare)
         {
             // across the room, and back again: PINGPONG turns at the end of
             // the row, CHASE wraps round to the start
             mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
-            // a SLOW walk while the room is quiet, one lamp a beat once it is
-            // going. Never faster than the beat - above it, the hardware
-            // strobe is what takes over (driveStrobe).
-            mv.stepBeats = e < 0.30 ? 4 : (e < 0.55 ? 2 : 1);
+            // SIX BARS to cross the room when they have just come on - four
+            // beats a lamp on six lamps. Tobias, 2026-09-22: "det er den
+            // langsomme chase, og en af dem vi har brugt rigtigt meget i
+            // busking. Det ser stilet ud." Then two beats, then a lamp a beat
+            // at the top. Never faster than the beat: above it the hardware
+            // shutter is what takes over (driveStrobe).
+            mv.stepBeats = wild < 0.30 ? 4 : (wild < 0.65 ? 2 : 1);
         }
         else
         {
@@ -7021,7 +7041,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // ENERGY slider is its off switch - under 50 % this never fires - and
         // a drop is where a coloured row across the strobes is a look rather
         // than a wobble. Everything else about them is unchanged.
-        mv.ownChaser = tier == 2 && e >= 0.50 && chance(0.25);
+        mv.ownChaser = tier == 2 && wild >= 0.15 && chance(0.25);
         // ... and ALL the way down between the hits, at every energy. It was
         // 0.85 + 0.15 * e, so at the bottom of the fader the room sat at
         // fifteen per cent of a very bright lamp between the blinks: lit, on a
@@ -7038,15 +7058,17 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.pulseOn = prog > 0.60 ? 0 : 1;
         else
         {
-            // A ramp, drawn: at the bottom of the fader it is the downbeat
-            // nearly every time, at the top it is every beat nearly every
-            // time, and the middle really is the middle - which a pair of
-            // thresholds could never be.
-            qreal often = qBound(0.0, (e - 0.20) / 0.65, 1.0);
-            mv.pulseOn = chance(often * often) ? 0
-                       : (chance(often) ? pick({ 1, 2 }) : 3);
+            // A ramp, drawn: the downbeat nearly every time just after they
+            // come on, every beat nearly every time at the top, and the middle
+            // really is the middle - which a pair of thresholds could never
+            // be. Measured from ENGINE_STROBE_ON, not from nought: the old
+            // span started at 0.20, so by the time they were allowed on stage
+            // they were already most of the way to every beat.
+            mv.pulseOn = chance(wild * wild) ? 0
+                       : (chance(wild) ? pick({ 1, 2 }) : 3);
         }
-        mv.flashBar = tier == 2 && e > 0.75 && chance(0.4);
+        // the bar flash is the top of the ramp, not a switch at 0.75
+        mv.flashBar = tier == 2 && wild > 0.55 && chance(0.20 + 0.50 * wild);
         // (the dimmer pulse cannot go faster than the beat - the sub-beat
         // timer only re-masks a pattern, it never re-triggers the pulse. Above
         // the beat it is driveStrobe's hardware strobe that takes over.)
