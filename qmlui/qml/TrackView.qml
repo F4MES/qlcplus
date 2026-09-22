@@ -130,6 +130,66 @@ Rectangle
     }
 
     // Small vector icons: no font symbols that change between Windows and macOS.
+    // WHAT MAKES A BAR LOOK LIKE A SLIDER (runde 140).
+    //
+    // Tobias: "hvordan gør vi så alle sliders faktisk viser at det er
+    // sliders? for nye djs der aldrig har set det før kan det godt være lidt
+    // svært at se dem." He is right, and it is the same problem on all four
+    // of them: a coloured rectangle that fills part of a box is what every
+    // progress bar in the world looks like, and nobody drags a progress bar.
+    //
+    // Three things turn it into something a hand reaches for, and none of
+    // them is a label:
+    //   the GRIP   a raised handle at the level, with three ridges cut into
+    //              it. This is the one that does the work - a ridged handle
+    //              is the oldest "hold here" signal there is, and it is the
+    //              only part of a fader a DJ has ever touched.
+    //   the TRACK  ticks at a quarter, a half and three quarters, so the bar
+    //              reads as a scale with positions rather than as a bar that
+    //              happens to be part full.
+    //   the REST   the part above the level stays visibly empty, so there is
+    //              somewhere obvious for the level to go.
+    //
+    // One component, used by ENERGY, MASTER DIMMER, the five group trims and
+    // HAZE / FAN SPEED, so the page teaches the gesture once.
+    component SliderGrip: Item {
+        property color ink: "#EEEEEE"
+        property bool pressed: false
+        width: 18
+        Rectangle {
+            anchors.fill: parent
+            anchors.topMargin: 2
+            anchors.bottomMargin: 2
+            radius: 4
+            color: parent.pressed ? "#FFFFFF" : parent.ink
+            border.width: 1
+            border.color: "#0E0E0E"
+            // the ridges
+            Column {
+                anchors.centerIn: parent
+                spacing: 3
+                Repeater {
+                    model: 3
+                    Rectangle { width: 9; height: 2; radius: 1; color: "#1A1A1A"; opacity: 0.75 }
+                }
+            }
+        }
+    }
+
+    component SliderTicks: Item {
+        // a quarter, a half, three quarters - short marks top and bottom
+        Repeater {
+            model: [ 0.25, 0.5, 0.75 ]
+            Item {
+                x: 3 + (parent.width - 6) * modelData - 1
+                width: 2
+                height: parent.height
+                Rectangle { y: 0; width: 2; height: 6; color: "#4A4A4A" }
+                Rectangle { y: parent.height - 6; width: 2; height: 6; color: "#4A4A4A" }
+            }
+        }
+    }
+
     component ControlIcon: Canvas {
         property string kind: ""
         property color ink: "#DDDDDD"
@@ -1120,6 +1180,33 @@ Rectangle
                     font.pixelSize: 14
                 }
 
+                // AUTO, not FOLLOW, and on the LEFT (runde 140, Tobias:
+                // "maaske hedde AUTO ligesom paa farverne, og saa rykke den
+                // over paa den anden side af sektionerne saa den passer med
+                // AUTO paa farverne"). Same word, same sun, same green, same
+                // corner as the colour row directly below it - so the page
+                // has one idea of "let the engine decide" instead of two
+                // words for it in two places.
+                TrackTile
+                {
+                    Layout.preferredWidth: 110
+                    Layout.fillHeight: true
+                    objectName: "followMusic"
+                    label: qsTr("AUTO")
+                    active: trackManager ? trackManager.overrideState === "" : true
+                    activeColor: "#7ED07E"
+                    onTapped: trackManager.overrideState = ""
+
+                    ControlIcon
+                    {
+                        x: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 16; height: 16
+                        ink: (trackManager && trackManager.overrideState === "") ? "#101010" : "#DDDDDD"
+                        kind: "autoColour"
+                    }
+                }
+
                 Repeater
                 {
                     model: trackViewRoot.states
@@ -1159,32 +1246,6 @@ Rectangle
                     }
                 }
 
-                Button
-                {
-                    Layout.preferredWidth: 95
-                    Layout.fillHeight: true
-                    objectName: "followMusic"
-                    text: qsTr("FOLLOW")
-                    enabled: trackManager ? trackManager.overrideState !== "" : false
-                    onClicked: trackManager.overrideState = ""
-
-                    contentItem: Text
-                    {
-                        text: parent.text
-                        color: parent.enabled ? trackViewRoot.cText : "#666666"
-                        font.bold: true
-                        font.pixelSize: 15
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle
-                    {
-                        radius: 5
-                        color: parent.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn
-                        border.width: 1
-                        border.color: trackViewRoot.cLine
-                    }
-                }
 
                 // the evening's opening picture: the START scene on its
                 // own, engine standing still. Switching the show on
@@ -1199,19 +1260,25 @@ Rectangle
 RowLayout {
             id: dialsRow
             Layout.fillWidth: true; Layout.fillHeight: false
-            // A FIXED HEIGHT, and no fillHeight (runde 139). This row holds a
-            // title, a fader and the three SPEED tiles - 10 + 20 + 6 + 62 +
-            // 6 + 48 + 10 = 162 - and nothing in it grows. Asking for a fifth
-            // of the window and taking a fillHeight share on top of that is
-            // what made it a field of air.
-            Layout.preferredHeight: trackViewRoot.compactLayout ? 148 : 168
-            Layout.minimumHeight: trackViewRoot.compactLayout ? 148 : 168
-            Layout.maximumHeight: trackViewRoot.compactLayout ? 148 : 168
+            // THREE BOXES, each saying what it is (runde 140). It was two:
+            // ENERGY, and one called MASTER DIMMER that also held SPEED -
+            // two unrelated controls under one name, which is what Tobias
+            // caught ("den skal ikke hedde masterdimmer og saa ogsaa have
+            // speed i den"). Splitting them is the whole fix: nothing needs
+            // a name that covers both, because nothing shares a box.
+            //
+            // And ENERGY is no longer the big one. It is set once and left
+            // ("Den kommer nok ikke til at blive rykket saa ofte"), so it is
+            // the same size as the others now. A fixed height again: title
+            // 20 + 6 + fader 66 + margins 20 = 112, and nothing grows.
+            Layout.preferredHeight: trackViewRoot.compactLayout ? 104 : 112
+            Layout.minimumHeight: trackViewRoot.compactLayout ? 104 : 112
+            Layout.maximumHeight: trackViewRoot.compactLayout ? 104 : 112
             spacing: 10
             visible: trackManager && trackEngine && trackManager.roleMode && !trackViewRoot.setupOpen
 Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                Layout.preferredWidth: dialsRow.width * 0.65
+                Layout.preferredWidth: dialsRow.width * 0.40
                 color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
                 ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
                     // Just the title. The 62-pixel percentage that used to sit
@@ -1232,10 +1299,9 @@ Rectangle
                 // went away. The fader takes it instead, which also makes
                 // the one control Tobias calls "rimelig essentiel" the
                 // easiest thing on the page to hit.
-                Layout.minimumHeight: trackViewRoot.touchH * 1.25
                 Layout.fillHeight: true
                 radius: 4
-                color: "#1B1B1B"
+                color: "#141414"
                 border.width: 1
                 border.color: "#555555"
 
@@ -1253,6 +1319,15 @@ Rectangle
                     color: "#E3B44F"
                 }
 
+                SliderTicks { anchors.fill: parent }
+                SliderGrip
+                {
+                    x: Math.max(1, Math.min(parent.width - width - 1,
+                                            3 + (parent.width - 6) * parent.trim - width / 2))
+                    height: parent.height
+                    ink: "#F6D98A"; pressed: energyArea.pressed
+                }
+
                 Text
                 {
                     anchors.centerIn: parent
@@ -1264,6 +1339,7 @@ Rectangle
 
                 MouseArea
                 {
+                    id: energyArea
                     objectName: "energyDrag"
                     anchors.fill: parent
                     function apply(x)
@@ -1284,7 +1360,7 @@ Rectangle
             }
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                Layout.preferredWidth: dialsRow.width * 0.35
+                Layout.preferredWidth: dialsRow.width * 0.34
                 color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
                 ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
                     // "MASTER DIMMER", not "MASTER" - it is the room's
@@ -1298,10 +1374,8 @@ Rectangle
             {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumHeight: 50
-                Layout.maximumHeight: 76
                 radius: 4
-                color: "#1B1B1B"
+                color: "#141414"
                 border.width: 1
                 border.color: "#555555"
 
@@ -1316,6 +1390,17 @@ Rectangle
                     color: "#4FA3E3"
                 }
 
+                SliderTicks { anchors.fill: parent }
+                SliderGrip
+                {
+                    property real lvl: trackEngine ? trackEngine.master : 1
+                    x: Math.max(1, Math.min(parent.width - width - 1,
+                                            3 + (parent.width - 6) * lvl - width / 2))
+                    height: parent.height
+                    ink: "#9FD3FF"
+                    pressed: masterArea.pressed
+                }
+
                 Text
                 {
                     anchors.centerIn: parent
@@ -1327,6 +1412,7 @@ Rectangle
 
                 MouseArea
                 {
+                    id: masterArea
                     objectName: "masterDrag"
                     anchors.fill: parent
                     function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
@@ -1334,41 +1420,43 @@ Rectangle
                     onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
                 }
             }
-RowLayout
-            {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 48
-                Layout.maximumHeight: 56
-                spacing: 6
 
-                Text
-                {
-                    Layout.alignment: Qt.AlignVCenter
-                    text: qsTr("SPEED")
-                    color: "#9A9A9A"
-                    font.bold: true
-                    font.pixelSize: 13
+
                 }
-
-                Repeater
-                {
-                    model: [ "\u00bd\u00d7", "1\u00d7", "2\u00d7" ]
-
-                    TrackTile
-                    {
+            }
+            Rectangle {
+                // SPEED is its own box now. It is not a dimmer and it is not
+                // a master of anything - it is how fast the engine runs the
+                // figures - so it gets its own name and its own frame.
+                Layout.fillWidth: true; Layout.fillHeight: true
+                Layout.preferredWidth: dialsRow.width * 0.26
+                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
+                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
+                    Text { text: "SPEED"; color: trackViewRoot.cText
+                           font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
+                    RowLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        objectName: "speed"+index
-                        label: modelData
-                        active: trackEngine ? trackEngine.speed === index - 1 : index === 1
-                        activeColor: [ "#5A7A9A", "#4FA3E3", "#E3B44F" ][index]
-                        onTapped: trackEngine.speed = index - 1
+                        spacing: 6
+                        Repeater
+                        {
+                            model: [ "\u00bd\u00d7", "1\u00d7", "2\u00d7" ]
+
+                            TrackTile
+                            {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                objectName: "speed"+index
+                                label: modelData
+                                active: trackEngine ? trackEngine.speed === index - 1 : index === 1
+                                activeColor: [ "#5A7A9A", "#4FA3E3", "#E3B44F" ][index]
+                                onTapped: trackEngine.speed = index - 1
+                            }
+                        }
                     }
                 }
             }
 
-                }
-            }
         }
 RowLayout {
             id: liveRow
@@ -1655,10 +1743,10 @@ Rectangle
                                     x: 3 + (castTile.width - 6) * modelData - 1
                                     y: 0
                                     width: 2
-                                    height: 40
+                                    height: 52
                                     anchors.bottom: parent.bottom
-                                    Rectangle { y: 0; width: 2; height: 8; color: "#3A3A3A" }
-                                    Rectangle { y: parent.height - 8; width: 2; height: 8; color: "#3A3A3A" }
+                                    Rectangle { y: 0; width: 2; height: 8; color: "#4A4A4A" }
+                                    Rectangle { y: parent.height - 8; width: 2; height: 8; color: "#4A4A4A" }
                                 }
                             }
 
@@ -1671,26 +1759,31 @@ Rectangle
                                 anchors.left: parent.left
                                                                 anchors.bottom: parent.bottom
                                 anchors.margins: 3
-                                height: 34
+                                height: 46
                                 width: (parent.width - 6) * (castTile.off ? 0 : castTile.trim)
                                 radius: 4
                                 color: castTile.lit ? (md.base ? "#2E6FA8" : "#3D86C4")
                                                     : (castArea.pressed ? "#3A3A3A" : "#303030")
                                 Behavior on color { ColorAnimation { duration: 150 } }
 
-                                Rectangle
+                                // the grip, at the level - the same handle
+                                // the big faders have, so the gesture is the
+                                // same one everywhere on the page
+                                SliderGrip
                                 {
                                     anchors.right: parent.right
-                                                                        anchors.bottom: parent.bottom
-                                    width: castArea.pressed ? 4 : 3
-                                    radius: 2
-                                    visible: parent.width > 4
-                                    color: castTile.lit ? "#BFE3FF" : (castArea.pressed ? "#DDDDDD" : "#8A8A8A")
+                                    anchors.rightMargin: -width / 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    height: parent.height + 4
+                                    visible: !castTile.off
+                                    ink: castTile.lit ? "#BFE3FF" : "#B0B0B0"
+                                    pressed: castArea.pressed
+                                    z: 3
                                 }
                             }
 
                             Text {
-                                anchors.bottom: parent.bottom; anchors.bottomMargin: 11
+                                anchors.bottom: parent.bottom; anchors.bottomMargin: 17
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: Math.round(castTile.trim * 100) + "%"
                                 visible: !castTile.switchOnly
@@ -1715,7 +1808,7 @@ Rectangle
                                 id: castArea
                                 objectName: "groupTrim:"+md.key+"Drag"
                                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                                height: castTile.switchOnly ? parent.height : 40
+                                height: castTile.switchOnly ? parent.height : 52
                                 // the base group is always in the show, switch-only
                                 // or not - the comment on the switch below says so
                                 // and this is the path that could have broken it
@@ -2120,76 +2213,7 @@ RowLayout {
             id: footerRow
             Layout.fillWidth: true; Layout.preferredHeight: 56; Layout.maximumHeight: 56
             spacing: 10
-RowLayout
-        {
-            id: atmosRow
-            Layout.fillWidth: true
-            Layout.preferredWidth: footerRow.width * 0.53
-            Layout.fillHeight: false
-            Layout.preferredHeight: 56
-            Layout.maximumHeight: 56
-            spacing: 10
-            visible: trackManager && trackManager.roleMode && trackEngine
-                     && trackEngine.hazeAvailable && !trackViewRoot.setupOpen
 
-            Repeater
-            {
-                model: [ "haze", "fan" ]
-
-                Rectangle
-                {
-                    id: atmosSlider
-                    objectName: modelData
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    radius: 4
-                    color: "#1B1B1B"
-                    border.width: 1
-                    border.color: "#555555"
-
-                    property bool isHaze: modelData === "haze"
-                    property real level: trackEngine
-                                         ? (isHaze ? trackEngine.haze : trackEngine.fan) : 0
-
-                    Rectangle
-                    {
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        anchors.margins: 3
-                        width: (parent.width - 6) * atmosSlider.level
-                        radius: 3
-                        color: atmosSlider.isHaze ? "#8A8A8A" : "#6A8AA0"
-                    }
-
-                    Text
-                    {
-                        anchors.centerIn: parent
-                        text: (atmosSlider.isHaze ? qsTr("HAZE") : qsTr("FAN SPEED"))
-                              + "  " + Math.round(atmosSlider.level * 100) + "%"
-                        color: "#CCCCCC"
-                        font.bold: true
-                        font.pixelSize: 13
-                    }
-
-                    MouseArea
-                    {
-                        objectName: atmosSlider.objectName+"Drag"
-                        anchors.fill: parent
-                        function apply(x)
-                        {
-                            var v = Math.max(0, Math.min(1, (x - 3) / (width - 6)))
-                            if (v < 0.03) v = 0
-                            if (atmosSlider.isHaze) trackEngine.haze = v
-                            else trackEngine.fan = v
-                        }
-                        onPressed: (mouse) => apply(mouse.x)
-                        onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
-                    }
-                }
-            }
-        }
- Item { Layout.fillWidth: true }
 Rectangle
             {
                 id: blackoutTile
@@ -2284,6 +2308,94 @@ Rectangle
                     onCanceled: trackEngine.setFlash(false)
                 }
             }
+
+// The sliders sit to the RIGHT of the two buttons now
+// (runde 140, Tobias: "FLASH og BLACKOUT skal ogsaa rykkes
+// paa den anden side af haze-sliderne"). The two things you
+// hit in a hurry are together at the near edge, and the two
+// you set once an evening are out of the way.
+Item { Layout.fillWidth: true }
+
+RowLayout
+        {
+            id: atmosRow
+            Layout.fillWidth: true
+            Layout.preferredWidth: footerRow.width * 0.53
+            Layout.fillHeight: false
+            Layout.preferredHeight: 56
+            Layout.maximumHeight: 56
+            spacing: 10
+            visible: trackManager && trackManager.roleMode && trackEngine
+                     && trackEngine.hazeAvailable && !trackViewRoot.setupOpen
+
+            Repeater
+            {
+                model: [ "haze", "fan" ]
+
+                Rectangle
+                {
+                    id: atmosSlider
+                    objectName: modelData
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: 4
+                    color: "#1B1B1B"
+                    border.width: 1
+                    border.color: "#555555"
+
+                    property bool isHaze: modelData === "haze"
+                    property real level: trackEngine
+                                         ? (isHaze ? trackEngine.haze : trackEngine.fan) : 0
+
+                    Rectangle
+                    {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 3
+                        width: (parent.width - 6) * atmosSlider.level
+                        radius: 3
+                        color: atmosSlider.isHaze ? "#8A8A8A" : "#6A8AA0"
+                    }
+
+                    SliderTicks { anchors.fill: parent }
+                    SliderGrip
+                    {
+                        x: Math.max(1, Math.min(parent.width - width - 1,
+                                                3 + (parent.width - 6) * atmosSlider.level - width / 2))
+                        height: parent.height
+                        ink: atmosSlider.isHaze ? "#C8C8C8" : "#A8C4D8"
+                        pressed: atmosArea.pressed
+                    }
+
+                    Text
+                    {
+                        anchors.centerIn: parent
+                        text: (atmosSlider.isHaze ? qsTr("HAZE") : qsTr("FAN SPEED"))
+                              + "  " + Math.round(atmosSlider.level * 100) + "%"
+                        color: "#CCCCCC"
+                        font.bold: true
+                        font.pixelSize: 13
+                    }
+
+                    MouseArea
+                    {
+                        id: atmosArea
+                        objectName: atmosSlider.objectName+"Drag"
+                        anchors.fill: parent
+                        function apply(x)
+                        {
+                            var v = Math.max(0, Math.min(1, (x - 3) / (width - 6)))
+                            if (v < 0.03) v = 0
+                            if (atmosSlider.isHaze) trackEngine.haze = v
+                            else trackEngine.fan = v
+                        }
+                        onPressed: (mouse) => apply(mouse.x)
+                        onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                    }
+                }
+            }
+        }
 
         }
     }
