@@ -5173,13 +5173,30 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                && beat - m_colourSince >= (haveCurves ? holdBeats * 3 / 2 : holdBeats);
     bool turnUp = haveCurves && turn && m_colourSince >= 0
                && beat - m_colourSince >= holdBeats / 2;
+    // A COLOUR LIVES TWO BARS, whatever asks for it (runde 157).
+    //
+    // holdUp and turnUp have floors of their own - holdBeats * 3/2 and
+    // holdBeats / 2, and holdBeats is never under sixteen - but the section
+    // branch had none, and it is the only one that offends. Measured on the
+    // night of 2026-09-20: of 318 colour changes inside a track, SEVENTY-FIVE
+    // came less than two bars after the one before, seven of them on the very
+    // same beat, and every single one of the seventy-five was a section change
+    // (48 in a drop, 27 in a break). A section that arrives two beats after
+    // the last one is a pair of flags, not a new passage - and a colour that
+    // lives one beat reads as a fault, not as a change. A colour change is
+    // the one thing the whole room sees at once; it is worth a floor.
+    //
+    // m_colourSince is -1 on a fresh track (trackLoaded), so the first colour
+    // of a track is never held back.
+    bool sectionColour = sectionChanged && (isBreak || isDrop)
+                      && (m_colourSince < 0 || beat - m_colourSince >= 8);
     bool changeColour;
     if (m_colour.isEmpty())
         changeColour = true;
     else if (m_colourBar < 0)
-        changeColour = sectionChanged && (isBreak || isDrop);
+        changeColour = sectionColour;
     else
-        changeColour = (sectionChanged && (isBreak || isDrop)) || holdUp || turnUp;
+        changeColour = sectionColour || holdUp || turnUp;
     if (isCalm)
         changeColour = m_colour.isEmpty();
     if (forceNext)
