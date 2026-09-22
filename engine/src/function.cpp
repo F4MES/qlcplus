@@ -1145,6 +1145,17 @@ void Function::start(MasterTimer* timer, FunctionParent source, quint32 startTim
 
     Q_ASSERT(timer != NULL);
 
+    // TRACK owns the output: a button, a slider, a cue stack or the simple
+    // desk cannot start a function over the top of it. The timer's own
+    // Master parent still may - that is how TRACK stops things itself.
+    if (timer != NULL && timer->trackControl()
+        && source.type() != FunctionParent::Track
+        && source.type() != FunctionParent::Master)
+    {
+        qDebug() << "Function start() refused while TRACK controls the output:" << m_name;
+        return;
+    }
+
     {
         QMutexLocker sourcesLocker(&m_sourcesMutex);
         if (m_sources.contains(source))
@@ -1208,6 +1219,17 @@ void Function::stop(FunctionParent source, bool preserveAttributes)
 bool Function::stopped() const
 {
     return m_stop;
+}
+
+bool Function::startedByTrack() const
+{
+    QMutexLocker sourcesLocker(const_cast<QMutex*>(&m_sourcesMutex));
+    foreach (FunctionParent source, m_sources)
+    {
+        if (source.type() == FunctionParent::Track)
+            return true;
+    }
+    return false;
 }
 
 bool Function::startedAsChild() const

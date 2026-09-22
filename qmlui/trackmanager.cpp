@@ -486,13 +486,13 @@ void TrackManager::applyLook()
         // many beats a step lasts, never the clock itself.
         if (division > 0 && slotFollowsSpeed(slot))
         {
-            func->start(m_doc->masterTimer(), FunctionParent::master(), 0,
+            func->start(m_doc->masterTimer(), FunctionParent::track(), 0,
                         Function::defaultSpeed(), Function::defaultSpeed(),
                         uint(division), Function::Beats);
         }
         else
         {
-            func->start(m_doc->masterTimer(), FunctionParent::master());
+            func->start(m_doc->masterTimer(), FunctionParent::track());
         }
 
         if (m_runningFunctions.contains(fid))
@@ -896,8 +896,16 @@ void TrackManager::setBpmHigh(int bpm)
 
 bool TrackManager::autoRun() const { return m_autoRun; }
 
+void TrackManager::setControlOwned(bool enable)
+{
+    if (!m_engine || m_engine->controlOwned() == enable) return;
+    setAutoRun(false);
+    m_engine->setControlOwned(enable);
+}
+
 void TrackManager::setAutoRun(bool enable)
 {
+    if (enable && m_engine && !m_engine->controlOwned()) setControlOwned(true);
     if (enable == m_autoRun)
         return;
     m_autoRun = enable;
@@ -1595,11 +1603,11 @@ void TrackManager::driveRole(int role, quint32 fid, qreal level, int division,
     // Ableton Link stays the only clock: we change how long a step lasts,
     // never the timing source.
     if (division > 0)
-        func->start(m_doc->masterTimer(), FunctionParent::master(), 0,
+        func->start(m_doc->masterTimer(), FunctionParent::track(), 0,
                     Function::defaultSpeed(), Function::defaultSpeed(),
                     uint(division), Function::Beats);
     else
-        func->start(m_doc->masterTimer(), FunctionParent::master());
+        func->start(m_doc->masterTimer(), FunctionParent::track());
 
     m_roleActive.insert(role, fid);
     m_roleLevel.insert(role, level);
@@ -2319,7 +2327,13 @@ void TrackManager::forgetAutomatic()
 
 void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
 {
-    if (evt == QStringLiteral("mix"))
+    if (evt == QStringLiteral("mix-profile"))
+    {
+        if (m_engine != nullptr)
+            m_engine->setIncomingProfile(obj.value("title").toString(),
+                obj.value("state").toString(), obj.value("energy").toDouble(-1.0));
+    }
+    else if (evt == QStringLiteral("mix"))
     {
         // two decks on air: a transition. The engine holds colour and calm.
         bool mixing = obj.value(QStringLiteral("mixing")).toBool(false);

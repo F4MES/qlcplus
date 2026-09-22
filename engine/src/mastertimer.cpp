@@ -245,6 +245,34 @@ void MasterTimer::startFunction(Function* function)
         m_startQueue.append(function);
 }
 
+bool MasterTimer::trackControl() const
+{
+    return m_trackControl;
+}
+
+void MasterTimer::setTrackControl(bool on)
+{
+    if (m_trackControl == on)
+        return;
+    m_trackControl = on;
+    if (on == false)
+        return;
+    // Taking over: everything that is not TRACK's goes, so nothing of the
+    // busking side is left holding a channel. TRACK's own functions are
+    // untouched - it is mid-show.
+    QList<Function *> others;
+    {
+        QMutexLocker locker(&m_functionListMutex);
+        foreach (Function *f, m_functionList)
+        {
+            if (f != NULL && f->startedByTrack() == false)
+                others.append(f);
+        }
+    }
+    foreach (Function *f, others)
+        f->stop(FunctionParent::master());
+}
+
 void MasterTimer::stopAllFunctions()
 {
     m_stopAllFunctions = true;

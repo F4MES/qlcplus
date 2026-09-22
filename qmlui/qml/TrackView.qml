@@ -31,6 +31,14 @@ Rectangle
     readonly property color cText:   "#EEEEEE"
     readonly property color cDim:    "#9A9A9A"
 
+    // Entering TRACK claims only QLC+'s local output. External Art-Net is
+    // independent; leaving this page does not silently return to busking.
+    function claimControl() {
+        if (visible && trackManager) trackManager.setControlOwned(true)
+    }
+    Component.onCompleted: claimControl()
+    onVisibleChanged: claimControl()
+
     property int beatCount: trackManager ? trackManager.beatCount : 0
     property int currentBeat: trackManager ? trackManager.currentBeat : 0
     property string liveState: trackManager ? trackManager.currentState : "normal"
@@ -2207,6 +2215,34 @@ RowLayout {
             id: footerRow
             Layout.fillWidth: true; Layout.preferredHeight: 56; Layout.maximumHeight: 56
             spacing: 10
+
+            Rectangle {
+                objectName: "controlOwner"
+                Layout.preferredWidth: 218
+                Layout.fillHeight: true
+                color: trackViewRoot.cBtn
+                border.color: trackViewRoot.cLine
+                radius: 4
+                Column {
+                    anchors.centerIn: parent
+                    spacing: 3
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: trackEngine && trackEngine.controlOwned ? "⇄  QLC+ BUSKING" : "⇄  TRACK CONTROL"
+                        color: trackViewRoot.cText; font.bold: true; font.pixelSize: 14
+                    }
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: qsTr("External Art-Net: switch at node")
+                        color: trackViewRoot.cDim; font.pixelSize: 10
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: if (trackManager && trackEngine)
+                        trackManager.setControlOwned(!trackEngine.controlOwned)
+                }
+            }
 
 Rectangle
             {

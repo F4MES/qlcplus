@@ -108,6 +108,13 @@ public:
     /** Get the number of currently running functions */
     int runningFunctions() const;
 
+    /** TRACK owns the output: while this is on, only functions started with
+     *  FunctionParent::Track (or Master, which is the timer's own) may run.
+     *  Switching it on stops everything that is not TRACK's, so no fader,
+     *  scene or effect of the busking side is left holding a channel. */
+    bool trackControl() const;
+    void setTrackControl(bool on);
+
 signals:
     /** Tells that the list of running functions has changed */
     void functionListChanged();
@@ -132,6 +139,9 @@ private:
 
     /** Flag for stopping all functions */
     bool m_stopAllFunctions;
+
+    /** TRACK owns the output - see trackControl() */
+    bool m_trackControl = false;
 
     /*************************************************************************
      * DMX Sources

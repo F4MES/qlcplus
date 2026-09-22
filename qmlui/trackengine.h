@@ -43,6 +43,7 @@
 #define TRACKENGINE_H
 
 #include <QElapsedTimer>
+#include "trackstagepolicy.h"
 #include <QVariantList>
 #include <QPoint>
 #include <QStringList>
@@ -331,6 +332,7 @@ class TrackEngine : public QObject
     Q_OBJECT
     Q_DISABLE_COPY(TrackEngine)
 
+    Q_PROPERTY(bool controlOwned READ controlOwned NOTIFY liveChanged)
     Q_PROPERTY(int roleCount READ roleCount CONSTANT)
     Q_PROPERTY(QVariantList groups READ groups NOTIFY tableChanged)
     Q_PROPERTY(QVariantList palette READ palette NOTIFY tableChanged)
@@ -586,7 +588,10 @@ public:
      *  un-patched trackmanager.cpp still compiles; the patch passes it. */
     void trackLoaded(const QString &title = QString(), const QString &key = QString());
     /** the key of the track on the other deck (BLT "next"), for the mix */
+    bool controlOwned() const;
+    void setControlOwned(bool on);
     void setNextKey(const QString &key);
+    void setIncomingProfile(const QString &title, const QString &state, qreal energy);
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** AUTO switched off: fade everything out over a bar, then let go. */
@@ -731,6 +736,7 @@ protected:
     qreal slotScale(const QString &slot, quint32 fid) const;
     void reapplyLevels();
     qreal pulseFactor(const QString &group) const;
+    bool ambientBase(const QString &group) const;
     QString moveName(const TrackMove &move) const;
 
 private:
@@ -844,6 +850,16 @@ private:
     qreal m_movesEnergy = -1.0;            // the energy the moves were last drawn at (a fader jump redraws)
     QString m_rhythmLead;                 // one leading effect, other groups support it
     QString m_compositionBase;
+    TrackStage::Exposure m_exposure;
+    int m_restUntil = -1;
+    QStringList m_sequenceGroups;
+    qint64 m_sequenceStart = -1;
+    qreal m_sequenceBeatMs = 500.0;
+    qint64 m_sequenceLast = -60000;
+    QString m_incomingTitle, m_incomingState;
+    qreal m_incomingEnergy = -1.0;
+    qint64 m_incomingAt = -1;
+    qreal m_mixMotionScale = 1.0;
     int m_compositionTier = 0;
     int m_dropLand = 0;                    // FAKE DROP: the bar of the drop the kick actually arrived on
     qreal m_castEnergy = -1.0;             // the energy the cast size was last decided at (a nudge steps it)

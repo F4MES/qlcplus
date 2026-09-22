@@ -403,7 +403,8 @@ void TrackEngine::slotPulseTimer()
             }
             continue;
         }
-        if (m_pulseDepth.value(key, 0.0) <= 0.0 && m_breathe.value(key, 0) <= 0)
+        if (m_pulseDepth.value(key, 0.0) <= 0.0 && m_breathe.value(key, 0) <= 0
+            && !m_sequenceGroups.contains(key))
             continue;
         any = true;
         // the chase owns the dimmers: the pulse rides on ITS intensity, since
@@ -3223,7 +3224,7 @@ void TrackEngine::applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32
     // fader on two channels nothing else in AUTO writes; a hand scene of the
     // operator's started later still wins under LTP while it runs.
     if (scene->isRunning() == false || scene->stopped())
-        scene->start(m_doc->masterTimer(), FunctionParent::master());
+        scene->start(m_doc->masterTimer(), FunctionParent::track());
 }
 
 void TrackEngine::setHaze(qreal level)
@@ -5019,6 +5020,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         m_fillUntil = -1;
         m_fillLast = beat - 8;
+        m_sequenceGroups.clear();
+        m_restUntil = -1;
     }
     m_lastBeat = beat;
 
@@ -5304,6 +5307,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_nextColour = drawColour(pool, m_nextKeyBias, rng);
     }
     int mixBarsOut = (m_mixing && m_mixBeat >= 0) ? qMax(0, beat - m_mixBeat) / 4 : -1;
+    // Live on-air profile, never a guessed loaded deck. Older BLT versions
+    // and ambiguous three-deck mixes retain the existing six-bar behaviour.
+    const bool incomingFresh = m_fullAuto && m_mixing && m_incomingAt >= 0
+        && m_clock.elapsed() - m_incomingAt < 8000 && !m_incomingTitle.isEmpty()
+        && m_incomingTitle != m_trackTitle;
+    int mixTurnBars = 6;
+    if (incomingFresh)
+        mixTurnBars = (m_incomingState == "break" || m_incomingState == "intro") ? 4
+                    : (m_incomingState == "drop" ? 8 : 6);
+    const qreal motionTarget = incomingFresh && m_incomingEnergy >= 0.0 && mixBarsOut >= 4
+        ? qBound(0.90, 1.0 + 0.20 * (m_incomingEnergy - sectionEnergy), 1.10) : 1.0;
+    // A stale profile eases back too; no jump when data disappears.
+    m_mixMotionScale += qBound(-0.02, motionTarget - m_mixMotionScale, 0.02);
 
     /* ---- eligible groups: enabled, and with a colour to take ---- */
     QStringList eligible;
@@ -5481,6 +5497,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     : (dropHidden ? QStringLiteral("normal") : state);
     m_lastState = state;
 
+    // r162: three minutes of sustained dense light earns four restrained bars
+    // in a groove. Never flatten a drop/build or override HOLD/ENERGY.
+    const qint64 stageNow = m_clock.elapsed();
+    const qreal density = (m_fullAuto && !m_blackout && !m_flash)
+        ? fader * qBound(0.0, qreal(m_cast.count()) / 4.0, 1.0) : 0.0;
+    m_exposure.sample(stageNow, density);
+    if (!m_fullAuto || hold || isDrop || isBuild || isBreak || isCalm || m_mixing)
+        m_restUntil = -1;
+    else if (beatInBar == 0 && m_restUntil < beat && m_exposure.ready(stageNow))
+    {
+        m_restUntil = beat + 16;
+        m_exposure.rest(stageNow);
+    }
+    const bool exposureRest = m_restUntil > beat;
     int effects = m_effects;
     // a build is the room filling up: it never has fewer groups than the
     // section before it, and past the middle it reaches for one more
@@ -5492,6 +5522,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     if (preDrop)     // no dice here: four beats of joining and leaving would flicker
         effects = qMax(effects, int(qRound(3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0))));
+    if (exposureRest) effects = qMax(0, effects - 1);
     if (isCalm || still)
         effects = 0;
     // A long blend keeps its musical activity budget. There is no elapsed-
@@ -6196,7 +6227,43 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_beatMs = 60000.0 / bpm;
     m_beatStartMs = m_clock.elapsed();
     m_beatIndex = beat - secStart;
-    bool anyPulse = false;
+    // r162: an occasional three-group conversation within the chosen cast.
+    // Only intensity is shaped: no extra fixtures, colour or laser aiming.
+    if (!m_fullAuto || hold || isCalm || isBreak || isBuild || m_blackout || m_mixing
+        || sectionChanged || exposureRest)
+        m_sequenceGroups.clear();
+    if (!m_sequenceGroups.isEmpty())
+    {
+        for (const QString &key : m_sequenceGroups)
+            if (!castSet.contains(key)) { m_sequenceGroups.clear(); break; }
+        if (stageNow - m_sequenceStart >= m_sequenceGroups.size() * 4 * m_sequenceBeatMs)
+            m_sequenceGroups.clear();
+    }
+    if (m_fullAuto && m_sequenceGroups.isEmpty() && !hold && !isCalm && !isBreak
+        && !isBuild && !m_blackout && !m_mixing && !sectionChanged && !exposureRest
+        && fader >= 0.45 && beatInBar == 0 && (beat - secStart) % 32 == 0
+        && stageNow - m_sequenceLast >= 45000)
+    {
+        QStringList conversation;
+        if (castSet.contains(base) && ambientBase(base)) conversation << base;
+        // Eyes/heads answer first; laser bars finish. No switched pattern
+        // devices or strobes: fractional levels must mean actual dimming.
+        for (int laserPass = 0; laserPass < 2; ++laserPass)
+            for (const QString &key : castSorted)
+            {
+                const TrackGroup &g = m_groups.value(key);
+                if (key != base && g.hasDimmer && !g.parts.isEmpty() && !g.strobes
+                    && !g.patternDevice && int(g.lasers) == laserPass)
+                    conversation << key;
+            }
+        if (conversation.size() >= 3)
+        {
+            m_sequenceGroups = conversation.mid(0, 3);
+            m_sequenceStart = m_sequenceLast = stageNow;
+            m_sequenceBeatMs = bpm > 0 ? 60000.0 / bpm : 500.0;
+        }
+    }
+    bool anyPulse = !m_sequenceGroups.isEmpty();
     bool moveHit = false;
     // runde 153: did a strobe group draw one of the show's chases this beat?
     // On the log so the trial can be measured instead of remembered.
@@ -6353,7 +6420,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
         QString colour = m_colour;
         // the mix's second half: the base stands in the incoming track's colour
-        if (key == base && mixBarsOut >= 6 && m_nextColour.isEmpty() == false && m_override.isEmpty())
+        if (key == base && mixBarsOut >= mixTurnBars && m_nextColour.isEmpty() == false && m_override.isEmpty())
             colour = m_nextColour;
         quint32 splitScene = Function::invalidId();
         if (accentColour.isEmpty() == false && key == accentGroup)
@@ -6510,6 +6577,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
 
+        // The foundation uses generated intensity masks, whose minimum is
+        // known. An opaque dimmer chase cannot promise a continuous floor.
+        // Position-only programmes and all effect-group programmes stay intact.
+        if (ambientBase(key) && mf != Function::invalidId() && m_funcs.value(mf).dimmer
+            && m_funcs.value(mf).litShare < 0.99)
+        {
+            mf = Function::invalidId();
+            m_sectionMotion.remove(key);
+        }
         quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
         // The programme paints a colour on every lamp in this group, so the
         // group's colour scene under it has nothing left to say - and it does
@@ -6720,7 +6796,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // In a drop the only thing driveStrobe reads `bar` for IS the landing.
     driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, isDrop ? dropBar : bar, beatInBar,
                 isCalm || still || dropWaiting || m_flash || m_blackout
-                || isIntro || isOutro);       // nobody strobes an intro
+                || isIntro || isOutro || exposureRest); // nobody strobes an intro/rest
 
     /* ---- hits ---- */
     // the minimal guard: more than eight hits in 32 beats is a strobe show,
@@ -6895,9 +6971,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (fakeDrop) ev << QString("drop-late@%1").arg(m_dropLand);
         if (isDrop && m_dropStyle > 0) ev << ("drop-" + dropStyleName(m_dropStyle));
         if (isDrop && dropBar >= 0 && dropBar < impactBarsLog) ev << "impact";
-        if (mixBarsOut >= 6 && m_nextColour.isEmpty() == false) ev << "mix-turn";
+        if (mixBarsOut >= mixTurnBars && m_nextColour.isEmpty() == false) ev << "mix-turn";
         if (m_fullAuto && m_rhythmLead.isEmpty() == false)
             ev << "lead=" + QString::fromLatin1(m_rhythmLead.toUtf8().toHex());
+        if (exposureRest) ev << "exposure-rest";
+        if (!m_sequenceGroups.isEmpty()) ev << "room-sequence";
+        if (incomingFresh) ev << "incoming-profile";
         if (strobeChase) ev << "strobe-chase";
         if (m_mixing) ev << "mix-energy";
         if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
@@ -7619,7 +7698,18 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
                 if (mask.at(i) >= 1.0)
                     mask[i] = 1.0 - move.texture * (1.0 - tex.at(i));
     }
+    // A generated wash keeps a quiet foundation even under a bare pattern.
+    // MASTER/trim/blackout and dark re-aim are applied later, so zero stays zero.
+    if (ambientBase(group))
+        for (qreal &value : mask) value = qMax(0.45, value);
     return mask;
+}
+
+bool TrackEngine::ambientBase(const QString &group) const
+{
+    const TrackGroup &g = m_groups.value(group);
+    return m_fullAuto && group == m_compositionBase && g.heads && g.hasDimmer
+        && !g.lasers && !g.strobes && !g.patternDevice && !m_groupOff.contains(group);
 }
 
 QString TrackEngine::partSlot(const QString &group, int index) const
@@ -7745,6 +7835,11 @@ qreal TrackEngine::pulseFactor(const QString &group) const
         qreal pos = (qreal(m_beatIndex) + within) / (qreal(bars) * 4.0);
         factor *= 0.70 + 0.30 * (0.5 + 0.5 * std::sin(pos * 6.283185307179586));
     }
+    if (ambientBase(group)) factor = qMax(0.40, factor);
+    const int sequenceIndex = m_sequenceGroups.indexOf(group);
+    if (sequenceIndex >= 0)
+        factor *= TrackStage::sequenceGain(qreal(now - m_sequenceStart) / m_sequenceBeatMs,
+            sequenceIndex, m_sequenceGroups.size(), group == m_compositionBase);
     return factor;
 }
 
@@ -8110,6 +8205,8 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         qreal e = qBound(0.0, energy, 1.0);
         qreal grow = sweepReach(sw.tier, e, sw.drive) / qMax(1.0, sweepReach(sw.tier, sw.drawnE, sw.drive));
         qreal pace = sweepPace(sw.tier, e, sw.drive) / qMax(1.0, sweepPace(sw.tier, sw.drawnE, sw.drive));
+        grow *= m_mixMotionScale;
+        pace /= m_mixMotionScale;
         width = qBound(6, int(qRound(sw.width * grow)), 127);
         height = qBound(4, int(qRound(sw.height * grow)), 28);
         beats = qMax(3, int(qRound(sw.beats * pace)));
@@ -8141,6 +8238,11 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             efx->setYOffset(qBound(0, 127 + dy, 255));
         return;
     }
+    // r162: only TRACK's non-laser relative figures opt into point blending.
+    // The running phase survives; a second change starts at the actual output.
+    if (running && !laser)
+        for (EFXFixture *ef : efx->fixtures())
+            ef->requestPointTransition(uint(qBound(600.0, beatMs * 4.0, 3000.0)));
     // reconfigured live: a stop and a start in the same tick would leave the
     // EFX stopped (stop() only asks; the timer thread does it later)
 
@@ -9104,6 +9206,7 @@ bool TrackEngine::startScene() const { return m_startScene; }
 
 void TrackEngine::setStartScene(bool on)
 {
+    if (on && !controlOwned()) setControlOwned(true);
     if (on == m_startScene)
         return;
     m_startScene = on;
@@ -9386,6 +9489,20 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 
 void TrackEngine::release()
 {
+    // SHOW OFF is dark but still exclusive. Only the explicit busking switch
+    // releases ownership. Reset at the frame boundary also clears LTP haze.
+    if (controlOwned())
+    {
+        stopAll();
+        m_startScene = false;
+        m_haze = m_fan = 0.0;
+        m_blackout = false;
+        m_doc->masterTimer()->setTrackControl(true, true);
+        emit liveChanged();
+        return;
+    }
+    m_sequenceGroups.clear();
+    m_restUntil = -1;
     if (m_testTimer.isActive())
         selfTest(); // cancel the test before releasing its output
     // AUTO went off: let everything fade out over a bar instead of clipping,
@@ -9594,6 +9711,8 @@ void TrackEngine::slotSelfTestStep()
 
 void TrackEngine::idle()
 {
+    m_sequenceGroups.clear();
+    m_restUntil = -1;
     if (m_doc == nullptr)
         return;
     if (m_testTimer.isActive())   // SELF TEST owns the stage until it is done
@@ -9727,6 +9846,32 @@ int TrackEngine::keyBiasOf(const QString &key)
     return -1;
 }
 
+bool TrackEngine::controlOwned() const
+{
+    return m_doc && m_doc->masterTimer()->trackControl();
+}
+
+void TrackEngine::setControlOwned(bool on)
+{
+    if (!m_doc || controlOwned() == on) return;
+    stopAll();
+    m_startScene = false;
+    m_haze = m_fan = 0.0;
+    m_blackout = false;
+    m_doc->masterTimer()->setTrackControl(on);
+    m_report = on ? tr("TRACK controls QLC+; stop external Light Rider output")
+                  : tr("QLC+ busking released; external Art-Net is selected at the node");
+    emit liveChanged();
+}
+
+void TrackEngine::setIncomingProfile(const QString &title, const QString &state, qreal energy)
+{
+    m_incomingTitle = title;
+    m_incomingState = state;
+    m_incomingEnergy = qIsFinite(energy) ? qBound(-1.0, energy, 1.0) : -1.0;
+    m_incomingAt = title.isEmpty() ? -1 : m_clock.elapsed();
+}
+
 void TrackEngine::setNextKey(const QString &key)
 {
     m_nextKeyBias = keyBiasOf(key);
@@ -9740,6 +9885,9 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     // costs a few kilobytes every four minutes.
     saveRoles();
     m_trackTitle = title;
+    setIncomingProfile(QString(), QString(), -1.0);
+    m_sequenceGroups.clear();
+    m_restUntil = -1;
     // the key leans the palette: minor to the cold side, major to the warm
     // (runde 48). Unknown - not every track is key-analysed - leans nowhere.
     m_keyBias = keyBiasOf(key);
@@ -9870,11 +10018,11 @@ void TrackEngine::startFunction(Function *func, int division)
     // Ableton Link stays the only clock: we change how long a step lasts,
     // never the timing source.
     if (division > 0)
-        func->start(m_doc->masterTimer(), FunctionParent::master(), 0,
+        func->start(m_doc->masterTimer(), FunctionParent::track(), 0,
                     Function::defaultSpeed(), Function::defaultSpeed(),
                     uint(division), Function::Beats);
     else
-        func->start(m_doc->masterTimer(), FunctionParent::master());
+        func->start(m_doc->masterTimer(), FunctionParent::track());
 }
 
 void TrackEngine::stopSlot(const QString &slot, bool hard)
@@ -10005,7 +10153,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
         int attr = m_activeAttr.value(slot, -1);
         if (func != nullptr && (func->isRunning() == false || func->stopped()))
         {
-            func->start(m_doc->masterTimer(), FunctionParent::master());
+            func->start(m_doc->masterTimer(), FunctionParent::track());
             if (attr >= 0)
                 func->releaseAttributeOverride(attr);
             attr = func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, applied);
@@ -10030,7 +10178,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
         m_fadeLevel.remove(fid);
     }
     else if (func->isRunning() == false || func->stopped())
-        func->start(m_doc->masterTimer(), FunctionParent::master());
+        func->start(m_doc->masterTimer(), FunctionParent::track());
 
     m_active.insert(slot, fid);
     m_activeLevel.insert(slot, level);
@@ -10040,6 +10188,8 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
 
 void TrackEngine::stopAll()
 {
+    m_sequenceGroups.clear();
+    m_restUntil = -1;
     if (m_testTimer.isActive())
         selfTest(); // no later test step may relight a stopped/replaced show
     foreach (const QString &slot, m_active.keys())

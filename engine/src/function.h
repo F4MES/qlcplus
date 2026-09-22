@@ -810,6 +810,11 @@ public:
      */
     void stop(FunctionParent parent, bool preserveAttributes = false);
 
+    /** Was this function started by the TRACK engine? Mirrors
+     *  startedAsChild(): the sources are private and behind a mutex, and the
+     *  timer needs the answer when TRACK takes the output over. */
+    bool startedByTrack() const;
+
     /**
      * Check, whether the function should be stopped ASAP. Functions can use this
      * to check, whether they should continue running or bail out.

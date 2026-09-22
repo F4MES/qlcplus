@@ -59,7 +59,7 @@ set(SRC_FILES
     tardis/simplecrypt.cpp tardis/simplecrypt.h
     tardis/tardis.cpp tardis/tardis.h
     trackmanager.cpp trackmanager.h
-    trackengine.cpp trackengine.h
+    trackengine.cpp trackengine.h trackstagepolicy.h
     treemodel.cpp treemodel.h
     treemodelitem.cpp treemodelitem.h
     uimanager.cpp uimanager.h

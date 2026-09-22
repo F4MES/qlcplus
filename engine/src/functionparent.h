@@ -55,6 +55,11 @@ public:
         ManualVCWidget,
         // Override anything (MasterTimer, test facilities...)
         Master = 0xffffffff,
+        // The TRACK page's automatic engine. Its own parent so the rest of
+        // QLC+ - buttons, sliders, cue stacks, the simple desk - can be held
+        // off the rig while TRACK drives, and so that handing control back
+        // leaves nothing of TRACK's running. (2026-09-22)
+        Track = 0xfffffffe,
     };
 
 private:
@@ -85,6 +90,11 @@ public:
     static FunctionParent master()
     {
         return FunctionParent(Master, 0);
+    }
+
+    static FunctionParent track()
+    {
+        return FunctionParent(Track, 0);
     }
 };
 
