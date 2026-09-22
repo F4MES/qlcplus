@@ -5399,6 +5399,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_effectsBefore = m_effects;
         int want = effectsFor(isDrop, isBreak);
         m_effects = qBound(m_effects - 1, want, m_effects + 1);
+        m_effectsBeat = beat;
     }
     else if (faderJump && isBreak == false)
     {
@@ -5409,15 +5410,30 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // cast goes straight to what the new energy asks for, on this bar.
         m_effectsBefore = m_effects;
         m_effects = effectsFor(isDrop, false);
+        m_effectsBeat = beat;
     }
     else if (faderNudge)
     {
         // one step towards what the fader asks for - rounded, not diced
+        //
+        // ... but not oftener than every two bars (runde 159). `energy` here is
+        // the slider TIMES the section's own loudness, so the analysis curve on
+        // its own drifts past the 0.05 nudge threshold every bar or two with
+        // nobody touching anything - and every step of this budget puts a group
+        // on stage or takes one off. Measured on the night of 2026-09-20: NINETY-
+        // NINE times a group left the cast and was back inside two bars, and 53
+        // of those happened without any section change at all - the strobes ten
+        // times inside a groove, the animation laser ten more. A group blinking
+        // out for a bar and returning reads as a fault.
+        //
+        // A section change and a real hand on the fader (faderJump, a fifth of
+        // the slider) both skip this: those are decisions, not drift.
         int want = int(qRound(effectsWant(isDrop)));
-        if (want != m_effects)
+        if (want != m_effects && (m_effectsBeat < 0 || beat - m_effectsBeat >= 8))
         {
             m_effectsBefore = m_effects;
             m_effects = qBound(m_effects - 1, want, m_effects + 1);
+            m_effectsBeat = beat;
         }
     }
     if (sectionChanged || faderJump || faderNudge || m_castEnergy < 0.0)
@@ -9735,6 +9751,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     // to come down again
     m_effects = 0;
     m_effectsBefore = 0;
+    m_effectsBeat = -1;
     m_zoom.clear();
     m_strobeSeen = -1;
     // the burst end is a beat number of THIS track: carrying it over would

@@ -801,6 +801,10 @@ private:
     QMap<QString, int> m_headMoveBeats;   // beats in a row a head group moved without us
     int m_effects;            // effect groups this section (locked, hysteresis)
     int m_effectsBefore;      // what the section before a build had
+    // the beat the cast budget last moved. A dwell, so the analysis curve
+    // cannot drift a group on and off stage every bar (runde 159). In-class
+    // default, deliberately: out of the constructor's list, out of -Wreorder.
+    int m_effectsBeat = -1;
     int m_starCeil;           // hottest star allowed this section (drawn from the energy)
     int m_lastBeat;
     int m_calmUntil;          // beat until which the panic look holds
