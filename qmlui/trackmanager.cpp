@@ -87,6 +87,8 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_colorCursor = 0;
     m_lastColorBar = -1;
     m_lastEngineBeat = -1;
+    m_lastSecStart = -1;                  // R168_SECTION_INIT
+    m_lastSecEnd = -1;
     m_movePick = Function::invalidId();
     for (int i = 0; i < TRACK_ROLE_COUNT; i++)
         m_roleFunctions.append(QList<quint32>());

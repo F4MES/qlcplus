@@ -312,9 +312,17 @@ void TrackEngine::slotDocSettled()
     // Function Manager edit mid-set was enough to trigger this. If the scene
     // is already gone with the project, applyAtmos() finds nothing and does
     // nothing.
-    if (m_haze > 0.0)
+    //
+    // ... and only while the id still names OUR scene. On a project switch
+    // these are the old show's ids, and function ids are small numbers every
+    // show reuses: applyAtmos() would write a nought into one of the new
+    // show's own scenes (Scene::setValue adds the channel), to be saved with
+    // it (runde 168).
+    Function *hazeFunc = m_doc != nullptr ? m_doc->function(m_hazeScene) : nullptr;
+    Function *fanFunc = m_doc != nullptr ? m_doc->function(m_fanScene) : nullptr;
+    if (m_haze > 0.0 && hazeFunc != nullptr && hazeFunc->name() == ENGINE_HAZE_SCENE)
         applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
-    if (m_fan > 0.0)
+    if (m_fan > 0.0 && fanFunc != nullptr && fanFunc->name() == ENGINE_FAN_SCENE)
         applyAtmos(m_fanScene, m_fanChannels, 0.0);
     m_haze = 0.0;
     m_fan = 0.0;
@@ -2632,8 +2640,14 @@ void TrackEngine::applyGroupOff()
         // mask can be running with nobody holding its slot. Switching the
         // group back on would then never turn it off again and the group
         // would stay dark for the rest of the night.
+        //
+        // ... unless BLACKOUT holds it: "black:" and "off:" run the SAME scene,
+        // and without this the mask BLACKOUT had just started was stopped here
+        // on the next call, restarted the call after - the laser bars and the
+        // animation lasers blinking every other beat through a blackout
+        // instead of going dark (runde 168).
         Function *func = fid != Function::invalidId() ? m_doc->function(fid) : nullptr;
-        if (func != nullptr && func->isRunning())
+        if (func != nullptr && func->isRunning() && m_active.contains(black) == false)
             func->stop(FunctionParent::master());
     }
 
@@ -5022,6 +5036,31 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_fillLast = beat - 8;
         m_sequenceGroups.clear();
         m_restUntil = -1;
+        // A jump BACK (a hot cue, a scrub) leaves every "beats since" stamp
+        // later than now, and `beat - stamp` negative: no colour change, no
+        // aim on a section change, no cast step and no echo until the track
+        // had played back past where it was. Treat the jump as the moment
+        // they last moved - the floors hold for their bar or two, and then
+        // the room is free (runde 168; m_hitBeats and m_darkUntil already
+        // did this).
+        if (m_colourSince > beat)
+            m_colourSince = beat;
+        if (m_effectsBeat > beat)
+            m_effectsBeat = beat;
+        if (m_echoBeat > beat)
+            m_echoBeat = beat;
+        // (a clamp, not a new aim - named apart from the two stamps
+        // verify_flicker counts)
+        foreach (const QString &group, m_aimSince.keys())
+        {
+            if (m_aimSince.value(group) > beat)
+                m_aimSince[group] = beat;
+        }
+        foreach (const QString &group, m_turnBeat.keys())
+        {
+            if (m_turnBeat.value(group) > beat)
+                m_turnBeat[group] = beat;
+        }
     }
     m_lastBeat = beat;
 
@@ -5316,7 +5355,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (incomingFresh)
         mixTurnBars = (m_incomingState == "break" || m_incomingState == "intro") ? 4
                     : (m_incomingState == "drop" ? 8 : 6);
-    const qreal motionTarget = incomingFresh && m_incomingEnergy >= 0.0 && mixBarsOut >= 4
+    const qreal motionTarget = incomingFresh && m_incomingEnergy >= 0.0 && sectionEnergy >= 0.0
+                               && mixBarsOut >= 4
         ? qBound(0.90, 1.0 + 0.20 * (m_incomingEnergy - sectionEnergy), 1.10) : 1.0;
     // A stale profile eases back too; no jump when data disappears.
     m_mixMotionScale += qBound(-0.02, motionTarget - m_mixMotionScale, 0.02);
@@ -5439,6 +5479,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the held programme - see the comment at `redraw`.
     bool faderJump = hold == false && beatInBar == 0 && m_movesEnergy >= 0.0
                   && qAbs(energy - m_movesEnergy) >= 0.20;
+    bool nudgeOwed = false;
     if ((sectionChanged || m_lastState.isEmpty()) && hold == false)
     {
         m_effectsBefore = m_effects;
@@ -5480,8 +5521,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_effects = qBound(m_effects - 1, want, m_effects + 1);
             m_effectsBeat = beat;
         }
+        else if (want != m_effects)
+            nudgeOwed = true;
     }
-    if (sectionChanged || faderJump || faderNudge || m_castEnergy < 0.0)
+    // A nudge the dwell held back is OWED, not spent: the reference stays
+    // where it was, so the step comes on the first bar the dwell allows. It
+    // used to be moved to the new energy anyway - and from then on the fader
+    // read as unmoved, so a hand pushing ENERGY 5-19 % within two bars of a
+    // section change got no step until the next section (runde 168). Drift
+    // that has gone back by then asks for nothing (want == m_effects) and is
+    // spent as before.
+    if (sectionChanged || faderJump || (faderNudge && nudgeOwed == false) || m_castEnergy < 0.0)
         m_castEnergy = energy;
     // Every re-pick below sits behind `hold == false`, so this is exactly the
     // moment the look on stage may change. A verdict belongs in the section
@@ -6155,9 +6205,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         int want = m_zoom.value(key, -1);
         bool pickZoom = want < 0 || (hold == false && (redraw
-                     || (isDrop && bar == 1 && beatInBar == 0)
+                     || (isDrop && dropBar == 1 && beatInBar == 0)
                      || (isBuild && beatInBar == 0 && ((prog > 0.5 && want != 0) || (prog <= 0.5 && want == 0)))));
-        if (isDrop && bar == 0 && hold == false)
+        // dropBar, not bar: a late drop (FAKE DROP) lands on bar m_dropLand,
+        // and `bar == 0` lost it its wide landing (runde 168)
+        if (isDrop && dropBar == 0 && hold == false)
             want = 2;                                        // the landing: everything wide
         else if (pickZoom)
         {
@@ -7798,7 +7850,14 @@ void TrackEngine::reapplyLevels()
         qreal out = m_activeLevel.value(slot, 1.0);
         if (slot.startsWith(QStringLiteral("dim:")))
         {
-            out *= pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master;
+            // A held flash is full, as in setPart() and slotPulseTimer(): no
+            // pulse under it, and no group trim while the operator holds the
+            // button - a trim or MASTER touched mid-flash pulled the strobes
+            // down to trim x pulse x master until the next beat (runde 168).
+            // The MASTER still applies, as it does there.
+            const bool held = m_flashHeld.contains(group);
+            const qreal trim = (m_flash && held) ? 1.0 : m_groupTrim.value(group, 1.0);
+            out *= (held ? 1.0 : pulseFactor(group)) * trim * m_master;
             // and the same on/off squaring setPart() does: an animation
             // laser's dimmer is a switch, and a fraction written to it is
             // rounded by the fixture in a way nobody can predict
@@ -8177,6 +8236,11 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
             // put two bars opposite at the bottom of the fader and 60 degrees
             // apart at the top - the fader ran the wrong way
             sw.spread = 0;
+            // ... and never mirrored: the head branch above dices sw.mirror,
+            // and applySweep() runs every second fixture Backward - every
+            // second bar in antiphase, the scatter this block exists to stop
+            // (runde 168)
+            sw.mirror = false;
             // A WAVE DOWN THE ROW, not a scatter. 60-180 degrees per bar put
             // every second bar in antiphase at the top, which from the floor
             // reads as six bars doing unrelated things. Tobias, 2026-09-20:
@@ -9206,8 +9270,14 @@ int TrackEngine::closingMinutes()
 {
     // 03:00 every night; 05:00 on New Year's night (the evening of the 31st
     // and the small hours of the 1st are the same night here)
+    // The night is named by its evening: before 21:00 it is still the night
+    // that began yesterday. Testing today's date made the small hours of the
+    // 31st - the night of the 30th - a New Year's night too, and the house
+    // closed at 05 with no slide down at 03 (runde 168).
     QDate d = QDate::currentDate();
-    bool newYear = (d.month() == 12 && d.day() == 31) || (d.month() == 1 && d.day() == 1);
+    if (QTime::currentTime().hour() < 21)
+        d = d.addDays(-1);
+    bool newYear = d.month() == 12 && d.day() == 31;
     return ((newYear ? 5 : 3) + 24 - 21) * 60;
 }
 
@@ -9958,6 +10028,11 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_calmUntil = m_calmUntil > m_lastBeat ? m_calmUntil - m_lastBeat : 0;
     m_lastBeat = 0;
     m_hitBeats.clear();
+    // two more beat stamps of the track that ended: the laser-bar echo waited
+    // for beat 604 of the new track after an echo on 600 of the old, and the
+    // animation lasers' turns the same, per group (runde 168)
+    m_echoBeat = -100;
+    m_turnBeat.clear();
     m_starCeil = 0;
     // the cast size is hysteretic, so a peak-time track that ended on four
     // groups handed four to the next track's intro and took three sections
