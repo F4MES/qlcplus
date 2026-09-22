@@ -1996,6 +1996,82 @@ void TrackEngine::ensureColourScenes()
         if (g.patternDevice)
             continue;
 
+        // THE WHITE LAMP, LEARNED FROM THE OPERATOR'S OWN WHITE SCENES.
+        //
+        // Three of this rig's six strobes have a white lamp and three do not
+        // (Tobias, 2026-09-22), and the fixture definitions for both models
+        // are not in this tree - so neither the White tag nor the channel
+        // name can be checked here. What CAN be checked is what the
+        // operator's own white scenes drive, and he confirmed those are the
+        // ones that have always blinked correctly: "de 3 lamper med hvid
+        // kanal virkede allerede (blinkede) foer, saa hvad end der hele
+        // tiden har virket som kanal er det rigtige."
+        //
+        // The test is: a channel that ONLY the white scenes touch, and that
+        // is neither the dimmer nor one of this fixture's red, green or
+        // blue. "Only white" is what makes it a lamp rather than part of the
+        // look - a pan or a zoom is carried by every colour's scene alike.
+        //
+        // The first version of this left out "only white" and simply took
+        // everything a white scene wrote that was not the dimmer or RGB.
+        // Simulated against the show file before it went anywhere, that
+        // learned PAN, TILT, STROBE and ZOOM on the seven wash heads as
+        // "white lamps" and would have driven them to 70 % on every white.
+        // With the rule as it stands the simulation returns exactly three
+        // channels in the whole rig: channel 8 on the three 8+8 strobes.
+        //
+        // This is NOT g.colourValue - that only learns a channel when at
+        // least two different COLOURS write it differently, and channel 8 is
+        // written by the white scenes and by nothing else. It would always
+        // come back empty; I checked before building on it.
+        QHash<quint32, QSet<quint32> > whiteCh, otherCh;
+        for (QHash<quint32, TrackFuncInfo>::const_iterator wf = m_funcs.constBegin();
+             wf != m_funcs.constEnd(); ++wf)
+        {
+            if (wf.value().generated || wf.value().colour.isEmpty()
+                || wf.value().groups.contains(key) == false)
+                continue;
+            Scene *ws = qobject_cast<Scene *>(m_doc->function(wf.key()));
+            if (ws == nullptr)
+                continue;
+            bool isWhiteScene = wf.value().colour == QStringLiteral("white");
+            foreach (const SceneValue &sv, ws->values())
+            {
+                if (sv.value == 0 || g.fixtures.contains(sv.fxi) == false)
+                    continue;
+                if (isWhiteScene)
+                    whiteCh[sv.fxi].insert(sv.channel);
+                else
+                    otherCh[sv.fxi].insert(sv.channel);
+            }
+        }
+        QHash<quint32, QList<quint32> > whiteLamps;
+        for (QHash<quint32, QSet<quint32> >::const_iterator wc = whiteCh.constBegin();
+             wc != whiteCh.constEnd(); ++wc)
+        {
+            Fixture *wfx = m_doc->fixture(wc.key());
+            if (wfx == nullptr)
+                continue;
+            quint32 wdim = dimmerChannel(wfx);
+            foreach (quint32 ch, wc.value())
+            {
+                if (ch == wdim || otherCh.value(wc.key()).contains(ch))
+                    continue;
+                const QLCChannel *wch = wfx->channel(ch);
+                if (wch == nullptr || wch->colour() == QLCChannel::Red
+                    || wch->colour() == QLCChannel::Green || wch->colour() == QLCChannel::Blue)
+                    continue;
+                // and never something that MOVES or focuses the fixture. The
+                // rule above already leaves only channel 8 on this rig, but
+                // the failure this guard prevents is a head swinging on every
+                // white, and it costs one comparison.
+                if (wch->group() == QLCChannel::Pan || wch->group() == QLCChannel::Tilt
+                    || wch->group() == QLCChannel::Speed || wch->group() == QLCChannel::Beam)
+                    continue;
+                whiteLamps[wc.key()].append(ch);
+            }
+        }
+
         QStringList wanted = m_palette;
         if (wanted.contains("white") == false)
             wanted.append("white");                 // the flash
@@ -2049,17 +2125,19 @@ void TrackEngine::ensureColourScenes()
                 // 80-segment ones write red, green and blue only. Channel 8
                 // is the lamp, and those three should use it alone.
                 //
-                // The definition's own White tag is the first source. The
-                // second is the channel's NAME - the same trick this file
-                // already uses on the shutter channels a few hundred lines
-                // down - because the definitions for these two strobes are
-                // not in our tree and cannot be checked here.
-                //
-                // g.colourValue is deliberately NOT a source: it only learns
-                // a channel when at least two different COLOURS write it
-                // differently, and channel 8 is written by the white scenes
-                // and nothing else. It would always come back empty.
+                // Three sources, in order of how much they prove: the
+                // definition's own White tag, what the operator's white
+                // scenes drive (whiteLamps, learned above the colour loop -
+                // this is the one that finds channel 8 on the 8+8 strobes),
+                // and last the channel's NAME, the same trick this file
+                // already uses on the shutter channels.
                 QList<quint32> whiteLamp = wcs;
+                foreach (quint32 c, whiteLamps.value(fid))
+                {
+                    if (rcs.contains(c) == false && gcs.contains(c) == false
+                        && bcs.contains(c) == false && whiteLamp.contains(c) == false)
+                        whiteLamp.append(c);
+                }
                 if (isWhite)
                 {
                     for (quint32 i = 0; i < fxi->channels(); i++)
@@ -2067,9 +2145,6 @@ void TrackEngine::ensureColourScenes()
                         const QLCChannel *qch = fxi->channel(i);
                         if (qch == nullptr || qch->group() != QLCChannel::Intensity)
                             continue;
-                        // a white SHUTTER is not a white lamp, and it is not
-                        // an Intensity channel either - the group test above
-                        // keeps it out
                         if (qch->name().contains(QStringLiteral("white"), Qt::CaseInsensitive) == false)
                             continue;
                         if (rcs.contains(i) || gcs.contains(i) || bcs.contains(i)
