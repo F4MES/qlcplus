@@ -25,6 +25,7 @@
 #include <QHash>
 #include <QObject>
 #include <QMutex>
+#include <QAtomicInt>
 #include <QList>
 
 class MasterTimerPrivate;
@@ -108,14 +109,15 @@ public:
     /** Get the number of currently running functions */
     int runningFunctions() const;
 
-    /** TRACK owns the output: while this is on, nothing started from the
-     *  Virtual Console may run. Switching it on stops every function the
-     *  console started, so no button, slider or cue list of the busking side
-     *  is left holding a channel. `force` runs that sweep again even when
-     *  TRACK already owns the output. SHOW ON switches it on, SHOW OFF off -
-     *  nothing else (TrackManager::setAutoRun). */
-    bool trackControl() const;
-    void setTrackControl(bool on, bool force = false);
+    /** SHOW ON clears the Virtual Console once, so nothing left running from
+     *  busking can get in the way of the automatic show. This half tells the
+     *  console's own DMX sources - the Level sliders - to let go of their
+     *  channels: each slider sees the serial move on its next tick
+     *  (VCSlider::writeDMXLevel). TrackEngine::resetConsole() stops the
+     *  functions. Nothing is locked: the console works as normal right after,
+     *  and a slider writes again the moment a hand moves it. (Runde 166.) */
+    void resetConsole();
+    int consoleResetSerial() const;
 
 signals:
     /** Tells that the list of running functions has changed */
@@ -142,8 +144,9 @@ private:
     /** Flag for stopping all functions */
     bool m_stopAllFunctions;
 
-    /** TRACK owns the output - see trackControl() */
-    bool m_trackControl = false;
+    /** Moved by resetConsole(). Written from the GUI thread, read from the
+     *  timer thread - hence atomic. */
+    QAtomicInt m_consoleResetSerial;
 
     /*************************************************************************
      * DMX Sources

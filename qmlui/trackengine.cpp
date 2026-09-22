@@ -9524,13 +9524,11 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 void TrackEngine::release()
 {
     // This fades the show out over a bar exactly as it did before round 162.
-    // It does NOT hand the console back: release() is reached from more than
-    // SHOW OFF - TrackManager::stopLook() calls it, and stopLook() runs from
-    // applyLook() on the legacy path and from setRoleMode() too, both with the
-    // show still on. The console is unlocked in TrackManager::setAutoRun(false)
-    // and nowhere else: "Det er bare SHOW on/OFF der skal styre skift mellem
-    // busking og autoshow" (Tobias, 2026-09-22). (Round 162 had this function
-    // cut hard and keep the console locked; that is gone too.)
+    // It touches nothing on the Virtual Console: the console is cleared once,
+    // at SHOW ON (resetConsole), and never locked. release() is reached from
+    // more than SHOW OFF - stopLook() calls it from applyLook() and
+    // setRoleMode() with the show still on - so nothing console-related may
+    // live here. (Round 162 had this function cut hard; that is gone too.)
     m_sequenceGroups.clear();
     m_restUntil = -1;
     if (m_testTimer.isActive())
@@ -9876,21 +9874,30 @@ int TrackEngine::keyBiasOf(const QString &key)
     return -1;
 }
 
-bool TrackEngine::controlOwned() const
+void TrackEngine::resetConsole()
 {
-    return m_doc && m_doc->masterTimer()->trackControl();
-}
-
-void TrackEngine::setControlOwned(bool on)
-{
-    // Lock or unlock the Virtual Console - nothing else. Called from exactly
-    // two places: SHOW ON (TrackManager::setAutoRun) and SHOW OFF (release()).
-    // It does not stop the show, and it does not touch HAZE, FAN or BLACKOUT:
-    // round 162's version reset all three, so an operator who set the haze
-    // before pressing SHOW ON had it switched off by the button.
-    if (!m_doc || controlOwned() == on) return;
-    m_doc->masterTimer()->setTrackControl(on);
-    emit liveChanged();
+    // SHOW ON, once (TrackManager::setAutoRun). Tobias, 2026-09-22: "SHOW ON
+    // skal ikke lukke for VC siderne, den skal blot soerge for at resette alt
+    // paa VC saa naar auto-show starter, er vi sikre paa intet i VC'en kan
+    // drille. Men naar showet ER i gang, skal det stadig vaere muligt at
+    // buske. For at resette igen, maa man genstarte showet."
+    //
+    // Doc's list, walked here in the GUI thread - never the MasterTimer's own
+    // m_functionList, which the timer thread changes without a lock.
+    // isRunning(), startedByConsole() and stop() are each safe to call from
+    // this thread: the Virtual Console's buttons call stop() from it all night.
+    // A console function's children (a chaser's steps, a collection's members)
+    // were started by that function and stop with it.
+    if (m_doc == nullptr)
+        return;
+    foreach (Function *f, m_doc->functions())
+    {
+        if (f != nullptr && f->isRunning() && f->startedByConsole())
+            f->stop(FunctionParent::master());
+    }
+    // ... and the Level sliders, which never start a function: each lets go
+    // of its channels on its next tick (VCSlider::writeDMXLevel)
+    m_doc->masterTimer()->resetConsole();
 }
 
 void TrackEngine::setIncomingProfile(const QString &title, const QString &state, qreal energy)

@@ -1835,18 +1835,22 @@ void VCSlider::writeDMXStrobe(MasterTimer* timer, QList<Universe *> universes)
 
 void VCSlider::writeDMXLevel(MasterTimer* timer, QList<Universe *> universes)
 {
-    // TRACK owns the output: a Level slider left up from busking does not
-    // write under the show. Its faders go (this is the timer thread, the
-    // only thread that fills m_fadersMap), and come back on their own when
-    // TRACK lets go. Runde 164.
-    if (timer != nullptr && timer->trackControl())
+    QMutexLocker locker(&m_levelValueMutex);
+
+    // SHOW ON cleared the console (MasterTimer::resetConsole): let go of every
+    // channel this slider holds, once. The handle stays where it is, and the
+    // slider writes again the moment a hand moves it (m_levelValueChanged) -
+    // busking during the show works as always. To clear again, restart the
+    // show. This is the timer thread, the thread that fills m_fadersMap; the
+    // lock above is the one m_levelValueChanged is guarded by. (Runde 166.)
+    if (timer != nullptr && timer->consoleResetSerial() != m_consoleResetSeen)
     {
+        m_consoleResetSeen = timer->consoleResetSerial();
         if (m_fadersMap.isEmpty() == false)
             removeActiveFaders();
+        m_levelValueChanged = false;
         return;
     }
-
-    QMutexLocker locker(&m_levelValueMutex);
 
     uchar modLevel = (sliderMode() == Strobe) ? m_strobeLevel : uchar(m_value);
 

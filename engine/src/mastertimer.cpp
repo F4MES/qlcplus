@@ -245,38 +245,14 @@ void MasterTimer::startFunction(Function* function)
         m_startQueue.append(function);
 }
 
-bool MasterTimer::trackControl() const
+void MasterTimer::resetConsole()
 {
-    return m_trackControl;
+    m_consoleResetSerial.fetchAndAddRelaxed(1);
 }
 
-void MasterTimer::setTrackControl(bool on, bool force)
+int MasterTimer::consoleResetSerial() const
 {
-    // `force` sweeps the console again even when TRACK already owns the
-    // output. No caller needs it since SHOW ON/OFF became the only switch
-    // (runde 165); it stays because it costs nothing and changing the
-    // signature again is a risk this week does not need.
-    if (m_trackControl == on && force == false)
-        return;
-    m_trackControl = on;
-    if (on == false)
-        return;
-    // Taking over: every function the CONSOLE started goes, so nothing of
-    // the busking side is left holding a channel. Not "everything that is
-    // not TRACK's": TRACK's own chasers run their steps as children with a
-    // Function parent, and that rule would have stopped them mid-show. A
-    // console function's children stop with it.
-    QList<Function *> console;
-    {
-        QMutexLocker locker(&m_functionListMutex);
-        foreach (Function *f, m_functionList)
-        {
-            if (f != NULL && f->startedByConsole())
-                console.append(f);
-        }
-    }
-    foreach (Function *f, console)
-        f->stop(FunctionParent::master());
+    return m_consoleResetSerial.loadRelaxed();
 }
 
 void MasterTimer::stopAllFunctions()

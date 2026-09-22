@@ -332,7 +332,6 @@ class TrackEngine : public QObject
     Q_OBJECT
     Q_DISABLE_COPY(TrackEngine)
 
-    Q_PROPERTY(bool controlOwned READ controlOwned NOTIFY liveChanged)
     Q_PROPERTY(int roleCount READ roleCount CONSTANT)
     Q_PROPERTY(QVariantList groups READ groups NOTIFY tableChanged)
     Q_PROPERTY(QVariantList palette READ palette NOTIFY tableChanged)
@@ -588,8 +587,10 @@ public:
      *  un-patched trackmanager.cpp still compiles; the patch passes it. */
     void trackLoaded(const QString &title = QString(), const QString &key = QString());
     /** the key of the track on the other deck (BLT "next"), for the mix */
-    bool controlOwned() const;
-    void setControlOwned(bool on);
+    /** SHOW ON, once: stop everything the Virtual Console started and have
+     *  its Level sliders let go of their channels, so nothing left over from
+     *  busking gets in the way of the show. Locks nothing. (Runde 166.) */
+    void resetConsole();
     void setNextKey(const QString &key);
     void setIncomingProfile(const QString &title, const QString &state, qreal energy);
     /** Nothing is playing but AUTO is on: run the start scene(s). */

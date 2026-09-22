@@ -298,6 +298,8 @@ protected:
 
     QMutex m_levelValueMutex;
     bool m_levelValueChanged;
+    /** the MasterTimer::consoleResetSerial() last acted on (SHOW ON, runde 166) */
+    int m_consoleResetSeen = 0;
 
     bool m_monitorEnabled;
     uchar m_monitorValue;

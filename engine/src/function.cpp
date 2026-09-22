@@ -1145,19 +1145,6 @@ void Function::start(MasterTimer* timer, FunctionParent source, quint32 startTim
 
     Q_ASSERT(timer != NULL);
 
-    // TRACK owns the output: nothing on the Virtual Console - a button, a
-    // slider, a cue list, an XY pad, an audio trigger - can start a function
-    // over the top of it. Only the console is refused: a chaser's steps, a
-    // collection's members and a show's tracks are started by their parent
-    // FUNCTION, and TRACK runs chasers all night.
-    if (timer != NULL && timer->trackControl()
-        && (source.type() == FunctionParent::ManualVCWidget
-            || source.type() == FunctionParent::AutoVCWidget))
-    {
-        qDebug() << "Function start() refused while TRACK controls the output:" << m_name;
-        return;
-    }
-
     {
         QMutexLocker sourcesLocker(&m_sourcesMutex);
         if (m_sources.contains(source))
