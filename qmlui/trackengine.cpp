@@ -4139,7 +4139,29 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // the 37 beats they were the accent group. Both are by design. The
     // guard stays because the rainbow case is real; the report is not
     // explained by it, and nothing was changed on the strength of it.)
-    else if (m_groups.value(group).perEye || m_groups.value(group).lasers)
+    //
+    // ... but NOT on a pattern device, whatever its group is called. Sixteen
+    // lines above, a pattern device is deliberately admitted in every colour,
+    // with the reason spelled out: holding it to the room's colour left it
+    // with nothing to show whenever the room was a colour it does not have.
+    // This branch then threw that away again, because `lasers` is set from
+    // the GROUP NAME - `g.lasers = low.contains("laser")` - and the group is
+    // called "Animation Laser". So the exemption written directly above has
+    // never once taken effect.
+    //
+    // Measured 2026-09-22 (runde 130) on the show file: the animation
+    // lasers have twelve red motion scenes, ten blue, five white, four cyan
+    // - and ONE green and ONE magenta, neither of them a motion. In green or
+    // magenta `exact` is therefore empty, and the group was handed nothing
+    // for the whole section. In a break that is the only extra group a break
+    // is allowed to light, so the break stood on the base alone.
+    //
+    // The guard itself is right for the laser BARS: their colour is a
+    // channel value, and a rainbow programme would overwrite the colour
+    // scene outright. A pattern device has no colour scene to overwrite -
+    // the scene IS the colour.
+    else if ((m_groups.value(group).perEye || m_groups.value(group).lasers)
+             && m_groups.value(group).patternDevice == false)
         return Function::invalidId();
 
     // this tier's motions first
