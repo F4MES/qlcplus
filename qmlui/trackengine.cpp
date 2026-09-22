@@ -6194,7 +6194,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the turnaround: bars 7-8 of an eight-bar phrase move twice as
         // fast, the way a drummer fills into the next phrase - down to
         // eighths and sixteenths when it is hot. The landing bar stands still
-        else if (key != base && landing)
+        // ... but not on the strobes (runde 154). ENGINE_PAT_STATIC lights
+        // EVERY lamp in the group - patternMask returns an all-ones mask - so
+        // on six powerful strobes hung across the ceiling a landing bar is a
+        // full bank standing lit, which is the one picture Tobias ruled out.
+        // They keep walking through it; the landing is still audible in the
+        // rest of the room.
+        else if (key != base && landing && g.strobes == false)
             mv.pattern = ENGINE_PAT_STATIC;
         else if (key != base && (m_fullAuto == false || key == m_rhythmLead) && turnaround && mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_FILL)
         {
@@ -6247,9 +6253,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_fullAuto && tier > 0 && key != m_rhythmLead && g.strobes
             && mv.ownChaser == false)
         {
-            mv.pattern = ENGINE_PAT_STATIC;
+            // runde 154: this used to pin the picture to STATIC and the pulse
+            // to the downbeat - a lit bank blinking once a bar, which is
+            // exactly what "never standing still on a colour" rules out. The
+            // walk and its beat stay; sub-beat flicker and the bar flash do
+            // not, because those are the lead's job.
             mv.subSteps = 1;
-            mv.pulseOn = turn ? 0 : 3;
             mv.flashBar = false;
         }
 
@@ -6829,6 +6838,11 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
 {
     if (tier == 0)
         return move; // the existing break's base and occasional fan are deliberate
+    // what drawMove() chose, kept before this function flattens it - a strobe
+    // group gets its walk back at the end (runde 154)
+    const int drawnPattern = move.pattern;
+    const int drawnPulseOn = move.pulseOn;
+    const int drawnStepBeats = move.stepBeats;
     move.phase = 0;  // one rhythmic origin across the room
     if (group == m_rhythmLead)
         return move;
@@ -6846,7 +6860,24 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
     move.pattern = ENGINE_PAT_STATIC;
     move.pulseOn = 3;
     move.bare = g.strobes;
-    move.pulse = g.strobes ? 0.95 : qMin(0.30, move.pulse);
+    move.pulse = g.strobes ? 1.0 : qMin(0.30, move.pulse);
+    // ... except that a STROBE group must never stand still (runde 154). This
+    // is the composition rule making every group but the lead calm, and for
+    // the strobes "calm" was a lit bank pulsing once a bar. They keep their
+    // walk and their own beat; what they give up is the pace - two beats a
+    // lamp rather than one, which is the slow chase Tobias asked for.
+    if (g.strobes && move.bare)
+    {
+        move.pattern = drawnPattern;
+        // and the pace drawMove drew, not the flat four beats this function
+        // gives everyone else: four beats a lamp on six lamps is six bars to
+        // cross the room, which reads as one lamp standing lit rather than as
+        // a walk. drawMove already slows it down for a quiet room (four beats
+        // under 0.30 on the fader, two under 0.55, one above) and the lamp
+        // blinks on every one of its beats while it is the lit one.
+        move.stepBeats = drawnStepBeats;
+        move.pulseOn = drawnPulseOn;
+    }
     // A strobe group is never the rhythm lead (chooseLead leaves it out), so
     // this line used to be the second of three places that shut the door on
     // the show's strobe chases. drawMove has already made that call - a drop,
@@ -6944,20 +6975,31 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     // so nothing fights the blink, and the energy decides how often it lands.
     if (g.strobes)
     {
-        // Not always a picture behind them. Four times in ten the group runs
-        // one lamp at a time with nothing lit in between - a blink walking
-        // down the row rather than a lit bank that flickers.
-        mv.bare = g.parts.count() >= 2 && chance(0.40);
+        // ALWAYS A WALK (runde 154). Tobias, 2026-09-22: "stroberne er kun
+        // rytmiske ja, men de maa gerne lave langsomme chases ogsaa, altsaa
+        // skift paa beat pr. lampe henover rummet, frem og tilbage, og puls op
+        // og HELT ned. Det er bare vigtigt de aldrig staar statisk taendt paa
+        // en farve uden at der 'sker noget'." Six of them, hung from the
+        // ceiling two to three metres apart, and powerful: a lamp walking the
+        // row is a sweep across the whole room, and a lit bank is a flat glare.
+        //
+        // What was here drew a still picture SIX TIMES IN TEN - the 40 % dice
+        // below, and under 0.60 on the fader it was static every time. That is
+        // the thing he is describing.
+        mv.bare = g.parts.count() >= 2;      // one lamp at a time, nothing between
         if (mv.bare)
         {
-            mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG, ENGINE_PAT_CHASE });
-            mv.stepBeats = 1;
+            // across the room, and back again: PINGPONG turns at the end of
+            // the row, CHASE wraps round to the start
+            mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
+            // a SLOW walk while the room is quiet, one lamp a beat once it is
+            // going. Never faster than the beat - above it, the hardware
+            // strobe is what takes over (driveStrobe).
+            mv.stepBeats = e < 0.30 ? 4 : (e < 0.55 ? 2 : 1);
         }
         else
         {
-            mv.pattern = e > 0.60 && g.parts.count() >= 2
-                       ? pick({ ENGINE_PAT_STATIC, ENGINE_PAT_ODDEVEN, ENGINE_PAT_STATIC })
-                       : ENGINE_PAT_STATIC;
+            mv.pattern = ENGINE_PAT_STATIC;  // one lamp has no row to walk
             mv.stepBeats = 4;
         }
         mv.subSteps = 1;
@@ -6980,9 +7022,13 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // a drop is where a coloured row across the strobes is a look rather
         // than a wobble. Everything else about them is unchanged.
         mv.ownChaser = tier == 2 && e >= 0.50 && chance(0.25);
-        // near-total at the bottom of the fader, total at the top: either way
-        // there is nothing between the blinks
-        mv.pulse = 0.85 + 0.15 * e;
+        // ... and ALL the way down between the hits, at every energy. It was
+        // 0.85 + 0.15 * e, so at the bottom of the fader the room sat at
+        // fifteen per cent of a very bright lamp between the blinks: lit, on a
+        // colour, with nothing happening. (The floor never quite reaches zero
+        // - the fader and the bass scale the depth and both cap at 0.95, which
+        // is there because a dimmer-as-switch fixture reads 1.0 as off.)
+        mv.pulse = 1.0;
         // the downbeat while the room is quiet, the backbeat in between,
         // every beat once it is going. A build hands them over to the beat as
         // it runs out; a break gets the downbeat and nothing else.
