@@ -1664,6 +1664,17 @@ Rectangle
                     // once, here - not once per tile. trackEngine.groups is a
                     // full rebuild of the function table, not a cheap getter.
                     property int n: trackEngine ? Math.max(1, trackEngine.groups.length) : 1
+                    // ... and the same for the other two getters that are not
+                    // cheap either (runde 142). trims() builds a QVariantMap
+                    // over every group on each call and cast() copies a list
+                    // and SORTS it; the delegate below asked for trims twice
+                    // and cast once, so five tiles came to ten map rebuilds
+                    // and five sorts every time a trim moved or the cast
+                    // changed - and a finger dragging a fader changes the
+                    // trim continuously. Read once here, per change, and the
+                    // tiles read these.
+                    property var allTrims: trackEngine ? trackEngine.trims : ({})
+                    property var litNow: trackEngine ? trackEngine.cast : []
                     width: parent.width
                     height: parent.height
                     spacing: 6
@@ -1686,11 +1697,11 @@ Rectangle
                             property var md: modelData ? modelData
                                                        : ({ key: "", enabled: true,
                                                             switchOnly: false, base: false })
-                            property bool lit: trackEngine ? trackEngine.cast.indexOf(md.key) >= 0 : false
+                            property bool lit: castRow.litNow.indexOf(md.key) >= 0
                             property bool off: !md.enabled
                             property bool switchOnly: md.switchOnly === true
-                            property real trim: (trackEngine && trackEngine.trims[md.key] !== undefined)
-                                                ? trackEngine.trims[md.key] : 1.0
+                            property real trim: castRow.allTrims[md.key] !== undefined
+                                                ? castRow.allTrims[md.key] : 1.0
                             width: (castRow.width - (castRow.n - 1) * castRow.spacing) / castRow.n
                             height: castRow.height
                             radius: 6
