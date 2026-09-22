@@ -7202,12 +7202,25 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     // forskellige grupper ... Kan slet ikke forstaa hvis der skulle vaere saa
     // mange forskellige som du siger der er." He was right, and the count was
     // not the problem - this line was.
+    // HALF THE NIGHT EACH (runde 156, Tobias' decision 2026-09-22). Two
+    // libraries were built for full auto: the 4867 AUTO chases in the show
+    // file, and the handful of shapes this file computes live. Measured on
+    // the night of 2026-09-20, the live shapes won NINE SECTIONS IN TEN
+    // wherever the fader was up - the wash had one of the AUTO chases in 11 %
+    // of its drops and 15 % of its grooves, the Mini in 6 % and 18 %, while a
+    // BREAK was 100 % because a break never reaches the branches below. That
+    // is not a split, it is one library with the other kept as a spare.
+    //
+    // "hvis det er nogle programmer du har bygget til motoren, skal de jo
+    // bruges 50/50? ogsaa hele aftenen vel?" - so: about half, at every
+    // energy. The floor under the groove ramp is what makes it hold at the
+    // quiet end too; the two kills further down are what used to eat it.
     if (isBase)
-        mv.ownChaser = rng->bounded(10) < 7;
+        mv.ownChaser = rng->bounded(100) < 60;
     else if (tier == 2)
-        mv.ownChaser = rng->bounded(10) < 8;
+        mv.ownChaser = rng->bounded(100) < 65;
     else
-        mv.ownChaser = rng->bounded(1000) < int(800.0 * qBound(0.15, (e - 0.05) / 0.5, 1.0));
+        mv.ownChaser = rng->bounded(1000) < int(650.0 * qBound(0.70, (e - 0.05) / 0.5, 1.0));
 
     // A linear slider deserves a linear engine: nothing below switches at a
     // threshold. Every chance and depth is a ramp of the energy, so 55 % and
@@ -7357,7 +7370,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     // where SPARKLE - a fresh random set every step - belongs.
     // never on the base: that group is the light the room stands on, and the
     // block just above spends fifteen lines saying so
-    if (tier == 2 && isBase == false && g.parts.count() >= 2 && chance(0.10 + 0.55 * e))
+    // (runde 156: this used to fire 0.10 + 0.55 * e - six drops in ten at the
+    // top - and every one of them took an AUTO chase off the group. Sparkle is
+    // a punch, not the drop's normal state.)
+    if (tier == 2 && isBase == false && g.parts.count() >= 2 && chance(0.08 + 0.15 * e))
     {
         mv.bare = true;
         mv.ownChaser = false;            // or the pattern never reaches the rig
@@ -7381,11 +7397,16 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     qreal fest = qBound(0.0, (e - 0.45) / 0.55, 1.0);
     if (fest > 0.0)
     {
-        if (chance(0.55 + 0.40 * fest))
+        // runde 156: this was 0.55 + 0.40 * fest - up to 95 % of sections at
+        // the top - and it is the single line that emptied the AUTO library
+        // above 45 % on the fader. It still has to exist (see below), but a
+        // quarter to two fifths is enough to make the top of the fader visible
+        // without taking the other library away.
+        if (chance(0.10 + 0.15 * fest))
         {
             // a generated pattern only reaches the rig when the group is not
-            // already running one of the user's chases - and the base runs
-            // one seven times in ten, so without this the top of the fader
+            // already running one of the AUTO chases - and the base asks for
+            // one most of the time, so without this the top of the fader
             // changed nothing at all on the heads
             mv.ownChaser = false;
             mv.pattern = isBase
