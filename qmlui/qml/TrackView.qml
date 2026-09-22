@@ -310,9 +310,12 @@ Rectangle
                         {
                             if (nm === null) return qsTr("No further points")
                             var d = nm.beat - trackViewRoot.currentBeat
+                            // bars rounded UP, like the countdown in the waveform and
+                            // the footer: "in 1 beat (0 bars)" sat next to a "DROP 1"
+                            var bars = Math.ceil(d / 4)
                             return qsTr("Next") + ": " + nm.type.toUpperCase()
-                                   + " " + qsTr("in") + " " + d + " " + qsTr("beats")
-                                   + "  (" + Math.round(d / 4) + " " + qsTr("bars") + ")"
+                                   + " " + qsTr("in") + " " + d + " " + (d === 1 ? qsTr("beat") : qsTr("beats"))
+                                   + "  (" + bars + " " + (bars === 1 ? qsTr("bar") : qsTr("bars")) + ")"
                         }
                         color: nm === null ? trackViewRoot.cDim
                                            : trackViewRoot.markerColor(nm.type)
@@ -684,9 +687,9 @@ Rectangle
                         TrackTile
                         {
                             objectName: "addFlag:"+modelData
-                            width: 74
+                            width: 82          // room for "+ NORMAL", which was cut to "+ NORMA"
                             height: 44
-                            label: "+ " + modelData.substring(0, 5).toUpperCase()
+                            label: "+ " + modelData.toUpperCase()
                             activeColor: trackViewRoot.markerColor(modelData)
                             active: true                  // in its section colour, like the SECTION row
                             opacity: 0.85
