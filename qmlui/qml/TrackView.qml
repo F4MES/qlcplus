@@ -1137,7 +1137,7 @@ Rectangle
             }
         }
 
-        // =============================================== live controls  (LIVE_V20_START)
+        // =============================================== live controls  (LIVE_V22_START)
         // What a DJ touches while playing. Two bars, one style: ENERGY (how
         // wild - the engine's appetite for effects, pulse and speed; creeps up
         // by the clock unless a hand takes over) and MASTER (how bright). Then
@@ -1446,17 +1446,75 @@ Rectangle
                 onTapped: trackEngine.next()
             }
 
-            // ---- blackout: a toggle. Everything at zero; the engine keeps
-            //      following the track underneath, so the lights come back on
-            //      the right look.
-            TrackTile
+            // ---- blackout: HOLD, and it latches if your finger leaves the
+            //      button (Tobias, 2026-09-22 - "ligesom det fungerer i
+            //      lightrider"). Press and hold: dark. Let go on the button:
+            //      light. Slide off the button and let go: it stays dark
+            //      until you tap it again. Which is the useful shape - you
+            //      can hold a blackout through a breakdown without your
+            //      thumb having to stay perfectly still, and you can park it.
+            //
+            //      The engine keeps following the track underneath the
+            //      whole time, so the lights come back on the right look.
+            Rectangle
             {
+                id: blackoutTile
+                property bool armed: false          // this press is the one holding it
+
                 Layout.preferredWidth: trackViewRoot.touchH * 2.2
                 Layout.fillHeight: true
-                label: qsTr("BLACKOUT")
-                active: trackEngine ? trackEngine.blackout : false
-                activeColor: "#B03030"
-                onTapped: trackEngine.blackout = !trackEngine.blackout
+                radius: 4
+                color: (trackEngine && trackEngine.blackout) ? "#B03030" : "#2A2A2A"
+                border.width: 1
+                border.color: "#4A4A4A"
+
+                Text
+                {
+                    anchors.centerIn: parent
+                    text: qsTr("BLACKOUT")
+                    color: (trackEngine && trackEngine.blackout) ? "#FFFFFF" : "#C8C8C8"
+                    font.bold: true
+                    font.pixelSize: 16
+                }
+
+                MouseArea
+                {
+                    anchors.fill: parent
+                    // do not let a Flickable under this steal the press: a
+                    // stolen grab would fire onCanceled and leave the room
+                    // dark with nothing holding it
+                    preventStealing: true
+                    onPressed:
+                    {
+                        if (!trackEngine)
+                            return
+                        if (trackEngine.blackout)
+                        {
+                            // latched on: this tap lets it go
+                            trackEngine.blackout = false
+                            blackoutTile.armed = false
+                        }
+                        else
+                        {
+                            trackEngine.blackout = true
+                            blackoutTile.armed = true
+                        }
+                    }
+                    onReleased: (mouse) =>
+                    {
+                        if (!trackEngine || !blackoutTile.armed)
+                            return
+                        blackoutTile.armed = false
+                        // released ON the button: a momentary hold, let go.
+                        // released off it: leave it latched.
+                        if (mouse.x >= 0 && mouse.y >= 0
+                            && mouse.x <= width && mouse.y <= height)
+                            trackEngine.blackout = false
+                    }
+                    // the grab taken away from us counts as "finger left the
+                    // button": latched, not released
+                    onCanceled: blackoutTile.armed = false
+                }
             }
             // ---- flash: hold to strobe
             Rectangle

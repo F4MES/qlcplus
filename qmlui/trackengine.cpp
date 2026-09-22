@@ -1939,7 +1939,12 @@ void TrackEngine::genFlash(bool on, const QString &colour)
                     stopSlot("col:" + key, true);
                 run("flash:" + key, fid, 1.0, 0, true);
             }
-            // full means full: no pulse or breath on the flash itself
+            // full means full: no pulse, no breath and no group trim on the
+            // flash itself. The trim is skipped in setPart() as long as the
+            // group is in m_flashHeld, so the mark has to go in BEFORE the
+            // dimmer is driven - and it stays, so moving the group's fader
+            // mid-flash does not pull the flash down either.
+            m_flashHeld.insert(key);
             qreal keepDepth = m_pulseDepth.value(key, 0.0);
             int keepBreath = m_breathe.value(key, 0);
             m_pulseDepth.insert(key, 0.0);
@@ -1947,7 +1952,6 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             setDimmer(key, 1.0);
             m_pulseDepth.insert(key, keepDepth);
             m_breathe.insert(key, keepBreath);
-            m_flashHeld.insert(key);
         }
     }
     else
@@ -2040,25 +2044,51 @@ void TrackEngine::ensureColourScenes()
                     // makes it colder and dirtier.
                     // And on a strobe it is capped: those three lamps at a
                     // full white channel are painful to stand in front of.
-                    foreach (quint32 c, wcs) values.append(SceneValue(fid, c, uchar(g.strobes ? 153 : 255)));
+                    foreach (quint32 c, wcs) values.append(SceneValue(fid, c, uchar(g.strobes ? ENGINE_STROBE_WHITE : 255)));
                     foreach (quint32 c, rcs) values.append(SceneValue(fid, c, uchar(0)));
                     foreach (quint32 c, gcs) values.append(SceneValue(fid, c, uchar(0)));
                     foreach (quint32 c, bcs) values.append(SceneValue(fid, c, uchar(0)));
                     coloured = true;
                 }
-                else if (isWhite && g.colourValue.contains(fid) == false)
+                else if (isWhite && g.colourValue.contains(fid) == false
+                         && (rcs.isEmpty() || gcs.isEmpty() || bcs.isEmpty()))
                 {
-                    // no white channel and nothing learned from a scene of the
-                    // operator's: this fixture sits the white out rather than
-                    // faking one by driving red, green and blue to full
+                    // Nothing to make a white out of: no white channel, no
+                    // full red-green-blue, and nothing learned from a scene
+                    // of the operator's. This fixture sits the white out.
+                    //
+                    // Until 2026-09-22 this branch also caught the fixtures
+                    // that DO have red, green and blue - on the reasoning
+                    // that faking a white from them is colder and dirtier
+                    // than a real white channel. True for a wash; wrong for
+                    // a strobe, which is where white belongs. Both strobe
+                    // models in this rig are RGB-only, so every white they
+                    // were ever asked for - including the manual FLASH -
+                    // simply did not reach them. Tobias: "RGB = hvid maa
+                    // gerne findes til strob/hurtige-blink ... flash maa
+                    // gerne ramme alle RGB paa de strobelamper der ikke har
+                    // den hvide kanal."
                     continue;
                 }
                 else if (sw != nullptr && rcs.isEmpty() == false && gcs.isEmpty() == false && bcs.isEmpty() == false)
                 {
-                    foreach (quint32 c, rcs) values.append(SceneValue(fid, c, uchar(sw->r)));
-                    foreach (quint32 c, gcs) values.append(SceneValue(fid, c, uchar(sw->g)));
-                    foreach (quint32 c, bcs) values.append(SceneValue(fid, c, uchar(sw->b)));
-                    foreach (quint32 c, wcs) values.append(SceneValue(fid, c, uchar(sw->w)));
+                    // A white made from red, green and blue is capped on a
+                    // strobe exactly as a real white channel is - 70 %. The
+                    // other colours are not touched: the cap is about how
+                    // hard a white strobe hits, not about the group's level,
+                    // which is the trim's job.
+                    int vr = sw->r, vg = sw->g, vb = sw->b, vw = sw->w;
+                    if (isWhite && g.strobes)
+                    {
+                        if (vr > ENGINE_STROBE_WHITE) vr = ENGINE_STROBE_WHITE;
+                        if (vg > ENGINE_STROBE_WHITE) vg = ENGINE_STROBE_WHITE;
+                        if (vb > ENGINE_STROBE_WHITE) vb = ENGINE_STROBE_WHITE;
+                        if (vw > ENGINE_STROBE_WHITE) vw = ENGINE_STROBE_WHITE;
+                    }
+                    foreach (quint32 c, rcs) values.append(SceneValue(fid, c, uchar(vr)));
+                    foreach (quint32 c, gcs) values.append(SceneValue(fid, c, uchar(vg)));
+                    foreach (quint32 c, bcs) values.append(SceneValue(fid, c, uchar(vb)));
+                    foreach (quint32 c, wcs) values.append(SceneValue(fid, c, uchar(vw)));
                     coloured = true;
                 }
                 else if (g.colourValue.contains(fid))
@@ -3799,8 +3829,22 @@ void TrackEngine::setFlash(bool pressed)
             fid = flashFunction(allOn, "white");
         if (fid != Function::invalidId())
             run("flash", fid, 1.0, 0, true);
-        else
-            genFlash(true);
+        // ... and the generated white ALWAYS, not only when no scene of the
+        // operator's was found (Tobias, 2026-09-22).
+        //
+        // "Flash Strobes WHITE" is the scene that wins the ranking above, and
+        // measured on the show file it writes dimmer 255 and one channel of
+        // its own on the three 8+8 strobes - and NO red, green or blue, on
+        // any strobe. The three 80-segment strobes it does not touch at all.
+        // So the button raised dimmers over whatever colour happened to be
+        // running and called it a white flash.
+        //
+        // genFlash() is what puts the white on: the generated white scene
+        // (red, green and blue at 70 % on a strobe - they have no white
+        // channel), every strobe group, and the dimmer at full with the
+        // group's trim stepped over. The operator's scene still runs on top
+        // of it; the two do not fight, they layer.
+        genFlash(true);
     }
     else
     {
@@ -9556,7 +9600,15 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     level = qBound(0.0, level, 1.0);
     // the level the beat sets already includes where the breath stands, so
     // an off-beat never bumps the light back up
-    qreal applied = qBound(0.0, level * pulseFactor(group) * m_groupTrim.value(group, 1.0) * m_master, 1.0);
+    //
+    // A HELD FLASH IGNORES THE GROUP'S TRIM (Tobias, 2026-09-22: "flash
+    // knappen skal ogsaa override hvad end lysstyrken staar paa
+    // strobe-lampe gruppen"). The trim is where the group sits all night;
+    // the flash is the one moment it should not. The MASTER still applies -
+    // that is the fader for the whole room and pulling it down has to mean
+    // something - and so does BLACKOUT, which is a safety.
+    qreal trim = m_flashHeld.contains(group) ? 1.0 : m_groupTrim.value(group, 1.0);
+    qreal applied = qBound(0.0, level * pulseFactor(group) * trim * m_master, 1.0);
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
         applied = applied > 0.10 ? 1.0 : 0.0;

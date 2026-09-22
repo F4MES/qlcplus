@@ -88,6 +88,11 @@ class QRandomGenerator;
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
 #define SETTINGS_ENGINE_CLOCKCURVE QStringLiteral("trackengine/clockcurve")   // "0,0,20,45,70,85": 21,22,23,00,01,02 h
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
+// The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
+// Those lamps at a full white are painful to stand in front of, and it
+// applies whether the white comes from a real white channel or is made from
+// red, green and blue on the two models here that have no white channel.
+#define ENGINE_STROBE_WHITE       178
 #define SETTINGS_ENGINE_BASE      QStringLiteral("trackengine/base")
 #define SETTINGS_ENGINE_LOG       QStringLiteral("trackengine/log")
 #define SETTINGS_ENGINE_STARS     QStringLiteral("trackengine/stars")
