@@ -358,9 +358,16 @@ Rectangle
         {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            // THE ONE ELASTIC ROW (runde 139). Everything else on this page
+            // is now a fixed height, so whatever the window has left over
+            // lands here - which is what Tobias allowed ("Du må gerne udvide
+            // waveformen til at være lidt højere hvis du skal bruge den til
+            // at udfylde pladsen lidt"), and it means there is no slack left
+            // to show up as a gap somewhere else. The cap only stops it from
+            // swallowing the page if a row below ever collapses.
             Layout.minimumHeight: trackViewRoot.compactLayout ? 130 : 180
-            Layout.preferredHeight: trackViewRoot.height * 0.20
-            Layout.maximumHeight: Math.max(130, trackViewRoot.height * 0.22)
+            Layout.preferredHeight: trackViewRoot.compactLayout ? 130 : 180
+            Layout.maximumHeight: Math.max(180, trackViewRoot.height * 0.62)
             color: "#101010"
             border.width: 1
             border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cLine
@@ -1191,28 +1198,42 @@ Rectangle
         }
 RowLayout {
             id: dialsRow
-            Layout.fillWidth: true; Layout.fillHeight: true
-            Layout.minimumHeight: 128
-            Layout.preferredHeight: trackViewRoot.height * 0.20
-            Layout.maximumHeight: Math.max(104, trackViewRoot.height * 0.23)
+            Layout.fillWidth: true; Layout.fillHeight: false
+            // A FIXED HEIGHT, and no fillHeight (runde 139). This row holds a
+            // title, a fader and the three SPEED tiles - 10 + 20 + 6 + 62 +
+            // 6 + 48 + 10 = 162 - and nothing in it grows. Asking for a fifth
+            // of the window and taking a fillHeight share on top of that is
+            // what made it a field of air.
+            Layout.preferredHeight: trackViewRoot.compactLayout ? 148 : 168
+            Layout.minimumHeight: trackViewRoot.compactLayout ? 148 : 168
+            Layout.maximumHeight: trackViewRoot.compactLayout ? 148 : 168
             spacing: 10
             visible: trackManager && trackEngine && trackManager.roleMode && !trackViewRoot.setupOpen
 Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.preferredWidth: dialsRow.width * 0.65
                 color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 6
-                    Item { Layout.fillWidth: true; Layout.fillHeight: true
-                        Text { anchors.left: parent.left; anchors.top: parent.top; text: "ENERGY"; color: trackViewRoot.cText; font.pixelSize: trackViewRoot.compactLayout ? 20 : 28; font.bold: true }
-                        Text { anchors.centerIn: parent; text: (trackManager ? trackManager.energyTrim : 0) + "%"; color: "#E3B44F"; font.pixelSize: trackViewRoot.compactLayout ? 32 : 62; font.bold: true }
-                    }
+                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
+                    // Just the title. The 62-pixel percentage that used to sit
+                    // in the middle of this box is gone (Tobias, 2026-09-22:
+                    // "Energi har alt for meget tomt plads med den store
+                    // procent tegn, det skal fjernes") - it said the same
+                    // number as the fader directly below it, and the Item it
+                    // was centred in was a fillHeight spacer, so the box was
+                    // mostly air to make room for one duplicate figure.
+                    Text { Layout.fillWidth: true; text: "ENERGY"; color: trackViewRoot.cText
+                           font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
 Rectangle
             {
                 Layout.fillWidth: true
+                // The fader FILLS the box (runde 139). Taking the big
+                // percentage out left the box with a title and a 62-pixel
+                // bar in 148 pixels of space - the air moved rather than
+                // went away. The fader takes it instead, which also makes
+                // the one control Tobias calls "rimelig essentiel" the
+                // easiest thing on the page to hit.
                 Layout.minimumHeight: trackViewRoot.touchH * 1.25
-                Layout.preferredHeight: trackViewRoot.touchH * 1.25
-                Layout.maximumHeight: trackViewRoot.touchH * 1.25
-                Layout.fillHeight: false
+                Layout.fillHeight: true
                 radius: 4
                 color: "#1B1B1B"
                 border.width: 1
@@ -1265,9 +1286,14 @@ Rectangle
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.preferredWidth: dialsRow.width * 0.35
                 color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 6
-                    Text { text: "MASTER"; color: trackViewRoot.cText; font.pixelSize: 20; font.bold: true; visible: !trackViewRoot.compactLayout }
-                    Item { Layout.fillHeight: true; visible: !trackViewRoot.compactLayout }
+                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
+                    // "MASTER DIMMER", not "MASTER" - it is the room's
+                    // brightness, and the word alone read like a master
+                    // section. (Tobias, 2026-09-22.) The fillHeight spacer
+                    // that sat under it is gone with it: it was there to push
+                    // the fader down into a box that had no reason to be tall.
+                    Text { text: "MASTER DIMMER"; color: trackViewRoot.cText
+                           font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
 Rectangle
             {
                 Layout.fillWidth: true
@@ -1293,7 +1319,7 @@ Rectangle
                 Text
                 {
                     anchors.centerIn: parent
-                    text: qsTr("MASTER") + "  " + Math.round((trackEngine ? trackEngine.master : 1) * 100) + "%"
+                    text: qsTr("MASTER DIMMER") + "  " + Math.round((trackEngine ? trackEngine.master : 1) * 100) + "%"
                     color: "#EEEEEE"
                     font.bold: true
                     font.pixelSize: 15
@@ -1545,10 +1571,16 @@ Rectangle
 Rectangle
         {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.preferredHeight: trackViewRoot.height * 0.20
-            Layout.maximumHeight: Math.max(190, trackViewRoot.height * 0.23)
-            Layout.minimumHeight: trackViewRoot.compactLayout ? 190 : 210
+            // no fillHeight: the waveform is the one row that grows
+            Layout.fillHeight: false
+            // Lower cards (runde 139, Tobias: "Grupperne må også gerne være
+            // lidt lavere"). 24 for the title, then one card: header row 46,
+            // gap, fader 40, margins - 124. The old 210 was carrying a
+            // separate status line and a 40-pixel ON/OFF button stacked
+            // under the name, with dead space between them.
+            Layout.preferredHeight: trackViewRoot.compactLayout ? 132 : 144
+            Layout.minimumHeight: trackViewRoot.compactLayout ? 132 : 144
+            Layout.maximumHeight: trackViewRoot.compactLayout ? 132 : 144
             color: trackViewRoot.cPanel
             radius: 4
 
@@ -1591,7 +1623,7 @@ Rectangle
                             id: castTile
                             objectName: "groupTrim:"+md.key
                             ControlIcon {
-                                x: 12; y: 14; width: trackViewRoot.compactLayout ? 36 : 48; height: width; z: 2
+                                x: 10; y: 10; width: trackViewRoot.compactLayout ? 28 : 34; height: width; z: 2
                                 ink: castTile.off ? "#666666" : "#CCCCCC"
                                 kind: md.switchOnly ? "animation" : md.strobes ? "strobe" : md.lasers ? "laser" : md.key.toLowerCase().indexOf("eyes") >= 0 ? "eyes" : "head"
                             }
@@ -1623,10 +1655,10 @@ Rectangle
                                     x: 3 + (castTile.width - 6) * modelData - 1
                                     y: 0
                                     width: 2
-                                    height: 54
+                                    height: 40
                                     anchors.bottom: parent.bottom
-                                    Rectangle { y: 0; width: 2; height: 10; color: "#3A3A3A" }
-                                    Rectangle { y: parent.height - 10; width: 2; height: 10; color: "#3A3A3A" }
+                                    Rectangle { y: 0; width: 2; height: 8; color: "#3A3A3A" }
+                                    Rectangle { y: parent.height - 8; width: 2; height: 8; color: "#3A3A3A" }
                                 }
                             }
 
@@ -1639,7 +1671,7 @@ Rectangle
                                 anchors.left: parent.left
                                                                 anchors.bottom: parent.bottom
                                 anchors.margins: 3
-                                height: 48
+                                height: 34
                                 width: (parent.width - 6) * (castTile.off ? 0 : castTile.trim)
                                 radius: 4
                                 color: castTile.lit ? (md.base ? "#2E6FA8" : "#3D86C4")
@@ -1658,7 +1690,7 @@ Rectangle
                             }
 
                             Text {
-                                anchors.bottom: parent.bottom; anchors.bottomMargin: 18
+                                anchors.bottom: parent.bottom; anchors.bottomMargin: 11
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: Math.round(castTile.trim * 100) + "%"
                                 visible: !castTile.switchOnly
@@ -1683,7 +1715,7 @@ Rectangle
                                 id: castArea
                                 objectName: "groupTrim:"+md.key+"Drag"
                                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                                height: castTile.switchOnly ? parent.height : 54
+                                height: castTile.switchOnly ? parent.height : 40
                                 // the base group is always in the show, switch-only
                                 // or not - the comment on the switch below says so
                                 // and this is the path that could have broken it
@@ -1733,8 +1765,10 @@ Rectangle
 
                             Column
                             {
-                                x: trackViewRoot.compactLayout ? 58 : 76; y: 14; width: parent.width - x - 8
-                                spacing: 4
+                                // room kept free on the right for the toggle
+                                x: trackViewRoot.compactLayout ? 44 : 52; y: 9
+                                width: Math.max(24, parent.width - x - (md.base ? 10 : 68))
+                                spacing: 2
 
                                 Text
                                 {
@@ -1759,38 +1793,57 @@ Rectangle
                                 }
                             }
 
-                            Text {
-                                x: 12; anchors.bottom: parent.bottom; anchors.bottomMargin: 64
-                                visible: !trackViewRoot.compactLayout
-                                text: castTile.off ? qsTr("OFF") : (md.base ? qsTr("BASE") + " · " : "") + (castTile.lit ? qsTr("ACTIVE NOW") : qsTr("READY"))
-                                color: castTile.lit ? "#7ED07E" : trackViewRoot.cDim
-                                font.pixelSize: 13
-                            }
+                            // The second status line is gone (runde 139). It
+                            // read "BASE · READY" against the line under the
+                            // name that already says BASE and the level, and
+                            // holding it took a 64-pixel gap above the fader.
+                            // What it alone carried - that a group is lit
+                            // RIGHT NOW - is now the name's colour and the
+                            // card's border, which it always was as well.
                             // the switch: in or out of tonight's show. The base
                             // (the heads) is always in; SETUP decides which one it
                             // is. A switch-only group is its own switch.
+                            // A TOGGLE, not a button (runde 139, Tobias:
+                            // "tilføj toggle i stedet for en on/off knap").
+                            // A switch shows its state by where the knob is,
+                            // so it needs no word in it and no second line
+                            // under the name to explain it - which is half of
+                            // why the card can now be 124 tall instead of 210.
+                            // Top right, clear of the fader at the bottom.
                             Rectangle
                             {
-                                x: trackViewRoot.compactLayout ? 58 : 76; y: 56
+                                id: groupSwitch
                                 objectName: "groupSwitch:"+md.key
-                                width: 86
-                                height: 40
-                                radius: 20
+                                x: parent.width - width - 10
+                                y: 11
+                                width: 52
+                                height: 26
+                                radius: height / 2
                                 visible: !md.base
-                                color: castTile.off ? "#3A3A3A" : "#7ED07E"
+                                color: castTile.off ? "#2E2E2E" : "#7ED07E"
+                                border.width: 1
+                                border.color: castTile.off ? "#4A4A4A" : "#9FE39F"
+                                Behavior on color { ColorAnimation { duration: 120 } }
 
-                                Text
+                                Rectangle
                                 {
-                                    anchors.centerIn: parent
-                                    text: castTile.off ? qsTr("OFF") : qsTr("ON")
-                                    color: castTile.off ? "#9A9A9A" : "#102010"
-                                    font.bold: true
-                                    font.pixelSize: 12
+                                    id: groupKnob
+                                    width: parent.height - 6
+                                    height: width
+                                    radius: width / 2
+                                    y: 3
+                                    x: castTile.off ? 3 : parent.width - width - 3
+                                    color: castTile.off ? "#8A8A8A" : "#123012"
+                                    Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
                                 }
 
                                 MouseArea
                                 {
-                                    anchors.fill: parent
+                                    // a touch target bigger than the switch it
+                                    // draws: the pill is 52x26, the finger is not
+                                    anchors.centerIn: parent
+                                    width: parent.width + 16
+                                    height: parent.height + 16
                                     onClicked: trackEngine.setGroupEnabled(md.key, castTile.off)
                                 }
                             }
