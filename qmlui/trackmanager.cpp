@@ -934,6 +934,7 @@ void TrackManager::setQuantize(int beats)
     m_quantize = beats;
     QSettings().setValue(SETTINGS_TRACK_QUANTIZE, m_quantize);
     emit quantizeChanged();
+    updateState();                       // R172_QUANTISE_RESTATE: the state is on the new grid now
 }
 
 QString TrackManager::title() const { return m_title; }
@@ -1398,7 +1399,10 @@ bool TrackManager::roleEnabled(QString state, int role) const
 void TrackManager::sectionBounds(int beat, int &start, int &end) const
 {
     start = 1;
-    end = m_beatCount > 0 ? m_beatCount + 1 : beat + 64;     // exclusive, like a flag's beat
+    // no track (a "pos" before the "track"): a fixed end on a 64-beat grid.
+    // beat + 64 moved every beat, and every beat was a new section - a new
+    // pick and colour on every beat until the track arrived (R172_FIXED_END)
+    end = m_beatCount > 0 ? m_beatCount + 1 : ((beat - 1) / 64 + 1) * 64 + 1;     // exclusive, like a flag's beat
 
     for (int i = 0; i < m_markers.count(); i++)
     {
@@ -1467,6 +1471,16 @@ void TrackManager::runEngine(bool sectionChanged)
         stateBeat = ((beat - 1) / m_quantize) * m_quantize + 1;
     int secStart = 1, secEnd = 1;
     sectionBounds(stateBeat, secStart, secEnd);
+    // R172_QUANTISED_BOUNDS. The state flips on the quantise grid, so the
+    // section starts and ends there too: a drop flag at 21 with quantise 8
+    // becomes the state at beat 25, and the engine was told the section
+    // began at 21 - bar 1 on its first beat, so no landing, no hit, no
+    // wait for the kick.
+    if (m_quantize > 1)
+    {
+        secStart = ((secStart - 1 + m_quantize - 1) / m_quantize) * m_quantize + 1;
+        secEnd = ((secEnd - 1 + m_quantize - 1) / m_quantize) * m_quantize + 1;
+    }
 
     // a jump to a cue, or two flags of the same type in a row: the state
     // string does not change but the section does
@@ -1485,6 +1499,11 @@ void TrackManager::runEngine(bool sectionChanged)
     // 8, 4, 0 and the pre-drop blink would never fire.
     if (beatsToNext > 0)
         beatsToNext = qMax(0, beatsToNext - (beat - stateBeat));
+    // ... and to where the state actually flips (R172_QUANTISED_NEXT): the
+    // flag itself is up to a grid step earlier, and the pre-drop blink came
+    // that many beats before the drop
+    if (m_quantize > 1 && beatsToNext > 0)
+        beatsToNext = qMax(0, secEnd - beat);
 
     // Energy = BPM dial x how loud this section is. The section's LEVEL slider
     // goes in separately as a brightness trim, so it cannot change how many
@@ -2186,8 +2205,13 @@ void TrackManager::markersEdited()
     m_lastMoveIndex = -1;                // the next drag is its own undo step
     fillMarkerEnergies(true);            // a flag came or went: the neighbours' spans moved too
     emit markersChanged();
+    // updateState() already runs the engine when the edit changed the state
+    // (applyLook -> runEngine(true)); a second call drew the section's
+    // programme and accent twice on one beat (R172_ONE_ENGINE_CALL)
+    const QString stateBefore = m_analysedState;
     updateState();
-    if (m_autoRun && m_roleMode)
+    const bool engineRan = m_analysedState != stateBefore && m_overrideState.isEmpty();
+    if (m_autoRun && m_roleMode && engineRan == false)
     {
         m_lastEngineBeat = -1;
         runEngine(true);
@@ -2267,8 +2291,10 @@ void TrackManager::undoMarkers()
     m_lastMoveIndex = -1;
     fillMarkerEnergies(false);
     emit markersChanged();
+    const QString stateBefore = m_analysedState;     // R172_ONE_ENGINE_CALL_UNDO
     updateState();
-    if (m_autoRun && m_roleMode)
+    const bool engineRan = m_analysedState != stateBefore && m_overrideState.isEmpty();
+    if (m_autoRun && m_roleMode && engineRan == false)
     {
         m_lastEngineBeat = -1;
         runEngine(true);

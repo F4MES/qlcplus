@@ -5106,6 +5106,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // they last moved - the floors hold for their bar or two, and then
         // the room is free (runde 168; m_hitBeats and m_darkUntil already
         // did this).
+        // CALM and the mix are counted in track beats too: a loop inside CALM
+        // never reached its end, and a looped outgoing track (the common way
+        // to stretch a mix) never turned the base - or turned it back and
+        // forth on every pass. Both move back with the jump (runde 172).
+        if (beat < m_lastBeat)
+        {
+            const int back = m_lastBeat - beat;
+            if (m_calmUntil > m_lastBeat)
+                m_calmUntil -= back;
+            if (m_mixBeat >= 0)
+                m_mixBeat = qMax(0, m_mixBeat - back);
+        }
         if (m_colourSince > beat)
             m_colourSince = beat;
         if (m_effectsBeat > beat)
@@ -5247,20 +5259,34 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // Reset HERE, not in the section-change block forty lines down: that one
     // runs after this and would leave the first beat of a new drop reading a
     // previous drop's offset - dropBar = 0 - 3 = -3, and the landing lost.
-    if (isDrop == false || sectionChanged)
+    // NEXT is a new look, not a new drop: it forces sectionChanged, and a
+    // wait that was on stopped waiting - the drop drawn with no kick and no
+    // landing (runde 172).
+    if (isDrop == false || (sectionChanged && forceNext == false))
         m_dropLand = 0;
-    if (isDrop && kick >= 0.0 && hold == false && beatInBar == 0
+    // Not `hold == false` here: HOLD freezes the LOOK, and the look is frozen
+    // anyway. Under HOLD the wait simply stopped, and a fake drop got its
+    // white hit and its strobe burst on bar 0 with no kick (runde 172).
+    if (isDrop && kick >= 0.0 && beatInBar == 0
         && bar == m_dropLand && m_dropLand < 8 && kick < 0.20)
         m_dropLand++;
     const int dropBar = isDrop ? bar - m_dropLand : bar;
     const bool dropWaiting = isDrop && dropBar < 0;
+    // prog a bar ago, where prog is NOT the section's own clock (the kick
+    // wait, a riser-promoted build); -1 = the section's own (runde 172)
+    qreal progBefore = -1.0;
     if (dropWaiting)
     {
         isDrop = false;
         isBuild = true;
         tier = 1;
         division = 0; // do not run the waiting build at the drop's forced step speed
-        prog = qMin(prog, 0.75); // tension, never the final build's automatic hits
+        // Tension, never the final build's automatic hits (0.82) - and the
+        // build's look HOLDS. This read qMin(prog, 0.75), but `prog` here is
+        // the DROP's own progress, nought to a tenth, so the wait fell back to
+        // an early build: the level down to 0.65, no chases (runde 172).
+        prog = 0.75;
+        progBefore = 0.75;       // ... and the figure is not tightened on every bar of it
     }
     else if (isDrop && m_dropLand > 0 && dropBar == 0 && beatInBar == 0 && hold == false)
         sectionChanged = true;  // draw the drop look WHEN the kick lands
@@ -5281,6 +5307,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         isBuild = true;
         prog = qBound(0.0, 1.0 - qreal(beatsToNext) / 32.0, 1.0);
+        progBefore = qBound(0.0, 1.0 - qreal(beatsToNext + 4) / 32.0, 1.0);
     }
     // ... and nothing builds towards, or blinks before, a drop that will
     // not be shown (see dropHidden above)
@@ -5608,13 +5635,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // A section change and a real hand on the fader (faderJump, a fifth of
         // the slider) both skip this: those are decisions, not drift.
         int want = int(qRound(effectsWant(isDrop)));
-        if (want != m_effects && (m_effectsBeat < 0 || beat - m_effectsBeat >= 8))
+        // ... and only the way the fader moved. m_effects came from a dice
+        // roll, so a fader pushed UP could round `want` below it and take a
+        // group OFF (runde 172).
+        const bool sameWay = (want > m_effects) == (energy > m_castEnergy);
+        if (want != m_effects && sameWay && (m_effectsBeat < 0 || beat - m_effectsBeat >= 8))
         {
             m_effectsBefore = m_effects;
             m_effects = qBound(m_effects - 1, want, m_effects + 1);
             m_effectsBeat = beat;
         }
-        else if (want != m_effects)
+        else if (want != m_effects && sameWay)
             nudgeOwed = true;
     }
     // A nudge the dwell held back is OWED, not spent: the reference stays
@@ -5868,7 +5899,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             foreach (const QString &key, castSorted)
             {
-                if (key != base) leads << key;
+                // "A strobe group is never the rhythm lead" - this fallback
+                // made it one whenever the cast was base + strobes (runde 172)
+                if (key != base && m_groups.value(key).strobes == false) leads << key;
             }
         }
         const QString lead = leads.isEmpty() ? QString() : leads.first();
@@ -5900,7 +5933,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_sectionMotion.clear();
     foreach (const QString &key, castSorted)
     {
-        if (redraw == false && m_moves.contains(key))
+        // ... only if it was on stage last beat too (m_cast is still last
+        // beat's here). A group rejoining mid-section - a nudge, the end of a
+        // rest, the pre-drop fill - ran whatever it drew the last time it was
+        // on: the strobes back in a groove with a drop's move (runde 172).
+        if (redraw == false && m_moves.contains(key) && m_cast.contains(key))
             continue;
         QList<int> history = m_moveHistory.value(key);
         TrackMove fresh;
@@ -6040,9 +6077,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // for the motor to finish, and the same length every
                     // time, so the room reads it as a deliberate pause and
                     // not as a fault.
+                    // dark whether in the cast or not: the echo lights bars
+                    // "in or out of the cast", and picked these mid-swing
+                    // (runde 172). Out of the cast they are not lit anyway.
+                    darkGroups.insert(key);
                     if (inCast)
                     {
-                        darkGroups.insert(key);
                         // ... but never the base for four bars: that is the
                         // light the room stands on, and "the room never goes
                         // black" is the one promise the engine keeps
@@ -6279,7 +6319,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // middle: "beats > 4" as the test redrew it every bar from there on
         // (a halved build figure is 5-14 beats), so the heads jumped to a new
         // figure every bar through the back half of every build
-        qreal prevProg = qreal(beat - 4 - secStart) / qreal(len);
+        // on the same clock as prog: a promoted build measures to the drop, and
+        // the section's own clock made "past the middle" true on three bar
+        // lines running in a four-bar groove - a new figure every bar (runde 172)
+        qreal prevProg = progBefore >= 0.0 ? progBefore : qreal(beat - 4 - secStart) / qreal(len);
         bool fresh = redraw || m_sweep.contains(key) == false
                   || (isBuild && prog > 0.5 && prevProg <= 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0);
         if (fresh)
@@ -6389,7 +6432,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     /* ---- musical fills; the eight-bar clock is only a no-curves fallback ---- */
     int phraseBar = bar % 8;
+    // not in the pre-drop bar: its dark beats piled onto the blink - two or
+    // three dark beats in the last bar before a drop (runde 172)
     bool phraseAllowed = hold == false && isCalm == false && still == false
+                      && preDrop == false
                       && (isDrop || (tier == 1 && energy > 0.5));
     bool fillSignal = haveCurves && (turn || (high > 0.65 && kick < 0.35 && riser > 0.08));
     if (phraseAllowed && fillSignal && beat - m_fillLast >= 8)
@@ -6652,7 +6698,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // between 55 % and 100 % every bar. The base is untouched; the room
         // never dims with it. (Tobias, 2026-09-16, forslag 3.)
         qreal duck = 1.0;
-        if (m_kickGone >= 4 && isBreak == false && isCalm == false && key != base)
+        // a groove or a drop, as the comment says - not a build, where the
+        // kick routinely drops out for the last bars just as the room should
+        // climb, nor the kick wait, which is kickless by definition (runde 172)
+        if (m_kickGone >= 4 && isBreak == false && isCalm == false && key != base
+            && isBuild == false && preDrop == false)
             duck = 1.0 - 0.45 * qBound(0.0, qreal(m_kickGone - 4) / 4.0, 1.0);
         qreal support = (m_fullAuto && tier > 0 && key != base && key != m_rhythmLead)
                       ? (g.strobes ? 0.55 : 0.70) : 1.0;
@@ -7049,7 +7099,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     int hitGap = qMax(1, int(qRound(8.0 - 7.0 * eNow)));
     bool crowded = m_hitBeats.count() >= hitCeil
                 || (m_hitBeats.isEmpty() == false && beat - m_hitBeats.last() < hitGap);
+    // ... and never on the pre-drop's one dark beat: a build hit there drove
+    // the strobes to full and the blink became a flash (runde 172)
     bool hit = isCalm == false && still == false && dropWaiting == false
+            && (preDrop && beatsToNext == 1) == false
             && ((isBuild && prog > 0.82 && crowded == false
                  && (haveCurves == false || turn || (kick > 0.45 && riser > 0.08)))
                 || (isDrop && dropBar == 0 && beatInBar < 2)
