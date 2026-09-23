@@ -9850,9 +9850,10 @@ void TrackEngine::setStartScene(bool on)
     m_startScene = on;
     if (on)
     {
-        // it has to stand in some colour: red unless the DJ has already
-        // picked one - and the tile lights up, so it is clear which it is
-        if (m_override.isEmpty())
+        // it always opens on red (Tobias, 2026-09-23: "den skal altid starte
+        // paa roed") - also over a tile the DJ left picked, which it replaces
+        // - and the tile lights up, so it is clear which it is. A tile tapped
+        // while it is up is the DJ's and outlives it (m_startColour).
         {
             QString want = m_palette.contains(QStringLiteral("red"))
                            ? QStringLiteral("red")
@@ -9860,6 +9861,7 @@ void TrackEngine::setStartScene(bool on)
             if (want.isEmpty() == false)
             {
                 m_override = want;
+                m_colour = want;
                 m_startColour = true;
             }
         }
@@ -9927,11 +9929,16 @@ void TrackEngine::startLook()
     QList<TrackFuncInfo *> idles = candidates(ENGINE_ROLE_IDLE, QString());
     QSet<QString> lit;
 
-    // the aim, from the start scene(s)
+    // the aim, from the start scene(s) - and ONLY the aim. The rider's START
+    // scene also holds the wash heads' and the Minis' dimmer and red at full,
+    // and HTP added that red to every colour tile: blue came out magenta,
+    // green yellow. At intensity 0 its Intensity channels (dimmer, R, G, B,
+    // W) are nought while pan, tilt and zoom still land (GenericFader scales
+    // only FadeChannel::Intensity); the engine's colour scene and dimmer
+    // parts below make the light (Tobias, 2026-09-23, runde 186). idle()
+    // between tracks is not this and keeps the scene's own levels.
     foreach (TrackFuncInfo *info, idles)
-        // the bare level: run() puts MASTER on through slotScale(), and an
-        run("idle:" + QString::number(info->id), info->id,
-            info->dimmer ? m_startLevel : 1.0, 0, false);
+        run("idle:" + QString::number(info->id), info->id, 0.0, 0, false);
 
     foreach (const QString &key, m_groupOrder)
     {
