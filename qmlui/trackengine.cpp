@@ -9976,7 +9976,7 @@ void TrackEngine::startLook()
     m_breathe.clear();
     m_pulseTimer.stop();
     stopEcho();
-    m_report = tr("(start scene)  |  %1  |  master %2 %%")
+    m_report = tr("(start scene)  |  %1  |  master %2 %")
                .arg(colour.isEmpty() ? tr("(no colour)") : colour)
                .arg(int(m_master * 100));
     emit liveChanged();

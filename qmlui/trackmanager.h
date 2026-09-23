@@ -388,6 +388,7 @@ private:
     QTimer m_energyTimer;
 
     qint64 m_lastPosMs;
+    qint64 m_beatChangedMs = 0;  // R187_LAGGING_BEAT: when the beat last moved
     bool m_linkStale;
 
     /* ---- roles ---- */

@@ -366,6 +366,9 @@ Button
                 {
                     width: 160
                     height: 48
+                    // a tap must not leave keyboard focus behind: Space would
+                    // press it again (runde 187, all four Buttons on the page)
+                    focusPolicy: Qt.NoFocus
                     anchors.verticalCenter: parent.verticalCenter
                     visible: trackManager ? trackManager.roleMode : false
                     checked: trackEngine ? trackEngine.startScene : false
@@ -404,6 +407,7 @@ Button
                 {
                     width: 196
                     height: 48
+                    focusPolicy: Qt.NoFocus
                     anchors.verticalCenter: parent.verticalCenter
                     checked: trackManager ? trackManager.autoRun : false
                     objectName: "showSwitch"
@@ -433,6 +437,7 @@ Button
                     anchors.verticalCenter: parent.verticalCenter
                     width: 110
                     height: 48
+                    focusPolicy: Qt.NoFocus
                     objectName: "setupSwitch"
                 ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "setupSwitch" }
                     text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
@@ -877,11 +882,15 @@ Rectangle
                                     // on stage when he lets go.
                                     if (trackEngine) trackEngine.markVerdictPoint()
                                 }
-                                onPressAndHold:
+                                // Qt 6: a handled press-and-hold eats the click
+                                // that follows. With nothing on stage to blame
+                                // it hands the click back, so the thumb still
+                                // counts as a plain vote (runde 187)
+                                onPressAndHold: function(mouse)
                                 {
-                                    if (trackEngine === null) return
+                                    if (trackEngine === null) { mouse.accepted = false; return }
                                     var rows = trackEngine.onStage()
-                                    if (rows.length === 0) return
+                                    if (rows.length === 0) { mouse.accepted = false; return }
                                     held = true
                                     verdictTools.stageRows = rows
                                     verdictTools.blaming = modelData
@@ -1346,6 +1355,7 @@ Rectangle
                     {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        focusPolicy: Qt.NoFocus
                         objectName: "section:"+modelData
                         // not checkable: a click would write 'checked' and
                         // break the binding, leaving two sections lit

@@ -216,6 +216,16 @@ void TrackManager::slotDisconnected()
         m_linkStale = true;
         emit linkChanged();
     }
+    // R187_MIX_ON_DISCONNECT: BLT forgets it was mixing when it reconnects
+    // and only ever announces a mix starting - a mix that ended while it
+    // was away held colour and calm for the whole next track
+    if (m_clients.isEmpty() && m_mixing)
+    {
+        m_mixing = false;
+        if (m_engine != nullptr)
+            m_engine->setMixing(false);
+        emit mixChanged();
+    }
     emit connectedChanged();
 }
 
@@ -272,6 +282,16 @@ void TrackManager::handleLine(const QByteArray &line)
 
 void TrackManager::handleTrack(const QJsonObject &obj)
 {
+    // R187_SAME_TRACK: the track that is playing, sent again - BLT resends
+    // after every reconnect and when its shared functions are saved, and
+    // after a master handover to the same song on the other deck. That
+    // reset the beat to 0 and restarted the engine mid-song: colour, cast
+    // and moves thrown away, a drop landed a second time. Flags and
+    // curves are still taken; the song's place and the engine are kept.
+    const bool resent = m_playing && m_title.isEmpty() == false
+        && obj.value(QStringLiteral("title")).toString() == m_title
+        && obj.value(QStringLiteral("beats")).toInt() > 0
+        && obj.value(QStringLiteral("beats")).toInt() == m_beatCount;
     m_title = obj.value(QStringLiteral("title")).toString();
     m_key = obj.value(QStringLiteral("key")).toString();      // "Am", "8A", "1m" - or nothing
     m_bpm = obj.value(QStringLiteral("bpm")).toDouble();
@@ -323,21 +343,24 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     // now, before the engine or the page reads them
     fillMarkerEnergies(false);
 
-    m_currentBeat = 0;
-    m_trackTimeMs = 0;
-    m_movePick = Function::invalidId();    // a new track picks afresh
-    m_undo.clear();
-    m_lastMoveIndex = -1;
-    m_lastEngineBeat = -1;
-    m_lastSecStart = -1;
-    m_lastSecEnd = -1;
+    if (resent == false)                 // R187_SAME_TRACK_KEEP
+    {
+        m_currentBeat = 0;
+        m_trackTimeMs = 0;
+        m_movePick = Function::invalidId();    // a new track picks afresh
+        m_undo.clear();
+        m_lastMoveIndex = -1;
+        m_lastEngineBeat = -1;
+        m_lastSecStart = -1;
+        m_lastSecEnd = -1;
+    }
     if (m_nextTitle == m_title)
     {
         m_nextTitle.clear();
         m_nextMarkers.clear();
         emit mixChanged(); // the preview now belongs to the playing deck
     }
-    if (m_engine != nullptr)
+    if (m_engine != nullptr && resent == false)   // R187_SAME_TRACK_ENGINE
         m_engine->trackLoaded(m_title, m_key);
 
     qDebug() << "[TrackManager] track:" << m_title << m_beatCount << "beats,"
@@ -356,15 +379,28 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     int timeMs = obj.value(QStringLiteral("time")).toInt();
 
     // the link is alive, even when it repeats itself
+    // (the stamp keeps its old spelling: an earlier patch looks for it)
     m_lastPosMs = QDateTime::currentMSecsSinceEpoch();
+    const qint64 now = m_lastPosMs;
     if (m_linkStale)
     {
         m_linkStale = false;
         emit linkChanged();
     }
+    // R187_LAGGING_BEAT_GUARD: BLT sends the beat twice - from the beat packet
+    // and from the player's status, five times a second - and the status
+    // lags: N, then N-1 a few ms later, then N again. Each of those ran a
+    // full engine beat and the jump-back path: 862 times on 20 Sep, 16 of
+    // them on a section boundary, where a drop landed twice in two styles.
+    // A one-beat step back within 150 ms of a step forward is that echo; a
+    // real jump back is repeated by every later status and gets through.
+    if (playing && m_playing && beat == m_currentBeat - 1 && now - m_beatChangedMs < 150)
+        return;
     if (beat == m_currentBeat && playing == m_playing && timeMs == m_trackTimeMs)
         return;
 
+    if (beat != m_currentBeat)
+        m_beatChangedMs = now;
     m_currentBeat = beat;
     m_playing = playing;
     m_trackTimeMs = timeMs;
@@ -544,8 +580,17 @@ void TrackManager::stopLook()
 
 void TrackManager::reroll()
 {
-    if (m_autoRun)
-        applyLook();
+    if (m_autoRun == false)
+        return;
+    // R187_REROLL_STALE: with the link quiet runEngine() holds the last
+    // look - and after the START SCENE tile (the only caller) took the
+    // picture down there is none: the room sat black for up to 30 s
+    if (m_linkStale && m_roleMode && m_engine != nullptr)
+    {
+        m_engine->idle();
+        return;
+    }
+    applyLook();
 }
 
 /*********************************************************************
@@ -815,6 +860,7 @@ void TrackManager::slotEnergyTick()
     if (stale && m_playing && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 30000)
     {
         m_playing = false;
+        m_lastEngineBeat = -1;           // R187_WATCHDOG_BEAT: a resume on the same beat runs
         emit positionChanged();
         if (m_engine != nullptr && m_autoRun && m_roleMode)
             m_engine->idle();
@@ -1552,13 +1598,16 @@ void TrackManager::runEngine(bool sectionChanged)
     // the state. How FAR it is: from the real beat, or a countdown that
     // has to hit exactly 1 never does once quantize > 1 - it would step
     // 8, 4, 0 and the pre-drop blink would never fire.
-    if (beatsToNext > 0)
-        beatsToNext = qMax(0, beatsToNext - (beat - stateBeat));
     // ... and to where the state actually flips (R172_QUANTISED_NEXT): the
     // flag itself is up to a grid step earlier, and the pre-drop blink came
-    // that many beats before the drop
+    // that many beats before the drop. Decided on the count BEFORE the
+    // subtraction (R187_QUANTISED_COUNTDOWN): a flag off the grid (21,
+    // quantise 8) took it to 0 at the flag, the correction never ran, and
+    // the last bar before the drop counted 0, 0, 0, 0 - no pre-drop, no blink.
     if (m_quantize > 1 && beatsToNext > 0)
         beatsToNext = qMax(0, secEnd - beat);
+    else if (beatsToNext > 0)
+        beatsToNext = qMax(0, beatsToNext - (beat - stateBeat));
 
     // Energy = BPM dial x how loud this section is. The section's LEVEL slider
     // goes in separately as a brightness trim, so it cannot change how many
