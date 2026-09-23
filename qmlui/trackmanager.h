@@ -378,7 +378,7 @@ private:
     int m_bpmHigh;
     int m_energyTrim;
     // R184_START_SCENE_MEMBERS
-    bool m_showRan = false;      // the show has run with ENERGY above 0 tonight
+    QString m_showRanNight;      // R185_SHOWRAN_NIGHT: the night the show ran with ENERGY above 0 (nightKey)
     bool m_startAuto = false;    // the start scene on stage was put up by SHOW ON
     /** SHOW ON with ENERGY above 0: the show has run tonight, and a start
      *  scene SHOW ON put up comes down. */

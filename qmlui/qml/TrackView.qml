@@ -371,7 +371,17 @@ Button
                     checked: trackEngine ? trackEngine.startScene : false
                     objectName: "startScene"
                     text: qsTr("START SCENE")
-                    onClicked: if (trackEngine) trackEngine.startScene = !checked
+                    // off with the deck stopped: nothing else would build the
+                    // room until play is pressed, so ask for the idle look
+                    // (reroll -> runEngine -> idle; runde 185)
+                    onClicked: {
+                        if (!trackEngine)
+                            return
+                        var on = !checked
+                        trackEngine.startScene = on
+                        if (!on && trackManager)
+                            trackManager.reroll()
+                    }
 
                     contentItem: Text
                     {

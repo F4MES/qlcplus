@@ -382,6 +382,13 @@ void TrackEngine::slotDocSettled()
     // until a beat happens to arrive
     m_report.clear();
     m_warnings.clear();
+    // stopAll() took the opening picture down with everything else but left
+    // its flag up - and tick() returns at once while the flag is up, so the
+    // stage stayed dark (tile still lit) until someone touched the tile or
+    // ENERGY. Now that SHOW ON opens on it every night, a Function Manager
+    // edit before the floor opens was enough (runde 185).
+    if (m_startScene)
+        startLook();
     emit tableChanged();
     emit liveChanged();
 }
@@ -3898,6 +3905,10 @@ void TrackEngine::setFullAuto(bool on)
     // the soft stops are stepped down by the fade timer, and no beat may come
     if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
         m_fadeTimer.start();
+    // the opening picture was among what just stopped: tick() will not bring
+    // it back while it is up, so it is put back here (runde 185)
+    if (m_startScene)
+        startLook();
     emit tableChanged();
     emit liveChanged();
 }
@@ -5285,10 +5296,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         // ... but the clock still speaks: at 22:30 it is what takes a start
         // scene SHOW ON put up back down (TrackManager::noteShowRunning,
-        // runde 184). Returning first held ENERGY at 0 all night.
+        // runde 184). Returning first held ENERGY at 0 all night. And this
+        // beat ends here either way: its energy was read before the clock
+        // moved, so the show starts clean on the next one (runde 185).
         announceRoom();
-        if (m_startScene)
-            return;
+        return;
     }
     ensureTable();
     tickFades();
@@ -9889,13 +9901,19 @@ void TrackEngine::setStartLevel(qreal level)
 
 void TrackEngine::startLook()
 {
-    // The evening's opening picture: the IDLE functions hold the aim (the
-    // START scene from the rider carries pan/tilt/zoom only), and the engine
-    // lights every group that is on, in one colour, standing still. The
-    // colour tiles, MASTER and the cast faders all work on it.
+    // The evening's opening picture: the IDLE functions hold the aim, and
+    // the engine lights every group that is on, in one colour, standing
+    // still. The colour tiles, MASTER and the cast faders all work on it.
+    // (The rider's "START scene" is not pan/tilt/zoom only, as this said: it
+    // also holds the wash heads' and the Minis' dimmer and red at full.)
     if (m_doc == nullptr)
         return;
     ensureTable();
+    // an OFF group stays off here as in idle(): setStartScene() comes through
+    // stopAll(), which stops the masks, and the rider's scene lights every
+    // head it names - a group switched off last night stood in full red
+    // (runde 185)
+    applyGroupOff();
     tickFades();
     stopSweeps();
 
@@ -10214,6 +10232,16 @@ void TrackEngine::selfTest()
         m_testGroups.clear();
         m_testLabels.clear();
         m_report = tr("self test stopped");
+        // The test darkened what it tested. Cut short - by a beat, or by its
+        // tile - the opening picture stayed half dark. Put back on the next
+        // turn of the event loop: stopAll() cancels a test on its way to
+        // stopping everything and must not have the picture started under it,
+        // and a destroyed engine takes the call with it (runde 185).
+        if (m_startScene)
+            QTimer::singleShot(0, this, [this]() {
+                if (m_startScene && m_testTimer.isActive() == false)
+                    startLook();
+            });
         emit liveChanged();
         return;
     }

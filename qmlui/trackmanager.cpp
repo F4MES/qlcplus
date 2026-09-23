@@ -112,7 +112,13 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     // R184_START_SCENE_INIT: tonight's state, and the clock's ENERGY at once -
     // it used to arrive on the first beat, so SHOW ON before the music
     // started saw last night's slider
-    m_showRan = QSettings().value(SETTINGS_TRACK_SHOWRAN).toString() == TrackEngine::nightKey();
+    m_showRanNight = QSettings().value(SETTINGS_TRACK_SHOWRAN).toString();   // R185_SHOWRAN_NIGHT
+    // R185_START_AUTO_TRACK: however the start scene comes down - its tile,
+    // release(), SHOW OFF - it is no longer the one SHOW ON put up
+    connect(m_engine, &TrackEngine::liveChanged, this, [this]() {
+        if (m_startAuto && m_engine->startScene() == false)
+            m_startAuto = false;
+    });
     m_engine->announceRoom();
     if (m_view != nullptr)
         m_view->rootContext()->setContextProperty("trackEngine", m_engine);
@@ -909,10 +915,11 @@ void TrackManager::noteShowRunning()
     // R184_START_SCENE_NOTE
     if (m_autoRun == false || m_energyTrim <= 0 || m_engine == nullptr)
         return;
-    if (m_showRan == false)
+    const QString night = TrackEngine::nightKey();
+    if (m_showRanNight != night)        // R185_SHOWRAN_WRITE
     {
-        m_showRan = true;
-        QSettings().setValue(SETTINGS_TRACK_SHOWRAN, TrackEngine::nightKey());
+        m_showRanNight = night;
+        QSettings().setValue(SETTINGS_TRACK_SHOWRAN, night);
     }
     // only the one SHOW ON put up: a start scene called by hand stays
     // until its tile is tapped again
@@ -921,6 +928,12 @@ void TrackManager::noteShowRunning()
         m_startAuto = false;
         if (m_engine->startScene())
             m_engine->setStartScene(false);
+        // R185_IDLE_AFTER: with the deck stopped no beat comes to build
+        // anything - the room faded to black until play was pressed.
+        // (From inside tick() the deck is playing, so this is not reached
+        // there.)
+        if (m_playing == false && m_roleMode)
+            m_engine->idle();
     }
 }
 
@@ -946,20 +959,22 @@ void TrackManager::setAutoRun(bool enable)
         m_engine->setStartScene(false);
     m_startAuto = false;
 
-    if (m_autoRun) applyLook();
-    else stopLook();
-
     // R184_START_SCENE_SHOW: ... unless it is the first SHOW ON of the night
     // and ENERGY is 0 - then the evening opens on it, until ENERGY moves.
     // The clock is asked first: it only speaks on a beat, and the music
-    // may not have started yet
+    // may not have started yet. Decided BEFORE applyLook() (R185_BEFORE_LOOK):
+    // after it, a playing track had the show's look started and replaced.
     if (m_autoRun && m_engine != nullptr)
         m_engine->announceRoom();
-    if (m_autoRun && m_engine != nullptr && m_showRan == false && m_energyTrim == 0)
+    if (m_autoRun && m_engine != nullptr && m_showRanNight != TrackEngine::nightKey()
+        && m_energyTrim == 0)
     {
         m_engine->setStartScene(true);
         m_startAuto = m_engine->startScene();
     }
+
+    if (m_autoRun) applyLook();
+    else stopLook();
     noteShowRunning();
 
     emit autoRunChanged();
