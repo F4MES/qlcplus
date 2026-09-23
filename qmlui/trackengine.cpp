@@ -6757,9 +6757,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         qreal support = (m_fullAuto && tier > 0 && key != base && key != m_rhythmLead)
                       ? (g.strobes ? 0.55 : 0.70) : 1.0;
         qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0) * duck * support, 1.0);
-        qreal gl = darkGroups.contains(key) ? 0.0 : groupLevel * m_groupTrim.value(key, 1.0) * m_master;
         // run() puts MASTER and the trim on for us now, so the colour scene
-        // gets the bare level - or the two would multiply
+        // gets the bare level - or the two would multiply. (The level WITH them,
+        // `gl`, went with runde 174: its last reader was the chase, which gets
+        // the bare level too now, and an unused local stops the -Werror build.)
         qreal glBase = darkGroups.contains(key) ? 0.0 : groupLevel;
         // the colour this group can actually show (a wheel has seven, the
         // palette has more) - and the motion pick below matches on it too,
