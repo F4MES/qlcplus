@@ -5382,6 +5382,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_effectsBeat = beat;
         if (m_echoBeat > beat)
             m_echoBeat = beat;
+        if (m_curveTurnBeat > beat)        // runde 193: the kick-turn spacing too
+            m_curveTurnBeat = beat;
         // (a clamp, not a new aim - named apart from the two stamps
         // verify_flicker counts)
         foreach (const QString &group, m_aimSince.keys())
@@ -5597,14 +5599,30 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                              && isBuild == false;
         const bool flagBreak = (state == QStringLiteral("break"));
         bool curveTurn = false;
-        if (kickAhead < 0.0 || (flagGroove == false && flagBreak == false))
+        // runde 193, from review: a flag cleared mid-section (a riser build
+        // taking over) is a turn like any other, not a silent change of look;
+        // with no curve data (its last beats) the correction simply stands;
+        // it is re-armed on a section change too, not only on a bar line -
+        // NEXT, a mix landing or a resume mid-bar drew a groove look and then
+        // a break one to three beats later; no turn inside the last two bars
+        // before a flag (it changes there anyway), none within four bars of
+        // the last one (a kick in one bar of four flipped every other bar),
+        // and no break armed with a drop ahead - a kickless climb there is a
+        // build, not a breakdown.
+        const bool flagSoon = beatsToNext > 0 && beatsToNext <= 8;
+        const bool dropAhead = nextState == QStringLiteral("drop") && beatsToNext > 0 && beatsToNext <= 32;
+        const bool mayTurn = hold == false && (beatInBar == 0 || sectionChanged) && flagSoon == false
+                          && (sectionChanged || beat - m_curveTurnBeat >= 16);
+        if (flagGroove == false && flagBreak == false)
         {
+            if ((m_curveBreak || m_curveGroove) && sectionChanged == false)
+                curveTurn = true;
             m_curveBreak = false;
             m_curveGroove = false;
         }
-        else if (beatInBar == 0 && hold == false)
+        else if (kickAhead >= 0.0 && mayTurn)
         {
-            if (flagGroove && m_curveBreak == false && kickAhead < 0.15)
+            if (flagGroove && m_curveBreak == false && kickAhead < 0.15 && dropAhead == false)
                 m_curveBreak = curveTurn = true;
             else if (flagGroove && m_curveBreak && kickAhead >= 0.30)
             {
@@ -5631,7 +5649,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             tier = 1;
         }
         if (curveTurn)
+        {
             sectionChanged = true;
+            m_curveTurnBeat = beat;
+        }
     }
 
     // ... and nothing builds towards, or blinks before, a drop that will
@@ -6028,7 +6049,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // its verdicts belong to the groove bucket, not the drop's
     if (hold == false)
         m_lookState = dropWaiting ? QStringLiteral("build")
-                    : (dropHidden ? QStringLiteral("normal") : state);
+                    : (dropHidden ? QStringLiteral("normal")
+                    // a look the kick chose is filed where it was chosen (runde 193)
+                    : (m_curveBreak ? QStringLiteral("break")
+                    : (m_curveGroove ? QStringLiteral("normal") : state)));
     m_lastState = state;
 
     // r162: three minutes of sustained dense light earns four restrained bars
@@ -9978,12 +10002,23 @@ void TrackEngine::laserFaderCheck(qreal slider)
             stopSlot("efx:" + key, true);
             m_sweep.remove(key);
         }
+        // an aim idle() already stopped is no aim: forget it, and the first
+        // aim when the music comes back goes through the unknown-aim dark hold
+        // - starting home here left m_position saying home while the tilt
+        // stood elsewhere, and the bars relit mid-swing on resume (runde 193)
+        if (m_active.contains("pos:" + key) == false)
+        {
+            m_position.remove(key);
+            continue;
+        }
         const quint32 held = m_position.value(key, Function::invalidId());
         const quint32 home = homePosition(key);
         if (held == Function::invalidId() || held == home)
             continue;
         const TrackFuncInfo &hi = m_funcs.value(held);
-        const bool unsafe = fader < 0.40
+        // as tick() under HOLD: a still, safe aim stands under 40 % while HOLD
+        // is on; one that moves or dips does not (runde 193)
+        const bool unsafe = (fader < 0.40 && (m_hold == false || hi.type != int(Function::SceneType)))
                          || (hi.sweep ? laserSweepSafe(held, key, downNow) == false
                                       : laserAimSafe(held, key, downNow) == false);
         if (unsafe == false)
@@ -10664,6 +10699,12 @@ void TrackEngine::idle()
             continue;
         if (holdBase && (slot == "col:" + base || slot.startsWith("dim:" + base + "#")))
             continue;
+        // an operator's aim stopped here is an aim nobody holds any more: the
+        // tilt stays wherever the scene left it. Forgotten, so the first aim
+        // after the pause goes through the unknown-aim dark hold - the bars
+        // came back lit mid-swing (runde 193)
+        if (slot.startsWith("pos:"))
+            m_position.remove(slotGroup(slot));
         stopSlot(slot, false);
     }
 
@@ -10823,6 +10864,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_kickGone = 0;              // the new track is not mid-vocal
     m_curveBreak = false;        // runde 192: its own curves decide afresh
     m_curveGroove = false;
+    m_curveTurnBeat = -100;
     m_kickBeat = -1;
     stopEcho();
     m_mixBeat = -1;              // a mix still on now is the mix INTO this track

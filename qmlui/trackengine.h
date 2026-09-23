@@ -808,6 +808,7 @@ private:
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
     bool m_curveBreak = false;   // runde 192: a groove flag with no kick in the next two bars plays as a break
     bool m_curveGroove = false;  // runde 192: a break flag with a solid kick in the next two bars plays as a groove
+    int m_curveTurnBeat = -100;  // runde 193: the beat of the last such turn - four bars between turns
     bool m_barsLead;          // this section: the laser bars take the first effect place
     int m_castCursor;
     int m_motionCursor;
