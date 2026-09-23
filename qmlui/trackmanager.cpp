@@ -2201,13 +2201,16 @@ bool TrackManager::refineMarkers()
     //    of kick, on a bar line, and no flag within two bars of it
     for (int b = 17; b + 8 <= m_beatCount; b += 4)
     {
-        qreal before = kickMean(b - 8, 8);
+        // R194_STEP3: "two bars without a kick" is BOTH bars - the two-bar
+        // mean let a one-bar fill pass; and the four-bar minimum step 1
+        // enforces holds here too, or the next load deletes what this added
+        qreal before = qMax(kickMean(b - 8, 4), kickMean(b - 4, 4));
         qreal after = kickMean(b, 8);
         if (before < 0.0 || after < 0.0 || before >= m_breakKick || after < m_dropKick)
             continue;
         bool nearby = false;             // near is a macro in windows.h
         foreach (const Flag &f, flags)
-            if (qAbs(f.beat - b) <= 8)
+            if (qAbs(f.beat - b) < 16)
                 nearby = true;
         if (nearby)
             continue;
@@ -2224,12 +2227,17 @@ bool TrackManager::refineMarkers()
         int start = b;
         while (start - 4 >= 1 && kickMean(start - 4, 4) >= 0.0 && kickMean(start - 4, 4) < m_breakKick)
             start -= 4;
+        // R194_STEP3_BREAK: a break or a build leads in - a drop or a drive
+        // there did not, and left drop -> drop; and the inserted break keeps
+        // four bars itself, and four bars after the flag before it
         bool hasBreak = false;
         foreach (const Flag &f, flags)
             if (f.beat == start                    // anything already there
-                || (f.beat >= start - 8 && f.beat < b && f.type != QStringLiteral("normal")))
+                || (f.beat >= start - 8 && f.beat < b
+                    && (f.type == QStringLiteral("break") || f.type == QStringLiteral("build")))
+                || (f.beat < start && start - f.beat < 16))
                 hasBreak = true;
-        if (hasBreak == false && start < b)
+        if (hasBreak == false && b - start >= 16)
         {
             Flag brk;
             brk.beat = start;

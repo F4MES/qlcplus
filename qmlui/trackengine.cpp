@@ -5615,7 +5615,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           && (sectionChanged || beat - m_curveTurnBeat >= 16);
         if (flagGroove == false && flagBreak == false)
         {
-            if ((m_curveBreak || m_curveGroove) && sectionChanged == false)
+            // a riser taking over mid-section: a turn only where turns may
+            // happen, otherwise quietly (runde 194)
+            if ((m_curveBreak || m_curveGroove) && sectionChanged == false && hold == false
+                && flagSoon == false && beat - m_curveTurnBeat >= 16)
                 curveTurn = true;
             m_curveBreak = false;
             m_curveGroove = false;
@@ -5624,7 +5627,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             if (flagGroove && m_curveBreak == false && kickAhead < 0.15 && dropAhead == false)
                 m_curveBreak = curveTurn = true;
-            else if (flagGroove && m_curveBreak && kickAhead >= 0.30)
+            // ... and one armed before the drop's 32-beat window lets go
+            // when it opens - no breakdown look on a climb (runde 194)
+            else if (flagGroove && m_curveBreak && (kickAhead >= 0.30 || dropAhead))
             {
                 m_curveBreak = false;
                 curveTurn = true;
@@ -10009,6 +10014,20 @@ void TrackEngine::laserFaderCheck(qreal slider)
         if (m_active.contains("pos:" + key) == false)
         {
             m_position.remove(key);
+            // ... but if the bars are still LIT (pinned as the base, held at
+            // 35 % between tracks) their tilt is unknown - wherever the
+            // stopped aim left it. Under 60 % that may not point down: dark
+            // (runde 194)
+            bool lit = m_active.contains("col:" + key);
+            for (int i = 0; i < g.parts.count() && lit == false; i++)
+                lit = m_active.contains(partSlot(key, i));
+            if (lit && fader < 0.60)
+            {
+                stopSlot("col:" + key, true);
+                for (int i = 0; i < g.parts.count(); i++)
+                    stopSlot(partSlot(key, i), true);
+                m_cast.remove(key);
+            }
             continue;
         }
         const quint32 held = m_position.value(key, Function::invalidId());
@@ -10018,7 +10037,7 @@ void TrackEngine::laserFaderCheck(qreal slider)
         const TrackFuncInfo &hi = m_funcs.value(held);
         // as tick() under HOLD: a still, safe aim stands under 40 % while HOLD
         // is on; one that moves or dips does not (runde 193)
-        const bool unsafe = (fader < 0.40 && (m_hold == false || hi.type != int(Function::SceneType)))
+        const bool unsafe = (fader < 0.40 && (m_hold == false || fader < 0.03 || hi.type != int(Function::SceneType)))
                          || (hi.sweep ? laserSweepSafe(held, key, downNow) == false
                                       : laserAimSafe(held, key, downNow) == false);
         if (unsafe == false)
@@ -10703,7 +10722,9 @@ void TrackEngine::idle()
         // tilt stays wherever the scene left it. Forgotten, so the first aim
         // after the pause goes through the unknown-aim dark hold - the bars
         // came back lit mid-swing (runde 193)
-        if (slot.startsWith("pos:"))
+        // (the laser bars only: a moving head re-aimed lit on the resume beat,
+        // under HOLD and at ENERGY 0 too - the bars go dark for theirs)
+        if (slot.startsWith("pos:") && m_groups.value(slotGroup(slot)).lasers)
             m_position.remove(slotGroup(slot));
         stopSlot(slot, false);
     }
