@@ -968,6 +968,41 @@ void TrackEngine::ensureTable()
                     info.dimmer = true;
             }
         }
+        // ... and a CHASE that works the dimmers, read off its steps (runde
+        // 173). This flag was only ever set for a scene, and "the chase owns
+        // the dimmers" in tick() (motionOwns, runde 69) asks for a chase WITH
+        // it - so from the day it was written it never once came true: the
+        // engine's own dimmer parts (ReplaceBlend) wrote over every AUTO
+        // chase's dimmer figure, and the room only ever showed the engine's
+        // figures. Tobias, 2026-09-23: "Slaa AUTO-programmernes egne
+        // lysmoenstre til." A Sequence keeps its values in the step itself;
+        // a chaser in its step scenes.
+        Chaser *dimChase = qobject_cast<Chaser *>(func);
+        if (dimChase != nullptr)
+        {
+            foreach (const ChaserStep &step, dimChase->steps())
+            {
+                QList<SceneValue> stepValues = step.values;
+                if (t != Function::SequenceType)
+                {
+                    Scene *stepScene = qobject_cast<Scene *>(m_doc->function(step.fid));
+                    if (stepScene == nullptr)
+                        continue;
+                    stepValues = stepScene->values();
+                }
+                foreach (const SceneValue &sv, stepValues)
+                {
+                    Fixture *fxi = m_doc->fixture(sv.fxi);
+                    if (fxi != nullptr && sv.channel == dimmerChannel(fxi) && sv.value > 0)
+                    {
+                        info.dimmer = true;
+                        break;
+                    }
+                }
+                if (info.dimmer)
+                    break;
+            }
+        }
 
         info.tier = tierOf(n);
         info.sweep = (t == Function::EFXType);
