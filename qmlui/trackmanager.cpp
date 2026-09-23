@@ -109,6 +109,11 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_engine = new TrackEngine(m_doc, this);
     // ROOM (by clock, or a tap) is the ENERGY trim: one dial, not two
     connect(m_engine, &TrackEngine::roomChanged, this, &TrackManager::setEnergyTrim);
+    // R184_START_SCENE_INIT: tonight's state, and the clock's ENERGY at once -
+    // it used to arrive on the first beat, so SHOW ON before the music
+    // started saw last night's slider
+    m_showRan = QSettings().value(SETTINGS_TRACK_SHOWRAN).toString() == TrackEngine::nightKey();
+    m_engine->announceRoom();
     if (m_view != nullptr)
         m_view->rootContext()->setContextProperty("trackEngine", m_engine);
 
@@ -868,6 +873,7 @@ void TrackManager::setEnergyTrim(int percent)
     QSettings().setValue(SETTINGS_TRACK_TRIM, m_energyTrim);
     emit energyChanged();
     applyEnergy();
+    noteShowRunning();                   // R184_START_SCENE_ENERGY
 }
 
 int TrackManager::bpmLow() const { return m_bpmLow; }
@@ -898,6 +904,26 @@ void TrackManager::setBpmHigh(int bpm)
  * Run control and data
  *********************************************************************/
 
+void TrackManager::noteShowRunning()
+{
+    // R184_START_SCENE_NOTE
+    if (m_autoRun == false || m_energyTrim <= 0 || m_engine == nullptr)
+        return;
+    if (m_showRan == false)
+    {
+        m_showRan = true;
+        QSettings().setValue(SETTINGS_TRACK_SHOWRAN, TrackEngine::nightKey());
+    }
+    // only the one SHOW ON put up: a start scene called by hand stays
+    // until its tile is tapped again
+    if (m_startAuto)
+    {
+        m_startAuto = false;
+        if (m_engine->startScene())
+            m_engine->setStartScene(false);
+    }
+}
+
 bool TrackManager::autoRun() const { return m_autoRun; }
 
 void TrackManager::setAutoRun(bool enable)
@@ -918,9 +944,23 @@ void TrackManager::setAutoRun(bool enable)
     // show on ends it
     if (m_autoRun && m_engine != nullptr)
         m_engine->setStartScene(false);
+    m_startAuto = false;
 
     if (m_autoRun) applyLook();
     else stopLook();
+
+    // R184_START_SCENE_SHOW: ... unless it is the first SHOW ON of the night
+    // and ENERGY is 0 - then the evening opens on it, until ENERGY moves.
+    // The clock is asked first: it only speaks on a beat, and the music
+    // may not have started yet
+    if (m_autoRun && m_engine != nullptr)
+        m_engine->announceRoom();
+    if (m_autoRun && m_engine != nullptr && m_showRan == false && m_energyTrim == 0)
+    {
+        m_engine->setStartScene(true);
+        m_startAuto = m_engine->startScene();
+    }
+    noteShowRunning();
 
     emit autoRunChanged();
 }

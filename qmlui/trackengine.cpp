@@ -223,6 +223,22 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     loadClockCurve(settings);
+    // runde 184: ENERGY by clock and the group faders come back after a
+    // restart - the same night only. A new evening starts as it always has:
+    // the clock on and every group at 100 %.
+    if (settings.value(SETTINGS_ENGINE_NIGHT).toString() == nightKey())
+    {
+        m_roomAuto = settings.value(SETTINGS_ENGINE_ROOMAUTO, true).toBool();
+        foreach (const QString &entry, settings.value(SETTINGS_ENGINE_GROUPTRIM, QString())
+                                               .toString().split(';', Qt::SkipEmptyParts))
+        {
+            const int eq = entry.lastIndexOf(QLatin1Char('='));
+            bool ok = false;
+            const qreal level = eq > 0 ? entry.mid(eq + 1).toDouble(&ok) : 0.0;
+            if (ok)
+                m_groupTrim.insert(entry.left(eq), qBound(0.0, level, 1.0));
+        }
+    }
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_fullAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
     // Read once, here. loadRoles() does not touch the group switches (the
@@ -3781,6 +3797,7 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
     if (qFuzzyCompare(level + 1.0, m_groupTrim.value(key, 1.0) + 1.0))
         return;
     m_groupTrim.insert(key, level); // the signal's settings snapshot must contain the new trim
+    saveNight();                    // runde 184: the same night gets it back after a restart
     // A fader is dragged, not tapped, so this would write a line per frame.
     // One per group per logged beat is enough to see the gesture and where it
     // ended, and the beat lines around it carry the rest.
@@ -4026,6 +4043,11 @@ QString TrackEngine::exportSettings()
     foreach (const QString &key, settings.allKeys())
     {
         if (key.startsWith(QStringLiteral("trackengine/")) == false && key.startsWith(QStringLiteral("trackmanager/")) == false)
+            continue;
+        // tonight's state is not a setting: carried to another night, it
+        // would only be thrown away by its own date stamp (runde 184)
+        if (key == SETTINGS_ENGINE_NIGHT || key == SETTINGS_ENGINE_ROOMAUTO || key == SETTINGS_ENGINE_GROUPTRIM
+            || key == QStringLiteral("trackmanager/showran"))
             continue;
         QVariant v = settings.value(key);
         switch (v.typeId())
@@ -5260,7 +5282,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
     if (m_startScene)            // the opening picture is up: nothing else runs
-        return;
+    {
+        // ... but the clock still speaks: at 22:30 it is what takes a start
+        // scene SHOW ON put up back down (TrackManager::noteShowRunning,
+        // runde 184). Returning first held ENERGY at 0 all night.
+        announceRoom();
+        if (m_startScene)
+            return;
+    }
     ensureTable();
     tickFades();
     // idle/release clear the state. Resuming the same marker span must still
@@ -9610,6 +9639,7 @@ void TrackEngine::setRoom(int room)
 {
     // a hand on the dial ends the automatic evening
     m_roomAuto = false;
+    saveNight();
     room = qBound(0, room, 3);
     if (room == m_room)
     {
@@ -9624,6 +9654,24 @@ void TrackEngine::setRoom(int room)
     emit liveChanged();
 }
 
+QString TrackEngine::nightKey()
+{
+    return QDateTime::currentDateTime().addSecs(-12 * 3600).date().toString(Qt::ISODate);
+}
+
+void TrackEngine::saveNight() const
+{
+    QStringList trims;
+    for (auto it = m_groupTrim.constBegin(); it != m_groupTrim.constEnd(); ++it)
+        trims << it.key() + QLatin1Char('=') + QString::number(it.value(), 'f', 3);
+    // all three together, always: a stamp written with only one of them
+    // would carry last night's other two into tonight
+    QSettings settings;
+    settings.setValue(SETTINGS_ENGINE_NIGHT, nightKey());
+    settings.setValue(SETTINGS_ENGINE_ROOMAUTO, m_roomAuto);
+    settings.setValue(SETTINGS_ENGINE_GROUPTRIM, trims.join(';'));
+}
+
 bool TrackEngine::roomAuto() const { return m_roomAuto; }
 
 void TrackEngine::setRoomAuto(bool on)
@@ -9631,6 +9679,7 @@ void TrackEngine::setRoomAuto(bool on)
     if (on == m_roomAuto)
         return;
     m_roomAuto = on;
+    saveNight();
     if (on)
     {
         m_roomSent = -1;             // hand the clock's value over right away

@@ -103,6 +103,10 @@ class QRandomGenerator;
 #define SETTINGS_ENGINE_AUTORATING QStringLiteral("trackengine/auto-rating-v1")
 #define SETTINGS_ENGINE_RATINGON  QStringLiteral("trackengine/ratingon")
 #define SETTINGS_ENGINE_SEEN      QStringLiteral("trackengine/seen")
+// runde 184: what one night remembers across a restart (see nightKey())
+#define SETTINGS_ENGINE_NIGHT     QStringLiteral("trackengine/night")
+#define SETTINGS_ENGINE_ROOMAUTO  QStringLiteral("trackengine/roomauto")
+#define SETTINGS_ENGINE_GROUPTRIM QStringLiteral("trackengine/grouptrim")
 
 /** Beats of stage time that count as one "showing". A section is 32-64 beats,
  *  so 64 is roughly "it was up for a section". Exposure is measured in these,
@@ -385,8 +389,10 @@ class TrackEngine : public QObject
      *  the slider turns it off. */
     Q_PROPERTY(bool roomAuto READ roomAuto WRITE setRoomAuto NOTIFY liveChanged)
     /** The evening's opening picture: the IDLE functions (the START scene)
-     *  held on their own, with the engine standing still. Switching AUTO on
-     *  takes it off again. */
+     *  held on their own, with the engine standing still. The first SHOW ON
+     *  of the night with ENERGY at 0 puts it up, and ENERGY above 0 takes
+     *  that one down again (TrackManager, runde 184); by hand it stays until
+     *  the tile is tapped again or the show is switched. */
     Q_PROPERTY(bool startScene READ startScene WRITE setStartScene NOTIFY liveChanged)
 
     /** Freeze the look: no colour, cast or move changes until released. */
@@ -550,6 +556,12 @@ public:
     static int keyBiasOf(const QString &key);
     static QString dropStyleName(int style);
     void announceRoom();
+    /** Which night it is, for what is remembered across a restart: the
+     *  date, turning at noon - 20:00 is a new evening, 01:00 is still
+     *  last night. (runde 184) */
+    static QString nightKey();
+    /** ENERGY by clock and the group faders, stamped with nightKey(). */
+    void saveNight() const;
     bool hold() const;
     void setHold(bool on);
     bool logEnabled() const;

@@ -54,6 +54,7 @@ class Doc;
 #define SETTINGS_TRACK_SLOTSPEED  QStringLiteral("trackmanager/slotspeed")
 #define SETTINGS_TRACK_DROPKICK   QStringLiteral("trackmanager/dropkick")
 #define SETTINGS_TRACK_BREAKKICK  QStringLiteral("trackmanager/breakkick")
+#define SETTINGS_TRACK_SHOWRAN    QStringLiteral("trackmanager/showran")   // R184_START_SCENE: the night it ran
 
 #define TRACK_DEFAULT_PORT     9998
 #define TRACK_DEFAULT_BPM_LOW  80
@@ -376,6 +377,12 @@ private:
     int m_bpmLow;
     int m_bpmHigh;
     int m_energyTrim;
+    // R184_START_SCENE_MEMBERS
+    bool m_showRan = false;      // the show has run with ENERGY above 0 tonight
+    bool m_startAuto = false;    // the start scene on stage was put up by SHOW ON
+    /** SHOW ON with ENERGY above 0: the show has run tonight, and a start
+     *  scene SHOW ON put up comes down. */
+    void noteShowRunning();
     int m_liveBpm;
 
     QTimer m_energyTimer;
