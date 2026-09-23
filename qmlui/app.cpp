@@ -967,7 +967,13 @@ bool App::loadXML(QXmlStreamReader &doc, bool goToConsole, bool fromMemory)
         }
     }
 
-    if (goToConsole == true || accessMask() == AC_VCControl)
+    if (accessMask() == AC_VCControl)
+        // KIOSK_TRACK_R183: kiosk mode shows the Track page. Called on the
+        // QML side directly - ContextManager does not know "TRACK"
+        QMetaObject::invokeMethod(rootObject(), "switchToContext",
+                                  Q_ARG(QVariant, "TRACK"),
+                                  Q_ARG(QVariant, "qrc:/TrackView.qml"));
+    else if (goToConsole == true)
         // Force the active window to be Virtual Console
         m_contextManager->switchToContext("VirtualConsole");
     else

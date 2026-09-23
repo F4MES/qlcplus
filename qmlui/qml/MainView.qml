@@ -609,16 +609,91 @@ Rectangle
     {
         id: mainViewLoader
         width: parent.width
-        height: parent.height - (mainToolbar.visible ? mainToolbar.height : 0)
-        y: mainToolbar.visible ? mainToolbar.height : 0
+        // KIOSK_TRACK_R183: in kiosk mode the page starts under kioskBar
+        height: parent.height - (mainToolbar.visible ? mainToolbar.height
+                                 : (kioskBar.visible ? kioskBar.height : 0))
+        y: mainToolbar.visible ? mainToolbar.height : (kioskBar.visible ? kioskBar.height : 0)
 
         Component.onCompleted:
         {
             var ctx = "FIXANDFUNC"
-            // handle Kiosk mode on startup
+            // handle Kiosk mode on startup: the Track page is the kiosk's
+            // own page; kioskBar switches to the Virtual Console
             if (qlcplus.accessMask === App.AC_VCControl)
-                ctx = "VC"
+                ctx = "TRACK"
             enableContext(ctx, true)
+        }
+    }
+
+    // KIOSK_BAR_R183 - kiosk tab strip (Tobias, 2026-09-23). Kiosk mode
+    // opens the Track page; these two tabs switch between it and the
+    // Virtual Console. They load the SAME qrc files as the normal toolbar,
+    // so there is no kiosk copy of either page. kioskBeatHeader (below)
+    // has the same height and sits in the strip's right end.
+    Rectangle
+    {
+        id: kioskBar
+        visible: qlcplus.accessMask === App.AC_VCControl
+        z: 59
+        anchors.top: parent.top
+        width: parent.width
+        height: UISettings.iconSizeMedium
+        color: UISettings.toolbarEnd
+
+        Row
+        {
+            anchors.left: parent.left
+            anchors.leftMargin: 4
+            anchors.verticalCenter: parent.verticalCenter
+            height: parent.height - 6
+            spacing: 4
+
+            Rectangle
+            {
+                id: kioskTrackTab
+                height: parent.height
+                width: kioskTrackLabel.implicitWidth + UISettings.iconSizeDefault
+                radius: 3
+                color: currentContext === "TRACK" ? UISettings.highlight : UISettings.bgMedium
+
+                Text
+                {
+                    id: kioskTrackLabel
+                    anchors.centerIn: parent
+                    text: qsTr("TRACK")
+                    color: UISettings.fgMain
+                    font.bold: true
+                    font.pixelSize: UISettings.textSizeDefault
+                }
+                MouseArea
+                {
+                    anchors.fill: parent
+                    onClicked: switchToContext(trackEntry.ctxName, trackEntry.ctxRes)
+                }
+            }
+            Rectangle
+            {
+                id: kioskVcTab
+                height: parent.height
+                width: kioskVcLabel.implicitWidth + UISettings.iconSizeDefault
+                radius: 3
+                color: currentContext === "VC" ? UISettings.highlight : UISettings.bgMedium
+
+                Text
+                {
+                    id: kioskVcLabel
+                    anchors.centerIn: parent
+                    text: qsTr("VIRTUAL CONSOLE")
+                    color: UISettings.fgMain
+                    font.bold: true
+                    font.pixelSize: UISettings.textSizeDefault
+                }
+                MouseArea
+                {
+                    anchors.fill: parent
+                    onClicked: switchToContext(vcEntry.ctxName, vcEntry.ctxRes)
+                }
+            }
         }
     }
 
