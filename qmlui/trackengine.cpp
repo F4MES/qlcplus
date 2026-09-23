@@ -4384,9 +4384,54 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // channel value, and a rainbow programme would overwrite the colour
     // scene outright. A pattern device has no colour scene to overwrite -
     // the scene IS the colour.
-    else if ((m_groups.value(group).perEye || m_groups.value(group).lasers)
-             && m_groups.value(group).patternDevice == false)
+    //
+    // RUNDE 170 - and not only on the bars. Tobias, 2026-09-22: "som jeg
+    // tidligere har sagt skal farverne vi koerer, passe sammen, altid." What
+    // this branch is left with is by construction ONLY programmes that paint
+    // a colour of their own without naming it - on this show the 37 rainbows
+    // and colour cycles (3-6 colours each: "Wash Groove Rainbow", "Bars
+    // Colour Cycle", "Wash Pulse Colour" ...) and the like. On the heads, the
+    // strobes and the Minis that was still a way in: never measured to happen
+    // (check_reach finds no situation where `exact` is empty), but a way in.
+    // No group runs one now; the group keeps its colour scene and its figure.
+    else if (m_groups.value(group).patternDevice == false)
         return Function::invalidId();
+    else
+    {
+        // A PATTERN DEVICE with no scene in the room's colour may show
+        // another - but only one that GOES WITH the room: the same pairs
+        // accentFor() hands the accent group, and white. Measured on the show
+        // (runde 130): red 12, blue 10, white 5, cyan 4, green 1, magenta 1,
+        // so in a green room this branch could hand the animation laser a RED
+        // pattern - red on green, the one pairing the colour rules leave out
+        // on purpose. Every room colour still has a partner here (green ->
+        // cyan/white, magenta -> blue/white, orange -> red, red -> white), so
+        // the group is not left dark by this on this rig.
+        static const QMap<QString, QStringList> goesWith =
+        {
+            { "blue",    { "white", "cyan" } },
+            { "red",     { "amber", "white" } },
+            { "cyan",    { "magenta", "white" } },
+            { "green",   { "cyan", "white" } },
+            { "magenta", { "blue", "white" } },
+            { "white",   { "blue", "cyan" } },
+            { "orange",  { "amber", "red" } },
+            { "amber",   { "red", "white" } },
+            { "uv",      { "magenta", "blue", "white" } },
+        };
+        const QStringList partners = goesWith.value(colour);
+        QList<TrackFuncInfo *> fits;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            // a scene with no colour word paints a colour we cannot name -
+            // it is not a partner of anything
+            if (partners.contains(info->colour) && engineBannedColour(info->colour) == false)
+                fits.append(info);
+        }
+        if (fits.isEmpty())
+            return Function::invalidId();
+        ok = fits;
+    }
 
     // this tier's motions first
     QList<TrackFuncInfo *> tagged;
