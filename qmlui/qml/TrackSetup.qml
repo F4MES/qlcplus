@@ -25,6 +25,13 @@ Rectangle
     color: "#262626"
     radius: 4
 
+    // First child, so every control below sits above it: a plain Rectangle
+    // lets a touch through to the page underneath, and the gaps between the
+    // SETUP tiles lie over SHOW ON/OFF, START SCENE and the waveform - a
+    // finger slightly off a tile switched the show off mid-set, or dragged a
+    // section flag (runde 176).
+    MouseArea { anchors.fill: parent }
+
     // The TrackView page. Set by the Loader that brings this panel up - an id
     // from the other file is not in scope here, see the note at the Loader.
     property var host: null

@@ -139,10 +139,13 @@ Rectangle
                 Math.max(1, Math.min(trackViewRoot.beatCount,
                                      trackViewRoot.zoomCenter + dir * step))
             var want = wfArea.beatAt(trackViewRoot.dragX) + trackViewRoot.dragOffset
-            var before = trackManager.markers.length
-            trackManager.moveMarker(trackViewRoot.dragIndex, want)
-            if (trackManager.markers.length !== before)
-                wfArea.reindex(want)
+            if (wfArea.barTaken(want) === false)
+            {
+                var before = trackManager.markers.length
+                trackManager.moveMarker(trackViewRoot.dragIndex, want)
+                if (trackManager.markers.length !== before)
+                    wfArea.reindex(want)
+            }
             wfCanvas.requestPaint()
         }
     }
@@ -1120,6 +1123,19 @@ Rectangle
 
                 // moveMarker may drop the flag we land on: everyone's index
                 // shifts, so find the dragged flag again by the beat we asked for
+                // moveMarker() drops any flag already on the target bar: a flag
+                // dragged across its neighbour deleted it (runde 176). The drag
+                // stops at the neighbour instead.
+                function barTaken(wantBeat)
+                {
+                    var snapped = Math.max(1, Math.floor((wantBeat - 1 + 2) / 4) * 4 + 1)
+                    var mk = trackManager.markers
+                    for (var i = 0; i < mk.length; i++)
+                        if (i !== trackViewRoot.dragIndex && mk[i].beat === snapped)
+                            return true
+                    return false
+                }
+
                 function reindex(wantBeat)
                 {
                     // moveMarker snapped the flag to a bar line: look for it
@@ -1155,10 +1171,13 @@ Rectangle
                     }
                     trackViewRoot.dragX = mouse.x
                     var want = beatAt(mouse.x) + trackViewRoot.dragOffset
-                    var before = trackManager.markers.length
-                    trackManager.moveMarker(trackViewRoot.dragIndex, want)
-                    if (trackManager.markers.length !== before)
-                        reindex(want)
+                    if (barTaken(want) === false)
+                    {
+                        var before = trackManager.markers.length
+                        trackManager.moveMarker(trackViewRoot.dragIndex, want)
+                        if (trackManager.markers.length !== before)
+                            reindex(want)
+                    }
 
                     var edge = width * 0.08
                     panTimer.dir = mouse.x < edge ? -1 : (mouse.x > width - edge ? 1 : 0)

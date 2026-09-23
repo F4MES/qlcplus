@@ -26,6 +26,7 @@
 #include <QTextStream>
 #include <QPair>
 #include <QDir>
+#include <QSaveFile>
 #include <cmath>
 
 #include "trackengine.h"
@@ -811,6 +812,26 @@ void TrackEngine::ensureTable()
         if (pan && tilt && grp.lasers == false)
             grp.heads = true;
     }
+    // Every group in HANGING order - DMX address order - not the order Doc
+    // lists the fixtures in (by id). The sweeps were sorted this way on
+    // 2026-09-20 (ensureSweeps), but the parts, and so every figure the
+    // engine draws itself (a chase, halves, odd/even, the position fan),
+    // walked the id order: the wash visited lamps 1, 4, 6, 5, 2, 3, 7 of the
+    // row, the strobes 3, 4, 5, 1, 2, 6 (runde 176). The part scenes follow
+    // by themselves: ensureDimmerScenes() re-points "#n" at its new fixture.
+    foreach (const QString &key, m_groupOrder)
+    {
+        QList<quint32> &hung = m_groups[key].fixtures;
+        std::sort(hung.begin(), hung.end(), [this](quint32 a, quint32 b) {
+            Fixture *fa = m_doc->fixture(a);
+            Fixture *fb = m_doc->fixture(b);
+            if (fa == nullptr || fb == nullptr)
+                return a < b;
+            if (fa->universe() != fb->universe())
+                return fa->universe() < fb->universe();
+            return fa->address() != fb->address() ? fa->address() < fb->address() : a < b;
+        });
+    }
 
     /* ---- functions ---- */
     // A scene that blends instead of adding is a modifier, not a look: the
@@ -1396,8 +1417,15 @@ void TrackEngine::learnGroups()
                     && qch->group() != QLCChannel::Tilt
                     && qch->group() != QLCChannel::Speed)
                     g.baseValue[fid].insert(ch, vals.first());
+                // ... and nor are the shutter, the zoom (Beam) or a speed: the
+                // Light Rider colour scenes differ on them ("STROB HVID", a
+                // zoom per look), and learned as colour they made eight
+                // colourless zoom programmes read as painting a colour of
+                // their own - out of every colour's pool (runde 176)
                 else if (constant == false && coloursHere >= 2
-                         && qch->group() != QLCChannel::Pan && qch->group() != QLCChannel::Tilt)
+                         && qch->group() != QLCChannel::Pan && qch->group() != QLCChannel::Tilt
+                         && qch->group() != QLCChannel::Shutter && qch->group() != QLCChannel::Beam
+                         && qch->group() != QLCChannel::Speed)
                     g.colourValue[fid].insert(ch, byColour.value(fid).value(ch));
             }
         }
@@ -1565,6 +1593,15 @@ void TrackEngine::learnHome()
                 // half an aim is no aim
                 if (g.fixtures.contains(fxid) == false
                     || gotPan.contains(fxid) == false || gotTilt.contains(fxid) == false)
+                    continue;
+                // ... and nought/nought is no aim either. lr_import.py writes
+                // these scenes HIDDEN, and QLC+ saves a hidden scene's values as
+                // zero (Scene::saveXML, see CLAUDE.md): in PSMAIN.qxw both Home
+                // scenes of the wash are 0/0 on all seven heads. Learned as an
+                // aim, the fan folded onto one side of the range (runde 176).
+                // Without it the engine falls back to the middle, as it does
+                // with no Home scene at all.
+                if (aim.value(fxid).first == 0 && aim.value(fxid).second == 0)
                     continue;
                 QPoint p(aim.value(fxid).first, aim.value(fxid).second);
                 if (pass == 0)
@@ -2889,8 +2926,31 @@ bool TrackEngine::setsColourOf(Function *func) const
             // dimmer chases write nought to all eight eye channels in every
             // step (see dim() in gen_programs.py, and the LTP trap it is
             // there for) - that is housekeeping, not a red programme.
+            //
+            // ... unless nought IS a colour on that channel: the animation
+            // laser's white is ch 1 = 0 ("AniWhite"). Read as "no colour",
+            // its unnamed white patterns sat in every colour's pool and could
+            // paint white over a red room (LTP) (runde 176).
             if (sv.value == 0)
+            {
+                bool zeroIsColour = false;
+                foreach (const TrackGroup &zg, m_groups)
+                {
+                    foreach (uchar cv, zg.colourValue.value(sv.fxi).value(sv.channel))
+                    {
+                        if (cv == 0)
+                        {
+                            zeroIsColour = true;
+                            break;
+                        }
+                    }
+                    if (zeroIsColour)
+                        break;
+                }
+                if (zeroIsColour)
+                    return true;
                 continue;
+            }
             Fixture *fxi = m_doc->fixture(sv.fxi);
             const QLCChannel *qch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
             if (qch == nullptr)
@@ -3745,14 +3805,19 @@ void TrackEngine::cycleGroup(QString key)
     // ON -> BASE -> OFF -> ON. The base may also be picked automatically when
     // none is set; the first tap on that one pins it, so the cycle carries on
     // from there instead of flipping between BASE and OFF forever
+    // ON and OFF go through setGroupEnabled(), as the cast panel's switch
+    // does: this only wrote the set, so under the start scene or between
+    // tracks (no tick to catch up) the group stayed lit with its tile on OFF
+    // (runde 176)
+    int turn = 0;                               // +1 on, -1 off
     if (m_groupOff.contains(key))
     {
-        m_groupOff.remove(key);                 // OFF -> ON
+        turn = 1;                               // OFF -> ON
         if (m_base == key) m_base.clear();
     }
     else if (m_base == key)
     {
-        m_groupOff.insert(key);                 // BASE -> OFF
+        turn = -1;                              // BASE -> OFF
         m_base.clear();
     }
     else
@@ -3760,6 +3825,11 @@ void TrackEngine::cycleGroup(QString key)
         m_base = key;                           // ON (or the automatic base) -> BASE
     }
     QSettings().setValue(SETTINGS_ENGINE_BASE, m_base);
+    if (turn != 0)
+    {
+        setGroupEnabled(key, turn > 0);         // saves and tells the page
+        return;
+    }
     saveRoles();
     emit tableChanged();
 }
@@ -3944,11 +4014,15 @@ QString TrackEngine::exportSettings()
             default:                obj.insert(key, v.toString()); break;
         }
     }
-    QFile file(engineSettingsPath());
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate) == false)
+    // QSaveFile: written beside the real one and moved into place, so a crash
+    // halfway leaves the previous export - the only backup of the ratings,
+    // roles and bans - rather than an empty file (runde 176)
+    QSaveFile file(engineSettingsPath());
+    if (file.open(QIODevice::WriteOnly) == false)
         return tr("could not write %1").arg(file.fileName());
     file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
-    file.close();
+    if (file.commit() == false)
+        return tr("could not write %1").arg(file.fileName());
     return tr("saved %1 settings to %2").arg(obj.count()).arg(file.fileName());
 }
 
@@ -4299,10 +4373,12 @@ quint32 TrackEngine::colourFunction(const QString &group, const QString &colour)
         if (info->colour == colour && lightsGroup(info->id, group))
             return info->id;
     }
-    // a colourless look for this group (the group has no named colours)
+    // a colourless look for this group (the group has no named colours) -
+    // one that LIGHTS it: "AUTO Bars Eyes Clear" is all noughts, a COLOR
+    // candidate, and would have blacked the bars out (runde 176)
     foreach (TrackFuncInfo *info, list)
     {
-        if (info->groups.count() == 1 && info->colour.isEmpty())
+        if (info->groups.count() == 1 && info->colour.isEmpty() && lightsGroup(info->id, group))
             return info->id;
     }
     return Function::invalidId();
@@ -9931,6 +10007,11 @@ void TrackEngine::release()
     // live here. (Round 162 had this function cut hard; that is gone too.)
     m_sequenceGroups.clear();
     m_restUntil = -1;
+    // the opening picture goes with everything else - and its tile with it:
+    // the room went dark while START SCENE still showed lit, and the first
+    // tap on it then turned "off" nothing (runde 176)
+    if (m_startScene)
+        setStartScene(false);
     if (m_testTimer.isActive())
         selfTest(); // cancel the test before releasing its output
     // AUTO went off: let everything fade out over a bar instead of clipping,
@@ -10114,6 +10195,10 @@ void TrackEngine::slotSelfTestStep()
     if (m_testIndex >= m_testSteps.count())
     {
         selfTest();                       // the stopping half
+        // the test darkened what it tested: the opening picture, if it is up,
+        // comes back (runde 176)
+        if (m_startScene)
+            startLook();
         m_report = m_testSkipped.isEmpty()
                        ? tr("self test done")
                        : tr("self test done - NOT tested (no colour scene): %1")
@@ -10145,6 +10230,14 @@ void TrackEngine::idle()
         return;
     if (m_testTimer.isActive())   // SELF TEST owns the stage until it is done
         return;
+    // the opening picture is up: nothing else runs - as in tick(). A stopped
+    // deck (and the 30 s watchdog) called this and replaced the picture with
+    // the idle look while the START SCENE tile stayed lit (runde 176).
+    if (m_startScene)
+    {
+        startLook();
+        return;
+    }
     ensureTable();
     tickFades();
 
