@@ -1206,6 +1206,51 @@ Rectangle
                 color: trackViewRoot.cDim
                 font.pixelSize: 15
             }
+            Rectangle
+            {
+                // OVER THE WAVEFORM, not a row of the page (runde 177). As a row it
+                // came and went with every warning - "BLT link stale", "moved from
+                // elsewhere" flip during a set - and each time SECTION, ENERGY,
+                // the colours and everything below jumped 36 px under a finger
+                // already on its way (Tobias, 2026-09-23: "laeg advarslen ovenpaa
+                // boelgeformen"). It sits across the top of the waveform, takes
+                // no touch (a Rectangle lets it through to the flags below) and
+                // moves nothing.
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 4
+                height: 30
+                z: 50
+                opacity: 0.94
+                radius: 3
+                color: "#3A2A1A"
+                border.width: 1
+                border.color: "#E3B44F"
+                visible: trackManager && trackManager.roleMode && !trackViewRoot.setupOpen
+                         && warnText.text.length > 0
+
+                Text
+                {
+                    id: warnText
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                    color: "#FFD27F"
+                    font.pixelSize: 13
+                    text:
+                    {
+                        var parts = []
+                        if (trackManager && trackManager.linkStale)
+                            parts.push(qsTr("BLT link stale - holding the last look"))
+                        if (trackEngine)
+                            for (var i = 0; i < trackEngine.warnings.length; i++)
+                                parts.push(trackEngine.warnings[i])
+                        return parts.join("   ·   ")
+                    }
+                }
+            }
         }
 Rectangle
         {
@@ -1632,38 +1677,6 @@ TrackTile
             }
         }
 
-Rectangle
-        {
-            Layout.fillWidth: true
-            Layout.preferredHeight: visible ? 30 : 0
-            radius: 3
-            color: "#3A2A1A"
-            border.width: 1
-            border.color: "#E3B44F"
-            visible: trackManager && trackManager.roleMode && !trackViewRoot.setupOpen
-                     && warnText.text.length > 0
-
-            Text
-            {
-                id: warnText
-                anchors.fill: parent
-                anchors.margins: 6
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-                color: "#FFD27F"
-                font.pixelSize: 13
-                text:
-                {
-                    var parts = []
-                    if (trackManager && trackManager.linkStale)
-                        parts.push(qsTr("BLT link stale - holding the last look"))
-                    if (trackEngine)
-                        for (var i = 0; i < trackEngine.warnings.length; i++)
-                            parts.push(trackEngine.warnings[i])
-                    return parts.join("   ·   ")
-                }
-            }
-        }
 Rectangle
         {
             Layout.fillWidth: true
