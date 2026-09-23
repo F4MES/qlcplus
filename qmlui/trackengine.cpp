@@ -391,7 +391,12 @@ void TrackEngine::slotPulseTimer()
             // every sub-step is a hit of its own: without this the pulse
             // decayed from the beat, and on a bare chase the eighths and
             // sixteenths landed at 37, 14 and 5 per cent - a trail, not steps
-            if (mv.pulse > 0.0 && sub != m_subStepSeen.value(key, 0))
+            // ... on a beat that HAS a pulse: tick() starts one only on the
+            // pulse's beats and on a kick. On any other beat m_subStepSeen still
+            // held the last beat's sub-step, so sub 0 restarted the pulse at
+            // full on exactly the beat that should have none (runde 171).
+            if (mv.pulse > 0.0 && m_pulseStart.value(key, -1) >= m_beatStartMs
+                && sub != m_subStepSeen.value(key, 0))
             {
                 m_subStepSeen.insert(key, sub);
                 m_pulseStart.insert(key, now);
@@ -1945,6 +1950,16 @@ void TrackEngine::genFlash(bool on, const QString &colour)
         {
             const TrackGroup &g = m_groups.value(key);
             if (g.strobes == false || g.generatable() == false || m_groupOff.contains(key))
+                continue;
+            // An automatic hit (a colour is given) flashes only strobes that
+            // are ON STAGE. Every drop landing lit the whole bank at full from
+            // 30 % on the fader - where the strobes are kept out of the cast
+            // until ENGINE_STROBE_ON - and a group out of the cast has no
+            // pulse, so the flash stood static for the beat. Tobias: "de skal
+            // heller ikke lyse overhovedet foer energien er der hvor der er
+            // dansegulv" (runde 171). The FLASH button (no colour) still takes
+            // every strobe: that is the operator's hand.
+            if (colour.isEmpty() == false && m_cast.contains(key) == false)
                 continue;
             quint32 fid = colourFunction(key, hue);
             if (fid == Function::invalidId())
@@ -3775,6 +3790,9 @@ void TrackEngine::setColourOverride(QString colour)
     if (colour == m_override)
         return;
     m_override = colour;
+    // the accent was drawn to go with the colour before the tile; a tile, or
+    // letting one go, is a new room colour (runde 171)
+    m_accentPick.clear();
     logSignal(colour.isEmpty() ? QStringLiteral("sig:colour-auto")
                                : QStringLiteral("sig:colour:") + colour);
     m_startColour = false;               // a tile the DJ tapped is theirs
@@ -5378,14 +5396,44 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // mixed in, not a bar after it has landed. The draw leans on the next
     // track's key when BLT has sent it. (Tobias, 2026-09-15: "saa lyset
     // skifter MED musikken, ikke efter".)
-    if (m_mixing && m_mixBeat >= 0 && m_nextColour.isEmpty() && m_palette.isEmpty() == false && m_override.isEmpty())
+    // HOLD is "no colour changes", and ENERGY 0 (STILL, which forces the
+    // hold) is "nothing changes": neither may turn the base, nor hand the
+    // whole room a new colour when the track lands (runde 171).
+    if (hold)
+        m_nextColour.clear();
+    if (m_mixing && m_mixBeat >= 0 && m_nextColour.isEmpty() && m_palette.isEmpty() == false
+        && m_override.isEmpty() && hold == false)
     {
-        QStringList pool;
+        // Through the mix's second half the base wears the next colour while
+        // every other group still wears this one - two colours on the rig for
+        // four to eight bars, so they have to go together: "farverne ... skal
+        // passe sammen, altid" (Tobias, 2026-09-22). A red room went green
+        // under a red strobe. The pairs are gen_programs' HARMONY - the same
+        // pairs the two-colour programmes are built from - without white,
+        // which is punctuation, not a room. Only if none of them is in the
+        // palette does the draw fall back to any colour (runde 171).
+        static const QMap<QString, QStringList> mixesWith =
+        {
+            { "red",     { "magenta", "orange", "blue" } },
+            { "orange",  { "red", "blue" } },
+            { "magenta", { "blue", "red", "cyan" } },
+            { "blue",    { "magenta", "cyan", "orange", "red" } },
+            { "cyan",    { "blue", "green", "magenta" } },
+            { "green",   { "cyan" } },
+            { "white",   { "blue", "cyan", "magenta" } },
+        };
+        QStringList pool, anyPool;
         foreach (const QString &c, m_palette)
         {
             if (c != m_colour && c != QStringLiteral("white") && engineBannedColour(c) == false)
-                pool.append(c);
+            {
+                anyPool.append(c);
+                if (mixesWith.value(m_colour).contains(c))
+                    pool.append(c);
+            }
         }
+        if (pool.isEmpty())
+            pool = anyPool;
         if (pool.isEmpty())
             pool = m_palette;
         m_nextColour = drawColour(pool, m_nextKeyBias, rng);
@@ -5708,7 +5756,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         castSet.clear();
         foreach (const QString &key, m_cast)
-            if (eligible.contains(key)) castSet.insert(key);
+        {
+            // HOLD freezes the look, not the strobe threshold: held at 70 %
+            // and the fader (or the closing cap) brought under
+            // ENGINE_STROBE_ON, the strobes kept walking (runde 171)
+            if (eligible.contains(key)
+                && (m_groups.value(key).strobes == false || fader >= ENGINE_STROBE_ON))
+                castSet.insert(key);
+        }
         if (base.isEmpty() == false) castSet.insert(base);
     }
 
@@ -5718,8 +5773,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         // a section turn under HOLD redraws nothing else, so not this either -
         // HOLD is "no colour changes", and the accent is a colour
+        // ... and when the ROOM colour changes inside the drop (the hold timer,
+        // a musical turn): the accent was drawn to go with the old one, and a
+        // cyan drop's magenta accent stood on in the green that followed -
+        // green/magenta, a pair the rules leave out on purpose (runde 171)
         if ((sectionChanged && hold == false) || m_accentPick.isEmpty()
-            || m_palette.contains(m_accentPick) == false)
+            || m_palette.contains(m_accentPick) == false
+            || (changeColour && hold == false))
         {
             // White is punctuation, not a colour: it may be the accent about
             // one draw in four and never two sections running. It used to be
@@ -5939,7 +5999,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // we want in breaks and build-ups and at the start" means.
         // HOLD freezes the aim like everything else; without that guard the
         // fader dropping under 60 % would swing the bars home under a hold.
-        if (g.lasers && hold == false)
+        // ... and at ENERGY 0 even under the HOLD it forces (runde 171): a
+        // bar that was roaming stood running its figure at the bottom of the
+        // fader - "ENERGY 0 = nothing moves". It goes home once and stands.
+        if (g.lasers && (hold == false || still))
         {
             // ... and only while they are LIT. A bar outside the cast stood
             // at the top of the fader running its slow tilt chase in the dark
@@ -5950,6 +6013,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // them, from 60 % one that dips them (positionFunction / laserAimSafe)
             bool mayRoam = inCast && fader >= 0.40 && isBreak == false && isBuild == false
                         && isCalm == false && still == false;
+            // LASER SAFETY (runde 171). The held aim was measured against the
+            // fader only on the beat it was chosen: picked at 80 % - a figure
+            // dipping 12 units under the home aim - it stayed there when the
+            // fader came down to 45 %, where the bars may only point UP. Every
+            // beat, a held aim that the fader no longer allows sends the bars
+            // home, exactly as the fader dropping under 40 % does.
+            if (mayRoam)
+            {
+                const quint32 heldAim = m_position.value(key, Function::invalidId());
+                const int downNow = laserDownAllowed(fader);
+                if (heldAim != Function::invalidId() && heldAim != homePosition(key)
+                    && (m_funcs.value(heldAim).sweep ? laserSweepSafe(heldAim, key, downNow) == false
+                                                     : laserAimSafe(heldAim, key, downNow) == false))
+                    mayRoam = false;
+            }
             quint32 home = mayRoam ? Function::invalidId() : homePosition(key);
             if (home != Function::invalidId())
             {
@@ -5999,7 +6077,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (want == Function::invalidId()
             || (mayMove && sectionChanged && aimSettled && (g.lasers == false || inCast)))
         {
-            quint32 np = positionFunction(key, m_castCursor, tier, fader);
+            // The laser block above sends the bars home everywhere they may
+            // not roam - except under HOLD, which skips it. A bar with no aim
+            // yet (a start, a stop, a FULL AUTO toggle) under HOLD drew one
+            // here with nothing but the fader to go by - a tilt chase at the
+            // bottom of the fader, say (runde 171). Home instead.
+            quint32 np = (g.lasers && (hold || fader < 0.40 || inCast == false))
+                       ? homePosition(key)
+                       : positionFunction(key, m_castCursor, tier, fader);
             // a laser group with nothing safe to roam to parks at home rather
             // than keeping whatever tilt the channel happens to hold
             if (np == Function::invalidId() && g.lasers)
@@ -6035,7 +6120,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (g.heads && inCast && hold == false && isBreak == false
             && (m_fullAuto || (m_moves.value(key).ownChaser
                                && candidates(ENGINE_ROLE_MOTION, key).isEmpty()))
-            && beatInBar == 0 && bar > 0 && (bar % walkBars) == 0)
+            && beatInBar == 0 && bar > 0 && (bar % walkBars) == 0
+            // the aim floor (runde 158) here too: NEXT makes a section change
+            // on any beat, and its aim was followed by this walk on the next
+            // bar line - two swings one to three beats apart (runde 171)
+            && (m_aimSince.contains(key) == false || beat - m_aimSince.value(key) >= 4))
         {
             // one step per walk, through the tier's own pool
             quint32 np = positionFunction(key, m_castCursor + bar / walkBars, tier, fader);
@@ -6173,7 +6262,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool wanted = castSet.contains(key) && aimed && aimMoves == false
                    && userMoves == false && darkGroups.contains(key) == false
                    && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
-                   && (g.lasers == false || (m_fullAuto && isBreak == false && isCalm == false));
+                   && (g.lasers == false || (m_fullAuto && isBreak == false && isCalm == false))
+                   // "Indtil 40 % energi skal de slet ikke bevaege sig"
+                   // (Tobias, 2026-09-18). drawSweep() only asks on the beat
+                   // a figure is DRAWN, so a figure drawn at 45 % kept running
+                   // at 32 % until the next section (runde 171).
+                   && (g.lasers == false || fader >= 0.40);
         if (wanted == false)
         {
             if (m_active.contains(slot))
@@ -6538,7 +6632,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (g.perEye && m_fullAuto)
             {
                 bool swap = ((bar / 2) % 2) == 1;
-                splitScene = splitColourFunction(key, swap ? accentColour : m_colour, swap ? m_colour : accentColour);
+                // through colourForGroup(), as `colour` is below: the bars have
+                // no orange, and an eye asked for one got nothing (runde 171)
+                const QString roomHere = colourForGroup(key, m_colour);
+                const QString accentHere = colourForGroup(key, accentColour);
+                splitScene = splitColourFunction(key, swap ? accentHere : roomHere, swap ? roomHere : accentHere);
             }
         }
 
@@ -6639,6 +6737,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mf = m_sectionMotion.value(key, Function::invalidId());
             if (mf != Function::invalidId() && m_funcs.contains(mf) == false)
                 mf = Function::invalidId();
+            // ENERGY 0 is STILL: a chase or EFX held from before the fader came
+            // down kept running - every place that clears the hold sits behind
+            // `hold == false`, and STILL forces the hold (runde 171). A static
+            // look may stay; the fresh pick below is static-only.
+            if (still && mf != Function::invalidId()
+                && m_funcs.value(mf).type != int(Function::SceneType))
+                mf = Function::invalidId();
             // The colour changes INSIDE a section too - on the hold timer and
             // on a musical turn (above, holdUp / turnUp). A programme that
             // wears its own colour and was picked for the red room must not
@@ -6665,8 +6770,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // group is actually wearing. A second lookup was added on
                 // 2026-09-20 and removed the same day: a no-op that cost a
                 // candidates() sweep per group per beat.
+                // Nor for a PATTERN DEVICE: motionFor() hands it a scene in a
+                // partner colour when it has none in the room's (goesWith,
+                // runde 170), and `worn` then never equals `colour` - the held
+                // scene was thrown away and re-picked on every beat (runde 171).
+                // It still lets go when the room colour changes.
                 if (worn.isEmpty() == false && worn != colour
-                    && (key != accentGroup || changeColour))
+                    && ((key != accentGroup && g.patternDevice == false) || changeColour))
                     mf = Function::invalidId();
             }
             // The fader moved the ceiling (ceilMoved): a programme hotter
@@ -6784,6 +6894,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // dimmer-as-switch fixture reads it as off.
             if (bass >= 0.0 && depth > 0.0)
                 depth = qMin(0.95, depth * qBound(0.70, 0.70 + 0.60 * bass, 1.25));
+            // ... but a strobe goes ALL the way down, whatever the bass or the
+            // fader since the draw: "puls op og HELT ned" (Tobias, 2026-09-21).
+            // The two scalers above only ever meant to cap the depth; they also
+            // scaled it DOWN - thin bass left the walking lamp standing at a
+            // third between its beats, lit on its colour with nothing
+            // happening (runde 171).
+            if (g.strobes && depth > 0.0)
+                depth = 0.95;
             // the kick the analysis heard on this beat: no kick, no pulse;
             // a soft kick, a soft pulse. The kick scales the HIT, never the
             // depth: depth is how far the light falls between two beats, so
@@ -6960,6 +7078,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (fc.isEmpty() == false && fc != hue)
                     ff = Function::invalidId();
             }
+            // ... and never on strobes that are off stage (see genFlash)
+            if (ff != Function::invalidId())
+            {
+                foreach (const QString &fg, m_funcs.value(ff).groups)
+                {
+                    if (m_groups.value(fg).strobes && castSet.contains(fg) == false)
+                    {
+                        ff = Function::invalidId();
+                        break;
+                    }
+                }
+            }
             if (ff != Function::invalidId())
                 run("flash", ff, 1.0, 0, true);
             // ... and the generated flash as well, not only as a fallback -
@@ -7000,11 +7130,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 }
                 if (echoKey.isEmpty() == false)
                 {
-                    static const QMap<QString, QString> opposite = {
-                        { "red", "cyan" }, { "cyan", "red" }, { "green", "magenta" }, { "magenta", "green" },
-                        { "blue", "yellow" }, { "yellow", "blue" }, { "amber", "blue" }, { "purple", "yellow" },
-                        { "orange", "cyan" }, { "pink", "green" }, { "uv", "yellow" } };
-                    QString echoHue = opposite.value(m_colour, QStringLiteral("white"));
+                    // A CONTRAST THAT GOES WITH THE ROOM, not the opposite. The
+                    // echo was the opposite colour (forslag 5, 2026-09-16):
+                    // green -> magenta, red -> cyan, orange -> cyan. Tobias,
+                    // 2026-09-22: "farverne ... skal passe sammen, altid" - and
+                    // green/magenta is one of the pairs left out on purpose.
+                    // These are the strongest contrasts in gen_programs'
+                    // HARMONY (runde 171).
+                    static const QMap<QString, QString> contrast = {
+                        { "red", "blue" }, { "blue", "magenta" }, { "cyan", "magenta" }, { "magenta", "cyan" },
+                        { "green", "cyan" }, { "orange", "blue" }, { "white", "blue" }, { "amber", "red" },
+                        { "purple", "blue" }, { "pink", "magenta" }, { "uv", "magenta" } };
+                    QString echoHue = contrast.value(m_colour, QStringLiteral("white"));
                     if (m_palette.contains(echoHue) == false || engineBannedColour(echoHue))
                         echoHue = QStringLiteral("white");
                     echoHue = colourForGroup(echoKey, echoHue);
@@ -7157,8 +7294,9 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
         // gives everyone else: four beats a lamp on six lamps is six bars to
         // cross the room, which reads as one lamp standing lit rather than as
         // a walk. drawMove already slows it down for a quiet room (four beats
-        // under 0.30 on the fader, two under 0.55, one above) and the lamp
-        // blinks on every one of its beats while it is the lit one.
+        // a lamp while its `wild` is under 0.30, two under 0.65, one above -
+        // wild runs from ENGINE_STROBE_ON to the top of the fader) and the
+        // lamp blinks on every one of its beats while it is the lit one.
         move.stepBeats = drawnStepBeats;
         move.pulseOn = drawnPulseOn;
     }
@@ -8341,7 +8479,15 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     // may reach. Drawn up-only (dy = -height); the fader slides it down.
     int dy = sw.dy;
     if (laser && sw.shape >= 0)
-        dy = -sw.height + qMin(2 * sw.height, laserDownAllowed(m_faderNow));
+    {
+        // The figure rides on the aim under it (a relative EFX). From the
+        // home aim it may use the fader's whole allowance; from any other aim
+        // - which may already be dipping by that allowance - none, or the two
+        // add up to twice what the fader allows (runde 171).
+        const int allowed = m_position.value(group, Function::invalidId()) == homePosition(group)
+                          ? laserDownAllowed(m_faderNow) : 0;
+        dy = -sw.height + qMin(2 * sw.height, allowed);
+    }
     if (laser == false && sw.shape >= 0)
     {
         qreal e = qBound(0.0, energy, 1.0);
@@ -10049,6 +10195,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     if (m_nextColour.isEmpty() == false && m_palette.contains(m_nextColour))
         m_colour = m_nextColour;
     m_nextColour.clear();
+    m_accentPick.clear();        // drawn for the last track's colour (runde 171)
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
     m_autoStageKeys.clear();
