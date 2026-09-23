@@ -3824,7 +3824,11 @@ void TrackEngine::setGroupTrim(QString key, qreal level)
 
 QString TrackEngine::baseGroup() const
 {
-    if (m_base.isEmpty() == false && m_groups.contains(m_base) && m_groupOff.contains(m_base) == false)
+    // never a strobe group: the base is in the cast at every fader, so a
+    // strobe base lit the strobes at 0 % and between tracks, past the 55 %
+    // rule - and one tap on its SETUP tile made it so (runde 190)
+    if (m_base.isEmpty() == false && m_groups.contains(m_base) && m_groupOff.contains(m_base) == false
+        && m_groups.value(m_base).strobes == false)
         return m_base;
     // automatic: the moving heads, if there are any with a colour to show
     foreach (const QString &key, m_groupOrder)
@@ -3856,6 +3860,10 @@ void TrackEngine::cycleGroup(QString key)
     {
         turn = -1;                              // BASE -> OFF
         m_base.clear();
+    }
+    else if (m_groups.value(key).strobes)
+    {
+        turn = -1;                              // strobes: ON -> OFF, never BASE (runde 190)
     }
     else
     {
@@ -4285,6 +4293,27 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             continue;
         if (info.frozen)
             continue;                    // it can never step: nothing to follow the music with
+        // LASER SAFETY (runde 190, Tobias: "ja, lav vagten"). A programme
+        // that steers pan/tilt on the laser bars runs only as a POSITION,
+        // where the 40/60 % rules are measured every beat. Roles are kept per
+        // function id and win over the guess, so a renumbered show or a slip
+        // in SETUP could hand a tilt dive to MOTION, FLASH or IDLE - where
+        // nothing measures it. The animation lasers (pattern devices) are
+        // not bars.
+        if (role != ENGINE_ROLE_POSITION && info.aims)
+        {
+            bool bars = false;
+            foreach (const QString &lg, info.groups)
+            {
+                if (m_groups.value(lg).lasers && m_groups.value(lg).patternDevice == false)
+                {
+                    bars = true;
+                    break;
+                }
+            }
+            if (bars)
+                continue;
+        }
         // Per-group slots must never start a whole-room snapshot. Its other
         // groups would bypass cast, colour and intensity decisions. Such
         // looks remain available as START scenes and on the Virtual Console.
@@ -5573,6 +5602,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // on 20 Sep came one to three beats before a drop, and the drop landed
     // in the colour it already had. And a turn waits for the bar line as the
     // timer does: 30 of 70 fell mid-bar (runde 188, from the tracklogs).
+    // trackLoaded() stamps an adopted mix colour 0, "changed before the
+    // first beat". The first beat after a mix is wherever the new deck has
+    // got to - beat 63 to 463 in the logs - so 0 alone let the floor pass at
+    // once; it becomes this beat here (beat 0 never reaches tick) (runde 190)
+    if (m_colourSince == 0)
+        m_colourSince = beat;
     const bool sectionSoon = beatsToNext > 0 && beatsToNext <= 8
         && (nextState == QStringLiteral("drop") || nextState == QStringLiteral("break"));
     bool holdUp = m_colourSince >= 0 && beatInBar == 0 && sectionSoon == false
@@ -5730,7 +5765,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // next to it in a pair the rules leave out (a cyan room's magenta
     // accent by a green base). Drops ran as grooves in a mix until runde
     // 150-odd, so this never showed; now they sit out the mix's last bars.
-    const bool mixTurned = mixBarsOut >= mixTurnBars && m_nextColour.isEmpty() == false;
+    const bool mixTurned = mixBarsOut >= mixTurnBars && m_nextColour.isEmpty() == false
+                        && m_override.isEmpty();     // a tile holds the base: it never turned (runde 190)
     const qreal motionTarget = incomingFresh && m_incomingEnergy >= 0.0 && sectionEnergy >= 0.0
                                && mixBarsOut >= 4
         ? qBound(0.90, 1.0 + 0.20 * (m_incomingEnergy - sectionEnergy), 1.10) : 1.0;
@@ -6296,7 +6332,25 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // ... and at ENERGY 0 even under the HOLD it forces (runde 171): a
         // bar that was roaming stood running its figure at the bottom of the
         // fader - "ENERGY 0 = nothing moves". It goes home once and stands.
-        if (g.lasers && (hold == false || still))
+        // LASER SAFETY under HOLD (runde 190): HOLD skipped this whole block,
+        // the every-beat check below included - an aim dipping under home,
+        // taken at 80 %, stayed pointing down with the fader pulled to 45 %,
+        // and a moving tilt chase kept moving under 40 %. HOLD freezes a SAFE
+        // aim; one the fader no longer allows comes through here and goes home.
+        bool heldUnsafe = false;
+        if (g.lasers && hold && still == false)
+        {
+            const quint32 heldAim = m_position.value(key, Function::invalidId());
+            if (heldAim != Function::invalidId() && heldAim != homePosition(key))
+            {
+                const TrackFuncInfo &hi = m_funcs.value(heldAim);
+                const int downNow = laserDownAllowed(fader);
+                heldUnsafe = (fader < 0.40 && hi.type != int(Function::SceneType))
+                          || (hi.sweep ? laserSweepSafe(heldAim, key, downNow) == false
+                                       : laserAimSafe(heldAim, key, downNow) == false);
+            }
+        }
+        if (g.lasers && (hold == false || still || heldUnsafe))
         {
             // ... and only while they are LIT. A bar outside the cast stood
             // at the top of the fader running its slow tilt chase in the dark
@@ -6345,7 +6399,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         // black" is the one promise the engine keeps
                         // everywhere else. The base blinks for its one beat
                         // and comes back.
-                        if (isBreak && key != base)
+                        // Four bars too when the bars come from an aim nobody
+                        // knows (SHOW ON, a stop, the start scene): tilt is
+                        // wherever it was last left - the floor, if DOWN was
+                        // busked - and one beat relit the beams mid-swing
+                        // (runde 190)
+                        if ((isBreak || m_position.contains(key) == false) && key != base)
                             m_darkUntil.insert(key, beat + ENGINE_DARK_BARS * 4 - 1);
                     }
                     m_position.insert(key, home);
@@ -6391,7 +6450,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (inCast && g.lasers)
                 {
                     darkGroups.insert(key);
-                    if (isBreak && key != base)     // never the base, see above
+                    // four bars from an unknown aim as well (runde 190, above)
+                    if ((isBreak || want == Function::invalidId()) && key != base)     // never the base, see above
                         m_darkUntil.insert(key, beat + ENGINE_DARK_BARS * 4 - 1);
                 }
                 want = np;
@@ -6564,11 +6624,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                    // (Tobias, 2026-09-18). drawSweep() only asks on the beat
                    // a figure is DRAWN, so a figure drawn at 45 % kept running
                    // at 32 % until the next section (runde 171).
-                   // A running figure keeps going down to 0.37: a fader resting
-                   // on 0.40 (or the closing slide passing it) stopped and
-                   // restarted the EFX on alternate beats, from phase 0 each
-                   // time - the bars jerking (runde 179)
-                   && (g.lasers == false || fader >= (m_active.contains(slot) ? 0.37 : 0.40));
+                   // A fader resting on 0.40 (or the closing slide passing it)
+                   // stopped and restarted the EFX on alternate beats, from
+                   // phase 0 each time - the bars jerking (runde 179). The
+                   // margin is ABOVE the line, not under it: a running figure
+                   // stops at 0.40, a new one starts from 0.43 - runde 179 let
+                   // it run on down to 0.37, against the rule (runde 190)
+                   && (g.lasers == false || fader >= (m_active.contains(slot) ? 0.40 : 0.43));
         if (wanted == false)
         {
             if (m_active.contains(slot))
@@ -9822,6 +9884,59 @@ int TrackEngine::clockPercent() const
         }
     }
     return 0;
+}
+
+void TrackEngine::laserFaderCheck(qreal slider)
+{
+    // Tobias, 2026-09-23: "barerne hjem med det samme". Every laser rule is
+    // kept by tick(), and tick() runs on a beat - with the link lost there is
+    // none for up to 30 s, and a bar aimed under home at 80 % stayed pointing
+    // down while the fader came down past 60 and 40. The same measure as
+    // tick()'s laser block, on the slider (with the closing lid, as there).
+    if (m_doc == nullptr || m_startScene)
+        return;
+    const qreal fader = qMin(closingCap(), qBound(0.0, slider, 1.0));
+    const int downNow = laserDownAllowed(fader);
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.lasers == false || g.patternDevice)
+            continue;
+        // a figure: nothing moves under 40 %
+        if (fader < 0.40 && m_active.contains("efx:" + key))
+        {
+            stopSlot("efx:" + key, true);
+            m_sweep.remove(key);
+        }
+        const quint32 held = m_position.value(key, Function::invalidId());
+        const quint32 home = homePosition(key);
+        if (held == Function::invalidId() || held == home)
+            continue;
+        const TrackFuncInfo &hi = m_funcs.value(held);
+        const bool unsafe = fader < 0.40
+                         || (hi.sweep ? laserSweepSafe(held, key, downNow) == false
+                                      : laserAimSafe(held, key, downNow) == false);
+        if (unsafe == false)
+            continue;
+        // dark first, then home: a beam never swings lit. The next beat
+        // lights it again where tick() says it may be.
+        stopSlot("col:" + key, true);
+        stopSlot("mot:" + key, true);
+        for (int i = 0; i < g.parts.count(); i++)
+            stopSlot(partSlot(key, i), true);
+        m_cast.remove(key);
+        if (home != Function::invalidId())
+        {
+            m_position.insert(key, home);
+            run("pos:" + key, home, 1.0, 0, true);
+        }
+        else
+        {
+            stopSlot("pos:" + key, true);
+            m_position.remove(key);
+        }
+    }
+    emit liveChanged();
 }
 
 void TrackEngine::announceRoom()

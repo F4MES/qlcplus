@@ -284,7 +284,8 @@ void TrackManager::handleTrack(const QJsonObject &obj)
 {
     // R187_SAME_TRACK: the track that is playing, sent again - BLT resends
     // after every reconnect and when its shared functions are saved, and
-    // after a master handover to the same song on the other deck. That
+    // (the same song from the OTHER deck is a new play, R188_TRACK_PLAYER -
+    // R188_RESENT_COMMENT). That
     // reset the beat to 0 and restarted the engine mid-song: colour, cast
     // and moves thrown away, a drop landed a second time. Flags and
     // curves are still taken; the song's place and the engine are kept.
@@ -929,6 +930,12 @@ void TrackManager::setEnergyTrim(int percent)
     QSettings().setValue(SETTINGS_TRACK_TRIM, m_energyTrim);
     emit energyChanged();
     applyEnergy();
+    // R190_LASER_NOW: no beat is coming (link lost, deck stopped) - the
+    // laser bars are measured against the fader now, not in 30 s. With
+    // beats arriving tick() does it on the next one (and a call from
+    // inside tick, via the clock, is never this branch).
+    if (m_engine != nullptr && m_autoRun && m_roleMode && (m_linkStale || m_playing == false))
+        m_engine->laserFaderCheck(energy());
     noteShowRunning();                   // R184_START_SCENE_ENERGY
 }
 

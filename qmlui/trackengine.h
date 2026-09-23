@@ -563,6 +563,11 @@ public:
     static int keyBiasOf(const QString &key);
     static QString dropStyleName(int style);
     void announceRoom();
+    /** The laser bars measured against the ENERGY slider (0..1) NOW, with no
+     *  beat to wait for: an aim the slider no longer allows goes home in the
+     *  dark, and a figure stops under 40 %. TrackManager calls it on a fader
+     *  move while no beats arrive (link lost, deck stopped). (runde 190) */
+    void laserFaderCheck(qreal slider);
     /** Which night it is, for what is remembered across a restart: the
      *  date, turning at noon - 20:00 is a new evening, 01:00 is still
      *  last night. (runde 184) */
