@@ -5329,7 +5329,8 @@ quint32 TrackEngine::flashFunction(const QSet<QString> &cast, const QString &col
 void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                        qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
                        const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
-                       qreal kick, qreal high, bool turn, qreal riser, qreal hats, qreal bass)
+                       qreal kick, qreal high, bool turn, qreal riser, qreal hats, qreal bass,
+                       qreal kickAhead)
 {
     if (m_doc == nullptr)
         return;
@@ -5566,6 +5567,73 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         prog = qBound(0.0, 1.0 - qreal(beatsToNext) / 32.0, 1.0);
         progBefore = qBound(0.0, 1.0 - qreal(beatsToNext + 4) / 32.0, 1.0);
     }
+    // THE CURVES OVER THE FLAGS (runde 192). Tobias, 2026-09-23: "analysen
+    // saetter dem ofte forkert, men overordnet virker det. Det er bare ikke
+    // altid en dj lige checker og faar rettet flagene." The flags carry what
+    // only a look ahead can give - the countdown, the build, the dark beat,
+    // the landing - so they stay the structure. But where the kick says
+    // plainly that a flag is wrong, the room follows the kick:
+    //   a GROOVE flag (normal, drive) with no kick in the next two bars plays
+    //   as a BREAK - the breakdown the analysis missed or placed late;
+    //   a BREAK flag with a solid kick through the next two bars plays as a
+    //   GROOVE - the break that ended early, or never was.
+    // kickAhead is the kick's mean over this beat and the seven after it,
+    // read from the track's own curves (TrackManager), so the change lands
+    // on the bar line where the music changes, not a bar late. Decided only
+    // on a bar line, with room between the in and out thresholds so a fill
+    // cannot flick it; not under HOLD; a build (flagged, or promoted by the
+    // riser above - builds often have no kick) and a drop (the kick wait
+    // above handles a drop without a kick) are left alone, and so are
+    // rekordbox' intro/outro. Without curves kickAhead is -1: nothing changes.
+    // A turn is a section change: a new look, and a colour change into the
+    // break under the usual floors.
+    {
+        if (sectionChanged)
+        {
+            m_curveBreak = false;
+            m_curveGroove = false;
+        }
+        const bool flagGroove = (state == QStringLiteral("normal") || state == QStringLiteral("drive"))
+                             && isBuild == false;
+        const bool flagBreak = (state == QStringLiteral("break"));
+        bool curveTurn = false;
+        if (kickAhead < 0.0 || (flagGroove == false && flagBreak == false))
+        {
+            m_curveBreak = false;
+            m_curveGroove = false;
+        }
+        else if (beatInBar == 0 && hold == false)
+        {
+            if (flagGroove && m_curveBreak == false && kickAhead < 0.15)
+                m_curveBreak = curveTurn = true;
+            else if (flagGroove && m_curveBreak && kickAhead >= 0.30)
+            {
+                m_curveBreak = false;
+                curveTurn = true;
+            }
+            else if (flagBreak && m_curveGroove == false && kickAhead >= 0.45)
+                m_curveGroove = curveTurn = true;
+            else if (flagBreak && m_curveGroove && kickAhead < 0.30)
+            {
+                m_curveGroove = false;
+                curveTurn = true;
+            }
+        }
+        if (m_curveBreak)
+        {
+            isBreak = true;
+            isDrive = false;
+            tier = 0;
+        }
+        else if (m_curveGroove)
+        {
+            isBreak = false;
+            tier = 1;
+        }
+        if (curveTurn)
+            sectionChanged = true;
+    }
+
     // ... and nothing builds towards, or blinks before, a drop that will
     // not be shown (see dropHidden above)
     if (fader < ENGINE_DROP_SHOW)
@@ -7614,6 +7682,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_hatsOut) ev << "hats-out";
         if (closing < 1.0) ev << "closing";
         if (m_kickGone >= 4 && isBreak == false) ev << "kick-gone";
+        if (m_curveBreak) ev << "curve-break";          // runde 192
+        if (m_curveGroove) ev << "curve-groove";
         if (dropHidden) ev << "drop-hidden";
         if (dropWaiting) ev << "drop-wait";
         if (fakeDrop) ev << QString("drop-late@%1").arg(m_dropLand);
@@ -10751,6 +10821,8 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_lookState.clear();
     m_darkUntil.clear();         // its beats belong to the track that just ended
     m_kickGone = 0;              // the new track is not mid-vocal
+    m_curveBreak = false;        // runde 192: its own curves decide afresh
+    m_curveGroove = false;
     m_kickBeat = -1;
     stopEcho();
     m_mixBeat = -1;              // a mix still on now is the mix INTO this track

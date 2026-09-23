@@ -1661,6 +1661,7 @@ void TrackManager::runEngine(bool sectionChanged)
     qreal riser = 0.0;
     qreal hats = -1.0;
     qreal bass = -1.0;
+    qreal kickAhead = -1.0;              // R192_KICK_AHEAD_DECL
     if (kick >= 0.0)
     {
         qreal k1 = curveAt(m_kick, beat - 1), k2 = curveAt(m_kick, beat - 2);
@@ -1681,12 +1682,15 @@ void TrackManager::runEngine(bool sectionChanged)
             riser = qBound(0.0, hNow - hThen, 1.0);
         hats = curveMean(m_high, beat - 7, beat);
         bass = curveMean(m_low, beat - 7, beat);
+        // R192_KICK_AHEAD: the kick over this beat and the seven after it -
+        // where the flag and the music disagree, the engine follows this
+        kickAhead = curveMean(m_kick, beat, beat + 7);
     }
 
     m_engine->tick(state, beat, secStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
                    m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high,
-                   turn, riser, hats, bass);
+                   turn, riser, hats, bass, kickAhead);
 
     if (sectionChanged)
         emit stateChanged();

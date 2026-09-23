@@ -606,7 +606,7 @@ public:
               const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
               qreal kick = -1.0, qreal high = -1.0,
               bool turn = false, qreal riser = 0.0, qreal hats = -1.0,
-              qreal bass = -1.0);
+              qreal bass = -1.0, qreal kickAhead = -1.0);
     /** $title is the track TrackManager just loaded. Defaulted so an
      *  un-patched trackmanager.cpp still compiles; the patch passes it. */
     void trackLoaded(const QString &title = QString(), const QString &key = QString());
@@ -806,6 +806,8 @@ private:
     qint64 m_cooldownMs;      // the clock reading the cooldown is judged against: frozen per section
     bool m_accentWasWhite;    // the last accent was white: the next one is not
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
+    bool m_curveBreak = false;   // runde 192: a groove flag with no kick in the next two bars plays as a break
+    bool m_curveGroove = false;  // runde 192: a break flag with a solid kick in the next two bars plays as a groove
     bool m_barsLead;          // this section: the laser bars take the first effect place
     int m_castCursor;
     int m_motionCursor;
