@@ -389,6 +389,7 @@ private:
 
     qint64 m_lastPosMs;
     qint64 m_beatChangedMs = 0;  // R187_LAGGING_BEAT: when the beat last moved
+    int m_trackPlayer = -1;      // R188_TRACK_PLAYER: the deck the track came from (-1: not sent)
     bool m_linkStale;
 
     /* ---- roles ---- */

@@ -291,7 +291,10 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     const bool resent = m_playing && m_title.isEmpty() == false
         && obj.value(QStringLiteral("title")).toString() == m_title
         && obj.value(QStringLiteral("beats")).toInt() > 0
-        && obj.value(QStringLiteral("beats")).toInt() == m_beatCount;
+        && obj.value(QStringLiteral("beats")).toInt() == m_beatCount
+        && (obj.value(QStringLiteral("player")).toInt(-1) < 0          // R188_TRACK_PLAYER_SAME
+            || obj.value(QStringLiteral("player")).toInt(-1) == m_trackPlayer);
+    m_trackPlayer = obj.value(QStringLiteral("player")).toInt(-1);
     m_title = obj.value(QStringLiteral("title")).toString();
     m_key = obj.value(QStringLiteral("key")).toString();      // "Am", "8A", "1m" - or nothing
     m_bpm = obj.value(QStringLiteral("bpm")).toDouble();
@@ -587,6 +590,7 @@ void TrackManager::reroll()
     // picture down there is none: the room sat black for up to 30 s
     if (m_linkStale && m_roleMode && m_engine != nullptr)
     {
+        m_lastEngineBeat = -1;           // R188_REROLL_BEAT: the link's return runs at once
         m_engine->idle();
         return;
     }

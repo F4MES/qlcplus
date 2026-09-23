@@ -87,6 +87,7 @@ class QRandomGenerator;
 #define SETTINGS_ENGINE_MASTER    QStringLiteral("trackengine/master")
 #define SETTINGS_ENGINE_ACCENT    QStringLiteral("trackengine/accent")
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
+#define SETTINGS_ENGINE_HOLDAUTO  QStringLiteral("trackengine/holdauto")  // runde 189: the fader picks the hold
 #define SETTINGS_ENGINE_CLOCKCURVE QStringLiteral("trackengine/clockcurve")   // "0,0,20,45,70,85": 21,22,23,00,01,02 h
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 // The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
@@ -348,6 +349,10 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool fullAuto READ fullAuto WRITE setFullAuto NOTIFY tableChanged)
     Q_PROPERTY(bool accent READ accent WRITE setAccent NOTIFY tableChanged)
     Q_PROPERTY(int holdBars READ holdBars WRITE setHoldBars NOTIFY tableChanged)
+    /** The ENERGY fader picks how long a colour holds - 64, 32, 16 or 8 bars
+     *  over its four quarters (Tobias, 2026-09-23). A holdBars tile sets a
+     *  fixed hold instead and turns this off; tapping it again turns it on. */
+    Q_PROPERTY(bool holdAuto READ holdAuto WRITE setHoldAuto NOTIFY tableChanged)
     /** ENERGY by clock: percent at 21, 22, 23, 00, 01 and 02 h (flat to 05, then 0). */
     Q_PROPERTY(QVariantList clockCurve READ clockCurve NOTIFY tableChanged)
 
@@ -447,6 +452,8 @@ public:
     bool accent() const;
     void setAccent(bool on);
     int holdBars() const;
+    bool holdAuto() const;
+    void setHoldAuto(bool on);
     QVariantList clockCurve() const;
     /** one of the six clock points, in steps of ten: 0 -> 10 -> ... -> 90 -> 0 */
     Q_INVOKABLE void cycleClockPoint(int index);
@@ -782,6 +789,8 @@ private:
     int m_colourBar;          // -1: a fresh track, hold the colour until a break or drop
     int m_colourSince;        // beat of the last colour change
     int m_holdNow;            // bars this colour holds - drawn each change around holdBars
+    bool m_holdAuto = true;   // runde 189: the fader picks the hold (64/32/16/8 bars)
+    qreal m_holdStretch = 1.0;  // this colour's random stretch of it, drawn at each change
     QString m_accentPick;     // the accent drawn for this section
     QString m_accentGroup;    // the group carrying it - rotates, never the same twice running
     int m_keyBias;            // this track's key: -1 unknown, 0 minor (cold side), 1 major (warm side)

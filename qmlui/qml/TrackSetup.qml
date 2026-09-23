@@ -837,6 +837,19 @@ Rectangle
                 font.pixelSize: 13
             }
 
+            // runde 189: by default the ENERGY fader picks the hold - 64, 32,
+            // 16 or 8 bars over its four quarters. A bars tile fixes it; tap
+            // the lit tile again (or ENERGY) to give it back to the fader.
+            TrackTile
+            {
+                Layout.preferredWidth: 96
+                Layout.preferredHeight: 34
+                label: qsTr("ENERGY")
+                active: trackEngine ? trackEngine.holdAuto : false
+                activeColor: "#4FA3E3"
+                onTapped: if (trackEngine) trackEngine.holdAuto = true
+            }
+
             Repeater
             {
                 // 8 added 2026-09-15 on Tobias' ask: "lav en ny knap saa vi
@@ -848,9 +861,16 @@ Rectangle
                     Layout.preferredWidth: 80
                     Layout.preferredHeight: 34
                     label: modelData + qsTr(" bars")
-                    active: trackEngine ? trackEngine.holdBars === modelData : false
+                    active: trackEngine ? (trackEngine.holdAuto === false && trackEngine.holdBars === modelData) : false
                     activeColor: "#4FA3E3"
-                    onTapped: if (trackEngine) trackEngine.holdBars = modelData
+                    onTapped: {
+                        if (!trackEngine)
+                            return
+                        if (active)
+                            trackEngine.holdAuto = true
+                        else
+                            trackEngine.holdBars = modelData
+                    }
                 }
             }
 

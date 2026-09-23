@@ -222,6 +222,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_master = 1.0;
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
+    m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
     // runde 184: ENERGY by clock and the group faders come back after a
     // restart - the same night only. A new evening starts as it always has:
@@ -3925,6 +3926,18 @@ void TrackEngine::setHoldBars(int bars)
 {
     m_holdBars = qBound(4, bars, 128);
     QSettings().setValue(SETTINGS_ENGINE_HOLDBARS, m_holdBars);
+    // a tile is a fixed hold: the fader lets go of it (runde 189)
+    m_holdAuto = false;
+    QSettings().setValue(SETTINGS_ENGINE_HOLDAUTO, m_holdAuto);
+    emit tableChanged();
+}
+bool TrackEngine::holdAuto() const { return m_holdAuto; }
+void TrackEngine::setHoldAuto(bool on)
+{
+    if (on == m_holdAuto)
+        return;
+    m_holdAuto = on;
+    QSettings().setValue(SETTINGS_ENGINE_HOLDAUTO, m_holdAuto);
     emit tableChanged();
 }
 
@@ -4117,6 +4130,7 @@ QString TrackEngine::importSettings()
     // take them on board: roles, stars and options are read in ensureTable
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
+    m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
@@ -5542,11 +5556,28 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // jumping - and only if no turn comes does it change on the timer, at one
     // and a half times the hold. Fewer changes, and each one lands on
     // something the ear heard too. Without curves it is the old timer.
+    // How long a colour holds (runde 189, Tobias 2026-09-23: "lav energi er
+    // faerre skift, og hoejere energi er mere skift"): the ENERGY FADER picks
+    // it, 64 / 32 / 16 / 8 bars over its four quarters - read every beat, so
+    // a hand on the fader shortens or lengthens the colour already up. A
+    // SETUP tile fixes it instead. The colour's own stretch (x0.5 .. x1.5,
+    // drawn at the change) keeps it off the same beat of every track.
+    const int holdBase = m_holdAuto
+        ? (m_faderNow < 0.25 ? 64 : (m_faderNow < 0.50 ? 32 : (m_faderNow < 0.75 ? 16 : 8)))
+        : m_holdBars;
+    m_holdNow = qMax(4, int(qRound(holdBase * m_holdStretch)));
     int holdBeats = qMax(4, m_holdNow * 4);
     bool haveCurves = kick >= 0.0;
-    bool holdUp = m_colourSince >= 0 && beatInBar == 0
+    // A drop or a break within two bars makes a colour change of its own -
+    // and the two-bar floor below then held THAT one back: 16 turn changes
+    // on 20 Sep came one to three beats before a drop, and the drop landed
+    // in the colour it already had. And a turn waits for the bar line as the
+    // timer does: 30 of 70 fell mid-bar (runde 188, from the tracklogs).
+    const bool sectionSoon = beatsToNext > 0 && beatsToNext <= 8
+        && (nextState == QStringLiteral("drop") || nextState == QStringLiteral("break"));
+    bool holdUp = m_colourSince >= 0 && beatInBar == 0 && sectionSoon == false
                && beat - m_colourSince >= (haveCurves ? holdBeats * 3 / 2 : holdBeats);
-    bool turnUp = haveCurves && turn && m_colourSince >= 0
+    bool turnUp = haveCurves && turn && m_colourSince >= 0 && beatInBar == 0 && sectionSoon == false
                && beat - m_colourSince >= holdBeats / 2;
     // A COLOUR LIVES TWO BARS, whatever asks for it (runde 157).
     //
@@ -5584,13 +5615,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         m_colourSince = beat;
         static const qreal stretch[4] = { 0.5, 0.75, 1.0, 1.5 };
-        // ... and the ENERGY fader leans it: the SETUP value is the middle
-        // of the road, a quiet room holds a colour a third longer, a hot one
-        // lets it go a third sooner. Colour changes are one of the few things
-        // the whole room sees at once, so they carry a lot of "energy" on
-        // their own. Never under four bars.
-        qreal lean = 1.30 - 0.60 * qBound(0.0, energy, 1.0);
-        m_holdNow = qMax(4, int(qRound(m_holdBars * stretch[rng->bounded(4)] * lean)));
+        // the length itself is read every beat, above: the fader picks it
+        // (it used to lean a fixed SETUP value by +-30 % here, once per
+        // colour). Never under four bars.
+        m_holdStretch = stretch[rng->bounded(4)];
     }
 
     if (engineBannedColour(m_override))
@@ -5677,7 +5705,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             pool = m_palette;
         m_nextColour = drawColour(pool, m_nextKeyBias, rng);
     }
-    int mixBarsOut = (m_mixing && m_mixBeat >= 0) ? qMax(0, beat - m_mixBeat) / 4 : -1;
+    // counted from the bar line the mix began in, so the base's turn to the
+    // next colour lands on a bar line: 16 of 29 fell on a random beat on
+    // 20 Sep - the mix is stamped on whatever beat BLT reported it (runde 188)
+    const int mixFrom = m_mixBeat >= 0 ? m_mixBeat - ((m_mixBeat - secStart) % 4 + 4) % 4 : -1;
+    int mixBarsOut = (m_mixing && m_mixBeat >= 0) ? qMax(0, beat - mixFrom) / 4 : -1;
     // Live on-air profile, never a guessed loaded deck. Older BLT versions
     // and ambiguous three-deck mixes retain the existing six-bar behaviour.
     const bool incomingFresh = m_fullAuto && m_mixing && m_incomingAt >= 0
@@ -5693,6 +5725,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the base keeps it and the track takes it when it lands.
     if (hold && mixBarsOut < mixTurnBars)
         m_nextColour.clear();
+    // Once the base has turned to the next track's colour, the accent and
+    // the bars' echo - both drawn to go with the OLD colour - could stand
+    // next to it in a pair the rules leave out (a cyan room's magenta
+    // accent by a green base). Drops ran as grooves in a mix until runde
+    // 150-odd, so this never showed; now they sit out the mix's last bars.
+    const bool mixTurned = mixBarsOut >= mixTurnBars && m_nextColour.isEmpty() == false;
     const qreal motionTarget = incomingFresh && m_incomingEnergy >= 0.0 && sectionEnergy >= 0.0
                                && mixBarsOut >= 4
         ? qBound(0.90, 1.0 + 0.20 * (m_incomingEnergy - sectionEnergy), 1.10) : 1.0;
@@ -6018,7 +6056,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     /* ---- accent: a partner colour on one effect group in drops ---- */
     QString accentColour;
-    if (m_accent && isDrop && isCalm == false && castSet.count() >= 2 && m_override.isEmpty())
+    if (m_accent && isDrop && isCalm == false && castSet.count() >= 2 && m_override.isEmpty()
+        && mixTurned == false)
     {
         // a section turn under HOLD redraws nothing else, so not this either -
         // HOLD is "no colour changes", and the accent is a colour
@@ -7408,6 +7447,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // In or out of the cast; at most one every four beats; not under
             // a break, calm or a still room. (Tobias, 2026-09-16, forslag 5.)
             if (energy >= 0.40 && isBreak == false && isCalm == false && still == false
+                && mixTurned == false
                 && beat - m_echoBeat >= 4 && m_echoTimer.isActive() == false)
             {
                 QString echoKey;
@@ -10578,8 +10618,12 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     // the mix drew this track's colour when the mix began, and the base has
     // been standing in it for the mix's second half: it IS the room's colour
     // now, and colourBar -1 below holds it to the first break or drop
+    bool adopted = false;
     if (m_nextColour.isEmpty() == false && m_palette.contains(m_nextColour))
+    {
         m_colour = m_nextColour;
+        adopted = true;
+    }
     m_nextColour.clear();
     m_accentPick.clear();        // drawn for the last track's colour (runde 171)
     // positions are kept: a new track is not a reason to swing the lasers
@@ -10596,7 +10640,12 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     stopEcho();
     m_mixBeat = -1;              // a mix still on now is the mix INTO this track
     m_colourBar = -1;            // hold the colour until the first break or drop
-    m_colourSince = -1;
+    // ... and a colour the mix handed over counts as changed on beat 0, so
+    // the two-bar floor keeps it through a landing IN a break or a drop:
+    // there it was thrown away on the first beat, all 10 landings of that
+    // kind on 19-20 Sep - the base turned for the mix, then turned again
+    // (runde 188)
+    m_colourSince = adopted ? 0 : -1;
     m_aimSince.clear();          // a fresh track aims where it likes
     m_castCursor++;
     m_moves.clear();             // the new track draws its own moves
