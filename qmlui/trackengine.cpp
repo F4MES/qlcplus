@@ -4192,8 +4192,28 @@ void TrackEngine::setFlash(bool pressed)
     }
     else
     {
+        const QSet<QString> released = m_flashHeld;
         stopSlot("flash", true);
         genFlash(false);
+        // The strobes on stage go back to this beat's picture NOW, not on the
+        // next beat: genFlash(false) only cuts the groups outside the cast,
+        // so the rest stood at full - lit, static, nothing happening - until
+        // the beat came round, and for good if the link had gone quiet
+        // (runde 181). A group whose chase owns the dimmers hands them back
+        // to it; the others take the level the beat gave them, with the pulse.
+        foreach (const QString &key, released)
+        {
+            if (m_cast.contains(key) == false)
+                continue;                        // genFlash(false) cut those
+            const TrackGroup &g = m_groups.value(key);
+            if (m_motionDim.contains(key))
+            {
+                for (int i = 0; i < g.parts.count(); i++)
+                    stopSlot(partSlot(key, i), true);
+            }
+            else if (g.hasDimmer)
+                setDimmer(key, m_moveLevel.value(key, 0.0));
+        }
     }
     emit liveChanged();
 }
