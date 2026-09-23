@@ -429,7 +429,14 @@ void TrackEngine::slotPulseTimer()
             Function *func = fid == Function::invalidId() ? nullptr : m_doc->function(fid);
             if (func != nullptr)
             {
-                qreal out = qBound(0.0, m_activeLevel.value(slot, 1.0) * pulseFactor(key), 1.0);
+                // MASTER and the trim through slotScale, as run() does (runde 174)
+                qreal out = qBound(0.0, m_activeLevel.value(slot, 1.0) * slotScale(slot, fid)
+                                        * pulseFactor(key), 1.0);
+                // painting the colour too: out squared - see run()
+                if (m_funcs.value(fid).dimmer && m_funcs.value(fid).type != int(Function::SceneType) && m_funcs.value(fid).litShare < 0.99
+                    && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
+                    && m_groups.value(key).rgb)
+                    out = std::sqrt(out);
                 if (m_blackout)
                     out = 0.0;
                 int attr = m_activeAttr.value(slot, -1);
@@ -4021,7 +4028,15 @@ void TrackEngine::setSpeed(int speed)
     foreach (const QString &slot, m_active.keys())
     {
         if (slot.startsWith("mot:"))
+        {
             stopSlot(slot, true);
+            // a group whose chase owned the dimmers had its parts stopped:
+            // it stood dark until the next beat (runde 174). The parts take
+            // over again until the chase is back.
+            const QString group = slotGroup(slot);
+            if (m_motionDim.remove(group))
+                setDimmer(group, m_moveLevel.value(group, 0.0));
+        }
     }
     emit liveChanged();
 }
@@ -6941,7 +6956,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (m_fullAuto && tier > 0 && key != m_rhythmLead
                     && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType)))
                     motionDivision = qMax(2000, motionDivision);
-                run("mot:" + key, mf, mi.dimmer ? gl : 1.0, motionDivision, hard);
+                // the bare level: run() adds MASTER and the trim (slotScale)
+                const bool mayOwn = mi.dimmer && mi.type != int(Function::SceneType) && mi.litShare < 0.99;
+                run("mot:" + key, mf, mayOwn ? glBase : 1.0, motionDivision, hard);
                 m_recentUse.insert(mf, m_clock.elapsed());     // the cooldown starts from its last beat
             }
         }
@@ -7056,7 +7073,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             bool motionOwns = mf != Function::invalidId()
                            && mInfo.type != int(Function::SceneType)
                            && mInfo.dimmer && mInfo.litShare < 0.99
-                           && darkGroups.contains(key) == false;
+                           && darkGroups.contains(key) == false
+                           // a colour scene that sets the dimmer itself sits
+                           // under every lamp (HTP) and the chase's dark
+                           // steps would never show (runde 174)
+                           && (cf == Function::invalidId() || m_funcs.value(cf).dimmer == false);
             if (motionOwns)
                 m_motionDim.insert(key);
             else
@@ -8093,6 +8114,24 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
     // The dimmer scenes get them in setPart(); a colour scene gets them here,
     // but only when it is the thing holding the intensity - otherwise the two
     // would multiply and MASTER would square itself.
+    //
+    // A chase that OWNS the dimmers (motionOwns, runde 173) is the thing
+    // holding the intensity too. It used to be handed the level with MASTER
+    // and the trim already multiplied in, so a hand on MASTER or a group fader
+    // reached it only on the next beat - reapplyLevels() had nothing to scale.
+    // It gets the bare level now, and MASTER and the trim here, live (runde 174).
+    if (slot.startsWith(QStringLiteral("mot:")))
+    {
+        // ... a chase that can OWN them - motionOwns' own test. One that lights
+        // every lamp in every step (litShare >= 0.99) never owns: the parts
+        // keep the dimmer, and scaling the chase as well put the room at
+        // level squared (runde 174).
+        const TrackFuncInfo &mfi = m_funcs.value(fid);
+        if (mfi.dimmer == false || mfi.type == int(Function::SceneType) || mfi.litShare >= 0.99)
+            return 1.0;
+        const QString group = slotGroup(slot);
+        return m_master * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
+    }
     if (slot.startsWith(QStringLiteral("col:")) == false
         && slot.startsWith(QStringLiteral("idle:")) == false
         && slot.startsWith(QStringLiteral("echo:")) == false)
@@ -8138,6 +8177,17 @@ void TrackEngine::reapplyLevels()
         else
         {
             out *= slotScale(slot, fid);
+            // an owning chase: its pulse and, painting the colour, the root -
+            // see run() (runde 174)
+            if (slot.startsWith(QStringLiteral("mot:")))
+            {
+                if (m_motionDim.contains(group) && m_flashHeld.contains(group) == false)
+                    out *= pulseFactor(group);
+                if (m_funcs.value(fid).dimmer && m_funcs.value(fid).type != int(Function::SceneType) && m_funcs.value(fid).litShare < 0.99
+                    && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
+                    && m_groups.value(group).rgb)
+                    out = std::sqrt(qBound(0.0, out, 1.0));
+            }
         }
         out = m_blackout ? 0.0 : qBound(0.0, out, 1.0);
         m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
@@ -10342,6 +10392,26 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     level = qBound(0.0, level, 1.0);
     // a blackout: the function runs, at nothing
     qreal out = m_blackout ? 0.0 : qBound(0.0, level * slotScale(slot, fid), 1.0);
+    // A chase that OWNS the dimmers (runde 173/174). Its intensity scales
+    // every QLCChannel::Intensity channel of its steps - the dimmer AND red,
+    // green and blue - so when it paints the colour itself (the colour scene
+    // steps aside for a programme that covers the group) the light is out
+    // SQUARED: MASTER at half gave a quarter. The square root gives back the
+    // level asked for. And the pulse goes on here too, as setPart() puts it on
+    // the parts: without it every off-beat and every fader move wrote the
+    // unpulsed level for a frame before the pulse timer pulled it down - a
+    // strobe at 5 % jumping to full. The same two steps are in
+    // slotPulseTimer() and reapplyLevels().
+    if (slot.startsWith(QStringLiteral("mot:")) && m_blackout == false)
+    {
+        const QString ownGroup = slotGroup(slot);
+        if (m_motionDim.contains(ownGroup) && m_flashHeld.contains(ownGroup) == false)
+            out = qBound(0.0, out * pulseFactor(ownGroup), 1.0);
+        if (m_funcs.value(fid).dimmer && m_funcs.value(fid).type != int(Function::SceneType) && m_funcs.value(fid).litShare < 0.99
+            && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
+            && m_groups.value(ownGroup).rgb)
+            out = std::sqrt(out);
+    }
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
