@@ -4722,6 +4722,11 @@ QString TrackEngine::familyOf(const QString &name)
         // comet, diagonal, mirror, middle, edges, sparkle, snake - which is
         // what this function says it is looking for.
         "eyes",
+        // ... and "bar" (runde 178): "Bar Outer In", "Bar Middle Out", "Bar
+        // Run", "Bar Ping-Pong", "Bar Alternate", "Bar Random" - 216 bar
+        // programmes, six different figures, one family "bar"; the scope
+        // word again, as "row" and "eyes" were
+        "bar",
         "break", "groove", "drop", "normal", "medium", "fan",
         "slow", "fast", "calm", "low", "high", "soft", "wide", "far", "cross",
         "red", "green", "blue", "cyan", "magenta", "orange", "white", "yellow",
@@ -7034,7 +7039,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType)))
                     motionDivision = qMax(2000, motionDivision);
                 // the bare level: run() adds MASTER and the trim (slotScale)
-                const bool mayOwn = mi.dimmer && mi.type != int(Function::SceneType) && mi.litShare < 0.99;
+                const bool mayOwn = mi.dimmer && mi.type != int(Function::SceneType) && mi.litShare < 0.99
+                                 && key != base;       // the base never owns: see motionOwns
                 run("mot:" + key, mf, mayOwn ? glBase : 1.0, motionDivision, hard);
                 m_recentUse.insert(mf, m_clock.elapsed());     // the cooldown starts from its last beat
             }
@@ -7147,7 +7153,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // trim went into the chase through run() above; the pulse follows
             // below, on the chase's own intensity.
             const TrackFuncInfo &mInfo = m_funcs.value(mf);
+            // ... and never on the BASE (runde 178). Measured on the show: 120
+            // of the wash's 1384 AUTO chases have steps with EVERY head dark -
+            // "Wash Pulse Long", "Wash Blink", "Wash Pulse Backbeat" - and in a
+            // drop the base may pick one (its lit floor there is 0.25). Owning
+            // the dimmers, those put the room in the black for a beat at a
+            // time, and "the base stays - the room never goes black" is the
+            // one promise this engine keeps everywhere. The base keeps its own
+            // figures, floors and pulse; the chase still brings its colour and
+            // its heads. The effect groups show their programmes' patterns.
             bool motionOwns = mf != Function::invalidId()
+                           && key != base
                            && mInfo.type != int(Function::SceneType)
                            && mInfo.dimmer && mInfo.litShare < 0.99
                            && darkGroups.contains(key) == false
@@ -8204,7 +8220,8 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         // keep the dimmer, and scaling the chase as well put the room at
         // level squared (runde 174).
         const TrackFuncInfo &mfi = m_funcs.value(fid);
-        if (mfi.dimmer == false || mfi.type == int(Function::SceneType) || mfi.litShare >= 0.99)
+        if (mfi.dimmer == false || mfi.type == int(Function::SceneType) || mfi.litShare >= 0.99
+            || slotGroup(slot) == m_compositionBase)       // the base never owns: see motionOwns
             return 1.0;
         const QString group = slotGroup(slot);
         return m_master * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
@@ -9923,7 +9940,9 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         bool fresh = m_log.exists() == false || m_log.size() == 0;
         if (m_log.open(QIODevice::Append | QIODevice::Text) == false)
         {
+            // and SAY so: the LOG tile stayed ON with nothing written (runde 178)
             m_logEnabled = false;
+            emit tableChanged();
             return;
         }
         if (fresh)
@@ -9968,7 +9987,8 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     QTextStream out(&m_log);
     out << QDateTime::currentDateTime().toString(Qt::ISODateWithMs) << ','
         << beat << ',' << state << ','
-        << castSorted.join('+') << ',' << m_colour << ','
+        // group names cleaned of commas like every other name column (runde 178)
+        << QString(castSorted.join('+')).replace(',', ' ') << ',' << m_colour << ','
         << QString::number(level, 'f', 2) << ','
         << QString::number(energy, 'f', 2) << ','
         << QString::number(sectionEnergy, 'f', 2) << ','
@@ -9991,7 +10011,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
                .replace('\n', ' ').replace('\r', ' ').simplified() << ','
         // runde 47, appended again: the accent ("Strobes All=white") and what
         // moved on this beat (section / turn / colour-on-turn / ...)
-        << m_logAccent << ',' << m_logEvent << ',' << csv(build) << ','
+        << QString(m_logAccent).replace(',', ' ') << ',' << m_logEvent << ',' << csv(build) << ','
         << m_logSettingsId << ',' << csv(snapshot) << '\n';
     out.flush();
     m_log.flush();                       // the report script reads while we play

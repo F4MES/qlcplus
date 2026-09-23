@@ -1016,9 +1016,16 @@ Rectangle
                     var mk = trackManager.markers
                     var rowH = Math.floor((lane - 4) / 2)
                     var rowRight = [ -1e9, -1e9 ]
+                    // left to right: the collision test compares each label with
+                    // the one BEFORE it, and after an add or a drag the list is
+                    // not in beat order - labels printed over each other (runde 178)
+                    var order = []
+                    for (var oi = 0; oi < mk.length; oi++) order.push(oi)
+                    order.sort(function(a, b) { return mk[a].beat - mk[b].beat })
 
-                    for (var m = 0; m < mk.length; m++)
+                    for (var o = 0; o < order.length; o++)
                     {
+                        var m = order[o]
                         var mb = mk[m].beat
                         if (mb < vf - 2 || mb > vf + vc + 2) continue
 
@@ -1604,7 +1611,10 @@ Row
                     width: colourRow.cellW
                     height: colourRow.height
                     objectName: "autoColour"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; ink: "#101010";width: 16; height: 16; kind: "autoColour" }
+                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; kind: "autoColour"
+                              // dark on the lit tile, light on the grey one - as SECTION's AUTO does;
+                              // it vanished on the grey tile once a colour was locked (runde 178)
+                              ink: (trackEngine && trackEngine.colourOverride !== "") ? "#DDDDDD" : "#101010" }
                     label: qsTr("AUTO")
                     active: trackEngine ? trackEngine.colourOverride === "" : true
                     activeColor: "#7ED07E"
