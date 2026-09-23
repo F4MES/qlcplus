@@ -1136,6 +1136,10 @@ Rectangle
                 function barTaken(wantBeat)
                 {
                     var snapped = Math.max(1, Math.floor((wantBeat - 1 + 2) / 4) * 4 + 1)
+                    // clamped as moveMarker() clamps it, or a flag on the last
+                    // beat could still be dragged onto and deleted (runde 179)
+                    if (trackViewRoot.beatCount > 0)
+                        snapped = Math.min(snapped, trackViewRoot.beatCount)
                     var mk = trackManager.markers
                     for (var i = 0; i < mk.length; i++)
                         if (i !== trackViewRoot.dragIndex && mk[i].beat === snapped)
@@ -1223,10 +1227,16 @@ Rectangle
                 // boelgeformen"). It sits across the top of the waveform, takes
                 // no touch (a Rectangle lets it through to the flags below) and
                 // moves nothing.
+                // At the BOTTOM, just above the flag tools (runde 179): across the
+                // top it covered the section bands, the first row of flag labels
+                // and the countdown to the next section - and some warnings
+                // ("X has no scene for green") stand all night.
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: 4
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 4
+                anchors.rightMargin: 4
+                anchors.bottomMargin: 60
                 height: 30
                 z: 50
                 opacity: 0.94

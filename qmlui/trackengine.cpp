@@ -2931,11 +2931,23 @@ bool TrackEngine::setsColourOf(Function *func) const
             // laser's white is ch 1 = 0 ("AniWhite"). Read as "no colour",
             // its unnamed white patterns sat in every colour's pool and could
             // paint white over a red room (LTP) (runde 176).
+            //
+            // DORMANT (runde 179): this runs when the table is built, BEFORE
+            // learnGroups() fills colourValue, so it - and the older "channel
+            // this group's colour scenes move" branch below - never sees a
+            // learned channel. Fixing the order is not safe a day before the
+            // rig: the laser bars' ch 6 "Effect" is 79 in one colour scene of
+            // the operator's and 0 in the rest, and with the order fixed every
+            // bar programme holding ch 6 at 0 would read as colour-painting and
+            // leave the bars' pools empty. So: pattern devices only, where the
+            // colour IS the channel, for the day the order is put right.
             if (sv.value == 0)
             {
                 bool zeroIsColour = false;
                 foreach (const TrackGroup &zg, m_groups)
                 {
+                    if (zg.patternDevice == false)
+                        continue;
                     foreach (uchar cv, zg.colourValue.value(sv.fxi).value(sv.channel))
                     {
                         if (cv == 0)
@@ -3905,6 +3917,16 @@ void TrackEngine::setColourOverride(QString colour)
     // the accent was drawn to go with the colour before the tile; a tile, or
     // letting one go, is a new room colour (runde 171)
     m_accentPick.clear();
+    // ... and a pattern device lets go of its held scene: it keeps a scene in
+    // a partner colour through the section (runde 171), and only a ROOM
+    // colour change (changeColour) released it - a tile sets m_colour here,
+    // so the red pattern ran on in the blue room until the next section
+    // (runde 179)
+    foreach (const QString &pk, m_groupOrder)
+    {
+        if (m_groups.value(pk).patternDevice)
+            m_sectionMotion.remove(pk);
+    }
     logSignal(colour.isEmpty() ? QStringLiteral("sig:colour-auto")
                                : QStringLiteral("sig:colour:") + colour);
     m_startColour = false;               // a tile the DJ tapped is theirs
@@ -5557,8 +5579,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // HOLD is "no colour changes", and ENERGY 0 (STILL, which forces the
     // hold) is "nothing changes": neither may turn the base, nor hand the
     // whole room a new colour when the track lands (runde 171).
-    if (hold)
-        m_nextColour.clear();
     if (m_mixing && m_mixBeat >= 0 && m_nextColour.isEmpty() && m_palette.isEmpty() == false
         && m_override.isEmpty() && hold == false)
     {
@@ -5606,6 +5626,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (incomingFresh)
         mixTurnBars = (m_incomingState == "break" || m_incomingState == "intro") ? 4
                     : (m_incomingState == "drop" ? 8 : 6);
+    // ... but only BEFORE the base has turned: clearing it after snapped the
+    // base back to the old colour the moment HOLD was pressed - HOLD making
+    // the very colour change it is there to stop (runde 179). Once turned,
+    // the base keeps it and the track takes it when it lands.
+    if (hold && mixBarsOut < mixTurnBars)
+        m_nextColour.clear();
     const qreal motionTarget = incomingFresh && m_incomingEnergy >= 0.0 && sectionEnergy >= 0.0
                                && mixBarsOut >= 4
         ? qBound(0.90, 1.0 + 0.20 * (m_incomingEnergy - sectionEnergy), 1.10) : 1.0;
@@ -6438,7 +6464,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                    // (Tobias, 2026-09-18). drawSweep() only asks on the beat
                    // a figure is DRAWN, so a figure drawn at 45 % kept running
                    // at 32 % until the next section (runde 171).
-                   && (g.lasers == false || fader >= 0.40);
+                   // A running figure keeps going down to 0.37: a fader resting
+                   // on 0.40 (or the closing slide passing it) stopped and
+                   // restarted the EFX on alternate beats, from phase 0 each
+                   // time - the bars jerking (runde 179)
+                   && (g.lasers == false || fader >= (m_active.contains(slot) ? 0.37 : 0.40));
         if (wanted == false)
         {
             if (m_active.contains(slot))
