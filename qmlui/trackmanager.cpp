@@ -72,16 +72,16 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     QSettings settings;
     QVariant var;
 
-    var = settings.value(SETTINGS_TRACK_PORT);
-    if (var.isValid()) m_port = var.toInt();
+    var = settings.value(SETTINGS_TRACK_PORT);        // R201_RESTORE_BOUNDS
+    if (var.isValid() && var.toInt() > 0 && var.toInt() <= 65535) m_port = var.toInt();
     var = settings.value(SETTINGS_TRACK_BPMLOW);
-    if (var.isValid()) m_bpmLow = var.toInt();
+    if (var.isValid() && var.toInt() > 0 && var.toInt() <= 300) m_bpmLow = var.toInt();
     var = settings.value(SETTINGS_TRACK_BPMHIGH);
-    if (var.isValid()) m_bpmHigh = var.toInt();
+    if (var.isValid() && var.toInt() > 0 && var.toInt() <= 300) m_bpmHigh = var.toInt();
     var = settings.value(SETTINGS_TRACK_TRIM);
-    if (var.isValid()) m_energyTrim = var.toInt();
+    if (var.isValid()) m_energyTrim = qBound(0, var.toInt(), 200);
     var = settings.value(SETTINGS_TRACK_QUANTIZE);
-    if (var.isValid()) m_quantize = var.toInt();
+    if (var.isValid()) m_quantize = qBound(1, var.toInt(), 32);
 
     m_roleMode = true;
     m_colorCursor = 0;
@@ -104,6 +104,8 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_mixing = false;
     m_dropKick = settings.value(SETTINGS_TRACK_DROPKICK, 0.55).toDouble();
     m_breakKick = settings.value(SETTINGS_TRACK_BREAKKICK, 0.30).toDouble();
+    m_dropKick = qBound(0.30, m_dropKick, 0.90);      // R201_KICK_BOUNDS
+    m_breakKick = qBound(0.05, m_breakKick, 0.50);
     m_lastPosMs = 0;
     m_linkStale = false;
     m_engine = new TrackEngine(m_doc, this);
@@ -1021,6 +1023,14 @@ void TrackManager::setAutoRun(bool enable)
     // The clock is asked first: it only speaks on a beat, and the music
     // may not have started yet. Decided BEFORE applyLook() (R185_BEFORE_LOOK):
     // after it, a playing track had the show's look started and replaced.
+    if (m_autoRun && m_engine != nullptr && m_showRanNight != TrackEngine::nightKey()
+        && QSettings().value(SETTINGS_ENGINE_NIGHT).toString() != TrackEngine::nightKey())
+    {
+        m_engine->setRoomAuto(true);          // R201_NEW_NIGHT
+        const QStringList trimmed = m_engine->trims().keys();
+        for (const QString &k : trimmed)
+            m_engine->setGroupTrim(k, 1.0);
+    }
     if (m_autoRun && m_engine != nullptr)
         m_engine->announceRoom();
     if (m_autoRun && m_engine != nullptr && m_showRanNight != TrackEngine::nightKey()

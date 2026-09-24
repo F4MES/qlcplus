@@ -2064,6 +2064,14 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             // every strobe: that is the operator's hand.
             if (colour.isEmpty() == false && m_cast.contains(key) == false)
                 continue;
+            // full means full: no pulse, no breath, and on the button no
+            // MASTER and no group trim. slotScale() and setPart() both read
+            // m_flashHeld, so the mark goes in BEFORE the colour scene is run
+            // and the dimmer driven - after it, run() below asked slotScale()
+            // with the group not yet held and the white came out at MASTER x
+            // trim: dark at MASTER 0 with the dimmers at full (runde 201). It
+            // stays, so moving a fader mid-flash does not pull it down either.
+            m_flashHeld.insert(key);
             quint32 fid = colourFunction(key, hue);
             if (fid == Function::invalidId())
                 fid = colourFunction(key, QStringLiteral("white"));
@@ -2077,12 +2085,6 @@ void TrackEngine::genFlash(bool on, const QString &colour)
                     stopSlot("col:" + key, true);
                 run("flash:" + key, fid, 1.0, 0, true);
             }
-            // full means full: no pulse, no breath and no group trim on the
-            // flash itself. The trim is skipped in setPart() as long as the
-            // group is in m_flashHeld, so the mark has to go in BEFORE the
-            // dimmer is driven - and it stays, so moving the group's fader
-            // mid-flash does not pull the flash down either.
-            m_flashHeld.insert(key);
             qreal keepDepth = m_pulseDepth.value(key, 0.0);
             int keepBreath = m_breathe.value(key, 0);
             m_pulseDepth.insert(key, 0.0);
@@ -4258,6 +4260,10 @@ void TrackEngine::setFlash(bool pressed)
             if (m_groups.value(key).strobes)
                 strobeGroups.insert(key);
         }
+        // an automatic hit that is still up (a red one, say) goes first: the
+        // button's white must not be laid over it, now that the button is at
+        // full and the hit would be too on the next fader move (runde 201)
+        stopSlot("flash", true);
         quint32 fid = flashFunction(strobeGroups, "white");
         if (fid == Function::invalidId())
             fid = flashFunction(allOn, "white");
@@ -5420,6 +5426,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (m_mixBeat >= 0)
                 m_mixBeat = qMax(0, m_mixBeat - back);
         }
+        // ... and forward (a hot cue ahead, or the next track, whose first
+        // beat is wherever the deck stands - trackLoaded() leaves CALM as a
+        // count from 0): what was left of CALM is kept (runde 201)
+        else if (m_calmUntil > m_lastBeat)
+            m_calmUntil += beat - m_lastBeat;
         if (m_colourSince > beat)
             m_colourSince = beat;
         if (m_effectsBeat > beat)
@@ -6348,13 +6359,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // drop/groove on any beat, and each flip redrew figure, zoom and walk mid-
     // bar. The change waits for the bar line (or a new section) and is
     // remembered until then (runde 199)
-    const bool roleContextChanged = (m_compositionBase != base || m_compositionTier != tier)
-                                 && (beatInBar == 0 || sectionChanged);
-    if (roleContextChanged || sectionChanged)
-    {
+    // Only the TIER waits: the base is the operator's pick (baseGroup()) and
+    // does not wobble with a fader, and slotScale() reads m_compositionBase
+    // while motionOwns reads `base` - a lagging base let the old base's chase
+    // own the dimmers without MASTER or trim for up to three beats (runde 201).
+    const bool baseMoved = m_compositionBase != base;
+    const bool tierMoved = m_compositionTier != tier && (beatInBar == 0 || sectionChanged);
+    const bool roleContextChanged = baseMoved || tierMoved;
+    if (baseMoved || sectionChanged)
         m_compositionBase = base;
+    if (tierMoved || sectionChanged)
         m_compositionTier = tier;
-    }
     bool compositionChanged = false;
     if (m_fullAuto && (((sectionChanged || roleContextChanged) && hold == false)
         || (m_rhythmLead.isEmpty() == false && castSet.contains(m_rhythmLead) == false)
@@ -6472,7 +6487,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         int until = m_darkUntil.value(key);
         if (beat <= until && until - beat < ENGINE_DARK_BARS * 4)
             darkGroups.insert(key);
-        else if (beat > until)
+        else if (beat > until || until - beat >= ENGINE_DARK_BARS * 4)   // runde 201: or a long jump back
             m_darkUntil.remove(key);
     }
     foreach (const QString &key, m_groupOrder)
@@ -8605,17 +8620,29 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         const QString group = slotGroup(slot);
         return m_master * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
     }
-    // the flashes (runde 199): MASTER applies to both, and the group's trim to
-    // the engine's own per-group hits - only a HELD button overrides a trim,
-    // as setPart() says. slotScale() gave 1.0 and the flash scenes' dimmer at
-    // 255 won over everything (HTP): a full hit at MASTER 0.
+    // the flashes. The HELD FLASH button is always full strength - no MASTER,
+    // no group trim - under its own ceiling (white at 70 % on a strobe, in
+    // the scene itself) (Tobias, 2026-09-24: "FLASH skal ikke foelge master,
+    // den skal altid vaere fuld styrke (med dens loft)"). The engine's OWN hits
+    // on a drop follow MASTER and the group's trim (runde 199).
     if (slot == QStringLiteral("flash"))
-        return m_master;
+    {
+        if (m_flash)
+            return 1.0;
+        // the operator's own flash scene on a hit spans several groups: it
+        // gets the highest of their trims, so a strobe bank turned down for
+        // the night stays down through the drop (runde 201)
+        qreal ftrim = 0.0;
+        foreach (const QString &fg, m_funcs.value(fid).groups)
+            ftrim = qMax(ftrim, m_groupTrim.value(fg, 1.0));
+        return m_master * (m_funcs.value(fid).groups.isEmpty() ? 1.0 : ftrim);
+    }
     if (slot.startsWith(QStringLiteral("flash:")))
     {
         const QString fg = slotGroup(slot);
-        const qreal ftrim = (m_flash && m_flashHeld.contains(fg)) ? 1.0 : m_groupTrim.value(fg, 1.0);
-        return m_master * ftrim;
+        if (m_flash && m_flashHeld.contains(fg))
+            return 1.0;
+        return m_master * m_groupTrim.value(fg, 1.0);
     }
     if (slot.startsWith(QStringLiteral("col:")) == false
         && slot.startsWith(QStringLiteral("idle:")) == false
@@ -8649,10 +8676,10 @@ void TrackEngine::reapplyLevels()
             // pulse under it, and no group trim while the operator holds the
             // button - a trim or MASTER touched mid-flash pulled the strobes
             // down to trim x pulse x master until the next beat (runde 168).
-            // The MASTER still applies, as it does there.
+            // Nor MASTER: the held button is always full (Tobias, 2026-09-24).
             const bool held = m_flashHeld.contains(group);
             const qreal trim = (m_flash && held) ? 1.0 : m_groupTrim.value(group, 1.0);
-            out *= (held ? 1.0 : pulseFactor(group)) * trim * m_master;
+            out *= (held ? 1.0 : pulseFactor(group)) * trim * ((m_flash && held) ? 1.0 : m_master);
             // and the same on/off squaring setPart() does: an animation
             // laser's dimmer is a switch, and a fraction written to it is
             // rounded by the fixture in a way nobody can predict
@@ -9133,7 +9160,7 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     if (m_speed < 0)
         beats *= 2;
     else if (m_speed > 0 && laser == false)
-        beats = qMax(4, beats / 2);          // never under a bar a figure (runde 199)
+        beats = qMin(beats, qMax(4, beats / 2));       // runde 201: 2x never slows a short figure          // never under a bar a figure (runde 199)
     uint ms = uint(qMax(250.0, beats * beatMs));
 
     bool running = m_active.contains(slot) && m_active.value(slot) == fid
@@ -11298,9 +11325,8 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // THE HELD FLASH BUTTON IGNORES THE GROUP'S TRIM (Tobias, 2026-09-22:
     // "flash knappen skal ogsaa override hvad end lysstyrken staar paa
     // strobe-lampe gruppen"). The trim is where the group sits all night;
-    // the button is the one moment it should not. The MASTER still applies -
-    // that is the fader for the whole room and pulling it down has to mean
-    // something - and so does BLACKOUT, which is a safety.
+    // the button is the one moment it should not. BLACKOUT still applies,
+    // which is a safety. (MASTER did too until runde 200 - see below.)
     //
     // m_flash, not m_flashHeld alone: the set is shared with the engine's
     // OWN accent hits on a drop (tick(), genFlash(true, hue)), and those are
@@ -11308,9 +11334,12 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // stays down through an automatic hit - that fader is how a group is
     // quietened for the night - and only his thumb on the button overrules
     // it. Caught reviewing runde 131 rather than on the rig.
-    qreal trim = (m_flash && m_flashHeld.contains(group)) ? 1.0
-                                                          : m_groupTrim.value(group, 1.0);
-    qreal applied = qBound(0.0, level * pulseFactor(group) * trim * m_master, 1.0);
+    // ... and, since 2026-09-24, MASTER too: "FLASH skal ikke foelge master,
+    // den skal altid vaere fuld styrke (med dens loft)" - the ceiling is in
+    // the flash scene's white. BLACKOUT still wins (run() and the masks).
+    const bool heldFlash = m_flash && m_flashHeld.contains(group);
+    qreal trim = heldFlash ? 1.0 : m_groupTrim.value(group, 1.0);
+    qreal applied = qBound(0.0, level * pulseFactor(group) * trim * (heldFlash ? 1.0 : m_master), 1.0);
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
         applied = applied > 0.10 ? 1.0 : 0.0;
