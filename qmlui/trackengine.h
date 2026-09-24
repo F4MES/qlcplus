@@ -924,7 +924,9 @@ private:
     QMap<QString, bool> m_patterned;       // whether that group's pattern is live (sub-beat steps)
     QSet<QString> m_motionDim;             // groups whose MOTION owns the dimmers this beat
     QMap<QString, QVector<qreal> > m_texture;  // per-fixture spread, drifting slowly
-    QMap<QString, QList<quint32> > m_zoomScenes; // head group -> narrow, mid, wide
+    QMap<QString, QList<quint32> > m_zoomScenes; // head group -> 9 levels narrow..wide, then alternating A and B (runde 214)
+    QMap<QString, int> m_zoomMode;         // per head group: 0 held, 1 the drop's pulse, 2 alternating heads (runde 214)
+    bool m_floorRound = false;             // this build: heads straight down, sharp, one blinking round (runde 214)
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)

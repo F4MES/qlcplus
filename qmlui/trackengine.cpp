@@ -351,6 +351,8 @@ void TrackEngine::slotDocSettled()
     m_fan = 0.0;
     m_flash = false;
     m_zoom.clear();
+    m_zoomMode.clear();
+    m_floorRound = false;
     // Everything the engine had running keeps running otherwise, with its
     // intensity override stuck where it was - and this fires on an ordinary
     // "delete a function" in the Function Manager, not only on a project load.
@@ -1827,11 +1829,17 @@ void TrackEngine::ensurePositionScenes()
 
 void TrackEngine::ensureZoomScenes()
 {
-    // Three hidden zoom scenes per group of moving heads - narrow, mid,
-    // wide - so the beam is a move of its own: tight beams for big figures
-    // in a drop, a wide wash in a break, wide for a bar when a drop lands.
-    static const char *names[3] = { "Narrow", "Mid", "Wide" };
-    static const int levels[3] = { 40, 130, 225 };
+    // Hidden zoom scenes per group of moving heads, so the beam is a move of
+    // its own: tight beams for big figures in a drop, a wide wash in a break,
+    // wide for a bar when a drop lands.
+    // Runde 214 (Tobias): nine steps from the sharpest beam to the widest -
+    // "Narrow" is 0 now, the sharp beam his own scenes use (124 of them), not
+    // 40 - so a build can tighten a step a bar; and two alternating scenes
+    // (every other head sharp, the rest wide, and the other way round). Each
+    // fades in over 300 ms, so a step is a zoom moving, not a snap.
+    static const char *names[11] = { "Narrow", "Zoom 1", "Zoom 2", "Zoom 3", "Mid",
+                                     "Zoom 5", "Zoom 6", "Zoom 7", "Wide", "Alt A", "Alt B" };
+    static const int levels[9] = { 0, 28, 56, 84, 112, 140, 168, 196, 225 };
 
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
@@ -1847,23 +1855,28 @@ void TrackEngine::ensureZoomScenes()
         if (g.heads == false || g.patternDevice)
             continue;
         QList<quint32> ids;
-        for (int z = 0; z < 3; z++)
+        for (int z = 0; z < 11; z++)
         {
             QList<SceneValue> values;
+            int headIndex = 0;
             foreach (quint32 fid, g.fixtures)
             {
                 Fixture *fxi = m_doc->fixture(fid);
                 if (fxi == nullptr)
                     continue;
+                // the alternating pair: A = even heads sharp, odd wide; B the other way
+                const int level = z < 9 ? levels[z]
+                                : (((headIndex % 2) == 0) == (z == 9) ? levels[0] : levels[8]);
+                headIndex++;
                 for (quint32 ch = 0; ch < fxi->channels(); ch++)
                 {
                     const QLCChannel *qch = fxi->channel(ch);
                     if (qch == nullptr)
                         continue;
                     if (qch->preset() == QLCChannel::BeamZoomSmallBig)
-                        values.append(SceneValue(fid, ch, uchar(levels[z])));
+                        values.append(SceneValue(fid, ch, uchar(level)));
                     else if (qch->preset() == QLCChannel::BeamZoomBigSmall)
-                        values.append(SceneValue(fid, ch, uchar(255 - levels[z])));
+                        values.append(SceneValue(fid, ch, uchar(255 - level)));
                 }
             }
             if (values.isEmpty())
@@ -1892,9 +1905,10 @@ void TrackEngine::ensureZoomScenes()
                     break;
                 }
             }
+            scene->setFadeInSpeed(300);
             ids.append(scene->id());
         }
-        if (ids.count() == 3)
+        if (ids.count() == 11)
             m_zoomScenes.insert(key, ids);
     }
 }
@@ -6464,6 +6478,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool redraw = hold == false
                && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump
                    || (bar > 0 && bar % 8 == 0 && beatInBar == 0 && rng->bounded(3) > 0));
+    // THE FLOOR ROUND (runde 214, Tobias: "det ser sejt ud, naar alle hoveder
+    // peger lige ned i gulvet og skiftes til at blinke rundt i rummet zoomet
+    // helt"). A build's look for the heads: every head straight down (the
+    // "Center" aim, tilt 128), the sharpest beam, no figure, and ONE head lit
+    // at a time, handed round faster and faster as the build climbs - the
+    // bare blink's acceleration below. The drop lands wide on all of them.
+    // Drawn once per build, more often the higher the room; never under
+    // HOLD, CALM or a still room.
+    if (isBuild == false || isCalm || still)
+        m_floorRound = false;
+    else if (sectionChanged && hold == false)
+        m_floorRound = m_fullAuto               // FULL AUTO only: it takes the heads' programmes and aims
+                    && energy >= 0.30 && rng->bounded(100) < int(30.0 + 30.0 * qBound(0.0, energy, 1.0));
     if (redraw)
         m_movesEnergy = energy;
     if (faderJump)
@@ -6674,7 +6701,32 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // and `want` is invalid anyway).
         const bool aimSettled = m_aimSince.contains(key) == false
                              || beat - m_aimSince.value(key) >= 4;
-        if (want == Function::invalidId()
+        // the floor round aims every head straight down: the generated
+        // "Center" position (runde 214). Without one (banned in SETUP) the
+        // heads aim as they always do.
+        quint32 centre = Function::invalidId();
+        if (m_floorRound && g.heads && g.patternDevice == false && inCast)
+        {
+            foreach (TrackFuncInfo *pi, candidates(ENGINE_ROLE_POSITION, key))
+            {
+                if (pi->generated && pi->name.endsWith(QStringLiteral(" Center")))
+                {
+                    centre = pi->id;
+                    break;
+                }
+            }
+        }
+        if (centre != Function::invalidId())
+        {
+            if (centre != want)
+            {
+                want = centre;
+                m_position.insert(key, want);
+                m_aimSince.insert(key, beat);
+                m_headMoveBeats.insert(key, -8);
+            }
+        }
+        else if (want == Function::invalidId()
             || (mayMove && sectionChanged && aimSettled && (g.lasers == false || inCast)))
         {
             // The laser block above sends the bars home everywhere they may
@@ -6719,6 +6771,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                               : qMax(2, int(qRound(8.0 - 6.0 * eWalk)));
         int walkBars = qMax(1, walkBase * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1));
         if (g.heads && inCast && hold == false && isBreak == false && isCalm == false   // CALM: no walk (r199)
+            && m_floorRound == false                                                    // the floor round holds Center (r214)
             && (m_fullAuto || (m_moves.value(key).ownChaser
                                && candidates(ENGINE_ROLE_MOTION, key).isEmpty()))
             && beatInBar == 0 && bar > 0 && (bar % walkBars) == 0
@@ -6938,7 +6991,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_sweepHistory.insert(key, history);
             }
         }
-        applySweep(key, m_sweep.value(key), bpm, energy);
+        // the floor round: no figure on the heads - they stand straight down (r214)
+        applySweep(key, (m_floorRound && g.heads) ? TrackSweep() : m_sweep.value(key), bpm, energy);
     }
 
     /* ---- zoom: a move of its own on the heads. Wide in a break, mid in
@@ -6955,25 +7009,45 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (m_active.contains(slot))
                 stopSlot(slot, true);
             m_zoom.remove(key);
+            m_zoomMode.remove(key);
             continue;
         }
+        // Runde 214 (Tobias: "Lav 1 (og saet ogsaa stram til 0)"): nine steps
+        // (0 = the sharpest beam, 4 mid, 8 wide) and three ways to wear them -
+        // held for the section, the drop's pulse (wide on the one, sharp on
+        // the rest: the beam breathes with the kick) and alternating heads
+        // (every other head sharp, trading every bar). A build tightens a step
+        // a bar from wide to the sharpest beam at the drop.
+        const QList<quint32> &zs = m_zoomScenes.value(key);
         int want = m_zoom.value(key, -1);
-        bool pickZoom = want < 0 || (hold == false && (redraw
-                     || (isDrop && dropBar == 1 && beatInBar == 0)
-                     || (isBuild && beatInBar == 0 && ((prog > 0.5 && want != 0) || (prog <= 0.5 && want == 0)))));
+        int mode = m_zoomMode.value(key, 0);
+        if (m_floorRound)
+        {
+            want = 0;                                        // the floor round: sharp spots
+            mode = 0;
+        }
         // dropBar, not bar: a late drop (FAKE DROP) lands on bar m_dropLand,
         // and `bar == 0` lost it its wide landing (runde 168)
-        if (isDrop && dropBar == 0 && hold == false)
-            want = 2;                                        // the landing: everything wide
-        else if (pickZoom)
+        else if (isDrop && dropBar == 0 && hold == false)
+        {
+            want = 8;                                        // the landing: everything wide
+            mode = 0;
+        }
+        else if (isBuild && hold == false)
+        {
+            if (want < 0 || beatInBar == 0)
+                want = qBound(0, int(qRound(8.0 * (1.0 - qBound(0.0, prog, 1.0)))), 8);
+            mode = 0;
+        }
+        else if (want < 0 || (hold == false && (redraw || (isDrop && dropBar == 1 && beatInBar == 0))))
         {
             int chosen = want, total = 0;
             int samples = m_fullAuto && m_ratingOn ? 6 : 1;
             for (int sample = 0; sample < samples; sample++)
             {
-                if (isBreak)       want = rng->bounded(4) == 0 ? 1 : 2;
-                else if (isBuild)  want = prog > 0.5 ? 0 : 1;
-                else if (isDrop)   want = (m_dropStyle == 2 || m_dropStyle == 4) ? 2 : ((m_dropStyle == 3 || m_dropStyle == 5) ? 0 : (m_dropStyle == 1 ? int(rng->bounded(2)) : int(rng->bounded(3))));
+                int w3;                                      // 0 narrow, 1 mid, 2 wide
+                if (isBreak)       w3 = rng->bounded(4) == 0 ? 1 : 2;
+                else if (isDrop)   w3 = (m_dropStyle == 2 || m_dropStyle == 4) ? 2 : ((m_dropStyle == 3 || m_dropStyle == 5) ? 0 : (m_dropStyle == 1 ? int(rng->bounded(2)) : int(rng->bounded(3))));
                 else
                 {
                     // a groove: the fader picks the beam. Wide and soft at
@@ -6984,12 +7058,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     qreal ez = qBound(0.0, energy, 1.0);
                     int roll = int(rng->bounded(1000));
                     if (roll < int(600.0 * qBound(0.0, (ez - 0.50) / 0.50, 1.0)))
-                        want = 0;
+                        w3 = 0;
                     else if (roll < int(600.0 * qBound(0.0, (ez - 0.50) / 0.50, 1.0)) + int(500.0 * (1.0 - ez)))
-                        want = 2;
+                        w3 = 2;
                     else
-                        want = 1;
+                        w3 = 1;
                 }
+                want = w3 * 4;
                 m_zoom.insert(key, want);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
                 total += weight;
@@ -6997,9 +7072,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     chosen = want;
             }
             want = chosen;
+            // how the section wears it: the hard and the nervous drop pulse
+            // with the kick from 55 %; a groove from 45 % trades sharp and
+            // wide between the heads a third of the time
+            mode = 0;
+            if (isDrop && (m_dropStyle == 1 || m_dropStyle == 5) && energy >= 0.55)     // hard, nervous
+                mode = 1;
+            else if (isDrop == false && isBreak == false && energy >= 0.45 && rng->bounded(3) == 0)
+                mode = 2;
         }
         m_zoom.insert(key, want);
-        run(slot, m_zoomScenes.value(key).at(qBound(0, want, 2)), 1.0, 0, true);
+        m_zoomMode.insert(key, mode);
+        int idx = want;
+        if (mode == 1 && isCalm == false)
+            idx = beatInBar == 0 ? 8 : 0;
+        else if (mode == 2)
+            idx = (bar % 2) == 0 ? 9 : 10;
+        run(slot, zs.at(qBound(0, idx, int(zs.count()) - 1)), 1.0, 0, true);
     }
 
     /* ---- musical fills; the eight-bar clock is only a no-curves fallback ---- */
@@ -7130,6 +7219,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mv.pulse = qMax(mv.pulse, 0.85);
             mv.pulseOn = 0;
             mv.ownChaser = false;
+        }
+        // the floor round: the heads hand ONE lit head round (runde 214) - bare,
+        // so the acceleration below takes it from every other beat to sixteenths
+        if (m_floorRound && g.heads && g.patternDevice == false && g.parts.count() >= 2)
+        {
+            mv.pattern = ENGINE_PAT_CHASE;
+            mv.bare = true;
+            mv.ownChaser = false;
+            mv.pulse = 1.0;
+            mv.pulseOn = 0;
+            mv.breatheBars = 0;
+            mv.texture = 0.0;
+            mv.stepBeats = 2;
+            mv.subSteps = 1;
         }
         if (isBuild)
         {
@@ -7327,7 +7430,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             cursor += m_turnCursor.value(key, 0);
         }
         quint32 mf = Function::invalidId();
-        if (isCalm == false)
+        // no programme on the heads under the floor round: the round is the
+        // engine's own blink on the dimmers (runde 214)
+        if (isCalm == false && (m_floorRound && g.heads) == false)
         {
             // the base must leave the room lit: most in a break, least in a
             // drop, where a punch is the point
@@ -8629,7 +8734,9 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
     // library was given half the night. m_compositionTier is this beat's tier,
     // set every tick before the group loop; a drop hidden under
     // ENGINE_DROP_SHOW is tier 1 and keeps the floor, which is right.
-    if (ambientBase(group) && m_compositionTier != 2)
+    // (not under the floor round either: its whole point is one sharp spot
+    // walking through a dark wash, runde 214)
+    if (ambientBase(group) && m_compositionTier != 2 && (m_floorRound && move.bare) == false)
         for (qreal &value : mask) value = qMax(0.45, value);
     return mask;
 }
@@ -8829,7 +8936,7 @@ qreal TrackEngine::pulseFactor(const QString &group) const
         factor *= 0.70 + 0.30 * (0.5 + 0.5 * std::sin(pos * 6.283185307179586));
     }
     // the foundation's floor - not in a drop, see patternMask()
-    if (ambientBase(group) && m_compositionTier != 2) factor = qMax(0.40, factor);
+    if (ambientBase(group) && m_compositionTier != 2 && m_floorRound == false) factor = qMax(0.40, factor);
     const int sequenceIndex = m_sequenceGroups.indexOf(group);
     if (sequenceIndex >= 0)
         factor *= TrackStage::sequenceGain(qreal(now - m_sequenceStart) / m_sequenceBeatMs,
@@ -9806,7 +9913,9 @@ QMap<QString, QString> TrackEngine::autoLookKeys(const QSet<QString> &cast, qrea
           << QString::number(sw.shape) << QString::number(sw.width / 16)
           << QString::number(sw.height / 16) << QString::number(sw.beats / 8)
           << QString::number(sw.spread) << QString::number(sw.mirror)
-          << QString::number(sw.fan > 0) << QString::number(m_zoom.value(group, -1))
+          // the zoom in its three old bands (narrow / mid / wide), so the saved
+          // ratings still match and a build's step a bar does not split them (r214)
+          << QString::number(sw.fan > 0) << QString::number(m_zoom.value(group, -1) < 0 ? -1 : (m_zoom.value(group, -1) + 2) / 4)
           << QString::number(m_accent && m_dropStyle > 0 && group == m_accentGroup);
         QString recipe = QString::fromLatin1(group.toUtf8().toHex()) + ':' + f.join(',');
         keys.insert(group, context + '|' + recipe);
@@ -11369,6 +11478,8 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_effectsBefore = 0;
     m_effectsBeat = -1;
     m_zoom.clear();
+    m_zoomMode.clear();
+    m_floorRound = false;
     m_strobeSeen = -1;
     // the burst end is a beat number of THIS track: carrying it over would
     // hold the hardware strobe on for the whole of the next one
@@ -11688,6 +11799,8 @@ void TrackEngine::stopAll()
     m_lastPan.clear();
     m_headMoveBeats.clear();
     m_zoom.clear();
+    m_zoomMode.clear();
+    m_floorRound = false;
     m_calmUntil = 0;              // CALM must not survive AUTO going off and on
     // NOT m_lastBeat: slotDocChanged() calls this mid-track now, and zeroing
     // the beat counter there would make a CALM pressed in that same beat
