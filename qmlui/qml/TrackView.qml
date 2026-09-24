@@ -1160,8 +1160,15 @@ Rectangle
                     if (trackViewRoot.beatCount > 0)
                         snapped = Math.min(snapped, trackViewRoot.beatCount)
                     var mk = trackManager.markers
+                    // ... and never OVER a neighbour: a quick swipe moved more
+                    // than a bar between two touch events and the flag jumped
+                    // past the next one, BUILD after DROP (runde 198)
+                    var from = (trackViewRoot.dragIndex >= 0 && trackViewRoot.dragIndex < mk.length)
+                               ? mk[trackViewRoot.dragIndex].beat : snapped
+                    var lo = Math.min(from, snapped), hi = Math.max(from, snapped)
                     for (var i = 0; i < mk.length; i++)
-                        if (i !== trackViewRoot.dragIndex && mk[i].beat === snapped)
+                        if (i !== trackViewRoot.dragIndex
+                            && (mk[i].beat === snapped || (mk[i].beat > lo && mk[i].beat < hi)))
                             return true
                     return false
                 }
@@ -1193,6 +1200,9 @@ Rectangle
                         if (Math.abs(mouse.x - pressX) < 6) return
                         // the drag begins: zoom in with the flag staying under the finger
                         var mk = trackManager.markers[pressIndex]
+                        // the flags shrank since the press (an UNDO with a
+                        // second finger): nothing to drag (runde 198)
+                        if (!mk) { pressIndex = -1; return }
                         trackViewRoot.dragIndex = pressIndex
                         trackViewRoot.zoomActive = true
                         var vc = trackViewRoot.viewCount()

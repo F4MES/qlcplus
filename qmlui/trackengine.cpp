@@ -2995,6 +2995,18 @@ bool TrackEngine::setsColourOf(Function *func) const
                 return true;
             if (qch->group() == QLCChannel::Colour)
                 return true;             // a colour wheel
+            // a per-eye colour channel the definition leaves as NoFunction -
+            // the laser bars' "Laser Color 1..8", the same names
+            // splitColourFunction() reads. Seven AUTO bar programmes (Eyes
+            // Rainbow, Eyes Split, Eyes Chase, Eyes Pairs) paint these and
+            // counted as colourless, so they sat in every colour's pool: red
+            // beside green on neighbouring eyes (runde 198)
+            {
+                static const QRegularExpression eyeColour(QStringLiteral("(colou?r|eye)\\s*\\d+"),
+                                                          QRegularExpression::CaseInsensitiveOption);
+                if (qch->name().contains(eyeColour))
+                    return true;
+            }
             // a channel this group's colour scenes are known to move
             foreach (const TrackGroup &g, m_groups)
             {
@@ -3971,6 +3983,9 @@ void TrackEngine::setColourOverride(QString colour)
     // the accent was drawn to go with the colour before the tile; a tile, or
     // letting one go, is a new room colour (runde 171)
     m_accentPick.clear();
+    // ... and so was the next track's colour in a mix: drawn against the
+    // room colour the tile has just replaced (runde 198)
+    m_nextColour.clear();
     // ... and a pattern device lets go of its held scene: it keeps a scene in
     // a partner colour through the section (runde 171), and only a ROOM
     // colour change (changeColour) released it - a tile sets m_colour here,
@@ -5791,6 +5806,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_colour = m_override;
     else if (changeColour && m_palette.isEmpty() == false)
     {
+        // a next-track colour drawn for the OLD room colour (a mix that was
+        // abandoned) must not turn the base in the next mix: redrawn against
+        // this one when the next mix comes (runde 198). No mix is live here -
+        // changeColour is false during one.
+        m_nextColour.clear();
         // Drawn, not counted through. Round-robin means the same order every
         // night, and white sat in the rotation like a colour - it is not one,
         // it is a punctuation mark. It comes up about one change in six now,
@@ -6657,6 +6677,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         tierLevel *= 0.80;               // the ends of a track are not the middle
     if (isCalm)
         tierLevel = qMin(tierLevel, 0.55);
+    // ENERGY 0 is the still room: the same brightness whatever section the
+    // track is in - it rose through a build and jumped on a drop (runde 198)
+    if (still)
+        tierLevel = 0.60;
     // The energy is already inside tierLevel above, per section type; here it
     // only keeps a very quiet room from running at full. The LEVEL slider is
     // a straight brightness trim.
@@ -7161,7 +7185,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             duck = 1.0 - 0.45 * qBound(0.0, qreal(m_kickGone - 4) / 4.0, 1.0);
         qreal support = (m_fullAuto && tier > 0 && key != base && key != m_rhythmLead)
                       ? (g.strobes ? 0.55 : 0.70) : 1.0;
-        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base) ? 1.4 : 1.0) * duck * support, 1.0);
+        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base && still == false) ? 1.4 : 1.0) * duck * support, 1.0);
         // run() puts MASTER and the trim on for us now, so the colour scene
         // gets the bare level - or the two would multiply. (The level WITH them,
         // `gl`, went with runde 174: its last reader was the chase, which gets
@@ -7409,8 +7433,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // scaled it DOWN - thin bass left the walking lamp standing at a
             // third between its beats, lit on its colour with nothing
             // happening (runde 171).
+            // 1.0, not 0.95: the "never past 0.95" is for a dimmer that is a
+            // switch - the animation lasers, which have their own gate -
+            // and the strobes are real dimmers; 0.95 left them at 5 %
+            // between beats (runde 198)
             if (g.strobes && depth > 0.0)
-                depth = 0.95;
+                depth = 1.0;
             // the kick the analysis heard on this beat: no kick, no pulse;
             // a soft kick, a soft pulse. The kick scales the HIT, never the
             // depth: depth is how far the light falls between two beats, so

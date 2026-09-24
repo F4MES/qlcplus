@@ -1596,7 +1596,10 @@ void TrackManager::runEngine(bool sectionChanged)
 
     // a jump to a cue, or two flags of the same type in a row: the state
     // string does not change but the section does
-    if (secStart != m_lastSecStart || secEnd != m_lastSecEnd)
+    // R198_SECTION_START: a section is where it STARTS - a moved end (the
+    // next flag dragged, bar by bar) is not a new one. Without flags the
+    // fixed 64-beat end still turns a section (R172_FIXED_END).
+    if (secStart != m_lastSecStart || (secEnd != m_lastSecEnd && m_markers.isEmpty()))
         sectionChanged = true;
     m_lastSecStart = secStart;
     m_lastSecEnd = secEnd;
@@ -2344,7 +2347,7 @@ void TrackManager::markersEdited()
     if (m_autoRun && m_roleMode && engineRan == false)
     {
         m_lastEngineBeat = -1;
-        runEngine(true);
+        runEngine(false);                // R198_EDIT_NO_RESTART: new bounds, same section
     }
     sendMarkers(true);                   // BLT keeps it as a hand-made correction
 }
@@ -2427,7 +2430,7 @@ void TrackManager::undoMarkers()
     if (m_autoRun && m_roleMode && engineRan == false)
     {
         m_lastEngineBeat = -1;
-        runEngine(true);
+        runEngine(false);                // R198_UNDO_NO_RESTART
     }
     sendMarkers(m_markersManual);
 }
