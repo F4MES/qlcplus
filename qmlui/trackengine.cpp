@@ -3799,6 +3799,7 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
     if (m_startScene)
         startLook();                     // the opening picture follows the switches
     emit tableChanged();
+    emit liveChanged();          // the cast panel's lit border follows at once (r199)
 }
 
 bool TrackEngine::groupEnabled(QString key) const { return m_groupOff.contains(key) == false; }
@@ -5492,11 +5493,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_sweep.clear();
     }
 
-    // a track is playing: the start scene steps aside
+    // a track is playing: the start scene steps aside - at once: fading out
+    // over a second it held the heads' pan/tilt and they swung back off the
+    // beat (runde 199)
     foreach (const QString &slot, m_active.keys())
     {
         if (slot.startsWith("idle:"))
-            stopSlot(slot, false);
+            stopSlot(slot, true);
     }
 
     // Rekordbox' own phrase analysis, when the track has one, hands us two
@@ -5656,7 +5659,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         const bool dropAhead = nextState == QStringLiteral("drop") && beatsToNext > 0 && beatsToNext <= 32;
         const bool mayTurn = hold == false && (beatInBar == 0 || sectionChanged) && flagSoon == false
                           && (sectionChanged || beat - m_curveTurnBeat >= 16);
-        if (flagGroove == false && flagBreak == false)
+        bool curveHeld = false;       // a correction waiting for the bar line (r199)
+        if (flagGroove == false && flagBreak == false && (m_curveBreak || m_curveGroove)
+            && sectionChanged == false && beatInBar != 0)
+        {
+            // a riser taking over mid-bar: the correction stands down for
+            // these beats and turns on the bar line - not mid-bar (runde 199)
+            curveHeld = true;
+        }
+        else if (flagGroove == false && flagBreak == false)
         {
             // a riser taking over mid-section: a turn only where turns may
             // happen, otherwise quietly (runde 194)
@@ -5692,7 +5703,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 curveTurn = true;
             }
         }
-        if (m_curveBreak)
+        if (curveHeld)
+        {
+            // the build look holds until the bar line; the flags stay
+        }
+        else if (m_curveBreak)
         {
             isBreak = true;
             isDrive = false;
@@ -6329,9 +6344,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // Stable roles for this room picture: base / rhythmic lead / support.
     // Keep the lead under HOLD and through a mix; replace it only when it
     // leaves the cast or the music starts a new section.
-    const bool roleContextChanged = m_compositionBase != base || m_compositionTier != tier;
-    m_compositionBase = base;
-    m_compositionTier = tier;
+    // ... on a bar line: a fader wobbling round the 30 % drop line flipped
+    // drop/groove on any beat, and each flip redrew figure, zoom and walk mid-
+    // bar. The change waits for the bar line (or a new section) and is
+    // remembered until then (runde 199)
+    const bool roleContextChanged = (m_compositionBase != base || m_compositionTier != tier)
+                                 && (beatInBar == 0 || sectionChanged);
+    if (roleContextChanged || sectionChanged)
+    {
+        m_compositionBase = base;
+        m_compositionTier = tier;
+    }
     bool compositionChanged = false;
     if (m_fullAuto && (((sectionChanged || roleContextChanged) && hold == false)
         || (m_rhythmLead.isEmpty() == false && castSet.contains(m_rhythmLead) == false)
@@ -6626,7 +6649,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      : isDrive ? qMax(1, int(qRound(6.0 - 4.5 * eWalk)))
                               : qMax(2, int(qRound(8.0 - 6.0 * eWalk)));
         int walkBars = qMax(1, walkBase * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1));
-        if (g.heads && inCast && hold == false && isBreak == false
+        if (g.heads && inCast && hold == false && isBreak == false && isCalm == false   // CALM: no walk (r199)
             && (m_fullAuto || (m_moves.value(key).ownChaser
                                && candidates(ENGINE_ROLE_MOTION, key).isEmpty()))
             && beatInBar == 0 && bar > 0 && (bar % walkBars) == 0
@@ -6803,7 +6826,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // lines running in a four-bar groove - a new figure every bar (runde 172)
         qreal prevProg = progBefore >= 0.0 ? progBefore : qreal(beat - 4 - secStart) / qreal(len);
         bool fresh = redraw || m_sweep.contains(key) == false
-                  || (isBuild && prog > 0.5 && prevProg <= 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0);
+                  || (hold == false && isCalm == false        // HOLD/CALM freeze it too (r199)
+                      && isBuild && prog > 0.5 && prevProg <= 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0);
         if (fresh)
         {
             QList<int> history = m_sweepHistory.value(key);
@@ -8581,6 +8605,18 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         const QString group = slotGroup(slot);
         return m_master * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
     }
+    // the flashes (runde 199): MASTER applies to both, and the group's trim to
+    // the engine's own per-group hits - only a HELD button overrides a trim,
+    // as setPart() says. slotScale() gave 1.0 and the flash scenes' dimmer at
+    // 255 won over everything (HTP): a full hit at MASTER 0.
+    if (slot == QStringLiteral("flash"))
+        return m_master;
+    if (slot.startsWith(QStringLiteral("flash:")))
+    {
+        const QString fg = slotGroup(slot);
+        const qreal ftrim = (m_flash && m_flashHeld.contains(fg)) ? 1.0 : m_groupTrim.value(fg, 1.0);
+        return m_master * ftrim;
+    }
     if (slot.startsWith(QStringLiteral("col:")) == false
         && slot.startsWith(QStringLiteral("idle:")) == false
         && slot.startsWith(QStringLiteral("echo:")) == false)
@@ -9084,7 +9120,10 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         pace /= m_mixMotionScale;
         width = qBound(6, int(qRound(sw.width * grow)), 127);
         height = qBound(4, int(qRound(sw.height * grow)), 28);
-        beats = qMax(3, int(qRound(sw.beats * pace)));
+        // the live rescale may quicken a figure by a quarter at most: it
+        // scaled the draw's floor down with it, and a drop figure pushed from
+        // 80 to 99 % halved its beats - 2x on top made it frantic (runde 199)
+        beats = qMax(3, qMax(int(qRound(sw.beats * pace)), sw.beats * 3 / 4));
     }
     // Not for the lasers. drawSweep() fixes their pace - "nothing here is ever
     // allowed to hurry" - and then this halved it whenever the DJ hit 2x. The
@@ -9094,7 +9133,7 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     if (m_speed < 0)
         beats *= 2;
     else if (m_speed > 0 && laser == false)
-        beats = qMax(1, beats / 2);
+        beats = qMax(4, beats / 2);          // never under a bar a figure (runde 199)
     uint ms = uint(qMax(250.0, beats * beatMs));
 
     bool running = m_active.contains(slot) && m_active.value(slot) == fid
@@ -9378,6 +9417,10 @@ void TrackEngine::next()
     // want it. How long it had been up is in the log already - the beat lines
     // before this one say when funcs last changed.
     logSignal(QStringLiteral("sig:next"));
+    // between tracks (or under the start scene) no beat takes it: it fired on
+    // the next track's first beat and threw away the mix's colour (r199)
+    if (m_lastState.isEmpty())
+        return;
     m_forceNext = true;
     emit liveChanged();
 }
@@ -10001,6 +10044,7 @@ void TrackEngine::cycleClockPoint(int index)
         parts << QString::number(p);
     QSettings().setValue(SETTINGS_ENGINE_CLOCKCURVE, parts.join(','));
     m_roomSent = -1;                       // announceRoom() re-sends on the next beat
+    announceRoom();                        // ... or now: the deck may be stopped (r199)
     emit tableChanged();
 }
 
@@ -10223,7 +10267,13 @@ void TrackEngine::setStartScene(bool on)
             m_override.clear();
         m_startColour = false;
         foreach (const QString &slot, m_active.keys())
+        {
+            // not the OFF and BLACKOUT masks: with SHOW OFF nothing puts them
+            // back, and the BLACKOUT tile stood lit over a lit room (r199)
+            if (slot.startsWith("off:") || slot.startsWith("black:"))
+                continue;
             stopSlot(slot, false);
+        }
         m_cast.clear();
         if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
             m_fadeTimer.start();
@@ -10496,6 +10546,8 @@ void TrackEngine::release()
     // live here. (Round 162 had this function cut hard; that is gone too.)
     m_sequenceGroups.clear();
     m_restUntil = -1;
+    m_calmUntil = 0;             // CALM goes with the show (stopAll() says so too; r199)
+    m_forceNext = false;
     // the opening picture goes with everything else - and its tile with it:
     // the room went dark while START SCENE still showed lit, and the first
     // tap on it then turned "off" nothing (runde 176)

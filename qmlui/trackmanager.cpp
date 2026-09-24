@@ -1690,6 +1690,13 @@ void TrackManager::runEngine(bool sectionChanged)
         kickAhead = curveMean(m_kick, beat, beat + 7);
     }
 
+    if (m_overrideState.isEmpty() == false)     // R199_OVERRIDE_WINS
+    {
+        kickAhead = -1.0;
+        riser = 0.0;
+        nextState.clear();
+        beatsToNext = 0;
+    }
     m_engine->tick(state, beat, secStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
                    m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high,

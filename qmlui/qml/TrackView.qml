@@ -2320,6 +2320,10 @@ Rectangle
                     onPressed: trackEngine.setFlash(true)
                     onReleased: trackEngine.setFlash(false)
                     onCanceled: trackEngine.setFlash(false)
+                    // the page is destroyed with the finger still down (another
+                    // page tapped with a second finger): no release ever comes,
+                    // and FLASH stood at full for the rest of the night (r199)
+                    Component.onDestruction: if (pressed && trackEngine) trackEngine.setFlash(false)
                 }
             }
 Rectangle
