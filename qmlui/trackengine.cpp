@@ -224,6 +224,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
+    m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
     // runde 184: ENERGY by clock and the group faders come back after a
     // restart - the same night only. A new evening starts as it always has:
     // the clock on and every group at 100 %.
@@ -487,7 +488,7 @@ void TrackEngine::slotPulseTimer()
             Function *func = m_doc->function(m_active.value(slot));
             if (func != nullptr)
             {
-                qreal out = m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_groupTrim.value(key, 1.0) * m_master, 1.0);
+                qreal out = m_blackout ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * m_groupTrim.value(key, 1.0) * masterOut(), 1.0);
                 // the same on/off squaring setPart() does: an animation
                 // laser's dimmer is a switch, and 0.7 written to it 20 ms
                 // after the beat is whatever the fixture makes of it
@@ -4031,6 +4032,10 @@ QStringList TrackEngine::cast() const
 
 qreal TrackEngine::master() const { return m_master; }
 
+// MASTER as it reaches the light: the operator's fader times the closing lid
+// (runde 211). The held FLASH button stays at full - it is the operator's hand.
+qreal TrackEngine::masterOut() const { return m_master * m_closingDim; }
+
 void TrackEngine::setMaster(qreal level)
 {
     level = qBound(0.0, level, 1.0);
@@ -4186,6 +4191,7 @@ QString TrackEngine::importSettings()
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
+    m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
     m_groupOff.clear();
@@ -8667,7 +8673,7 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
             || slotGroup(slot) == m_compositionBase)       // the base never owns: see motionOwns
             return 1.0;
         const QString group = slotGroup(slot);
-        return m_master * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
+        return masterOut() * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
     }
     // the flashes. The HELD FLASH button is always full strength - no MASTER,
     // no group trim - under its own ceiling (white at 70 % on a strobe, in
@@ -8684,14 +8690,14 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         qreal ftrim = 0.0;
         foreach (const QString &fg, m_funcs.value(fid).groups)
             ftrim = qMax(ftrim, m_groupTrim.value(fg, 1.0));
-        return m_master * (m_funcs.value(fid).groups.isEmpty() ? 1.0 : ftrim);
+        return masterOut() * (m_funcs.value(fid).groups.isEmpty() ? 1.0 : ftrim);
     }
     if (slot.startsWith(QStringLiteral("flash:")))
     {
         const QString fg = slotGroup(slot);
         if (m_flash && m_flashHeld.contains(fg))
             return 1.0;
-        return m_master * m_groupTrim.value(fg, 1.0);
+        return masterOut() * m_groupTrim.value(fg, 1.0);
     }
     if (slot.startsWith(QStringLiteral("col:")) == false
         && slot.startsWith(QStringLiteral("idle:")) == false
@@ -8702,7 +8708,7 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
     bool carries = m_funcs.value(fid).dimmer || g.hasDimmer == false || g.parts.isEmpty();
     if (carries == false)
         return 1.0;
-    return m_master * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
+    return masterOut() * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
 }
 
 void TrackEngine::reapplyLevels()
@@ -8728,7 +8734,7 @@ void TrackEngine::reapplyLevels()
             // Nor MASTER: the held button is always full (Tobias, 2026-09-24).
             const bool held = m_flashHeld.contains(group);
             const qreal trim = (m_flash && held) ? 1.0 : m_groupTrim.value(group, 1.0);
-            out *= (held ? 1.0 : pulseFactor(group)) * trim * ((m_flash && held) ? 1.0 : m_master);
+            out *= (held ? 1.0 : pulseFactor(group)) * trim * ((m_flash && held) ? 1.0 : masterOut());
             // and the same on/off squaring setPart() does: an animation
             // laser's dimmer is a switch, and a fraction written to it is
             // rounded by the fixture in a way nobody can predict
@@ -9196,6 +9202,25 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         pace /= m_mixMotionScale;
         width = qBound(6, int(qRound(sw.width * grow)), 127);
         height = qBound(4, int(qRound(sw.height * grow)), 28);
+        // Over the horizon by ENERGY (runde 211, Tobias: "Heads maa gerne gaa
+        // over vandret, jo mere energi, jo oftere maa de gaa over vandret").
+        // The aim stays in the floor cone; the FIGURE on it reaches in tilt by
+        // |width sin r| + |height cos r| + |dy| (EFX rotateAndScale). Up to
+        // 30 % ENERGY that reach is held to 24 steps - inside the cone, never
+        // across - and from there the allowance opens with the fader, all the
+        // way by 85 %: the higher the room, the more of each figure is over.
+        const qreal rad = qreal(sw.rotation) * 3.14159265358979 / 180.0;
+        const qreal reach = qAbs(width * std::sin(rad)) + qAbs(height * std::cos(rad)) + qAbs(sw.dy);
+        const qreal allow = 24.0 + 131.0 * qBound(0.0, (e - 0.30) / 0.55, 1.0);
+        if (reach > allow && reach > 0.0)
+        {
+            // only the tilt comes down: height all the way, width by its
+            // share of the tilt (|sin r|) - a figure lying flat keeps its
+            // sideways sweep (review, runde 211)
+            const qreal k = allow / reach;
+            width = qBound(6, int(qRound(width * (1.0 - (1.0 - k) * qAbs(std::sin(rad))))), 127);
+            height = qBound(4, int(qRound(height * k)), 28);
+        }
         // the live rescale may quicken a figure by a quarter at most: it
         // scaled the draw's floor down with it, and a drop figure pushed from
         // 80 to 99 % halved its beats - 2x on top made it frantic (runde 199)
@@ -10087,16 +10112,55 @@ int TrackEngine::roomPercent() const { return m_roomSent; }
 
 void TrackEngine::loadClockCurve(const QSettings &settings)
 {
-    // the default is the curve that was hard-wired here until runde 48: a
-    // restaurant, still until 22:00, then a slow creep to 85 % at 02:00
-    static const int dflt[6] = { 0, 0, 20, 45, 70, 85 };
+    // Runde 211 (Tobias, 2026-09-24): "energi by time skal vaere pr. 15 minut
+    // i perioden 20-03, baade koersel og knapperne". Twenty-eight points,
+    // 20:00, 20:15 ... 02:45; the house closes at 03:00 (05:00 New Year).
+    //
+    // The six-point curve of runde 48 (21, 22, 23, 00, 01, 02 h, still until
+    // 22:30) is read as it was and laid onto the quarters, so a curve set by
+    // hand survives the change; it is also the default.
     m_clockCurve.clear();
     QStringList parts = settings.value(SETTINGS_ENGINE_CLOCKCURVE, QString()).toString().split(',', Qt::SkipEmptyParts);
+    if (parts.count() == ENGINE_CLOCK_POINTS)
+    {
+        for (int i = 0; i < ENGINE_CLOCK_POINTS; i++)
+        {
+            bool ok = false;
+            int v = parts.at(i).trimmed().toInt(&ok);
+            m_clockCurve.append(ok ? qBound(0, v, 100) : 0);
+        }
+        return;
+    }
+    static const int dflt[6] = { 0, 0, 20, 45, 70, 85 };
+    int six[6];
     for (int i = 0; i < 6; i++)
     {
         bool ok = false;
-        int v = i < parts.count() ? parts.at(i).trimmed().toInt(&ok) : 0;
-        m_clockCurve.append(ok ? qBound(0, v, 100) : dflt[i]);
+        int v = (parts.count() == 6) ? parts.at(i).trimmed().toInt(&ok) : 0;
+        six[i] = ok ? qBound(0, v, 100) : dflt[i];
+    }
+    // the old anchors, minutes past 21:00: 21 h, 22 h held to 22:30, 23 h ... 02 h
+    const int at[7] = { 0, 60, 90, 120, 180, 240, 300 };
+    const int val[7] = { six[0], six[1], six[1], six[2], six[3], six[4], six[5] };
+    for (int q = 0; q < ENGINE_CLOCK_POINTS; q++)
+    {
+        int m = q * 15 - 60;                 // minutes past 21:00
+        int v = 0;
+        if (m >= at[6])
+            v = val[6];
+        else if (m >= 0)
+        {
+            for (int k = 1; k < 7; k++)
+            {
+                if (m <= at[k])
+                {
+                    qreal f = qreal(m - at[k - 1]) / qreal(at[k] - at[k - 1]);
+                    v = int(qRound(val[k - 1] + f * (val[k] - val[k - 1])));
+                    break;
+                }
+            }
+        }
+        m_clockCurve.append(v);
     }
 }
 
@@ -10112,9 +10176,10 @@ void TrackEngine::cycleClockPoint(int index)
 {
     if (index < 0 || index >= m_clockCurve.count())
         return;
-    // a tap steps ten percent; past ninety it comes round to nought
-    int v = m_clockCurve.at(index) + 10;
-    m_clockCurve[index] = v > 90 ? 0 : v;
+    // a tap steps up to the next ten percent; past a hundred it comes round
+    // to nought. (A converted 85 went 95 -> 0 and never showed 90.)
+    int v = (m_clockCurve.at(index) / 10 + 1) * 10;
+    m_clockCurve[index] = v > 100 ? 0 : v;
     QStringList parts;
     foreach (int p, m_clockCurve)
         parts << QString::number(p);
@@ -10126,59 +10191,50 @@ void TrackEngine::cycleClockPoint(int index)
 
 int TrackEngine::clockPercent() const
 {
-    // anchor points through the night, minutes past 21:00 -> percent: the
-    // six hourly points of SETUP > ADVANCED > "ENERGY by clock", flat from
-    // 02:00 to closing, nought from closing until 21:00. The curve only moves
-    // the ENERGY slider the way the old one did; a hand on the slider still
-    // wins (Tobias, 2026-09-15: "det er stadig energi-slideren der skal
-    // bestemme").
-    // Nothing moves before 22:30. The 22 h value HOLDS until half past, and
-    // the climb to the 23 h value runs from there - so a restaurant evening
-    // is still a restaurant at ten past ten (Tobias, 2026-09-16: "lyset skal
-    // ikke bevaege sig foer kl. 22:30. Ikke 21").
-    // The tail is the house closing: flat at the 02 h value until forty
-    // minutes before closing time, then a straight slide to nought AT
-    // closing - three or four tracks of the room coming down by itself
-    // ("vi lukker altid kl 03, 05 nytaarsaften"). The slide counts REAL
-    // seconds to closing time (see closingCap(), runde 209): the anchors stay
-    // flat to closing, and the slide is laid on top below.
-    int close = closingMinutes();
-    int anchor[9][2] = { { 0, 0 }, { 60, 0 }, { 90, 0 }, { 120, 20 }, { 180, 45 },
-                         { 240, 70 }, { 300, 85 }, { close - 40, 85 }, { close, 85 } };
-    // the six tiles are 21, 22, 23, 00, 01, 02 h; anchor[2] is the 22:30 hold
-    anchor[0][1] = m_clockCurve.value(0, 0);
-    anchor[1][1] = m_clockCurve.value(1, 0);
-    anchor[2][1] = anchor[1][1];
-    for (int i = 2; i < 6 && i < m_clockCurve.count(); i++)
-        anchor[i + 1][1] = m_clockCurve.at(i);
-    anchor[7][1] = anchor[6][1];
-    anchor[8][1] = anchor[6][1];
+    // The ENERGY the clock asks for now: the quarter-hour points from 20:00,
+    // with a straight line between two points, so the slider reaches each
+    // tile's value on its quarter and moves at most a percent or so a minute
+    // on the way. Before 20:00 and from closing time: nought. Past the last
+    // point (02:45) the value holds - on New Year's night until closing.
+    // A hand on the slider still wins (Tobias, 2026-09-15: "det er stadig
+    // energi-slideren der skal bestemme").
+    // The house closing is a lid on top: the last forty minutes to closing
+    // time come down to nought in REAL seconds (runde 209: the two nights the
+    // clocks change), from whatever the curve says forty minutes before.
+    const int close = closingMinutes();              // minutes past 20:00
     QTime now = QTime::currentTime();
-    int minutes = now.hour() * 60 + now.minute() - 21 * 60;
+    int minutes = now.hour() * 60 + now.minute() - 20 * 60;
     if (minutes < 0)
         minutes += 24 * 60;          // past midnight
-    if (minutes >= close)
-        return 0;                    // closed, until 21:00
+    // with the closing sequence off the curve's last point holds past closing
+    // time, until 05:00 - the house decides when it is over
+    if (minutes >= (m_closingOn ? close : 540) || m_clockCurve.isEmpty())
+        return 0;                    // closed, until 20:00
+    const int last = int(m_clockCurve.count()) - 1;
+    auto curveAt = [&](int m) {
+        const int q = m / 15;
+        if (q >= last)
+            return m_clockCurve.at(last);
+        const qreal f = qreal(m % 15) / 15.0;
+        return int(qRound(m_clockCurve.at(q) + f * (m_clockCurve.at(q + 1) - m_clockCurve.at(q))));
+    };
+    int v = curveAt(minutes);
     QDate night = QDate::currentDate();
-    if (now.hour() < 21)
+    if (now.hour() < 20)
         night = night.addDays(-1);
     const qint64 left = QDateTime::currentDateTime()
-                            .secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 3, 0)));
+                            .secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 4, 0)));
+    if (m_closingOn == false)
+        return v;
     if (left <= 0)
         return 0;
-    for (int i = 1; i < 9; i++)
-    {
-        if (minutes <= anchor[i][0])
-        {
-            int span = anchor[i][0] - anchor[i - 1][0];
-            qreal f = span > 0 ? qreal(minutes - anchor[i - 1][0]) / qreal(span) : 1.0;
-            int v = int(qRound(anchor[i - 1][1] + f * (anchor[i][1] - anchor[i - 1][1])));
-            if (left < 2400)
-                v = qMin(v, int(qRound(anchor[6][1] * qreal(left) / 2400.0)));
-            return v;
-        }
-    }
-    return 0;
+    // the closing sequence (runde 211, Tobias: "skal foerst starte 5 min foer
+    // luk, og langsomt saette farten ned helt og paa lukke minuttet"): the
+    // slider comes down from what the curve says five minutes before closing
+    // to nought on the closing minute
+    if (left < ENGINE_CLOSING_SECS)
+        v = qMin(v, int(qRound(curveAt(qMax(0, close - 5)) * qreal(left) / qreal(ENGINE_CLOSING_SECS))));
+    return v;
 }
 
 void TrackEngine::laserFaderCheck(qreal slider)
@@ -10282,15 +10338,16 @@ int TrackEngine::closingMinutes()
 {
     // 03:00 every night; 05:00 on New Year's night (the evening of the 31st
     // and the small hours of the 1st are the same night here)
-    // The night is named by its evening: before 21:00 it is still the night
+    // The night is named by its evening: before 20:00 it is still the night
     // that began yesterday. Testing today's date made the small hours of the
     // 31st - the night of the 30th - a New Year's night too, and the house
     // closed at 05 with no slide down at 03 (runde 168).
+    // Minutes past 20:00 since runde 211 (the curve starts at 20:00).
     QDate d = QDate::currentDate();
-    if (QTime::currentTime().hour() < 21)
+    if (QTime::currentTime().hour() < 20)
         d = d.addDays(-1);
     bool newYear = d.month() == 12 && d.day() == 31;
-    return ((newYear ? 5 : 3) + 24 - 21) * 60;
+    return ((newYear ? 5 : 3) + 24 - 20) * 60;
 }
 
 qreal TrackEngine::closingCap() const
@@ -10303,14 +10360,17 @@ qreal TrackEngine::closingCap() const
     // (Tobias, 2026-09-16: "saa laenge vi overrider det ved at traekke i
     // energi-slideren er det fint ... hvad nu hvis vi vil teste lyset
     // efter luk?")
-    if (m_roomAuto == false)
+    if (m_roomAuto == false || m_closingOn == false)
         return 1.0;
-    int close = closingMinutes();
+    int close = closingMinutes();                    // minutes past 20:00 (runde 211)
     QTime now = QTime::currentTime();
-    int minutes = now.hour() * 60 + now.minute() - 21 * 60;
+    int minutes = now.hour() * 60 + now.minute() - 20 * 60;
     if (minutes < 0)
         minutes += 24 * 60;
-    if (minutes >= 480)
+    // day from 06:00 (runde 211: the room is DARK after closing now, and on
+    // New Year's night closing is 05:00 - a day starting at 05:00 lit it again
+    // on the closing minute)
+    if (minutes >= 600)
         return 1.0;
     if (minutes >= close)
         return 0.0;
@@ -10320,15 +10380,53 @@ qreal TrackEngine::closingCap() const
     // CEST, then the clock fell back to 02:00 and the lid sprang open) and the
     // March night never ran it (01:59 CET, then 03:00 CEST = closed) (runde 209).
     QDate night = QDate::currentDate();
-    if (now.hour() < 21)
+    if (now.hour() < 20)
         night = night.addDays(-1);
     const qint64 left = QDateTime::currentDateTime()
-                            .secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 3, 0)));
+                            .secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 4, 0)));
     if (left <= 0)
         return 0.0;
-    if (left < 2400)
-        return qreal(left) / 2400.0;
+    // five minutes, not forty (runde 211): the lid starts at 02:55 and is shut
+    // on the closing minute - energy, pace AND light (closingTick() dims the
+    // output with it, so the room is dark at closing)
+    if (left < ENGINE_CLOSING_SECS)
+        return qreal(left) / qreal(ENGINE_CLOSING_SECS);
     return 1.0;
+}
+
+bool TrackEngine::closingSequence() const { return m_closingOn; }
+
+void TrackEngine::setClosingSequence(bool on)
+{
+    if (on == m_closingOn)
+        return;
+    m_closingOn = on;
+    QSettings().setValue(SETTINGS_ENGINE_CLOSING, on);
+    m_roomSent = -1;
+    announceRoom();
+    closingTick();
+    emit liveChanged();
+}
+
+void TrackEngine::closingTick()
+{
+    // The closing sequence runs on the clock, not on beats: the DJ may stop
+    // before closing, and the room must still be dark on the minute.
+    // - the light: every output is scaled by the lid (masterOut())
+    // - the hazer: off as the sequence starts, so the room is clear at closing
+    // - the ENERGY slider follows the clock (announceRoom, as a beat would)
+    // A hand on ENERGY (ENERGY by clock off) or the toggle lifts the lid, and
+    // the light comes back: the rig can be tested after closing.
+    const qreal dim = closingCap();
+    if (qAbs(dim - m_closingDim) > 0.004 || (dim == 0.0) != (m_closingDim == 0.0))
+    {
+        m_closingDim = dim;
+        reapplyLevels();
+        emit liveChanged();
+    }
+    if (dim < 1.0 && m_haze > 0.0)
+        setHaze(0.0);
+    announceRoom();
 }
 
 bool TrackEngine::startScene() const { return m_startScene; }
@@ -11452,7 +11550,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // the flash scene's white. BLACKOUT still wins (run() and the masks).
     const bool heldFlash = m_flash && m_flashHeld.contains(group);
     qreal trim = heldFlash ? 1.0 : m_groupTrim.value(group, 1.0);
-    qreal applied = qBound(0.0, level * pulseFactor(group) * trim * (heldFlash ? 1.0 : m_master), 1.0);
+    qreal applied = qBound(0.0, level * pulseFactor(group) * trim * (heldFlash ? 1.0 : masterOut()), 1.0);
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
         applied = applied > 0.10 ? 1.0 : 0.0;

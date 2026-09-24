@@ -913,22 +913,19 @@ Rectangle
 
             Item { Layout.preferredWidth: 20 }
 
-            // the six points of the clock curve: tap steps ten percent
-            Repeater
+            // the closing sequence (runde 211): the last five minutes to
+            // closing bring the room to dark and the hazer off
+            TrackTile
             {
-                model: trackEngine ? trackEngine.clockCurve : []
-                TrackTile
-                {
-                    Layout.preferredWidth: 58
-                    Layout.preferredHeight: 34
-                    label: [ "21", "22", "23", "00", "01", "02" ][index] + "h\n" + modelData + "%"
-                    active: trackEngine ? trackEngine.roomAuto : false
-                    activeColor: "#4FA3E3"
-                    onTapped: if (trackEngine) trackEngine.cycleClockPoint(index)
-                }
+                Layout.preferredWidth: 170
+                Layout.preferredHeight: 34
+                label: qsTr("Closing sequence")
+                active: trackEngine ? trackEngine.closingSequence : false
+                activeColor: "#7ED07E"
+                onTapped: if (trackEngine) trackEngine.closingSequence = !trackEngine.closingSequence
             }
 
-            Item { Layout.preferredWidth: 20 }
+            // the clock curve's points are in their own rows below (runde 211)
 
             // every Track setting to / from Documents/QLC+/track-settings.json
             // two taps each (runde 209): IMPORT replaces every role, star
@@ -975,6 +972,35 @@ Rectangle
                 color: setupRoot.cDim
                 font.pixelSize: 11
                 elide: Text.ElideLeft
+            }
+        }
+
+        // ------------------------------------------------- ENERGY by clock
+        // Runde 211 (Tobias, 2026-09-24): a point every fifteen minutes from
+        // 20:00 to 02:45 - two rows of fourteen, the evening and the night.
+        // A tap steps up ten percent, past a hundred it comes round to nought.
+        GridLayout
+        {
+            Layout.fillWidth: true
+            visible: setupRoot.advancedOpen
+            columns: 14
+            columnSpacing: 4
+            rowSpacing: 4
+
+            Repeater
+            {
+                model: trackEngine ? trackEngine.clockCurve : []
+                TrackTile
+                {
+                    Layout.preferredWidth: 60
+                    Layout.preferredHeight: 34
+                    property int at: 20 * 60 + 15 * index
+                    label: ("0" + (Math.floor(at / 60) % 24)).slice(-2) + ":" + ("0" + (at % 60)).slice(-2)
+                           + "\n" + modelData + "%"
+                    active: trackEngine ? trackEngine.roomAuto : false
+                    activeColor: "#4FA3E3"
+                    onTapped: if (trackEngine) trackEngine.cycleClockPoint(index)
+                }
             }
         }
 

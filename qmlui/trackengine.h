@@ -88,7 +88,12 @@ class QRandomGenerator;
 #define SETTINGS_ENGINE_ACCENT    QStringLiteral("trackengine/accent")
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
 #define SETTINGS_ENGINE_HOLDAUTO  QStringLiteral("trackengine/holdauto")  // runde 189: the fader picks the hold
-#define SETTINGS_ENGINE_CLOCKCURVE QStringLiteral("trackengine/clockcurve")   // "0,0,20,45,70,85": 21,22,23,00,01,02 h
+#define SETTINGS_ENGINE_CLOCKCURVE QStringLiteral("trackengine/clockcurve")   // 28 percents: 20:00, 20:15 ... 02:45 (runde 211; six hourly ones before, still read)
+#define ENGINE_CLOCK_POINTS 28
+// runde 211 (Tobias): the closing sequence - the last five minutes to closing
+// time bring the room down to dark, and the hazer off - can be switched off
+#define SETTINGS_ENGINE_CLOSING   QStringLiteral("trackengine/closing")
+#define ENGINE_CLOSING_SECS       300
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 // The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
 // Those lamps at a full white are painful to stand in front of, and it
@@ -393,6 +398,7 @@ class TrackEngine : public QObject
     /** Let the clock move the ENERGY slider through the night. A hand on
      *  the slider turns it off. */
     Q_PROPERTY(bool roomAuto READ roomAuto WRITE setRoomAuto NOTIFY liveChanged)
+    Q_PROPERTY(bool closingSequence READ closingSequence WRITE setClosingSequence NOTIFY liveChanged)
     /** The evening's opening picture: the IDLE functions (the START scene)
      *  held on their own, with the engine standing still. The first SHOW ON
      *  of the night with ENERGY at 0 puts it up, and ENERGY above 0 takes
@@ -548,10 +554,16 @@ public:
     void setRoom(int room);
     bool roomAuto() const;
     void setRoomAuto(bool on);
-    /** minutes past 21:00 when the house closes: 03:00, 05:00 on New Year's night */
+    /** minutes past 20:00 when the house closes: 03:00, 05:00 on New Year's night */
     static int closingMinutes();
+    bool closingSequence() const;
+    void setClosingSequence(bool on);
+    /** called every 200 ms by TrackManager: the closing sequence runs to the
+     *  minute with or without beats (the light's dim, the hazer, the slider) */
+    void closingTick();
     /** 1.0 all night, sliding to 0 over the last forty minutes before closing, 0 after */
     qreal closingCap() const;
+    qreal masterOut() const;
     /** The ENERGY percent the clock last handed to TrackManager. */
     Q_INVOKABLE int roomPercent() const;
     /** ENERGY by the clock, a restaurant's night: 0 (still) until 22:00,
@@ -801,7 +813,7 @@ private:
     int m_keyBias;            // this track's key: -1 unknown, 0 minor (cold side), 1 major (warm side)
     int m_nextKeyBias;        // the next track's, from BLT "next"
     QString m_nextColour;     // drawn when a mix begins: the colour the incoming track arrives in
-    QList<int> m_clockCurve;  // six percents, see SETTINGS_ENGINE_CLOCKCURVE
+    QList<int> m_clockCurve;  // ENGINE_CLOCK_POINTS percents, see SETTINGS_ENGINE_CLOCKCURVE
     QHash<quint32, qint64> m_recentUse;   // programme -> clock ms it last ran (the cooldown)
     qint64 m_cooldownMs;      // the clock reading the cooldown is judged against: frozen per section
     bool m_accentWasWhite;    // the last accent was white: the next one is not
@@ -952,6 +964,8 @@ private:
     QMap<QString, int> m_turnBeat;         // ... and the beat it was last bumped on
     int m_room;
     bool m_roomAuto;
+    bool m_closingOn = true;               // the closing sequence (SETTINGS_ENGINE_CLOSING)
+    qreal m_closingDim = 1.0;              // closingCap() as last applied to the light (closingTick)
     int m_roomSent;                        // last percent handed to the ENERGY trim
     bool m_fullAuto;
     QSet<QString> m_flashHeld;             // strobe groups the generated flash lit

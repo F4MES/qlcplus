@@ -877,6 +877,8 @@ void TrackManager::slotEnergyTick()
         if (m_engine != nullptr && m_autoRun && m_roleMode)
             m_engine->idle();
     }
+    if (m_engine != nullptr)
+        m_engine->closingTick();                  // R211_CLOSING_TICK
 
     int bpm = 0;
     if (m_doc != nullptr && m_doc->masterTimer() != nullptr)
@@ -1047,6 +1049,11 @@ void TrackManager::setAutoRun(bool enable)
 
     if (m_autoRun) applyLook();
     else stopLook();
+    if (m_autoRun == false && m_engine != nullptr)      // R211_SHOW_OFF_ATMOS
+    {
+        m_engine->setHaze(0.0);
+        m_engine->setFan(0.0);
+    }
     noteShowRunning();
 
     emit autoRunChanged();
@@ -1689,7 +1696,7 @@ void TrackManager::runEngine(bool sectionChanged)
     qreal kickAhead = -1.0;              // R192_KICK_AHEAD_DECL
     if (kick >= 0.0)
     {
-        qreal k1 = curveAt(m_kick, beat - 1), k2 = curveAt(m_kick, beat - 2);
+        qreal k1 = curveAt(m_kick, beat - 3), k2 = curveAt(m_kick, beat - 4);   // R211_KICK_BACK
         if (kick >= 0.45 && k1 >= 0.0 && k1 < 0.20 && k2 >= 0.0 && k2 < 0.20)
             turn = true;
         qreal hMax = -1.0;

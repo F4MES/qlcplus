@@ -1553,8 +1553,25 @@ Rectangle
                     // number as the fader directly below it, and the Item it
                     // was centred in was a fillHeight spacer, so the box was
                     // mostly air to make room for one duplicate figure.
-                    Text { Layout.fillWidth: true; text: "ENERGY"; color: trackViewRoot.cText
-                           font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
+                    // runde 211 (Tobias): AUTO beside the title gives ENERGY back
+                    // to the clock after a hand has taken it - lit while the
+                    // clock drives it, like the other AUTO tiles
+                    RowLayout { Layout.fillWidth: true; spacing: 8
+                        Text { Layout.fillWidth: true; text: "ENERGY"; color: trackViewRoot.cText
+                               font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
+                        TrackTile
+                        {
+                            objectName: "energyAuto"
+                            Layout.preferredWidth: 84
+                            Layout.preferredHeight: trackViewRoot.compactLayout ? 24 : 28
+                            ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 14; height: 14; kind: "autoColour"
+                                          ink: (trackEngine && trackEngine.roomAuto) ? "#101010" : "#DDDDDD" }
+                            label: qsTr("AUTO")
+                            active: trackEngine ? trackEngine.roomAuto : false
+                            activeColor: "#7ED07E"
+                            onTapped: if (trackEngine) trackEngine.roomAuto = true
+                        }
+                    }
 Rectangle
             {
                 Layout.fillWidth: true
