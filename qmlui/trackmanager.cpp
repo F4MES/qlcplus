@@ -1712,6 +1712,8 @@ void TrackManager::runEngine(bool sectionChanged)
         kickAhead = curveMean(m_kick, beat, beat + 7);
     }
 
+    if (m_markersManual)                        // R210_MANUAL_WINS
+        kickAhead = -1.0;
     if (m_overrideState.isEmpty() == false)     // R199_OVERRIDE_WINS
     {
         kickAhead = -1.0;
@@ -2231,7 +2233,7 @@ bool TrackManager::refineMarkers()
 
     // 3. a drop the analysis missed: two bars without a kick, then two bars
     //    of kick, on a bar line, and no flag within two bars of it
-    for (int b = 17; b + 8 <= m_beatCount; b += 4)
+    for (int b = 17; b + 16 <= m_beatCount + 1; b += 4)     // R210_STEP3_END
     {
         // R194_STEP3: "two bars without a kick" is BOTH bars - the two-bar
         // mean let a one-bar fill pass; and the four-bar minimum step 1
@@ -2354,7 +2356,12 @@ void TrackManager::setMarkerType(int index, QString type)
     if (mk.value(QStringLiteral("type")).toString() == type)
         return;
     pushUndo();
-    learnFromFlag(mk.value(QStringLiteral("type")).toString(), mk.value(QStringLiteral("beat")).toInt(), false);
+    const QString oldType = mk.value(QStringLiteral("type")).toString();     // R210_RELABEL_LESSON
+    const bool sameKick = (oldType == QStringLiteral("drop")
+                           && (type == QStringLiteral("drive") || type == QStringLiteral("build")))
+                       || (oldType == QStringLiteral("break") && type == QStringLiteral("build"));
+    if (sameKick == false)
+        learnFromFlag(oldType, mk.value(QStringLiteral("beat")).toInt(), false);
     mk.insert(QStringLiteral("type"), type);
     m_markers.replace(index, mk);
     learnFromFlag(type, mk.value(QStringLiteral("beat")).toInt(), true);

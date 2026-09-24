@@ -4186,8 +4186,6 @@ QString TrackEngine::importSettings()
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
-    m_roomSent = -1;                 // an imported curve moves ENERGY now, not on the next beat (runde 209)
-    announceRoom();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
     m_groupOff.clear();
@@ -4221,6 +4219,12 @@ QString TrackEngine::importSettings()
     applyGroupOff();
     if (m_startScene)
         startLook();
+    // an imported clock curve moves ENERGY now, not on the next beat (runde
+    // 209) - and LAST (runde 210): roomChanged can take the start scene down
+    // and put the idle look up, which must be built from the imported base,
+    // switches and roles, not the old ones
+    m_roomSent = -1;
+    announceRoom();
     emit tableChanged();
     emit liveChanged();
     return tr("loaded %1 settings - restart QLC+ for the Track page's own values").arg(n);
@@ -7425,9 +7429,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // room asked for. motionFor() falls back to another colour when this
         // one has nothing to offer, and a fallback must not be allowed to
         // repaint the room: there the scene underneath is the whole point.
+        // ... and not while a strobe burst runs on the group: the colour scene
+        // is what writes the shutter back to Open, and most programmes never
+        // touch that channel - after a burst the washes strobed on at the
+        // burst's rate until the next section (runde 210). driveStrobe() runs
+        // after this, so the burst still wins while it lasts.
         if (mf != Function::invalidId() && splitScene == Function::invalidId()
             && m_funcs.value(mf).coversColour
-            && m_funcs.value(mf).colour == colour)
+            && m_funcs.value(mf).colour == colour
+            && m_active.contains(QStringLiteral("str:") + key) == false)
             cf = Function::invalidId();
         // colour scenes swap hard: a soft fade left the old colour adding up
         // with the new one on RGB fixtures for a bar - a blend nobody asked for
