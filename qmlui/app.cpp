@@ -119,6 +119,10 @@ App::~App()
     QSettings settings;
 
     stopAllFunctions();
+    // TRACK_BEFORE_DOC_R202: TrackManager stops its look through the Doc,
+    // and the Doc (made first) would be deleted first
+    delete m_trackManager;
+    m_trackManager = nullptr;
 
 #if defined(Q_OS_ANDROID)
     settings.setValue(SETTINGS_GEOMETRY, QVariant());

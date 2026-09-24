@@ -105,7 +105,7 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_dropKick = settings.value(SETTINGS_TRACK_DROPKICK, 0.55).toDouble();
     m_breakKick = settings.value(SETTINGS_TRACK_BREAKKICK, 0.30).toDouble();
     m_dropKick = qBound(0.30, m_dropKick, 0.90);      // R201_KICK_BOUNDS
-    m_breakKick = qBound(0.05, m_breakKick, 0.50);
+    m_breakKick = qBound(0.05, m_breakKick, qMin(0.50, m_dropKick - 0.10));   // R202_KICK_GAP
     m_lastPosMs = 0;
     m_linkStale = false;
     m_engine = new TrackEngine(m_doc, this);
@@ -364,6 +364,7 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     {
         m_nextTitle.clear();
         m_nextMarkers.clear();
+        if (m_engine != nullptr) m_engine->setNextKey(QString());   // R202_NEXT_KEY
         emit mixChanged(); // the preview now belongs to the playing deck
     }
     if (m_engine != nullptr && resent == false)   // R187_SAME_TRACK_ENGINE

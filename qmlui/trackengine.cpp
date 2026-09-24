@@ -274,6 +274,10 @@ TrackEngine::~TrackEngine()
 
 void TrackEngine::slotFadeTimer()
 {
+    // a project was just loaded: the ids below may be the NEW show's, and
+    // slotDocSettled() on this turn of the event loop clears it all (runde 202)
+    if (m_docTimer.isActive())
+        return;
     tickFades();
     if (m_fadeAttr.isEmpty())
         m_fadeTimer.stop();
@@ -396,6 +400,8 @@ void TrackEngine::slotDocSettled()
 
 void TrackEngine::slotPulseTimer()
 {
+    if (m_docTimer.isActive())          // see slotFadeTimer() (runde 202)
+        return;
     // between two beats: let every breathing group's dimmers fall back from
     // the level the beat set, so the light pumps with the kick
     bool any = false;
@@ -4046,6 +4052,8 @@ void TrackEngine::setBlackout(bool on)
     logSignal(on ? QStringLiteral("sig:blackout") : QStringLiteral("sig:blackout-off"));
     if (on)
         stopEcho();
+    if (on && m_testTimer.isActive())   // a test under BLACKOUT tests nothing (runde 202)
+        selfTest();
 
     applyGroupOff();          // it owns both masks: the off ones and the black ones
 
@@ -9160,7 +9168,7 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     if (m_speed < 0)
         beats *= 2;
     else if (m_speed > 0 && laser == false)
-        beats = qMin(beats, qMax(4, beats / 2));       // runde 201: 2x never slows a short figure          // never under a bar a figure (runde 199)
+        beats = qMin(beats, qMax(4, beats / 2));       // 2x: never under a bar, never slower (runde 199, 201)
     uint ms = uint(qMax(250.0, beats * beatMs));
 
     bool running = m_active.contains(slot) && m_active.value(slot) == fid
@@ -10678,6 +10686,14 @@ void TrackEngine::selfTest()
     }
     if (m_doc == nullptr)
         return;
+    // under BLACKOUT every step runs dark and reads as a broken lamp
+    // (runde 202)
+    if (m_blackout)
+    {
+        m_report = tr("self test: BLACKOUT is on");
+        emit liveChanged();
+        return;
+    }
     ensureTable();
     m_testSteps.clear();
     m_testGroups.clear();
@@ -10785,7 +10801,8 @@ void TrackEngine::stopEcho()
 void TrackEngine::slotEchoOn()
 {
     // the stage went dark in the half beat since the hit: no echo
-    if (m_doc == nullptr || m_active.isEmpty() || m_echoFid == Function::invalidId()
+    // (nor between a project load and slotDocSettled() - runde 202)
+    if (m_docTimer.isActive() || m_doc == nullptr || m_active.isEmpty() || m_echoFid == Function::invalidId()
         || m_echoKey.isEmpty() || m_groupOff.contains(m_echoKey)
         || m_blackout || m_startScene || m_lastBeat < m_calmUntil)
         return;
@@ -10813,7 +10830,14 @@ void TrackEngine::testDark()
 
 void TrackEngine::slotSelfTestStep()
 {
+    if (m_docTimer.isActive())          // see slotFadeTimer() (runde 202)
+        return;
     testDark();
+    // a group switched OFF during the test stays off: its step would light it
+    // at full over the OFF mask - on the laser bars, the only blackout they
+    // have (runde 202)
+    while (m_testIndex < m_testSteps.count() && m_groupOff.contains(m_testGroups.at(m_testIndex)))
+        m_testIndex++;
     if (m_testIndex >= m_testSteps.count())
     {
         selfTest();                       // the stopping half
@@ -11050,7 +11074,10 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     // the key leans the palette: minor to the cold side, major to the warm
     // (runde 48). Unknown - not every track is key-analysed - leans nowhere.
     m_keyBias = keyBiasOf(key);
-    m_nextKeyBias = -1;
+    // m_nextKeyBias is NOT cleared here: BLT sends "next" only when its title
+    // changes, so a deck that was NEXT before the handover and still is lost
+    // its key for good. TrackManager clears it when the next track is the one
+    // that just started (runde 202)
     // the mix drew this track's colour when the mix began, and the base has
     // been standing in it for the mix's second half: it IS the room's colour
     // now, and colourBar -1 below holds it to the first break or drop
