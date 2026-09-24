@@ -559,17 +559,19 @@ public:
     bool closingSequence() const;
     void setClosingSequence(bool on);
     /** called every 200 ms by TrackManager: the closing sequence runs to the
-     *  minute with or without beats (the light's dim, the hazer, the slider) */
-    void closingTick();
-    /** 1.0 all night, sliding to 0 over the last forty minutes before closing, 0 after */
+     *  minute with or without beats (the light's dim, the hazer, the slider).
+     *  showOn: with SHOW OFF the light is the operator's - nothing is dimmed */
+    void closingTick(bool showOn);
+    /** 1.0 all night, sliding to 0 over the last five minutes before closing (the
+     *  closing sequence, runde 211), 0 after until 06:00 */
     qreal closingCap() const;
     qreal masterOut() const;
     /** The ENERGY percent the clock last handed to TrackManager. */
     Q_INVOKABLE int roomPercent() const;
-    /** ENERGY by the clock, a restaurant's night: 0 (still) until 22:00,
-     *  20 % at 23:00, 45 % at midnight, 70 % at 01:00, 85 % from 02:00, back
-     *  to 0 at 05:00 - a slow creep, not steps. The DJ pushes the slider when
-     *  the floor actually opens. */
+    /** ENERGY by the clock: 28 quarter-hour points 20:00-02:45 (SETUP >
+     *  ADVANCED), a straight line between them; by default still until 22:30,
+     *  20 % at 23:00, 45 % at midnight, 70 % at 01:00, 85 % from 02:00. The DJ
+     *  pushes the slider when the floor actually opens. */
     int clockPercent() const;
     void loadClockCurve(const QSettings &settings);
     static int keyBiasOf(const QString &key);

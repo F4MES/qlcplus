@@ -2749,8 +2749,9 @@ void TrackEngine::applyGroupOff()
         // only thing that actually blacks those out. Driven from here, so a
         // teardown that drops them is corrected on the next beat instead of
         // leaving the rig lit for the rest of the night.
+        // ... and so does the closing sequence at nought (runde 213)
         QString black = "black:" + key;
-        if (m_blackout && fid != Function::invalidId())
+        if ((m_blackout || m_closingDim <= 0.0) && fid != Function::invalidId())
             run(black, fid, 1.0, 0, true);
         else if (m_active.contains(black))
             stopSlot(black, true);
@@ -3851,8 +3852,11 @@ QString TrackEngine::baseGroup() const
     // never a strobe group: the base is in the cast at every fader, so a
     // strobe base lit the strobes at 0 % and between tracks, past the 55 %
     // rule - and one tap on its SETUP tile made it so (runde 190)
+    // ... nor the laser bars (runde 213): the base skips the dark hold while
+    // the bars re-aim, and idle() lights it between tracks with the tilt
+    // unknown - lit beams below home at any fader
     if (m_base.isEmpty() == false && m_groups.contains(m_base) && m_groupOff.contains(m_base) == false
-        && m_groups.value(m_base).strobes == false)
+        && m_groups.value(m_base).strobes == false && m_groups.value(m_base).lasers == false)
         return m_base;
     // automatic: the moving heads, if there are any with a colour to show
     foreach (const QString &key, m_groupOrder)
@@ -3885,9 +3889,9 @@ void TrackEngine::cycleGroup(QString key)
         turn = -1;                              // BASE -> OFF
         m_base.clear();
     }
-    else if (m_groups.value(key).strobes)
+    else if (m_groups.value(key).strobes || m_groups.value(key).lasers)
     {
-        turn = -1;                              // strobes: ON -> OFF, never BASE (runde 190)
+        turn = -1;                              // strobes and lasers: ON -> OFF, never BASE (runde 190, 213)
     }
     else
     {
@@ -5727,6 +5731,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 curveTurn = true;
             m_curveBreak = false;
             m_curveGroove = false;
+        }
+        else if (kickAhead < 0.0 && (m_curveBreak || m_curveGroove) && mayTurn)
+        {
+            // the flags turned hand-made (TrackManager stops the look-ahead,
+            // R210) with a correction armed: it lets go on the bar line instead
+            // of holding to the section's end - a break look over a running
+            // kick for 32 bars (runde 213)
+            m_curveBreak = false;
+            m_curveGroove = false;
+            curveTurn = true;
         }
         else if (kickAhead >= 0.0 && mayTurn)
         {
@@ -9207,11 +9221,15 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // The aim stays in the floor cone; the FIGURE on it reaches in tilt by
         // |width sin r| + |height cos r| + |dy| (EFX rotateAndScale). Up to
         // 30 % ENERGY that reach is held to 24 steps - inside the cone, never
-        // across - and from there the allowance opens with the fader, all the
-        // way by 85 %: the higher the room, the more of each figure is over.
+        // across. From there it opens on a cube, so the heads stay pointed at
+        // the floor through most of the fader and only the top lets them go:
+        // free at 95 % (Tobias, runde 212: "Foerst fra 95% skal de vaere helt
+        // frie. Og saa langsomt nedad derfra ... primaert vaere rettet ned mod
+        // gulvet"). 60 %: 37 steps, 70 %: 55, 80 %: 84, 90 %: 127.
         const qreal rad = qreal(sw.rotation) * 3.14159265358979 / 180.0;
         const qreal reach = qAbs(width * std::sin(rad)) + qAbs(height * std::cos(rad)) + qAbs(sw.dy);
-        const qreal allow = 24.0 + 131.0 * qBound(0.0, (e - 0.30) / 0.55, 1.0);
+        const qreal open = qBound(0.0, (e - 0.30) / 0.65, 1.0);
+        const qreal allow = 24.0 + 131.0 * open * open * open;
         if (reach > allow && reach > 0.0)
         {
             // only the tilt comes down: height all the way, width by its
@@ -10198,9 +10216,9 @@ int TrackEngine::clockPercent() const
     // point (02:45) the value holds - on New Year's night until closing.
     // A hand on the slider still wins (Tobias, 2026-09-15: "det er stadig
     // energi-slideren der skal bestemme").
-    // The house closing is a lid on top: the last forty minutes to closing
+    // The house closing is a lid on top: the last five minutes to closing
     // time come down to nought in REAL seconds (runde 209: the two nights the
-    // clocks change), from whatever the curve says forty minutes before.
+    // clocks change), from whatever the curve says five minutes before.
     const int close = closingMinutes();              // minutes past 20:00
     QTime now = QTime::currentTime();
     int minutes = now.hour() * 60 + now.minute() - 20 * 60;
@@ -10258,6 +10276,21 @@ void TrackEngine::laserFaderCheck(qreal slider)
         {
             stopSlot("efx:" + key, true);
             m_sweep.remove(key);
+        }
+        // 40 % and up: a running figure dips no further than the fader allows
+        // NOW. applySweep() re-derives it on the beat; with the link lost there
+        // is none, and a figure drawn at 90 % kept dipping at 50 % (runde 213)
+        else if (m_active.contains("efx:" + key) && m_sweepShown.contains(key))
+        {
+            const TrackSweep sw = m_sweepShown.value(key);
+            EFX *efx = qobject_cast<EFX *>(m_doc->function(m_sweepFunc.value(key, Function::invalidId())));
+            if (sw.shape >= 0 && efx != nullptr)
+            {
+                const int allowed = m_position.value(key, Function::invalidId()) == homePosition(key) ? downNow : 0;
+                const int y = qBound(0, 127 - sw.height + qMin(2 * sw.height, allowed), 255);
+                if (int(efx->yOffset()) > y)
+                    efx->setYOffset(y);
+            }
         }
         // an aim idle() already stopped is no aim: forget it, and the first
         // aim when the music comes back goes through the unknown-aim dark hold
@@ -10374,7 +10407,7 @@ qreal TrackEngine::closingCap() const
         return 1.0;
     if (minutes >= close)
         return 0.0;
-    // The last forty minutes count REAL seconds to closing time, which is a
+    // The last minutes count REAL seconds to closing time, which is a
     // local wall time that exists exactly once on both change-over nights.
     // On the wall clock the October night ran the slide twice (02:20-02:59
     // CEST, then the clock fell back to 02:00 and the lid sprang open) and the
@@ -10408,20 +10441,27 @@ void TrackEngine::setClosingSequence(bool on)
     emit liveChanged();
 }
 
-void TrackEngine::closingTick()
+void TrackEngine::closingTick(bool showOn)
 {
     // The closing sequence runs on the clock, not on beats: the DJ may stop
     // before closing, and the room must still be dark on the minute.
+    // - dark: MASTER x the lid on every output, and the BLACKOUT masks at nought
     // - the light: every output is scaled by the lid (masterOut())
     // - the hazer: off as the sequence starts, so the room is clear at closing
     // - the ENERGY slider follows the clock (announceRoom, as a beat would)
     // A hand on ENERGY (ENERGY by clock off) or the toggle lifts the lid, and
     // the light comes back: the rig can be tested after closing.
-    const qreal dim = closingCap();
+    const qreal dim = showOn ? closingCap() : 1.0;
     if (qAbs(dim - m_closingDim) > 0.004 || (dim == 0.0) != (m_closingDim == 0.0))
     {
+        const bool darkChanged = (dim <= 0.0) != (m_closingDim <= 0.0);
         m_closingDim = dim;
         reapplyLevels();
+        // at nought the masks go on, as BLACKOUT's do: the intensity scaling
+        // does not reach a laser bar's beam (a colour channel) or an animation
+        // laser's (effect channels) - they stayed lit at closing (runde 213)
+        if (darkChanged)
+            applyGroupOff();
         emit liveChanged();
     }
     if (dim < 1.0 && m_haze > 0.0)
@@ -10858,6 +10898,14 @@ void TrackEngine::selfTest()
         emit liveChanged();
         return;
     }
+    // ... nor while the closing sequence has the room down (runde 213):
+    // every lamp would read as broken. A hand on ENERGY lifts it.
+    if (m_closingDim < 1.0)
+    {
+        m_report = tr("self test: closing - touch ENERGY first");
+        emit liveChanged();
+        return;
+    }
     ensureTable();
     m_testSteps.clear();
     m_testGroups.clear();
@@ -10900,6 +10948,9 @@ void TrackEngine::selfTest()
             m_cast.remove(key);
             run("pos:" + key, home, 1.0, 0, true);
         }
+        // "home plus a figure" is the bars' everyday state: the figure goes
+        // too, or the bars are tested at full while it swings (runde 213)
+        stopSlot("efx:" + key, true);
         m_position.remove(key);
         barsLast.append(key);
     }

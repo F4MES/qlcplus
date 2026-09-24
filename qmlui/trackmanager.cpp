@@ -325,8 +325,10 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     QJsonArray kickArr = obj.value(QStringLiteral("kick")).toArray();
     for (int i = 0; i < kickArr.count(); i++) m_kick.append(kickArr.at(i).toInt());
 
-    m_markers.clear();
-    QJsonArray mk = obj.value(QStringLiteral("markers")).toArray();
+    const bool keepLocal = resent && m_markersManual;       // R213_KEEP_HAND_FLAGS
+    if (keepLocal == false)
+        m_markers.clear();
+    QJsonArray mk = keepLocal ? QJsonArray() : obj.value(QStringLiteral("markers")).toArray();
     for (int i = 0; i < mk.count(); i++)
     {
         QJsonObject mo = mk.at(i).toObject();
@@ -341,8 +343,11 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     // hand-made flags are the truth; a fresh analysis gets the second pass,
     // run once the flags are in, and what it changed goes back to BLT's
     // cache (as automatic)
-    m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
-    if (m_markersManual == false && refineMarkers())
+    if (keepLocal)
+        sendMarkers(true);                      // R213_KEEP_HAND_SEND: BLT missed them
+    else
+        m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
+    if (m_markersManual == false && keepLocal == false && refineMarkers())
     {
         // measure the new flags BEFORE the correction goes back to the
         // cache, or BLT stores a -1 and hands it straight back next time
@@ -878,7 +883,7 @@ void TrackManager::slotEnergyTick()
             m_engine->idle();
     }
     if (m_engine != nullptr)
-        m_engine->closingTick();                  // R211_CLOSING_TICK
+        m_engine->closingTick(m_autoRun);         // R211_CLOSING_TICK R213_SHOW_ON
 
     int bpm = 0;
     if (m_doc != nullptr && m_doc->masterTimer() != nullptr)
