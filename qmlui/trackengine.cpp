@@ -4186,6 +4186,8 @@ QString TrackEngine::importSettings()
     m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
+    m_roomSent = -1;                 // an imported curve moves ENERGY now, not on the next beat (runde 209)
+    announceRoom();
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
     m_groupOff.clear();
@@ -10116,7 +10118,7 @@ int TrackEngine::clockPercent() const
 {
     // anchor points through the night, minutes past 21:00 -> percent: the
     // six hourly points of SETUP > ADVANCED > "ENERGY by clock", flat from
-    // 02:00 to 05:00, a restaurant again from 05:00. The curve only moves
+    // 02:00 to closing, nought from closing until 21:00. The curve only moves
     // the ENERGY slider the way the old one did; a hand on the slider still
     // wins (Tobias, 2026-09-15: "det er stadig energi-slideren der skal
     // bestemme").
@@ -10127,10 +10129,12 @@ int TrackEngine::clockPercent() const
     // The tail is the house closing: flat at the 02 h value until forty
     // minutes before closing time, then a straight slide to nought AT
     // closing - three or four tracks of the room coming down by itself
-    // ("vi lukker altid kl 03, 05 nytaarsaften").
+    // ("vi lukker altid kl 03, 05 nytaarsaften"). The slide counts REAL
+    // seconds to closing time (see closingCap(), runde 209): the anchors stay
+    // flat to closing, and the slide is laid on top below.
     int close = closingMinutes();
     int anchor[9][2] = { { 0, 0 }, { 60, 0 }, { 90, 0 }, { 120, 20 }, { 180, 45 },
-                         { 240, 70 }, { 300, 85 }, { close - 40, 85 }, { close, 0 } };
+                         { 240, 70 }, { 300, 85 }, { close - 40, 85 }, { close, 85 } };
     // the six tiles are 21, 22, 23, 00, 01, 02 h; anchor[2] is the 22:30 hold
     anchor[0][1] = m_clockCurve.value(0, 0);
     anchor[1][1] = m_clockCurve.value(1, 0);
@@ -10138,19 +10142,30 @@ int TrackEngine::clockPercent() const
     for (int i = 2; i < 6 && i < m_clockCurve.count(); i++)
         anchor[i + 1][1] = m_clockCurve.at(i);
     anchor[7][1] = anchor[6][1];
+    anchor[8][1] = anchor[6][1];
     QTime now = QTime::currentTime();
     int minutes = now.hour() * 60 + now.minute() - 21 * 60;
     if (minutes < 0)
         minutes += 24 * 60;          // past midnight
     if (minutes >= close)
-        return 0;                    // closed, and a restaurant again until 21:00
+        return 0;                    // closed, until 21:00
+    QDate night = QDate::currentDate();
+    if (now.hour() < 21)
+        night = night.addDays(-1);
+    const qint64 left = QDateTime::currentDateTime()
+                            .secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 3, 0)));
+    if (left <= 0)
+        return 0;
     for (int i = 1; i < 9; i++)
     {
         if (minutes <= anchor[i][0])
         {
             int span = anchor[i][0] - anchor[i - 1][0];
             qreal f = span > 0 ? qreal(minutes - anchor[i - 1][0]) / qreal(span) : 1.0;
-            return int(qRound(anchor[i - 1][1] + f * (anchor[i][1] - anchor[i - 1][1])));
+            int v = int(qRound(anchor[i - 1][1] + f * (anchor[i][1] - anchor[i - 1][1])));
+            if (left < 2400)
+                v = qMin(v, int(qRound(anchor[6][1] * qreal(left) / 2400.0)));
+            return v;
         }
     }
     return 0;
@@ -10289,8 +10304,20 @@ qreal TrackEngine::closingCap() const
         return 1.0;
     if (minutes >= close)
         return 0.0;
-    if (minutes >= close - 40)
-        return qreal(close - minutes) / 40.0;
+    // The last forty minutes count REAL seconds to closing time, which is a
+    // local wall time that exists exactly once on both change-over nights.
+    // On the wall clock the October night ran the slide twice (02:20-02:59
+    // CEST, then the clock fell back to 02:00 and the lid sprang open) and the
+    // March night never ran it (01:59 CET, then 03:00 CEST = closed) (runde 209).
+    QDate night = QDate::currentDate();
+    if (now.hour() < 21)
+        night = night.addDays(-1);
+    const qint64 left = QDateTime::currentDateTime()
+                            .secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 3, 0)));
+    if (left <= 0)
+        return 0.0;
+    if (left < 2400)
+        return qreal(left) / 2400.0;
     return 1.0;
 }
 

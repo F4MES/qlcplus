@@ -330,13 +330,24 @@ Rectangle
                         label: qsTr("REFRESH")
                         onTapped: if (trackManager) trackManager.requestCache()
                     }
+                    // two taps, like RE-GUESS: one throws away every analysis
+                    // of the night, rekordbox' too (runde 209)
                     TrackTile
                     {
+                        id: forgetAutoTile
+                        property bool armed: false
                         Layout.preferredWidth: 190
                         Layout.preferredHeight: 28
-                        label: qsTr("FORGET ALL AUTOMATIC")
+                        label: armed ? qsTr("SURE?") : qsTr("FORGET ALL AUTOMATIC")
+                        active: armed
                         activeColor: "#E36B6B"
-                        onTapped: if (trackManager) trackManager.forgetAutomatic()
+                        onTapped:
+                        {
+                            if (armed === false) { armed = true; forgetAutoArm.restart(); return }
+                            armed = false
+                            if (trackManager) trackManager.forgetAutomatic()
+                        }
+                        Timer { id: forgetAutoArm; interval: 4000; onTriggered: forgetAutoTile.armed = false }
                     }
                 }
 
@@ -920,19 +931,41 @@ Rectangle
             Item { Layout.preferredWidth: 20 }
 
             // every Track setting to / from Documents/QLC+/track-settings.json
+            // two taps each (runde 209): IMPORT replaces every role, star
+            // and ban with the file's, and EXPORT overwrites the only backup
             TrackTile
             {
+                id: exportTile
+                property bool armed: false
                 Layout.preferredWidth: 110
                 Layout.preferredHeight: 34
-                label: qsTr("EXPORT")
-                onTapped: if (trackEngine) setupRoot.ioMessage = trackEngine.exportSettings()
+                label: armed ? qsTr("SURE?") : qsTr("EXPORT")
+                active: armed
+                activeColor: "#E3B44F"
+                onTapped:
+                {
+                    if (armed === false) { armed = true; exportArm.restart(); return }
+                    armed = false
+                    if (trackEngine) setupRoot.ioMessage = trackEngine.exportSettings()
+                }
+                Timer { id: exportArm; interval: 4000; onTriggered: exportTile.armed = false }
             }
             TrackTile
             {
+                id: importTile
+                property bool armed: false
                 Layout.preferredWidth: 110
                 Layout.preferredHeight: 34
-                label: qsTr("IMPORT")
-                onTapped: if (trackEngine) setupRoot.ioMessage = trackEngine.importSettings()
+                label: armed ? qsTr("SURE?") : qsTr("IMPORT")
+                active: armed
+                activeColor: "#E3B44F"
+                onTapped:
+                {
+                    if (armed === false) { armed = true; importArm.restart(); return }
+                    armed = false
+                    if (trackEngine) setupRoot.ioMessage = trackEngine.importSettings()
+                }
+                Timer { id: importArm; interval: 4000; onTriggered: importTile.armed = false }
             }
 
             Text
