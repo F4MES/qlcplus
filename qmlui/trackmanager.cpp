@@ -1610,7 +1610,11 @@ void TrackManager::runEngine(bool sectionChanged)
     // R198_SECTION_START: a section is where it STARTS - a moved end (the
     // next flag dragged, bar by bar) is not a new one. Without flags the
     // fixed 64-beat end still turns a section (R172_FIXED_END).
-    if (secStart != m_lastSecStart || (secEnd != m_lastSecEnd && m_markers.isEmpty()))
+    const bool insideOld = m_lastSecStart > 0 && stateBeat >= m_lastSecStart
+                        && stateBeat < m_lastSecEnd;          // R205_SAME_SECTION
+    if (m_overrideState.isEmpty()
+        && ((secStart != m_lastSecStart && insideOld == false)
+            || (secEnd != m_lastSecEnd && m_markers.isEmpty())))
         sectionChanged = true;
     m_lastSecStart = secStart;
     m_lastSecEnd = secEnd;
@@ -1630,7 +1634,10 @@ void TrackManager::runEngine(bool sectionChanged)
     // quantise 8) took it to 0 at the flag, the correction never ran, and
     // the last bar before the drop counted 0, 0, 0, 0 - no pre-drop, no blink.
     if (m_quantize > 1 && beatsToNext > 0)
+    {
         beatsToNext = qMax(0, secEnd - beat);
+        nextState = stateAtBeat(secEnd);        // R205_QUANTISED_NEXT_STATE
+    }
     else if (beatsToNext > 0)
         beatsToNext = qMax(0, beatsToNext - (beat - stateBeat));
 

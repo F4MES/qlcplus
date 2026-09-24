@@ -724,7 +724,7 @@ Rectangle
                             // room for "+ NORMAL", which was cut to "+ NORMA" - but
                             // never so wide the row runs under the thumbs on a
                             // narrow screen, where a tap on UNDO was a vote (runde 204)
-                            width: Math.max(40, Math.min(82, (trackViewRoot.width - 476) / 7))
+                            width: Math.max(40, Math.min(82, (trackViewRoot.width - 500) / 7))   // 346 fixed + margins + thumbs (runde 205)
                             height: 44
                             label: "+ " + modelData.toUpperCase()
                             activeColor: trackViewRoot.markerColor(modelData)

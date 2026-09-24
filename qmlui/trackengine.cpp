@@ -4010,7 +4010,10 @@ void TrackEngine::setColourOverride(QString colour)
     m_startColour = false;               // a tile the DJ tapped is theirs
     if (colour.isEmpty() == false)
         m_colour = colour;
-    else if (engineBannedColour(m_colour))
+    // AUTO after the WHITE tile: white is punctuation, never the room's own
+    // colour - the room stood white until the next change, at a low fader
+    // several minutes (runde 205)
+    else if (engineBannedColour(m_colour) || m_colour == QStringLiteral("white"))
         m_colour = firstRoomColour();
     if (m_startScene)
         startLook();                     // the opening picture follows the tiles
@@ -5900,8 +5903,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // HOLD is "no colour changes", and ENERGY 0 (STILL, which forces the
     // hold) is "nothing changes": neither may turn the base, nor hand the
     // whole room a new colour when the track lands (runde 171).
+    // CALM too (runde 205: it only blocked changeColour, and the base turned
+    // and the next track took the colour through a CALM mix), and on a bar
+    // line, so a HOLD let go after the turn point does not turn the base mid-bar
     if (m_mixing && m_mixBeat >= 0 && m_nextColour.isEmpty() && m_palette.isEmpty() == false
-        && m_override.isEmpty() && hold == false)
+        && m_override.isEmpty() && hold == false && isCalm == false && beatInBar == 0)
     {
         // Through the mix's second half the base wears the next colour while
         // every other group still wears this one - two colours on the rig for
@@ -5955,7 +5961,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // base back to the old colour the moment HOLD was pressed - HOLD making
     // the very colour change it is there to stop (runde 179). Once turned,
     // the base keeps it and the track takes it when it lands.
-    if (hold && mixBarsOut < mixTurnBars)
+    if ((hold || isCalm) && mixBarsOut < mixTurnBars)
         m_nextColour.clear();
     // Once the base has turned to the next track's colour, the accent and
     // the bars' echo - both drawn to go with the OLD colour - could stand
@@ -7731,6 +7737,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // a break, calm or a still room. (Tobias, 2026-09-16, forslag 5.)
             if (energy >= 0.40 && isBreak == false && isCalm == false && still == false
                 && mixTurned == false
+                && m_override.isEmpty()           // a tile is one colour: no echo in another (runde 205)
                 && beat - m_echoBeat >= 4 && m_echoTimer.isActive() == false)
             {
                 QString echoKey;
@@ -11095,16 +11102,28 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     // the mix drew this track's colour when the mix began, and the base has
     // been standing in it for the mix's second half: it IS the room's colour
     // now, and colourBar -1 below holds it to the first break or drop
-    // ... which holds only once the mix has run long enough for the base to
-    // turn (four bars is the earliest turn). A track that lands just after the
-    // mix began - BLT now waits for "mix" before it hands over to a deck that
-    // came up after being given MASTER (runde 203) - found a colour drawn or
-    // not depending on whether the old track had ticked in those 200 ms, and
-    // the room jumped to one the base had never shown. It keeps the old
-    // colour instead, to the first break or drop (runde 204).
+    // ... which holds only once the base has actually turned. A track that
+    // lands before that - BLT now waits for "mix" before it hands over to a
+    // deck that came up after being given MASTER (runde 203) - found a colour
+    // drawn or not depending on whether the old track had ticked in those
+    // 200 ms, and the room jumped to one the base had never shown (runde 204).
+    // Four bars was not the test either: the turn comes after 4, 6 or 8 bars
+    // by what the incoming track is doing. So: is the base's colour scene the
+    // next colour (or the stand-in its wheel has for it)? (runde 205)
     bool adopted = false;
-    if (m_nextColour.isEmpty() == false && m_palette.contains(m_nextColour)
-        && m_mixBeat >= 0 && m_lastBeat - m_mixBeat >= 16)
+    const QString turnBase = baseGroup();
+    const quint32 baseCol = turnBase.isEmpty() ? Function::invalidId()
+                          : m_active.value(QStringLiteral("col:") + turnBase, Function::invalidId());
+    // ... or its programme, when that wears the colour itself (a colour-named
+    // AUTO Wash covers it, and tick() then stops the "col:" slot)
+    const quint32 baseMot = turnBase.isEmpty() ? Function::invalidId()
+                          : m_active.value(QStringLiteral("mot:") + turnBase, Function::invalidId());
+    const QString turnWant = m_nextColour.isEmpty() ? QString() : colourForGroup(turnBase, m_nextColour);
+    const bool baseTurned = m_nextColour.isEmpty() == false
+        && ((baseCol != Function::invalidId() && m_funcs.value(baseCol).colour == turnWant)
+            || (baseMot != Function::invalidId() && m_funcs.value(baseMot).coversColour
+                && m_funcs.value(baseMot).colour == turnWant));
+    if (m_nextColour.isEmpty() == false && m_palette.contains(m_nextColour) && baseTurned)
     {
         m_colour = m_nextColour;
         adopted = true;
