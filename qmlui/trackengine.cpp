@@ -4148,7 +4148,7 @@ QString TrackEngine::importSettings()
         if (key == QStringLiteral("trackmanager/dropkick"))
             v = qBound(0.30, v.toDouble(), 0.90);
         if (key == QStringLiteral("trackmanager/breakkick"))
-            v = qBound(0.05, v.toDouble(), 0.60);
+            v = qBound(0.05, v.toDouble(), 0.50);      // the learner's ceiling (runde 197)
         settings.setValue(key, v);
         n++;
     }
@@ -10595,14 +10595,25 @@ void TrackEngine::selfTest()
         const quint32 home = homePosition(key);
         if (home == Function::invalidId())
         {
-            m_testSkipped.append(key);
+            m_testSkipped.append(key + tr(" (no home aim)"));
             continue;
         }
-        if (m_position.value(key, Function::invalidId()) != home)
+        // what RUNS, not what m_position remembers (release() stops an aim
+        // and keeps the entry) - dark first, then home; and the entry is
+        // forgotten, not written: the first beat after the test takes the
+        // unknown-aim dark hold, as it must if the test is cut short while
+        // the motor is still moving (runde 197)
+        if (m_active.value("pos:" + key, Function::invalidId()) != home)
         {
+            stopSlot("col:" + key, true);
+            stopSlot("mot:" + key, true);
+            stopSlot("efx:" + key, true);
+            for (int i = 0; i < bg.parts.count(); i++)
+                stopSlot(partSlot(key, i), true);
+            m_cast.remove(key);
             run("pos:" + key, home, 1.0, 0, true);
-            m_position.insert(key, home);
         }
+        m_position.remove(key);
         barsLast.append(key);
     }
     order += barsLast;
@@ -10613,7 +10624,7 @@ void TrackEngine::selfTest()
         const TrackGroup &tg = m_groups.value(key);
         if (tg.lasers && tg.patternDevice == false && m_testSteps.count() < 2)
         {
-            m_testSkipped.append(key);
+            m_testSkipped.append(key + tr(" (no time to reach home)"));
             continue;
         }
         int before = m_testSteps.count();
@@ -10634,7 +10645,7 @@ void TrackEngine::selfTest()
         // skips them (patternDevice) and the operator has none either. Name
         // them at the end instead of leaving a hole. (2026-09-17.)
         if (m_testSteps.count() == before)
-            m_testSkipped.append(key);
+            m_testSkipped.append(key + tr(" (no colour scene)"));   // each skip says why (runde 197)
     }
     if (m_testSteps.isEmpty())
     {
@@ -10705,7 +10716,7 @@ void TrackEngine::slotSelfTestStep()
             startLook();
         m_report = m_testSkipped.isEmpty()
                        ? tr("self test done")
-                       : tr("self test done - NOT tested (no colour scene): %1")
+                       : tr("self test done - NOT tested: %1")
                              .arg(m_testSkipped.join(", "));
         emit liveChanged();
         return;
