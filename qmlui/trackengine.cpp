@@ -7699,12 +7699,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (fc.isEmpty() == false && fc != hue)
                     ff = Function::invalidId();
             }
-            // ... and never on strobes that are off stage (see genFlash)
+            // ... and never on strobes that are off stage (see genFlash) - nor,
+            // on strobes, a scene that is not in the hit's colour. A colourless
+            // one passed the colour test above, and "StrobStrobStrobe3lights"
+            // (white 255 + the hardware strobe on the 8+8s) or "Flash
+            // Everything" then fired white over a cyan hit, past the 70 %
+            // ceiling; which one came first was down to the hash order of the
+            // night. genFlash() below lights every strobe in the hit's own
+            // colour, so nothing is lost (runde 207).
             if (ff != Function::invalidId())
             {
                 foreach (const QString &fg, m_funcs.value(ff).groups)
                 {
-                    if (m_groups.value(fg).strobes && castSet.contains(fg) == false)
+                    if (m_groups.value(fg).strobes
+                        && (castSet.contains(fg) == false || m_funcs.value(ff).colour != hue))
                     {
                         ff = Function::invalidId();
                         break;

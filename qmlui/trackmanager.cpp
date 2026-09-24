@@ -269,7 +269,11 @@ void TrackManager::handleLine(const QByteArray &line)
     QJsonParseError err;
     QJsonDocument json = QJsonDocument::fromJson(line, &err);
     if (err.error != QJsonParseError::NoError || json.isObject() == false)
+    {
+        qWarning() << "[TrackManager] bad line from BLT:" << err.errorString()   // R207_BAD_LINE
+                   << line.size() << "bytes";
         return;
+    }
 
     QJsonObject obj = json.object();
     QString evt = obj.value(QStringLiteral("evt")).toString();
