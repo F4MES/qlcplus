@@ -3671,7 +3671,9 @@ QVariantList TrackEngine::table()
 void TrackEngine::assignRole(quint32 fid, int role)
 {
     ensureTable();
-    if (m_funcs.contains(fid) == false)
+    // a generated function's id belongs to whatever is generated there after
+    // the next rebuild - as setBanned() already refuses (runde 196)
+    if (m_funcs.contains(fid) == false || m_funcs.value(fid).generated)
         return;
     m_funcs[fid].role = role;
     saveRoles();
@@ -3683,7 +3685,7 @@ void TrackEngine::assignRole(quint32 fid, int role)
 void TrackEngine::setStars(quint32 fid, int stars)
 {
     ensureTable();
-    if (m_funcs.contains(fid) == false)
+    if (m_funcs.contains(fid) == false || m_funcs.value(fid).generated)   // never saved: runde 196
         return;
     m_funcs[fid].stars = qBound(1, stars, 3);
     saveRoles();
@@ -3901,7 +3903,10 @@ void TrackEngine::setFullAuto(bool on)
     // whatever runs now may be a function that is no longer allowed
     foreach (const QString &slot, m_active.keys())
     {
-        if (slot.startsWith("idle:") == false)
+        // ... but not the OFF and BLACKOUT masks: between tracks no beat puts
+        // them back, and an OFF group lit up under the start look (runde 196)
+        if (slot.startsWith("idle:") == false && slot.startsWith("off:") == false
+            && slot.startsWith("black:") == false)
             stopSlot(slot, false);
     }
     m_position.clear();
@@ -4132,6 +4137,18 @@ QString TrackEngine::importSettings()
             continue;
         if (key == SETTINGS_ENGINE_HOLDBARS)
             v = qBound(4, v.toInt(), 128);
+        // runde 196: tonight's state is not a setting (export leaves it out,
+        // so does import); the role-mode switch has no control to undo it;
+        // quantise and the kick thresholds get the bounds they have elsewhere
+        if (key == SETTINGS_ENGINE_NIGHT || key == SETTINGS_ENGINE_ROOMAUTO || key == SETTINGS_ENGINE_GROUPTRIM
+            || key == QStringLiteral("trackmanager/showran") || key == QStringLiteral("trackmanager/rolemode"))
+            continue;
+        if (key == QStringLiteral("trackmanager/quantize"))
+            v = qBound(1, v.toInt(), 32);
+        if (key == QStringLiteral("trackmanager/dropkick"))
+            v = qBound(0.30, v.toDouble(), 0.90);
+        if (key == QStringLiteral("trackmanager/breakkick"))
+            v = qBound(0.05, v.toDouble(), 0.60);
         settings.setValue(key, v);
         n++;
     }
@@ -4146,6 +4163,12 @@ QString TrackEngine::importSettings()
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString()).toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
     m_dirty = true;
+    // the file's roles REPLACE the ones in memory: ensureTable() carries a
+    // function's in-memory role over, and loadRoles() only overrides the ids
+    // the file names - a hand-set role the file did not have survived the
+    // import and was saved again (runde 196)
+    for (QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.begin(); it != m_funcs.end(); ++it)
+        it.value().role = -2;
     // rebuild NOW, not on the next table() call: setFullAuto(), rebuild() and
     // a doc change all save the in-memory table before they rebuild, and
     // until this rebuild has run the in-memory table is the OLD verdicts -
@@ -4162,6 +4185,11 @@ QString TrackEngine::importSettings()
         setFullAuto(wantAuto);
     }
     m_moves.clear();
+    // the imported group switches, on stage now - between tracks no beat
+    // would apply them, and the tiles said the opposite (runde 196)
+    applyGroupOff();
+    if (m_startScene)
+        startLook();
     emit tableChanged();
     emit liveChanged();
     return tr("loaded %1 settings - restart QLC+ for the Track page's own values").arg(n);
@@ -5628,7 +5656,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         else if (kickAhead >= 0.0 && mayTurn)
         {
-            if (flagGroove && m_curveBreak == false && kickAhead < 0.15 && dropAhead == false)
+            // (48, not 32: a break armed just outside the drop's window was
+            // taken over by the riser a bar later - two looks one bar apart,
+            // runde 196)
+            if (flagGroove && m_curveBreak == false && kickAhead < 0.15
+                && (nextState == QStringLiteral("drop") && beatsToNext > 0 && beatsToNext <= 48) == false)
                 m_curveBreak = curveTurn = true;
             // ... and one armed before the drop's 32-beat window lets go
             // when it opens - no breakdown look on a climb (runde 194)
@@ -10547,10 +10579,43 @@ void TrackEngine::selfTest()
     // often (white: a lamp with no white channel and nothing learned sits it out)
     static const char *const testColours[] = { "red", "green", "blue", "white" };
     m_testSkipped.clear();
+    // LASER SAFETY (runde 196): the test lit every group at full wherever it
+    // pointed - and it is pressed right after QLC+ starts, when the bars'
+    // tilt is whatever was left. The bars are sent home now, in the dark, and
+    // tested LAST, after at least two other steps (four seconds) for the
+    // motor; with no home aim, or nothing to test before them, they sit out.
+    QStringList order = m_groupOrder;
+    QStringList barsLast;
     foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &bg = m_groups.value(key);
+        if (bg.lasers == false || bg.patternDevice || m_groupOff.contains(key))
+            continue;
+        order.removeAll(key);
+        const quint32 home = homePosition(key);
+        if (home == Function::invalidId())
+        {
+            m_testSkipped.append(key);
+            continue;
+        }
+        if (m_position.value(key, Function::invalidId()) != home)
+        {
+            run("pos:" + key, home, 1.0, 0, true);
+            m_position.insert(key, home);
+        }
+        barsLast.append(key);
+    }
+    order += barsLast;
+    foreach (const QString &key, order)
     {
         if (m_groupOff.contains(key))
             continue;
+        const TrackGroup &tg = m_groups.value(key);
+        if (tg.lasers && tg.patternDevice == false && m_testSteps.count() < 2)
+        {
+            m_testSkipped.append(key);
+            continue;
+        }
         int before = m_testSteps.count();
         for (int i = 0; i < 4; i++)
         {
