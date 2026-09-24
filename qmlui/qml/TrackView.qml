@@ -496,6 +496,7 @@ Rectangle
                 z: 1
                 renderStrategy: Canvas.Threaded
 
+                property string paintedColour: ""       // runde 204: see onLiveChanged
                 // the selected flag (an index into trackManager.markers), -1 = none
                 property int selected: -1
 
@@ -657,7 +658,19 @@ Rectangle
                 Connections
                 {
                     target: trackEngine
-                    function onLiveChanged() { wfOverlay.requestPaint() }
+                    // the overlay reads one thing from the engine - the colour
+                    // of the playhead. liveChanged fires on every frame of a
+                    // fader drag, and each fired a full repaint of the curves
+                    // and flags (runde 204)
+                    function onLiveChanged()
+                    {
+                        var c = trackEngine ? trackEngine.currentColour : ""
+                        if (c !== wfOverlay.paintedColour)
+                        {
+                            wfOverlay.paintedColour = c
+                            wfOverlay.requestPaint()
+                        }
+                    }
                 }
                 Connections
                 {
@@ -708,7 +721,10 @@ Rectangle
                         TrackTile
                         {
                             objectName: "addFlag:"+modelData
-                            width: 82          // room for "+ NORMAL", which was cut to "+ NORMA"
+                            // room for "+ NORMAL", which was cut to "+ NORMA" - but
+                            // never so wide the row runs under the thumbs on a
+                            // narrow screen, where a tap on UNDO was a vote (runde 204)
+                            width: Math.max(40, Math.min(82, (trackViewRoot.width - 476) / 7))
                             height: 44
                             label: "+ " + modelData.toUpperCase()
                             activeColor: trackViewRoot.markerColor(modelData)
@@ -1643,7 +1659,7 @@ Row
                 height: 48
                 spacing: 6
 
-                property int cells: 1 + (trackEngine ? trackEngine.palette.length : 0)
+                property int cells: 1 + palRep.count      // runde 204: palette() is not a cheap getter
                 property real cellW: Math.max(48, (width - spacing * (cells - 1)) / cells)
 
                 TrackTile
@@ -1663,6 +1679,7 @@ Row
 
                 Repeater
                 {
+                    id: palRep
                     model: trackEngine ? trackEngine.palette : []
 
                     // lit = locked to this colour. A ring only = this is what
@@ -1768,7 +1785,7 @@ Rectangle
                     id: castRow
                     // once, here - not once per tile. trackEngine.groups is a
                     // full rebuild of the function table, not a cheap getter.
-                    property int n: trackEngine ? Math.max(1, trackEngine.groups.length) : 1
+                    property int n: Math.max(1, castRep.count)     // runde 204: the Repeater's count, not a second groups()
                     // ... and the same for the other two getters that are not
                     // cheap either (runde 142). trims() builds a QVariantMap
                     // over every group on each call and cast() copies a list
@@ -1786,6 +1803,7 @@ Rectangle
 
                     Repeater
                     {
+                        id: castRep
                         model: trackEngine ? trackEngine.groups : []
 
                         Rectangle
@@ -2317,9 +2335,9 @@ Rectangle
                 MouseArea
                 {
                     anchors.fill: parent
-                    onPressed: trackEngine.setFlash(true)
-                    onReleased: trackEngine.setFlash(false)
-                    onCanceled: trackEngine.setFlash(false)
+                    onPressed: if (trackEngine) trackEngine.setFlash(true)
+                    onReleased: if (trackEngine) trackEngine.setFlash(false)
+                    onCanceled: if (trackEngine) trackEngine.setFlash(false)
                     // the page is destroyed with the finger still down (another
                     // page tapped with a second finger): no release ever comes,
                     // and FLASH stood at full for the rest of the night (r199)

@@ -4485,7 +4485,21 @@ QString TrackEngine::colourForGroup(const QString &group, const QString &colour)
     // (The table is called `neighbours`, not `near`: `near` and `far` are
     // legacy Windows macros from windef.h and MinGW rejects them as names.
     // CI caught it, 2026-09-16.)
-    if (colour.isEmpty() || groupHasColour(group, colour))
+    if (colour.isEmpty())
+        return colour;
+    // the colours this group has, from ONE scan of the candidates: it was one
+    // scan per colour asked - up to six a group a beat for a wheel without the
+    // room's colour, over some 5,500 functions (runde 204). Same test as
+    // groupHasColour().
+    const QList<TrackFuncInfo *> own = candidates(ENGINE_ROLE_COLOR, group);
+    QSet<QString> has;
+    foreach (TrackFuncInfo *info, own)
+    {
+        if (info->colour.isEmpty() == false && has.contains(info->colour) == false
+            && lightsGroup(info->id, group))
+            has.insert(info->colour);
+    }
+    if (has.contains(colour))
         return colour;
     static const QMap<QString, QStringList> neighbours =
     {
@@ -4511,12 +4525,12 @@ QString TrackEngine::colourForGroup(const QString &group, const QString &colour)
     // per-eye programme is not this, and is untouched.
     foreach (const QString &c, neighbours.value(colour))
     {
-        if (engineBannedColour(c) == false && groupHasColour(group, c))
+        if (engineBannedColour(c) == false && has.contains(c))
             return c;
     }
     // Nothing near it either: any colour of its own, rather than a group that
     // is in the cast and contributing nothing.
-    foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_COLOR, group))
+    foreach (TrackFuncInfo *info, own)
     {
         if (info->groups.count() == 1 && info->colour.isEmpty() == false
             && engineBannedColour(info->colour) == false
@@ -11081,8 +11095,16 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     // the mix drew this track's colour when the mix began, and the base has
     // been standing in it for the mix's second half: it IS the room's colour
     // now, and colourBar -1 below holds it to the first break or drop
+    // ... which holds only once the mix has run long enough for the base to
+    // turn (four bars is the earliest turn). A track that lands just after the
+    // mix began - BLT now waits for "mix" before it hands over to a deck that
+    // came up after being given MASTER (runde 203) - found a colour drawn or
+    // not depending on whether the old track had ticked in those 200 ms, and
+    // the room jumped to one the base had never shown. It keeps the old
+    // colour instead, to the first break or drop (runde 204).
     bool adopted = false;
-    if (m_nextColour.isEmpty() == false && m_palette.contains(m_nextColour))
+    if (m_nextColour.isEmpty() == false && m_palette.contains(m_nextColour)
+        && m_mixBeat >= 0 && m_lastBeat - m_mixBeat >= 16)
     {
         m_colour = m_nextColour;
         adopted = true;
