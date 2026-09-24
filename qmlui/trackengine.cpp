@@ -5617,8 +5617,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             // a riser taking over mid-section: a turn only where turns may
             // happen, otherwise quietly (runde 194)
+            // (no four-bar spacing here: a riser takes over once per section,
+            // and holding it back cleared the correction with no turn - the
+            // build played under the break look to the drop, runde 195)
             if ((m_curveBreak || m_curveGroove) && sectionChanged == false && hold == false
-                && flagSoon == false && beat - m_curveTurnBeat >= 16)
+                && flagSoon == false)
                 curveTurn = true;
             m_curveBreak = false;
             m_curveGroove = false;
@@ -10018,10 +10021,13 @@ void TrackEngine::laserFaderCheck(qreal slider)
             // 35 % between tracks) their tilt is unknown - wherever the
             // stopped aim left it. Under 60 % that may not point down: dark
             // (runde 194)
+            // (only for bars the engine aims at all: a laser group with no
+            // position scenes never has a pos: slot, and was darkened on
+            // every fader move, runde 195)
             bool lit = m_active.contains("col:" + key);
             for (int i = 0; i < g.parts.count() && lit == false; i++)
                 lit = m_active.contains(partSlot(key, i));
-            if (lit && fader < 0.60)
+            if (lit && fader < 0.60 && candidates(ENGINE_ROLE_POSITION, key).isEmpty() == false)
             {
                 stopSlot("col:" + key, true);
                 for (int i = 0; i < g.parts.count(); i++)

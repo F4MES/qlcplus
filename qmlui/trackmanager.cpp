@@ -2235,7 +2235,10 @@ bool TrackManager::refineMarkers()
             if (f.beat == start                    // anything already there
                 || (f.beat >= start - 8 && f.beat < b
                     && (f.type == QStringLiteral("break") || f.type == QStringLiteral("build")))
-                || (f.beat < start && start - f.beat < 16))
+                || (f.beat < start && start - f.beat < 16)
+                // R195_STEP3_AFTER: nor a flag under four bars AFTER it - the
+                // walk back can pass over one, and the next load deleted it
+                || (f.beat > start && f.beat < b && f.beat - start < 16))
                 hasBreak = true;
         if (hasBreak == false && b - start >= 16)
         {
