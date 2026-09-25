@@ -347,6 +347,9 @@ void TrackEngine::slotDocSettled()
     m_sweepShown.clear();
     m_sweepFunc.clear();
     m_splitScenes.clear();
+    // runde 230: a held programme id of the old show could name an unrelated
+    // function of the new one, and run it past every group and ban filter
+    m_sectionMotion.clear();
     m_zoomScenes.clear();
     m_strobeScenes.clear();
     m_offScenes.clear();
@@ -1259,7 +1262,12 @@ void TrackEngine::ensureTable()
     m_climbGroups.clear();
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
     {
-        if (it.value().groups.count() == 1
+        // ... that can SHOW: a dimmer chase that keeps every lamp lit never
+        // owns the dimmers (litShare >= 0.99, motionOwns), and on the base
+        // nothing does - there the climb only peeks above the engine's own
+        // level, and the build's first half is better left to the engine's
+        // own growing fill (runde 230, review)
+        if (it.value().groups.count() == 1 && it.value().litShare < 0.99
             && it.value().name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
             m_climbGroups.insert(*it.value().groups.constBegin());
     }
@@ -4475,10 +4483,16 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         // full over its loop - 16 beats, or 32 for "Long". It belongs in a
         // build and nowhere else, and only with room left to reach the top
         // before the drop: m_buildLen is the beats still to go.
-        if (info.name.contains(QStringLiteral("climb"), Qt::CaseInsensitive)
-            && (m_buildLen < 16
-                || (m_buildLen < 32 && info.name.contains(QStringLiteral("long"), Qt::CaseInsensitive))))
-            continue;
+        // Its top lands on the drop only when the beats left are whole
+        // passes, and only at the drawn tempo - the SPEED tiles stretch or
+        // halve it (runde 230, review).
+        if (info.name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
+        {
+            const bool isLong = info.name.contains(QStringLiteral("long"), Qt::CaseInsensitive);
+            const int pass = isLong ? 32 : 16;
+            if (m_buildLen < pass || (m_buildLen % pass) != 0 || m_speed != 0)
+                continue;
+        }
         // Per-group slots must never start a whole-room snapshot. Its other
         // groups would bypass cast, colour and intensity decisions. Such
         // looks remain available as START scenes and on the Virtual Console.
@@ -7494,13 +7508,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (key == base && mixBarsOut >= mixTurnBars && m_nextColour.isEmpty() == false && m_override.isEmpty())
             colour = m_nextColour;
         quint32 splitScene = Function::invalidId();
+        QString tradeOther;   // the accent group's other half of the trade (runde 230)
         if (accentColour.isEmpty() == false && key == accentGroup)
         {
             // the accent either holds, or trades places with the palette
             // colour every few bars - never a third colour
             colour = accentColour;
+            tradeOther = m_colour;
             if (mv.colourBars > 0 && ((bar / mv.colourBars) % 2) == 1)
+            {
                 colour = m_colour;
+                tradeOther = accentColour;
+            }
             // on a per-eye lamp the two colours share the bar, and swap eyes
             // every second bar
             if (g.perEye && m_fullAuto)
@@ -7558,7 +7577,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // to reach its top. beatsToNext, not the section's length: a
         // riser-promoted build measures to the drop, and a pick half way in
         // must not start a 32-beat climb with eight beats left (review)
-        m_buildLen = isBuild ? qMax(1, beatsToNext) : 0;
+        // not while a fake drop waits for its kick: the build's top holds
+        // there, and a fresh climb would start again from the bottom
+        m_buildLen = (isBuild && dropWaiting == false) ? qMax(1, beatsToNext) : 0;
         bool breakLasers = isBreak && g.lasers;
         // The base may run a break programme of the show's own - but only one
         // that keeps the room lit (litOnly below, ENGINE_BREAK_LIT). Counted
@@ -7743,7 +7764,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // after this, so the burst still wins while it lasts.
         if (mf != Function::invalidId() && splitScene == Function::invalidId()
             && m_funcs.value(mf).coversColour
-            && m_funcs.value(mf).colour == colour
+            // ... or wearing the OTHER half of the accent trade: the held
+            // programme is kept through the trade on purpose (above), and the
+            // room's colour scene ran under it and HTP-added a third colour
+            // for the other half of every trade (BACKLOG 65, runde 230)
+            && (m_funcs.value(mf).colour == colour
+                || (tradeOther.isEmpty() == false && changeColour == false
+                    && m_funcs.value(mf).colour == colourForGroup(key, tradeOther)))
             && m_active.contains(QStringLiteral("str:") + key) == false)
             cf = Function::invalidId();
         // ... and not under a HELD FLASH: genFlash() stopped the colour scene
@@ -8532,7 +8559,11 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // A chase of the operator's switches the generated figure OFF - and a
         // build was drawing one half the time, so half of all builds stood
         // completely still. The engine's own figure is what a build needs.
-        mv.ownChaser = rng->bounded(5) == 0;
+        // ... except a group that has build programmes of its own ("...
+        // Climb", runde 227): those ARE a build figure, so it takes one half
+        // the time, as the 50/50 rule asks (runde 230). Not the base.
+        mv.ownChaser = (isBase == false && m_climbGroups.contains(group))
+                     ? rng->bounded(2) == 0 : rng->bounded(5) == 0;
         if (isBase)
         {
             // the base carries the build: a fill that grows across the heads,

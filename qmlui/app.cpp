@@ -493,7 +493,9 @@ void App::slotDocAutosave()
     // KIOSK_NO_AUTOSAVE_R221: the Track engine marks the Doc modified all
     // night; a 7.8 MB save on the GUI thread stalled beats and fades. Kiosk
     // edits nothing that lives in the show file.
-    if (m_doc != nullptr && m_doc->isKiosk())
+    // KIOSK_NO_AUTOSAVE_R230: -k only sets the access mask; Doc::isKiosk()
+    // is never set by qmlui and was always false
+    if (accessMask() == AC_VCControl)
         return;
     saveXML(autoSaveFileName(), true);
 }

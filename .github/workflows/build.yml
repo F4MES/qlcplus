@@ -578,8 +578,12 @@ jobs:
           brew install fftw mad libsndfile libftdi
           # the runner image no longer ships python@3.13, and "No such keg"
           # stopped every macOS build (#296 onwards) - the link is only there
-          # to settle a conflict, so it may fail harmlessly
-          brew link --overwrite python@3.13 || true
+          # to settle a conflict, so it may fail harmlessly. Asked first
+          # (runde 230): brew still printed "Error: No such keg" and every
+          # run showed it as an error annotation
+          if brew list --versions python@3.13 >/dev/null 2>&1; then
+            brew link --overwrite python@3.13 || true
+          fi
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
