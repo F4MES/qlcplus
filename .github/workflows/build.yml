@@ -356,36 +356,54 @@ jobs:
           path: C:/projects/D2XXSDK/cdm.zip
           key: d2xx-CDM-v2.12.36.20-WHQL-Certified
 
+      # 2026-09-25: every Windows build since #300 died here - qlcplus.org's
+      # Cloudflare answers GitHub's runners 429 on every try, so the cache
+      # below was never filled either. Now, in order:
+      #   1. the zip committed in the repo (.github/ci/, if someone put it
+      #      there - FTDI's licence allows passing it on unchanged),
+      #   2. the Actions cache,
+      #   3. qlcplus.org, three tries,
+      #   4. and failing all of that the build goes on WITHOUT the FTDI D2XX
+      #      driver: the DMX USB plugin is built without FTDI support
+      #      (plugins/dmxusb/src/CMakeLists.txt checks for the library).
+      #      Art-Net, sACN and the rest are untouched.
       - name: D2XX SDK (64 bit)
+        id: d2xx
         shell: msys2 {0}
         env:
           D2XX_CACHED: ${{ steps.d2xx-cache.outputs.cache-hit }}
         run: |
           mkdir -p /c/projects/D2XXSDK
-          # A cache miss downloads. A plain loop rather than
-          # --retry-on-http-error (wget 1.19+ only). The waits grow - a rate
-          # limit does not lift in 30 s - to about ten minutes in all.
-          if [ "$D2XX_CACHED" != "true" ] || [ ! -s /c/projects/D2XXSDK/cdm.zip ]; then
-            for wait in 30 60 90 120 150 180 0; do
-              wget https://qlcplus.org/misc/CDM-v2.12.36.20-WHQL-Certified.zip \
-                   -O /c/projects/D2XXSDK/cdm.zip && break
-              rm -f /c/projects/D2XXSDK/cdm.zip
+          ZIP=/c/projects/D2XXSDK/cdm.zip
+          REPOZIP=$(ls .github/ci/CDM-*.zip 2>/dev/null | head -n 1)
+          if [ -n "$REPOZIP" ]; then
+            cp "$REPOZIP" "$ZIP"
+            echo "D2XX SDK from the repo: $REPOZIP"
+          elif [ "$D2XX_CACHED" = "true" ] && [ -s "$ZIP" ]; then
+            echo "D2XX SDK from the cache"
+          else
+            for wait in 30 60 0; do
+              wget https://qlcplus.org/misc/CDM-v2.12.36.20-WHQL-Certified.zip -O "$ZIP" && break
+              rm -f "$ZIP"
               [ "$wait" = 0 ] && break
               echo "D2XX download failed - waiting $wait s"
               sleep $wait
             done
-          else
-            echo "D2XX SDK from the cache"
           fi
-          test -s /c/projects/D2XXSDK/cdm.zip
-          cd /c/projects/D2XXSDK
-          unzip -o cdm.zip
-          cd amd64
-          gendef.exe - ftd2xx64.dll > ftd2xx.def
-          dlltool -k --input-def ftd2xx.def --dllname ftd2xx64.dll --output-lib libftd2xx.a
+          if [ -s "$ZIP" ]; then
+            cd /c/projects/D2XXSDK
+            unzip -o cdm.zip
+            cd amd64
+            gendef.exe - ftd2xx64.dll > ftd2xx.def
+            dlltool -k --input-def ftd2xx.def --dllname ftd2xx64.dll --output-lib libftd2xx.a
+            echo "got=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::D2XX SDK not available - building the DMX USB plugin without FTDI D2XX support"
+            echo "got=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: D2XX SDK cache (save)
-        if: steps.d2xx-cache.outputs.cache-hit != 'true'
+        if: steps.d2xx-cache.outputs.cache-hit != 'true' && steps.d2xx.outputs.got == 'true'
         uses: actions/cache/save@v4
         with:
           path: C:/projects/D2XXSDK/cdm.zip
@@ -553,7 +571,10 @@ jobs:
         run: |
           brew update
           brew install fftw mad libsndfile libftdi
-          brew link --overwrite python@3.13
+          # the runner image no longer ships python@3.13, and "No such keg"
+          # stopped every macOS build (#296 onwards) - the link is only there
+          # to settle a conflict, so it may fail harmlessly
+          brew link --overwrite python@3.13 || true
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4

@@ -3945,6 +3945,14 @@ void TrackEngine::setFullAuto(bool on)
     {
         // ... but not the OFF and BLACKOUT masks: between tracks no beat puts
         // them back, and an OFF group lit up under the start look (runde 196)
+        // the hardware strobe is cut, as release() and idle() cut it: a
+        // shutter-only scene has nothing for a soft stop's fade to scale,
+        // and it strobed on at full for the fade (runde 215)
+        if (slot.startsWith("str:"))
+        {
+            stopSlot(slot, true);
+            continue;
+        }
         if (slot.startsWith("idle:") == false && slot.startsWith("off:") == false
             && slot.startsWith("black:") == false)
             stopSlot(slot, false);
@@ -4360,6 +4368,10 @@ void TrackEngine::setFlash(bool pressed)
             else if (g.hasDimmer)
                 setDimmer(key, m_moveLevel.value(key, 0.0));
         }
+        // a white room: the flash ran on the very scene "col:" holds, and its
+        // level override stayed at full - MASTER and the trim back on now,
+        // not on the next beat (runde 215)
+        reapplyLevels();
     }
     emit liveChanged();
 }
@@ -10546,7 +10558,9 @@ void TrackEngine::setClosingSequence(bool on)
     QSettings().setValue(SETTINGS_ENGINE_CLOSING, on);
     m_roomSent = -1;
     announceRoom();
-    closingTick();
+    // (the light follows on the next 200 ms closingTick() from TrackManager:
+    // a bare closingTick() here did not compile, and closingTick(true) would
+    // have darkened a room with the show OFF - runde 215)
     emit liveChanged();
 }
 
@@ -10569,7 +10583,10 @@ void TrackEngine::closingTick(bool showOn)
         // at nought the masks go on, as BLACKOUT's do: the intensity scaling
         // does not reach a laser bar's beam (a colour channel) or an animation
         // laser's (effect channels) - they stayed lit at closing (runde 213)
-        if (darkChanged)
+        // ... only with the show running (runde 215): with SHOW OFF release()
+        // has already dropped every mask, and applyGroupOff() here put the
+        // OFF groups' masks back - over the Virtual Console until SHOW ON
+        if (darkChanged && showOn)
             applyGroupOff();
         emit liveChanged();
     }

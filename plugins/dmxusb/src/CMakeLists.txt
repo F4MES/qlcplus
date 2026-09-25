@@ -29,6 +29,13 @@ add_library(${module_name}
 if(WIN32)
     target_link_libraries(${module_name} PRIVATE winmm)
     set(FTD2XXDIR "C:/projects/D2XXSDK")
+endif()
+# The FTDI D2XX SDK is fetched by CI from qlcplus.org, which rate-limits
+# GitHub's runners: without it the plugin builds without FTDI D2XX support
+# instead of failing the whole Windows build (F4MES, 2026-09-25).
+if(WIN32 AND NOT EXISTS "${FTD2XXDIR}/amd64/libftd2xx.a" AND NOT EXISTS "${FTD2XXDIR}/i386/libftd2xx.a")
+    message(WARNING "FTDI D2XX SDK not found in ${FTD2XXDIR} - building without FTD2xx support.")
+elseif(WIN32)
     if (DEFINED ENV{MSYSTEM_CARCH})
         set(SYSTEM_ARCH "$ENV{MSYSTEM_CARCH}")
         if (SYSTEM_ARCH STREQUAL "x86_64")

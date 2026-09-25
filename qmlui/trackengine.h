@@ -359,7 +359,7 @@ class TrackEngine : public QObject
      *  fixed hold instead and turns this off; tapping it again turns it on. */
     Q_PROPERTY(bool holdAuto READ holdAuto WRITE setHoldAuto NOTIFY tableChanged)
     /** ENERGY by clock: percent at 21, 22, 23, 00, 01 and 02 h (flat to 05, then 0). */
-    Q_PROPERTY(QVariantList clockCurve READ clockCurve NOTIFY tableChanged)
+    Q_PROPERTY(QVariantList clockCurve READ clockCurve NOTIFY tableChanged)   // 28 points, 20:00..02:45 (r211)
 
     Q_PROPERTY(QString colourOverride READ colourOverride WRITE setColourOverride NOTIFY liveChanged)
     Q_PROPERTY(QString currentColour READ currentColour NOTIFY liveChanged)

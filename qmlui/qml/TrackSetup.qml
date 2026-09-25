@@ -885,11 +885,12 @@ Rectangle
                 }
             }
 
-            Item { Layout.preferredWidth: 20 }
-
+            // (runde 215: the row's spacers went and its tiles narrowed - it was
+            // 1478 px wanted in 1264 at 1280x720, the EXPORT/IMPORT reply got no
+            // width at all and "Colour holds for" drew over the ENERGY tile)
             TrackTile
             {
-                Layout.preferredWidth: 220
+                Layout.preferredWidth: 170
                 Layout.preferredHeight: 34
                 label: qsTr("Accent colour in drops")
                 active: trackEngine ? trackEngine.accent : false
@@ -897,13 +898,11 @@ Rectangle
                 onTapped: if (trackEngine) trackEngine.accent = !trackEngine.accent
             }
 
-            Item { Layout.preferredWidth: 20 }
-
             // the clock creeps the ENERGY slider up through the night; a
             // hand on the slider turns it off, this turns it back on
             TrackTile
             {
-                Layout.preferredWidth: 180
+                Layout.preferredWidth: 130
                 Layout.preferredHeight: 34
                 label: qsTr("ENERGY by clock")
                 active: trackEngine ? trackEngine.roomAuto : false
@@ -911,13 +910,11 @@ Rectangle
                 onTapped: if (trackEngine) trackEngine.roomAuto = !trackEngine.roomAuto
             }
 
-            Item { Layout.preferredWidth: 20 }
-
             // the closing sequence (runde 211): the last five minutes to
             // closing bring the room to dark and the hazer off
             TrackTile
             {
-                Layout.preferredWidth: 170
+                Layout.preferredWidth: 130
                 Layout.preferredHeight: 34
                 label: qsTr("Closing sequence")
                 active: trackEngine ? trackEngine.closingSequence : false
@@ -934,7 +931,7 @@ Rectangle
             {
                 id: exportTile
                 property bool armed: false
-                Layout.preferredWidth: 110
+                Layout.preferredWidth: 84
                 Layout.preferredHeight: 34
                 label: armed ? qsTr("SURE?") : qsTr("EXPORT")
                 active: armed
@@ -951,7 +948,7 @@ Rectangle
             {
                 id: importTile
                 property bool armed: false
-                Layout.preferredWidth: 110
+                Layout.preferredWidth: 84
                 Layout.preferredHeight: 34
                 label: armed ? qsTr("SURE?") : qsTr("IMPORT")
                 active: armed
@@ -982,6 +979,7 @@ Rectangle
         GridLayout
         {
             Layout.fillWidth: true
+            Layout.fillHeight: false
             visible: setupRoot.advancedOpen
             columns: 14
             columnSpacing: 4

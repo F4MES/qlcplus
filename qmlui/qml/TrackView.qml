@@ -1545,7 +1545,7 @@ Rectangle
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.preferredWidth: dialsRow.width * 0.40
                 color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
+                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 10   // r215: a tap just under AUTO must not land on the fader's top end
                     // Just the title. The 62-pixel percentage that used to sit
                     // in the middle of this box is gone (Tobias, 2026-09-22:
                     // "Energi har alt for meget tomt plads med den store
