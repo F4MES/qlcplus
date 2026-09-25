@@ -974,6 +974,11 @@ private:
     bool m_fullAuto;
     QSet<QString> m_flashHeld;             // strobe groups the generated flash lit
     bool m_hold;
+    // runde 227: the build's own programmes ("... Climb" in the name, from
+    // gen_programs.py). m_buildLen is this beat's build length in beats (0
+    // outside a build); m_climbGroups the groups that have any.
+    int m_buildLen = 0;
+    QSet<QString> m_climbGroups;
     bool m_startScene;        // the opening picture is held by hand
     qreal m_startLevel;       // a trim on the opening picture
     bool m_startColour;       // the opening picture chose the colour, not the DJ

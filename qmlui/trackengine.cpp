@@ -1255,6 +1255,15 @@ void TrackEngine::ensureTable()
     if (m_palette.count() < 2)
         m_palette.append(singles);
 
+    // the groups that have a programme made for builds (runde 227)
+    m_climbGroups.clear();
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        if (it.value().groups.count() == 1
+            && it.value().name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
+            m_climbGroups.insert(*it.value().groups.constBegin());
+    }
+
     ensureColourScenes();
     ensureStrobeScenes();
     ensureOffScenes();
@@ -4462,6 +4471,14 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         // til alt andet." By name, as the break's "vifte" is (tierOf).
         if (m_faderNow < 0.995 && info.name.contains(QStringLiteral("dryp"), Qt::CaseInsensitive))
             continue;
+        // A BUILD PROGRAMME ("... Climb", runde 227) rises from sparse to
+        // full over its loop - 16 beats, or 32 for "Long". It belongs in a
+        // build and nowhere else, and only with room left to reach the top
+        // before the drop: m_buildLen is the beats still to go.
+        if (info.name.contains(QStringLiteral("climb"), Qt::CaseInsensitive)
+            && (m_buildLen < 16
+                || (m_buildLen < 32 && info.name.contains(QStringLiteral("long"), Qt::CaseInsensitive))))
+            continue;
         // Per-group slots must never start a whole-room snapshot. Its other
         // groups would bypass cast, colour and intensity decisions. Such
         // looks remain available as START scenes and on the Virtual Console.
@@ -4881,6 +4898,21 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         if (fits.isEmpty())
             return Function::invalidId();
         ok = fits;
+    }
+
+    // In a build, the build's own programmes first (runde 227, Tobias: "Byg
+    // 1, rigtige build programmer"). The rest of the pool stays behind them
+    // for a group that has none in this colour.
+    if (m_buildLen > 0)
+    {
+        QList<TrackFuncInfo *> climbs;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (info->name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
+                climbs.append(info);
+        }
+        if (climbs.isEmpty() == false)
+            ok = climbs;
     }
 
     // this tier's motions first
@@ -7521,6 +7553,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // base may reach one star higher, it is what carries the room
         // ... except the laser bars in a break, which are only ever in a
         // break's cast to run a slow (tier 0: "break", "slow", "low") chase
+        // the beats this build has still to go, for candidates() and
+        // motionFor(): a build programme only in a build, and only with room
+        // to reach its top. beatsToNext, not the section's length: a
+        // riser-promoted build measures to the drop, and a pick half way in
+        // must not start a 32-beat climb with eight beats left (review)
+        m_buildLen = isBuild ? qMax(1, beatsToNext) : 0;
         bool breakLasers = isBreak && g.lasers;
         // The base may run a break programme of the show's own - but only one
         // that keeps the room lit (litOnly below, ENGINE_BREAK_LIT). Counted
@@ -7533,7 +7571,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool breakBase = isBreak && key == base && isCalm == false && still == false;
         bool moving = still == false
                    && (breakLasers || breakBase
-                       || (mv.ownChaser && isBreak == false && (isBuild == false || prog > 0.5)));
+                       || (mv.ownChaser && isBreak == false
+                           && (isBuild == false || prog > 0.5
+                               // a group with build programmes starts one on
+                               // the build's first beat: they are made to run
+                               // the whole build (runde 227)
+                               || m_climbGroups.contains(key))));
         int stars = qMin(3, maxStars + (key == base ? 1 : 0));
         // The animation lasers change their pattern where the music turns -
         // the same turn the colours land on - and not only on the section
@@ -7643,11 +7686,24 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (mf != Function::invalidId() && m_faderNow < 0.995
                 && m_funcs.value(mf).name.contains(QStringLiteral("dryp"), Qt::CaseInsensitive))
                 mf = Function::invalidId();
+            // ... and a build programme outside a build (HOLD carried it
+            // over the drop, runde 227)
+            if (mf != Function::invalidId() && m_buildLen <= 0
+                && m_funcs.value(mf).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
+                mf = Function::invalidId();
             if (mf == Function::invalidId())
             {
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
                                moving == false, stars, litFloor);
                 if (mf == Function::invalidId() && moving)
+                    mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars, litFloor);
+                // the first half of a build opens to a group with build
+                // programmes FOR those programmes (runde 227). When none got
+                // through (stars, a ban, the cast) it is the old rule: a
+                // static look until half way, not an ordinary chase (review)
+                if (mf != Function::invalidId() && isBuild && prog <= 0.5 && m_climbGroups.contains(key)
+                    && m_funcs.value(mf).type != int(Function::SceneType)
+                    && m_funcs.value(mf).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive) == false)
                     mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars, litFloor);
                 if (mf != Function::invalidId())
                     m_sectionMotion.insert(key, mf);
