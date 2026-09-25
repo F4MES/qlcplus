@@ -298,12 +298,42 @@ void TrackEngine::slotDocChanged()
     // the clear and leak into the next project holding values for fixtures that
     // are about to be deleted. One rebuild once the storm has passed.
     m_dirty = true;
+    // A PROJECT LOAD: the document has just been emptied, and every id the
+    // engine holds names a function that no longer exists. By the time
+    // slotDocSettled() runs, the new show is in, numbered from 0 like every
+    // show - and stopAll() there stopped whichever NEW functions had the old
+    // ids, the new show's startup function among them (runde 217). Forget
+    // them now, while they are dead.
+    if (m_doc != nullptr && m_doc->loadStatus() == Doc::Cleared)
+    {
+        m_active.clear();
+        m_activeAttr.clear();
+        m_activeLevel.clear();
+        m_activeOut.clear();
+        m_fadeAttr.clear();
+        m_fadeLevel.clear();
+    }
     if (m_docTimer.isActive() == false)
         m_docTimer.start();
 }
 
 void TrackEngine::slotDocSettled()
 {
+    // the between-tracks look was up (no section, an idle: slot running): an
+    // edit in QLC+ took it down with everything else, and nothing but a hand
+    // on ENERGY or a track brought it back - a dark room (runde 217)
+    bool wasIdle = false;
+    if (m_lastState.isEmpty())
+    {
+        foreach (const QString &slot, m_active.keys())
+        {
+            if (slot.startsWith(QStringLiteral("idle:")))
+            {
+                wasIdle = true;
+                break;
+            }
+        }
+    }
     m_darkUntil.clear();
     // same as setFullAuto(): the rebuild drops the unsaved stage counts. On
     // an ordinary edit in the Function Manager this is the current show; on
@@ -397,6 +427,8 @@ void TrackEngine::slotDocSettled()
     // edit before the floor opens was enough (runde 185).
     if (m_startScene)
         startLook();
+    else if (wasIdle)
+        idle();
     emit tableChanged();
     emit liveChanged();
 }
@@ -6498,9 +6530,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // bare blink's acceleration below. The drop lands wide on all of them.
     // Drawn once per build, more often the higher the room; never under
     // HOLD, CALM or a still room.
-    if (isBuild == false || isCalm || still)
+    // (runde 217: and it ends with FULL AUTO, below 30 % ENERGY - the rule it
+    // was drawn by - and is not rolled again on a fake drop's waiting beat,
+    // where the build's look holds)
+    if (isBuild == false || isCalm || still || m_fullAuto == false || (m_floorRound && fader < 0.30))
         m_floorRound = false;
-    else if (sectionChanged && hold == false)
+    else if (sectionChanged && hold == false && dropWaiting == false)
         m_floorRound = m_fullAuto               // FULL AUTO only: it takes the heads' programmes and aims
                     && energy >= 0.30 && rng->bounded(100) < int(30.0 + 30.0 * qBound(0.0, energy, 1.0));
     if (redraw)
@@ -7045,7 +7080,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             want = 8;                                        // the landing: everything wide
             mode = 0;
         }
-        else if (isBuild && hold == false)
+        else if (isBuild && hold == false && dropWaiting == false)   // r217: the wait holds the build's last zoom
         {
             if (want < 0 || beatInBar == 0)
                 want = qBound(0, int(qRound(8.0 * (1.0 - qBound(0.0, prog, 1.0)))), 8);
@@ -7096,9 +7131,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_zoom.insert(key, want);
         m_zoomMode.insert(key, mode);
         int idx = want;
-        if (mode == 1 && isCalm == false)
+        // neither under CALM nor in a still room ("nothing moves or changes",
+        // runde 217): the held zoom stands
+        if (mode == 1 && isCalm == false && still == false)
             idx = beatInBar == 0 ? 8 : 0;
-        else if (mode == 2)
+        else if (mode == 2 && isCalm == false && still == false)
             idx = (bar % 2) == 0 ? 9 : 10;
         run(slot, zs.at(qBound(0, idx, int(zs.count()) - 1)), 1.0, 0, true);
     }

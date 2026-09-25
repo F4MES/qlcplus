@@ -375,7 +375,12 @@ jobs:
         run: |
           mkdir -p /c/projects/D2XXSDK
           ZIP=/c/projects/D2XXSDK/cdm.zip
-          REPOZIP=$(ls .github/ci/CDM-*.zip 2>/dev/null | head -n 1)
+          # a glob, not "ls | head": the msys2 shell runs with -e and pipefail,
+          # and ls finding nothing exits 2 - which ended the step (#307)
+          REPOZIP=""
+          for f in .github/ci/CDM-*.zip; do
+            if [ -f "$f" ]; then REPOZIP="$f"; break; fi
+          done
           if [ -n "$REPOZIP" ]; then
             cp "$REPOZIP" "$ZIP"
             echo "D2XX SDK from the repo: $REPOZIP"
@@ -385,7 +390,7 @@ jobs:
             for wait in 30 60 0; do
               wget https://qlcplus.org/misc/CDM-v2.12.36.20-WHQL-Certified.zip -O "$ZIP" && break
               rm -f "$ZIP"
-              [ "$wait" = 0 ] && break
+              if [ "$wait" = 0 ]; then break; fi
               echo "D2XX download failed - waiting $wait s"
               sleep $wait
             done
