@@ -2035,8 +2035,15 @@ void TrackEngine::ensureSweeps()
                 efx->addFixture(want.at(i).first, want.at(i).second);
         }
         efx->setIsRelative(true);
-        efx->setXOffset(127);
-        efx->setYOffset(127);
+        // not under a running figure (runde 219): a table rebuild put a bar
+        // figure's centre back on the aim, and one drawn up-only dipped its
+        // whole height under it until the next beat. applySweep() sets both
+        // at every start.
+        if (efx->isRunning() == false)
+        {
+            efx->setXOffset(127);
+            efx->setYOffset(127);
+        }
         efx->setFadeInSpeed(0);
         efx->setFadeOutSpeed(0);
     }
@@ -2513,14 +2520,27 @@ void TrackEngine::ensureColourScenes()
                     const QLCChannel *qch = fxi->channel(i);
                     if (qch == nullptr || qch->group() != QLCChannel::Shutter || base.contains(i))
                         continue;
+                    bool open = false;
                     foreach (QLCCapability *cap, qch->capabilities())
                     {
                         if (cap != nullptr && cap->preset() == QLCCapability::ShutterOpen)
                         {
                             values.append(SceneValue(fid, i, uchar(cap->min())));
+                            open = true;
                             break;
                         }
                     }
+                    // Runde 219: a channel that only names the "Strobe slow to
+                    // fast" preset (the Yuer strobes and the 8 eyes laser) has
+                    // no ShutterOpen, so nothing wrote it back after a burst:
+                    // stopSlot() lets go of the str: scene, the channel is not
+                    // an intensity channel, and it held 162-209 - the lamps
+                    // strobed under 97 % of the lit beats of 09-20 ("meget
+                    // hurtige"). 0 is "no strobe": every one of Tobias' own
+                    // scenes writes 0 there. Fast-to-slow is left alone - its 0
+                    // could be the fastest.
+                    if (open == false && qch->preset() == QLCChannel::ShutterStrobeSlowFast)
+                        values.append(SceneValue(fid, i, uchar(0)));
                 }
                 touched++;
             }
@@ -7002,6 +7022,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool fresh = redraw || m_sweep.contains(key) == false
                   || (hold == false && isCalm == false        // HOLD/CALM freeze it too (r199)
                       && isBuild && prog > 0.5 && prevProg <= 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0);
+        // Runde 219: a bar figure is never redrawn while it runs. On 09-20
+        // it lasted 10-14 s against a 30-60 s figure: every section line,
+        // cast change, fader jump and two in three 8-bar lines drew a new
+        // one, and a new one restarts the EFX - six bars jumping, and not
+        // one cycle ever finished. The fader still moves it live (the dip,
+        // applySweep) and every stop - a break, CALM, under 40 %, the bars
+        // leaving the cast - draws afresh the next time.
+        // Keyed on what SHOWS: NEXT, a new track and calm(0) empty m_sweep
+        // while the EFX runs on, and a figure drawn then would be put on the
+        // running EFX without a restart (review, runde 219).
+        if (g.lasers && m_active.contains(slot) && m_sweepShown.contains(key))
+        {
+            fresh = false;
+            m_sweep.insert(key, m_sweepShown.value(key));
+        }
         if (fresh)
         {
             QList<int> history = m_sweepHistory.value(key);
@@ -7644,6 +7679,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (m_fullAuto && tier > 0 && key != m_rhythmLead
                     && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType)))
                     motionDivision = qMax(2000, motionDivision);
+                // Runde 219: the strobes' ceiling above (a whole beat, eighths
+                // at most in a drop) held for the engine's own picture only.
+                // A show chase drawn for the strobes ran at its own tempo -
+                // 23 "Fast" strobe chasers step on quarter beats. Same rule
+                // for both now. Chasers and sequences only: 0 is "its own
+                // time" for a one-shot, a scene or an EFX.
+                if (g.strobes && motionDivision > 0
+                    && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType)))
+                    motionDivision = qMax(tier == 2 ? 500 : 1000, motionDivision);
                 // the bare level: run() adds MASTER and the trim (slotScale)
                 const bool mayOwn = mi.dimmer && mi.type != int(Function::SceneType) && mi.litShare < 0.99
                                  && key != base;       // the base never owns: see motionOwns
@@ -9358,14 +9402,15 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     // the lasers' one live control: how far under the home aim the figure
     // may reach. Drawn up-only (dy = -height); the fader slides it down.
     int dy = sw.dy;
+    int allowed = 0;
     if (laser && sw.shape >= 0)
     {
         // The figure rides on the aim under it (a relative EFX). From the
         // home aim it may use the fader's whole allowance; from any other aim
         // - which may already be dipping by that allowance - none, or the two
         // add up to twice what the fader allows (runde 171).
-        const int allowed = m_position.value(group, Function::invalidId()) == homePosition(group)
-                          ? laserDownAllowed(m_faderNow) : 0;
+        allowed = m_position.value(group, Function::invalidId()) == homePosition(group)
+                ? laserDownAllowed(m_faderNow) : 0;
         dy = -sw.height + qMin(2 * sw.height, allowed);
     }
     if (laser == false && sw.shape >= 0)
@@ -9416,6 +9461,26 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         beats = qMin(beats, qMax(4, beats / 2));       // 2x: never under a bar, never slower (runde 199, 201)
     uint ms = uint(qMax(250.0, beats * beatMs));
 
+    // THE BARS GROW OUT OF THE AIM (runde 219, the 09-20 log: "sigtet var
+    // maerkeligt og bevaegelserne ikke smooth"). A figure used to start at
+    // full size, its centre `height` steps above the aim and every bar at its
+    // own point of the wave - six bars thrown 0-26 steps at once on every
+    // start. Now a bar figure starts at size nought ON its aim and grows one
+    // step of height every second beat, by the EFX's own clock read here on
+    // the beat. The centre follows from that size by the rule it always had
+    // (dy = -h + min(2h, allowed): the lowest point is on the aim, or as far
+    // under it as the fader allows) and is set together with it.
+    //
+    // Not the EFX's fade-in (tried first in this round, review): that grows
+    // on the timer thread whether beats come or not, and with the link lost
+    // there are none for up to 30 s - the figure would outgrow a centre that
+    // only moves on the beat. Grown here, nothing grows between beats, and
+    // the safety line holds whatever the timing.
+    auto barGrow = [&](qreal elapsedMs, int &h, int &d) {
+        h = qMin(sw.height, int(elapsedMs / beatMs) / 2);
+        d = -h + qMin(2 * h, allowed);
+    };
+
     bool running = m_active.contains(slot) && m_active.value(slot) == fid
                 && efx->isRunning() && efx->stopped() == false;
     if (running && m_sweepShown.value(group) == sw)
@@ -9424,12 +9489,27 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // and the ENERGY fader resizes it (the live ratio above)
         if (qAbs(int(efx->duration()) - int(ms)) > int(ms / 50))
             efx->setDuration(ms);
+        if (laser && sw.shape >= 0)
+        {
+            int h = 0, d = 0;
+            barGrow(qreal(efx->elapsed()), h, d);
+            int y = qBound(0, 127 + d, 255);
+            // down one step a beat (a fader pushed up, a figure growing past
+            // the fader's allowance); up - the safe way - at once
+            const int cur = int(efx->yOffset());
+            if (y > cur)
+                y = qMin(y, cur + 1);
+            // the centre first: lifted before the figure grows under it
+            if (efx->yOffset() != y)
+                efx->setYOffset(y);
+            if (efx->height() != h)
+                efx->setHeight(h);
+            return;
+        }
         if (sw.shape >= 0 && efx->width() != width)
             efx->setWidth(width);
         if (sw.shape >= 0 && efx->height() != height)
             efx->setHeight(height);
-        if (laser && sw.shape >= 0 && efx->yOffset() != qBound(0, 127 + dy, 255))
-            efx->setYOffset(qBound(0, 127 + dy, 255));
         return;
     }
     // (Point 4 - a new figure taking over from where the heads actually are -
@@ -9443,12 +9523,20 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     // EFX stopped (stop() only asks; the timer thread does it later)
 
     // no figure but a jitter: a figure of size zero is a still point off the aim
+    // a bar starts at size nought on its aim (barGrow) - unless the EFX is
+    // still running (a soft stop taken over, a reconfigure): then its clock
+    // is live and the size and centre are read from it, together
+    if (laser && sw.shape >= 0)
+    {
+        const bool live = efx->isRunning() && efx->stopped() == false;
+        barGrow(live ? qreal(efx->elapsed()) : 0.0, height, dy);
+    }
     efx->setAlgorithm(sw.shape < 0 ? EFX::Circle : EFX::Algorithm(sw.shape));
+    efx->setYOffset(qBound(0, 127 + dy, 255));     // the centre before the size
     efx->setWidth(sw.shape < 0 ? 0 : width);
     efx->setHeight(sw.shape < 0 ? 0 : height);
     efx->setRotation(sw.rotation);
     efx->setXOffset(qBound(0, 127 + sw.dx, 255));
-    efx->setYOffset(qBound(0, 127 + dy, 255));
     efx->setIsRelative(true);
     efx->setXFrequency(sw.fx);
     efx->setYFrequency(sw.fy);
@@ -10450,7 +10538,10 @@ void TrackEngine::laserFaderCheck(qreal slider)
             if (sw.shape >= 0 && efx != nullptr)
             {
                 const int allowed = m_position.value(key, Function::invalidId()) == homePosition(key) ? downNow : 0;
-                const int y = qBound(0, 127 - sw.height + qMin(2 * sw.height, allowed), 255);
+                // the size that SHOWS: a bar figure grows from nought (runde
+                // 219), and lifting to the full size's centre jumped it
+                const int h = int(efx->height());
+                const int y = qBound(0, 127 - h + qMin(2 * h, allowed), 255);
                 if (int(efx->yOffset()) > y)
                     efx->setYOffset(y);
             }
