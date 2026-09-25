@@ -221,7 +221,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     // because someone dimmed last time is worse than one that starts bright
     m_master = 1.0;
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
-    m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
+    m_holdBars = qBound(4, settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt(), 128);   // as setHoldBars (runde 220)
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
     m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
@@ -4266,7 +4266,7 @@ QString TrackEngine::importSettings()
     }
     // take them on board: roles, stars and options are read in ensureTable
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
-    m_holdBars = settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt();
+    m_holdBars = qBound(4, settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt(), 128);   // as setHoldBars (runde 220)
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
     m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
@@ -6866,6 +6866,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             run("pos:" + key, want, 1.0, 0, true);
     }
 
+    // the bar figure below must not stop for the blink: it is a dark beat,
+    // not a move, and the figure restarted from nought at every drop (runde
+    // 220 - it undid the "never redrawn while running" of runde 219)
+    const QSet<QString> moveDark = darkGroups;
     /* ---- the blink: one dark beat right before a drop, then everything
      *      lands on the one. The base stays - the room never goes black. ---- */
     if (preDrop && beatsToNext == 1 && energy > 0.5 && isCalm == false && hold == false)
@@ -6990,7 +6994,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // No figure in a break - there the bars sit at the home aim - and CALM
         // stops the lasers while the heads keep drifting.
         bool wanted = castSet.contains(key) && aimed && aimMoves == false
-                   && userMoves == false && darkGroups.contains(key) == false
+                   && userMoves == false && (g.lasers ? moveDark : darkGroups).contains(key) == false
                    && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
                    && (g.lasers == false || (m_fullAuto && isBreak == false && isCalm == false))
                    // "Indtil 40 % energi skal de slet ikke bevaege sig"
@@ -7006,6 +7010,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                    && (g.lasers == false || fader >= (m_active.contains(slot) ? 0.40 : 0.43));
         if (wanted == false)
         {
+            // An EFX has no fade-out: a bar figure stopped puts the beams
+            // straight back on the aim - up to 26 steps (20 degrees) lit.
+            // Dark for that beat, like a position move (runde 220). The
+            // levels below read darkGroups.
+            if (g.lasers && m_active.contains(slot) && castSet.contains(key))
+                darkGroups.insert(key);
             if (m_active.contains(slot))
                 stopSlot(slot, true);
             m_sweep.remove(key);
@@ -7091,7 +7101,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         quint32 posId = m_active.value("pos:" + key, Function::invalidId());
         // only over our own positions: a position of the user's may set its own zoom
         bool ours = posId != Function::invalidId() && m_funcs.value(posId).generated;
-        if (castSet.contains(key) == false || ours == false || m_blackout)
+        // ... and not under a programme that zooms by itself (runde 220): the
+        // show has eight "AUTO Wash Zoom ..." / "... Zoom ..." chasers that
+        // write only the zoom channel, and they pass every motion filter. Two
+        // writers on one LTP channel - each chaser step took the zoom, each
+        // zoom change of ours took it back. The programme wins; ours waits.
+        const quint32 motId = m_active.value("mot:" + key, Function::invalidId());
+        const bool progZoom = motId != Function::invalidId() && m_funcs.value(motId).generated == false
+                           && m_funcs.value(motId).name.contains(QStringLiteral("zoom"), Qt::CaseInsensitive);
+        if (castSet.contains(key) == false || ours == false || progZoom || m_blackout)
         {
             if (m_active.contains(slot))
                 stopSlot(slot, true);
@@ -7879,11 +7897,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     m_cast = castSet;
 
     applyGroupOff();
-    // dropBar, not bar: the landing burst waits for the kick (see m_dropLand).
-    // In a drop the only thing driveStrobe reads `bar` for IS the landing.
-    driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, isDrop ? dropBar : bar, beatInBar,
-                isCalm || still || dropWaiting || m_flash || m_blackout
-                || isIntro || isOutro || exposureRest); // nobody strobes an intro/rest
+    // (driveStrobe moved below the hits, runde 220)
 
     /* ---- hits ---- */
     // the minimal guard: more than eight hits in 32 beats is a strobe show,
@@ -8029,6 +8043,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 genFlash(false);
         }
     }
+
+    // AFTER the hits (runde 220): genFlash() restarts a colour scene, and
+    // since runde 219 a colour scene writes the strobe channel to 0 - the
+    // scene started last in a tick wins, so a hit cut the burst on its own
+    // beat: the drop's landing burst lands on the hit beats and never showed
+    // at 0.7. Nothing in the hits reads the strobe state.
+    // dropBar, not bar: the landing burst waits for the kick (see m_dropLand).
+    // In a drop the only thing driveStrobe reads `bar` for IS the landing.
+    driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, isDrop ? dropBar : bar, beatInBar,
+                isCalm || still || dropWaiting || m_flash || m_blackout
+                || isIntro || isOutro || exposureRest); // nobody strobes an intro/rest
 
     checkConflicts(castSet);
 
@@ -10707,6 +10732,10 @@ void TrackEngine::closingTick(bool showOn)
     // - the ENERGY slider follows the clock (announceRoom, as a beat would)
     // A hand on ENERGY (ENERGY by clock off) or the toggle lifts the lid, and
     // the light comes back: the rig can be tested after closing.
+    // Not while a project load settles (runde 220): the ids below may still
+    // be the old show's, as in the pulse and fade timers.
+    if (m_docTimer.isActive())
+        return;
     const qreal dim = showOn ? closingCap() : 1.0;
     if (qAbs(dim - m_closingDim) > 0.004 || (dim == 0.0) != (m_closingDim == 0.0))
     {
@@ -11057,6 +11086,18 @@ void TrackEngine::release()
     // and let the dimmers fall back to the sliders. Positions stay where they
     // are - stopping a laser position is a move, and a slider may still have
     // the beam lit.
+    // ... but a bar FIGURE stopping is a move, and an EFX has no fade-out:
+    // the beams jumped back to the aim while their colour faded over a bar
+    // (runde 220). Those bars go dark at once instead.
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &lg = m_groups.value(key);
+        if (lg.lasers == false || lg.patternDevice || m_active.contains("efx:" + key) == false)
+            continue;
+        stopSlot("col:" + key, true);
+        for (int i = 0; i < lg.parts.count(); i++)
+            stopSlot(partSlot(key, i), true);
+    }
     stopSweeps();
     m_strobeUntil = -1;
     m_darkUntil.clear();              // AUTO is off: nothing is waiting to come back
