@@ -4428,6 +4428,15 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             continue;
         if (info.frozen)
             continue;                    // it can never step: nothing to follow the music with
+        // Per-group slots must never start a whole-room snapshot. Its other
+        // groups would bypass cast, colour and intensity decisions. Such
+        // looks remain available as START scenes and on the Virtual Console.
+        // (Runde 218: tested BEFORE the laser block - both are pure
+        // `continue` tests, so the order cannot change the result, but this
+        // one is cheap and throws away most of the table.)
+        if (group.isEmpty() == false
+            && (info.groups.contains(group) == false || info.groups.count() != 1))
+            continue;
         // LASER SAFETY (runde 190, Tobias: "ja, lav vagten"). A programme
         // that steers pan/tilt on the laser bars runs only as a POSITION,
         // where the 40/60 % rules are measured every beat. Roles are kept per
@@ -4440,7 +4449,9 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             bool bars = false;
             foreach (const QString &lg, info.groups)
             {
-                if (m_groups.value(lg).lasers && m_groups.value(lg).patternDevice == false)
+                // constFind: value() copied the whole TrackGroup (runde 218)
+                QMap<QString, TrackGroup>::const_iterator gi = m_groups.constFind(lg);
+                if (gi != m_groups.constEnd() && gi->lasers && gi->patternDevice == false)
                 {
                     bars = true;
                     break;
@@ -4449,12 +4460,6 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             if (bars)
                 continue;
         }
-        // Per-group slots must never start a whole-room snapshot. Its other
-        // groups would bypass cast, colour and intensity decisions. Such
-        // looks remain available as START scenes and on the Virtual Console.
-        if (group.isEmpty() == false
-            && (info.groups.contains(group) == false || info.groups.count() != 1))
-            continue;
         if (m_doc->function(info.id) == nullptr)
             continue;
         if (userAllowed(info, group) == false)
