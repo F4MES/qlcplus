@@ -4454,6 +4454,11 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             continue;
         if (info.frozen)
             continue;                    // it can never step: nothing to follow the music with
+        // "DrypDryp" (the animation lasers) only at a full fader. Tobias,
+        // 2026-09-25: "skal kun bruges paa 100% energi. Den er alt for vild
+        // til alt andet." By name, as the break's "vifte" is (tierOf).
+        if (m_faderNow < 0.995 && info.name.contains(QStringLiteral("dryp"), Qt::CaseInsensitive))
+            continue;
         // Per-group slots must never start a whole-room snapshot. Its other
         // groups would bypass cast, colour and intensity decisions. Such
         // looks remain available as START scenes and on the Virtual Console.
@@ -7630,6 +7635,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (have > stars || stars - have >= 2)
                     mf = Function::invalidId();
             }
+            // ... and "DrypDryp" goes the beat the fader leaves 100 % (runde
+            // 222) - candidates() will not hand it out again below that
+            if (mf != Function::invalidId() && m_faderNow < 0.995
+                && m_funcs.value(mf).name.contains(QStringLiteral("dryp"), Qt::CaseInsensitive))
+                mf = Function::invalidId();
             if (mf == Function::invalidId())
             {
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
