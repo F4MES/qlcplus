@@ -1942,6 +1942,10 @@ Rectangle
                                     v = Math.max(0, Math.min(1, v))
                                     if (v > 0.97) v = 1
                                     if (v < 0.03) v = 0
+                                    // whole percent (runde 221): every mouse move
+                                    // wrote the registry three times - repeats now
+                                    // stop at setGroupTrim's own equality test
+                                    v = Math.round(v * 100) / 100
                                     if (trackEngine) trackEngine.setGroupTrim(md.key, v)
                                 }
                                 // decided on the press alone: a drag that began on

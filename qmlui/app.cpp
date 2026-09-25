@@ -490,6 +490,11 @@ bool App::docModified() const
 
 void App::slotDocAutosave()
 {
+    // KIOSK_NO_AUTOSAVE_R221: the Track engine marks the Doc modified all
+    // night; a 7.8 MB save on the GUI thread stalled beats and fades. Kiosk
+    // edits nothing that lives in the show file.
+    if (m_doc != nullptr && m_doc->isKiosk())
+        return;
     saveXML(autoSaveFileName(), true);
 }
 

@@ -4365,6 +4365,12 @@ void TrackEngine::setFlash(bool pressed)
         // button's white must not be laid over it, now that the button is at
         // full and the hit would be too on the next fader move (runde 201)
         stopSlot("flash", true);
+        // ... and a hardware strobe burst that is running: driveStrobe() is
+        // quiet under FLASH from the next beat, but the burst's scene kept the
+        // lamps strobing under the held white until then (runde 221)
+        foreach (const QString &key, m_groupOrder)
+            stopSlot("str:" + key, true);
+        m_strobeUntil = -1;
         quint32 fid = flashFunction(strobeGroups, "white");
         if (fid == Function::invalidId())
             fid = flashFunction(allOn, "white");
@@ -10737,6 +10743,7 @@ void TrackEngine::closingTick(bool showOn)
     if (m_docTimer.isActive())
         return;
     const qreal dim = showOn ? closingCap() : 1.0;
+    const bool closingStarts = dim < 1.0 && m_closingDim >= 1.0;
     if (qAbs(dim - m_closingDim) > 0.004 || (dim == 0.0) != (m_closingDim == 0.0))
     {
         const bool darkChanged = (dim <= 0.0) != (m_closingDim <= 0.0);
@@ -10754,6 +10761,14 @@ void TrackEngine::closingTick(bool showOn)
     }
     if (dim < 1.0 && m_haze > 0.0)
         setHaze(0.0);
+    // Runde 221: haze set from a Virtual Console or MIDI fader never passed
+    // through m_haze, so the closing left the hazer running. Once, as the
+    // closing starts: the haze scene at nought over whatever set it.
+    else if (closingStarts)
+    {
+        ensureTable();
+        applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
+    }
     announceRoom();
 }
 
@@ -11017,7 +11032,14 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     castSorted.sort();
     const QString build = QCoreApplication::applicationVersion()
                         + QStringLiteral(" / TRACK-r127 / " __DATE__ " " __TIME__);
-    const QByteArray currentSettings = logSettings();
+    // Runde 221: every 16th beat, not every beat. logSettings() builds a
+    // QSettings and walks allKeys() - on Windows the REGISTRY, with the big
+    // seen/rating lists in it - and it ran on every beat and again on every
+    // group-fader signal: 2-10 ms on the GUI thread each time. A changed
+    // setting now reaches the log up to 16 beats late; the first row of a
+    // file still carries its snapshot (m_logSettingsLast is empty there).
+    const bool sample = m_logSettingsLast.isEmpty() || (beat % 16) == 0;
+    const QByteArray currentSettings = sample ? logSettings() : m_logSettingsLast;
     QString snapshot;
     if (currentSettings != m_logSettingsLast)
     {
