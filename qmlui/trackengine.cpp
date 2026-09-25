@@ -2138,11 +2138,14 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             if (fid != Function::invalidId())
             {
                 // Colour channels are HTP, so a red accent over a running
-                // blue base would mix to magenta. White never showed this
-                // because 255,255,255 wins every channel. The colour scene
-                // steps aside for the flash and comes back on the next beat.
-                if (hue != QStringLiteral("white"))
-                    stopSlot("col:" + key, true);
+                // blue base would mix to magenta. The colour scene steps
+                // aside for the flash and comes back on the next beat.
+                // White too, since runde 221+2: "255,255,255 wins every
+                // channel" stopped being true when strobe white became the
+                // white lamp or RGB at 178 (09-22) - the white hit came out
+                // lavender in a blue room, pink in a red one (119 of 172
+                // white flash beats on 09-20 had the room colour under them).
+                stopSlot("col:" + key, true);
                 run("flash:" + key, fid, 1.0, 0, true);
             }
             qreal keepDepth = m_pulseDepth.value(key, 0.0);
@@ -7687,6 +7690,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && m_funcs.value(mf).colour == colour
             && m_active.contains(QStringLiteral("str:") + key) == false)
             cf = Function::invalidId();
+        // ... and not under a HELD FLASH: genFlash() stopped the colour scene
+        // hard so the white is white (HTP), and this restarted it on the next
+        // beat - the held white went back to white + the room's colour for
+        // the rest of the hold (runde 223). The flash's own white scene is
+        // running; the room colour comes back on the first beat after release.
+        if (m_flash && m_flashHeld.contains(key))
+            cf = Function::invalidId();
         // colour scenes swap hard: a soft fade left the old colour adding up
         // with the new one on RGB fixtures for a bar - a blend nobody asked for
         if (cf != Function::invalidId())
@@ -11681,8 +11691,14 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_colourSince = adopted ? 0 : -1;
     m_aimSince.clear();          // a fresh track aims where it likes
     m_castCursor++;
-    m_moves.clear();             // the new track draws its own moves
-    m_sweep.clear();
+    // ... unless HOLD is on (runde 223): tick() redraws whatever is missing,
+    // so clearing these under HOLD changed every pattern, figure and zoom on
+    // the new track's first beat - the one thing HOLD promises not to do
+    if (m_hold == false)
+    {
+        m_moves.clear();         // the new track draws its own moves
+        m_sweep.clear();
+    }
     m_dropStyle = 0;
     // CALM counts beats of this track: carry only what is left of it
     m_calmUntil = m_calmUntil > m_lastBeat ? m_calmUntil - m_lastBeat : 0;
@@ -11700,8 +11716,11 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_effects = 0;
     m_effectsBefore = 0;
     m_effectsBeat = -1;
-    m_zoom.clear();
-    m_zoomMode.clear();
+    if (m_hold == false)         // as m_moves above (runde 223)
+    {
+        m_zoom.clear();
+        m_zoomMode.clear();
+    }
     m_floorRound = false;
     m_strobeSeen = -1;
     // the burst end is a beat number of THIS track: carrying it over would
