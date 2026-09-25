@@ -82,6 +82,10 @@ static quint32 nameScatter(const QString &name)
 // chase walks one head at a time (Tobias, 2026-09-15: "det jeg skriver med
 // lyset slukker, er basen der slukker").
 #define ENGINE_BREAK_LIT      0.60
+// A programme that keeps every lamp of its group at least this high in every
+// step may own the dimmers - on the base too (runde 231, Tobias: "Gør som du
+// foreslår" - BACKLOG 70). The room cannot go dark under it.
+#define ENGINE_OWN_FLOOR      0.35
 // how far from the home aim a laser position may take the beams before the
 // engine refuses to run it on its own: 24 units is about 17 degrees, and our
 // own tilt figures are clamped to 14 (gen_programs.py, BAR_TILT_REACH)
@@ -502,7 +506,7 @@ void TrackEngine::slotPulseTimer()
                 qreal out = qBound(0.0, m_activeLevel.value(slot, 1.0) * slotScale(slot, fid)
                                         * pulseFactor(key), 1.0);
                 // painting the colour too: out squared - see run()
-                if (m_funcs.value(fid).dimmer && m_funcs.value(fid).type != int(Function::SceneType) && m_funcs.value(fid).litShare < 0.99
+                if (canOwnDimmers(m_funcs.value(fid), key == m_compositionBase)     // runde 231
                     && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
                     && m_groups.value(key).rgb)
                     out = std::sqrt(out);
@@ -1034,6 +1038,7 @@ void TrackEngine::ensureTable()
         QSet<quint32> touched = fixturesOf(func, 0);
         info.fixtureCount = touched.count();
         info.litShare = litShareOf(func, touched);
+        info.minLit = minLitOf(func, touched);
         info.setsColour = setsColourOf(func);
         info.aims = aimsOf(func);
         foreach (quint32 fid, touched)
@@ -1267,7 +1272,10 @@ void TrackEngine::ensureTable()
         // nothing does - there the climb only peeks above the engine's own
         // level, and the build's first half is better left to the engine's
         // own growing fill (runde 230, review)
-        if (it.value().groups.count() == 1 && it.value().litShare < 0.99
+        // (runde 231: or one that keeps every lamp at ENGINE_OWN_FLOOR, which
+        // may own them on the base too - canOwnDimmers)
+        if (it.value().groups.count() == 1
+            && (it.value().litShare < 0.99 || it.value().minLit >= ENGINE_OWN_FLOOR)
             && it.value().name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
             m_climbGroups.insert(*it.value().groups.constBegin());
     }
@@ -3305,6 +3313,75 @@ qreal TrackEngine::litShareOf(Function *func, const QSet<quint32> &touched) cons
         counted++;
     }
     return counted > 0 ? sum / counted : 1.0;
+}
+
+qreal TrackEngine::minLitOf(Function *func, const QSet<quint32> &touched) const
+{
+    // The lowest master dimmer any step leaves any lamp at, 0..1. A lamp with
+    // a dimmer that a step does not write is a lamp this programme makes no
+    // promise about: 0. Lamps without a master dimmer are not judged here.
+    if (func == nullptr || touched.isEmpty() || m_doc == nullptr)
+        return 0.0;
+    QList<quint32> steps;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+    }
+    else
+        steps.append(func->id());
+    if (steps.isEmpty())
+        return 0.0;
+    int lowest = 255;
+    bool judged = false;
+    foreach (quint32 sid, steps)
+    {
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            return 0.0;
+        foreach (quint32 fid, touched)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr)
+                continue;
+            const quint32 dch = dimmerChannel(fxi);
+            if (dch == QLCChannel::invalid())
+                continue;
+            int v = -1;
+            foreach (const SceneValue &sv, scene->values())
+            {
+                if (sv.fxi == fid && sv.channel == dch)
+                {
+                    v = int(sv.value);
+                    break;
+                }
+            }
+            if (v < 0)
+                return 0.0;              // not written: no promise
+            lowest = qMin(lowest, v);
+            judged = true;
+        }
+    }
+    return judged ? qreal(lowest) / 255.0 : 0.0;
+}
+
+bool TrackEngine::canOwnDimmers(const TrackFuncInfo &info, bool onBase) const
+{
+    // A dimmer chase takes the group's dimmers from the engine's own parts
+    // (motionOwns) - so its dark steps show. One that lights every lamp in
+    // every step never did (litShare >= 0.99: the parts kept the level), and
+    // on the base nothing did, so the room never went dark under a chase
+    // (runde 178). Runde 231: a programme that keeps EVERY lamp at
+    // ENGINE_OWN_FLOOR or more in every step owns them too, base included -
+    // its figure shows in full, and the room still cannot go dark. Before,
+    // those figures (Throb, Glimmer, Pendulum, the build climbs ...) only
+    // showed where they rose above the engine's own level.
+    if (info.dimmer == false || info.type == int(Function::SceneType))
+        return false;
+    if (info.minLit >= ENGINE_OWN_FLOOR)
+        return true;
+    return onBase == false && info.litShare < 0.99;
 }
 
 quint32 TrackEngine::dimmerChannel(Fixture *fxi) const
@@ -7816,8 +7893,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType)))
                     motionDivision = qMax(tier == 2 ? 500 : 1000, motionDivision);
                 // the bare level: run() adds MASTER and the trim (slotScale)
-                const bool mayOwn = mi.dimmer && mi.type != int(Function::SceneType) && mi.litShare < 0.99
-                                 && key != base;       // the base never owns: see motionOwns
+                const bool mayOwn = canOwnDimmers(mi, key == base);   // see motionOwns (runde 231)
                 run("mot:" + key, mf, mayOwn ? glBase : 1.0, motionDivision, hard);
                 m_recentUse.insert(mf, m_clock.elapsed());     // the cooldown starts from its last beat
             }
@@ -7943,10 +8019,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // one promise this engine keeps everywhere. The base keeps its own
             // figures, floors and pulse; the chase still brings its colour and
             // its heads. The effect groups show their programmes' patterns.
+            // Runde 231: canOwnDimmers() - the base too, but only a chase
+            // that keeps every head at ENGINE_OWN_FLOOR or more, so the
+            // promise above holds.
             bool motionOwns = mf != Function::invalidId()
-                           && key != base
-                           && mInfo.type != int(Function::SceneType)
-                           && mInfo.dimmer && mInfo.litShare < 0.99
+                           && canOwnDimmers(mInfo, key == base)
                            && darkGroups.contains(key) == false
                            // a colour scene that sets the dimmer itself sits
                            // under every lamp (HTP) and the chase's dark
@@ -9022,12 +9099,12 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
     if (slot.startsWith(QStringLiteral("mot:")))
     {
         // ... a chase that can OWN them - motionOwns' own test. One that lights
-        // every lamp in every step (litShare >= 0.99) never owns: the parts
+        // every lamp in every step (litShare >= 0.99) never owns - unless it
+        // keeps them all at ENGINE_OWN_FLOOR (runde 231, canOwnDimmers): the parts
         // keep the dimmer, and scaling the chase as well put the room at
         // level squared (runde 174).
         const TrackFuncInfo &mfi = m_funcs.value(fid);
-        if (mfi.dimmer == false || mfi.type == int(Function::SceneType) || mfi.litShare >= 0.99
-            || slotGroup(slot) == m_compositionBase)       // the base never owns: see motionOwns
+        if (canOwnDimmers(mfi, slotGroup(slot) == m_compositionBase) == false)   // see motionOwns (runde 231)
             return 1.0;
         const QString group = slotGroup(slot);
         return masterOut() * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
@@ -9107,7 +9184,7 @@ void TrackEngine::reapplyLevels()
             {
                 if (m_motionDim.contains(group) && m_flashHeld.contains(group) == false)
                     out *= pulseFactor(group);
-                if (m_funcs.value(fid).dimmer && m_funcs.value(fid).type != int(Function::SceneType) && m_funcs.value(fid).litShare < 0.99
+                if (canOwnDimmers(m_funcs.value(fid), group == m_compositionBase)   // runde 231
                     && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
                     && m_groups.value(group).rgb)
                     out = std::sqrt(qBound(0.0, out, 1.0));
@@ -9173,6 +9250,18 @@ qreal TrackEngine::pulseFactor(const QString &group) const
     }
     // the foundation's floor - not in a drop, see patternMask()
     if (ambientBase(group) && m_compositionTier != 2 && m_floorRound == false) factor = qMax(0.40, factor);
+    // A chase that OWNS the base's dimmers (runde 231, canOwnDimmers) keeps
+    // every head at minLit or more - that is the promise it owns them on. The
+    // pulse and the breath multiply onto it, so without this the base's
+    // darkest head went to minLit x pulse (0.35 x 0.08 in a drop, review):
+    // the pulse may take it down to ENGINE_OWN_FLOOR of the level, no further.
+    if (group == m_compositionBase && m_motionDim.contains(group))
+    {
+        const qreal ml = m_funcs.value(m_active.value(QStringLiteral("mot:") + group,
+                                                      Function::invalidId())).minLit;
+        if (ml > 0.0)
+            factor = qMax(factor, qMin(1.0, ENGINE_OWN_FLOOR / ml));
+    }
     const int sequenceIndex = m_sequenceGroups.indexOf(group);
     if (sequenceIndex >= 0)
         factor *= TrackStage::sequenceGain(qreal(now - m_sequenceStart) / m_sequenceBeatMs,
@@ -11845,7 +11934,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         const QString ownGroup = slotGroup(slot);
         if (m_motionDim.contains(ownGroup) && m_flashHeld.contains(ownGroup) == false)
             out = qBound(0.0, out * pulseFactor(ownGroup), 1.0);
-        if (m_funcs.value(fid).dimmer && m_funcs.value(fid).type != int(Function::SceneType) && m_funcs.value(fid).litShare < 0.99
+        if (canOwnDimmers(m_funcs.value(fid), ownGroup == m_compositionBase)   // runde 231
             && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
             && m_groups.value(ownGroup).rgb)
             out = std::sqrt(out);

@@ -186,6 +186,8 @@ struct TrackFuncInfo
     int starsGuess = 0;       // what the engine would say, from tempo and name
     int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
     qreal litShare = 1.0;     // how much of what it touches is lit, averaged over its steps
+    qreal minLit = 0.0;       // the lowest master dimmer any step leaves any of its lamps
+                              // at (0..1); 0 = can promise nothing (runde 231)
 
     /* ---- the operator's verdict, per section kind ---- */
     /** Verdict POINTS, not taps. A spread thumb is worth 1, an aimed one
@@ -691,6 +693,8 @@ protected:
      *  for a scene that lights all of them, 1/7 for a chase that walks one
      *  head of seven. Measured once, when the table is built. */
     qreal litShareOf(Function *func, const QSet<quint32> &touched) const;
+    qreal minLitOf(Function *func, const QSet<quint32> &touched) const;
+    bool canOwnDimmers(const TrackFuncInfo &info, bool onBase) const;
     /** Does this function write a colour of its own? A chase that only moves
      *  dimmers takes whatever colour the room is in, so it can run under all
      *  of them; one that writes red is a red programme. */
