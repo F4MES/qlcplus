@@ -447,6 +447,7 @@ public:
     /** ON -> BASE -> OFF -> ON. The base group is always lit; the others
      *  are effects added on top as the evening's energy rises. */
     Q_INVOKABLE void cycleGroup(QString key);
+    Q_INVOKABLE void toggleBase(QString key);
     QVariantMap trims() const;
     Q_INVOKABLE qreal groupTrim(QString key) const;
     Q_INVOKABLE void setGroupTrim(QString key, qreal level);
@@ -936,6 +937,7 @@ private:
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)
     int m_kickBeat;           // the beat it last counted - tick() can run twice on one beat
     bool m_sectionOwed = false;   // R233_SAME_BEAT: a same-beat call's landing, owed to the next beat
+    int m_landedBeat = -1;        // R234: the beat the last section landed on - owed only if it was not this one
     qint64 m_whiteLandMs = -1;    // runde 233: the last white drop landing (m_clock ms)
     QTimer m_echoTimer;       // the bars answer a hit half a beat later ...
     QTimer m_echoOffTimer;    // ... and let go a third of a beat after that

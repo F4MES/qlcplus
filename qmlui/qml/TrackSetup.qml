@@ -547,12 +547,15 @@ Rectangle
                         }
                     }
 
-                    // tap cycles ON -> BASE -> OFF. The base group is always lit;
-                    // the others are effects added on top as the evening rises.
+                    // tap: ON <-> OFF. Press and hold: BASE (or back to the
+                    // automatic base) - one tap made the Minis the base by
+                    // accident (runde 234). The base group is always lit; the
+                    // others are effects added on top as the evening rises.
                     MouseArea
                     {
                         anchors.fill: parent
                         onClicked: if (trackEngine && groupTile.g.key) trackEngine.cycleGroup(groupTile.g.key)
+                        onPressAndHold: if (trackEngine && groupTile.g.key) trackEngine.toggleBase(groupTile.g.key)
                     }
                 }
             }

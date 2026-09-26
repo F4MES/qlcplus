@@ -4035,37 +4035,37 @@ QString TrackEngine::baseGroup() const
 
 void TrackEngine::cycleGroup(QString key)
 {
+    // Runde 234: a TAP is ON <-> OFF, nothing else. It used to cycle
+    // ON -> BASE -> OFF, and one tap on the Minis in SETUP (01:42, 26 Sep)
+    // made them the base for the rest of the night - and saved it - without
+    // Tobias meaning to ("Jeg har altså ikke ændret mini til at være base").
+    // BASE is a press-and-hold now (toggleBase).
     ensureTable();
-    // ON -> BASE -> OFF -> ON. The base may also be picked automatically when
-    // none is set; the first tap on that one pins it, so the cycle carries on
-    // from there instead of flipping between BASE and OFF forever
-    // ON and OFF go through setGroupEnabled(), as the cast panel's switch
-    // does: this only wrote the set, so under the start scene or between
-    // tracks (no tick to catch up) the group stayed lit with its tile on OFF
-    // (runde 176)
-    int turn = 0;                               // +1 on, -1 off
-    if (m_groupOff.contains(key))
+    const bool turnOn = m_groupOff.contains(key);
+    if (turnOn == false && m_base == key)
     {
-        turn = 1;                               // OFF -> ON
-        if (m_base == key) m_base.clear();
+        m_base.clear();                         // a base switched off is no base
+        QSettings().setValue(SETTINGS_ENGINE_BASE, m_base);
     }
-    else if (m_base == key)
-    {
-        turn = -1;                              // BASE -> OFF
+    setGroupEnabled(key, turnOn);               // saves and tells the page
+}
+
+void TrackEngine::toggleBase(QString key)
+{
+    // press-and-hold on a group in SETUP: make it the base, or give the base
+    // back to the automatic pick. Strobes and lasers are never the base
+    // (runde 190, 213). A group that is OFF is switched on to be the base.
+    ensureTable();
+    if (m_base == key)
         m_base.clear();
-    }
     else if (m_groups.value(key).strobes || m_groups.value(key).lasers)
-    {
-        turn = -1;                              // strobes and lasers: ON -> OFF, never BASE (runde 190, 213)
-    }
+        return;
     else
-    {
-        m_base = key;                           // ON (or the automatic base) -> BASE
-    }
+        m_base = key;
     QSettings().setValue(SETTINGS_ENGINE_BASE, m_base);
-    if (turn != 0)
+    if (m_base == key && m_groupOff.contains(key))
     {
-        setGroupEnabled(key, turn > 0);         // saves and tells the page
+        setGroupEnabled(key, true);             // saves and tells the page
         return;
     }
     saveRoles();
@@ -5691,7 +5691,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // beat still draws at once.
     if (beat == m_lastBeat && m_lastState.isEmpty() == false)
     {
-        m_sectionOwed = m_sectionOwed || sectionChanged;
+        // ... unless this beat already landed one (runde 234): the look path
+        // (updateState -> applyLook -> runEngine(true)) follows a landing on
+        // the same beat, and owing it drew a second drop look on the next.
+        m_sectionOwed = m_sectionOwed || (sectionChanged && m_landedBeat != beat);
         return;
     }
     ensureTable();
@@ -5700,6 +5703,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // invalidate the old section's programmes and delayed-drop offset.
     sectionChanged = sectionChanged || m_lastState.isEmpty() || m_sectionOwed;
     m_sectionOwed = false;
+    if (sectionChanged)
+        m_landedBeat = beat;
     if (beat < m_lastBeat || beat - m_lastBeat > 8)
     {
         m_fillUntil = -1;
