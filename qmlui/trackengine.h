@@ -935,6 +935,8 @@ private:
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)
     int m_kickBeat;           // the beat it last counted - tick() can run twice on one beat
+    bool m_sectionOwed = false;   // R233_SAME_BEAT: a same-beat call's landing, owed to the next beat
+    qint64 m_whiteLandMs = -1;    // runde 233: the last white drop landing (m_clock ms)
     QTimer m_echoTimer;       // the bars answer a hit half a beat later ...
     QTimer m_echoOffTimer;    // ... and let go a third of a beat after that
     QString m_echoKey;        // the laser group that answers

@@ -2207,7 +2207,9 @@ void TrackEngine::ensureColourScenes()
     struct Swatch { const char *name; int r, g, b, w; };
     static const Swatch table[] = {
         { "red", 255, 0, 0, 0 },       { "green", 0, 255, 0, 0 },     { "blue", 0, 0, 255, 0 },
-        { "cyan", 0, 255, 255, 0 },    { "magenta", 255, 0, 255, 0 }, { "yellow", 255, 255, 0, 0 },
+        // cyan and magenta at 75 %: two channels read brighter than one on
+        // RGB LEDs (Tobias, 2026-09-26: "meget lyse ... skrues en smule ned")
+        { "cyan", 0, 192, 192, 0 },    { "magenta", 192, 0, 192, 0 }, { "yellow", 255, 255, 0, 0 },
         { "white", 255, 255, 255, 255 }, { "orange", 255, 90, 0, 0 },  { "pink", 255, 60, 120, 0 },
         { "purple", 140, 0, 255, 0 },  { "amber", 255, 160, 0, 0 },   { "uv", 90, 0, 255, 0 } };
 
@@ -5015,6 +5017,29 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     }
     if (tagged.isEmpty() == false)
         ok = tagged;
+    else if (tier >= 0)
+    {
+        // No programme of this tier (runde 233: the Minis have no break
+        // programmes, yet the operator can make them the base - then every
+        // break fell through to the whole pool, and the doubled top star
+        // favoured the DROP figures: Mini Wide Hammer 104 of 104 beats in
+        // breaks). The nearest tier instead, and in a break the calm ones.
+        // Only when something is left, so no group goes without.
+        QList<TrackFuncInfo *> nearby;
+        QList<TrackFuncInfo *> calm;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (info->tier >= 0 && qAbs(info->tier - tier) >= 2)
+                continue;
+            nearby.append(info);
+            if (tier != 0 || qMax(1, info->stars) <= 1)
+                calm.append(info);
+        }
+        if (calm.isEmpty() == false)
+            ok = calm;
+        else if (nearby.isEmpty() == false)
+            ok = nearby;
+    }
 
     // Not the same FIGURE twice in a row. The per-programme cooldown counts
     // names, and the eye counts shapes: "Row Outer In" following "Row Trade"
@@ -5518,17 +5543,18 @@ QString TrackEngine::drawColour(const QStringList &pool, int keyBias, QRandomGen
     // cold palette still gets a colour, and a cold night still sees red.
     if (pool.isEmpty())
         return QString();
-    if (keyBias < 0)
-        return pool.at(int(rng->bounded(pool.count())));
+    // Green: one ticket where any other colour has three (Tobias, 2026-09-26:
+    // "en fed farve, men den skal ikke bruges så tit"), known key or not.
     static const QStringList cold = { "blue", "cyan", "magenta", "purple", "uv", "pink" };
     static const QStringList warm = { "red", "amber", "yellow", "orange" };
-    const QStringList &side = keyBias == 0 ? cold : warm;
     QStringList weighted;
     foreach (const QString &c, pool)
     {
-        weighted << c;
-        if (side.contains(c))
-            weighted << c << c;
+        int n = (c == QLatin1String("green")) ? 1 : 3;
+        if (keyBias >= 0 && (keyBias == 0 ? cold : warm).contains(c))
+            n *= 3;
+        for (int i = 0; i < n; i++)
+            weighted << c;
     }
     return weighted.at(int(rng->bounded(weighted.count())));
 }
@@ -5657,11 +5683,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         announceRoom();
         return;
     }
+    // R233_SAME_BEAT: a second call on a beat already drawn (a SECTION tap,
+    // a flag edit or undo, a resend) is not a landing. On 25-26 Sep it
+    // re-landed the section 334 times - a second drop look, lead and cast a
+    // splitsecond after the first. What it asks for is owed to the next beat.
+    // idle/release/trackLoaded clear m_lastState, so a resume on the same
+    // beat still draws at once.
+    if (beat == m_lastBeat && m_lastState.isEmpty() == false)
+    {
+        m_sectionOwed = m_sectionOwed || sectionChanged;
+        return;
+    }
     ensureTable();
     tickFades();
     // idle/release clear the state. Resuming the same marker span must still
     // invalidate the old section's programmes and delayed-drop offset.
-    sectionChanged = sectionChanged || m_lastState.isEmpty();
+    sectionChanged = sectionChanged || m_lastState.isEmpty() || m_sectionOwed;
+    m_sectionOwed = false;
     if (beat < m_lastBeat || beat - m_lastBeat > 8)
     {
         m_fillUntil = -1;
@@ -6407,6 +6445,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // press when you like what you see, so this is not a corner case.
     // A hidden drop (under ENGINE_DROP_SHOW) was CHOSEN with groove rules, so
     // its verdicts belong to the groove bucket, not the drop's
+    // the drop ARRIVES (not a drop running on into its next section): while
+    // one waits for its kick m_lookState reads "build" (runde 233)
+    const bool dropArrives = isDrop && m_lookState != QStringLiteral("drop");
     if (hold == false)
         m_lookState = dropWaiting ? QStringLiteral("build")
                     : (dropHidden ? QStringLiteral("normal")
@@ -6486,7 +6527,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     // One rhythmic lead in a drop, INSIDE the same budget. The remainder
     // keeps the section's rotation; fixture names never decide who is cut.
-    if ((isDrop || preDrop) && hold == false && isCalm == false)
+    // Runde 233 (Tobias: "under grooves og i normal kan de godt køre en
+    // langsom beat-chase en gang imellem"): one groove section in three,
+    // above the dance-floor line, the strobes take the first effect place
+    // too. m_castCursor only moves on a section change, so it holds for the
+    // section.
+    const bool grooveStrobes = isDrop == false && preDrop == false && isBuild == false
+                            && isBreak == false && isIntro == false && isOutro == false
+                            && fader >= ENGINE_STROBE_ON && (m_castCursor % 3) == 0;
+    if ((isDrop || preDrop || grooveStrobes) && hold == false && isCalm == false)
     {
         for (int i = 0; i < priority.count(); i++)
         {
@@ -6505,7 +6554,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (isBreak == false && m_barsLead && hold == false && isCalm == false)
     {
         int slot = 0;
-        if ((isDrop || preDrop) && priority.isEmpty() == false && m_groups.value(priority.first()).strobes)
+        if ((isDrop || preDrop || grooveStrobes) && priority.isEmpty() == false && m_groups.value(priority.first()).strobes)
             slot = 1;
         for (int i = 0; i < priority.count(); i++)
         {
@@ -6697,7 +6746,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // where the build's look holds)
     if (isBuild == false || isCalm || still || m_fullAuto == false || (m_floorRound && fader < 0.30))
         m_floorRound = false;
-    else if (sectionChanged && hold == false && dropWaiting == false)
+    // (not re-rolled at an inner flag of the same build - it was drawn at
+    // the build's start; 13 of 16 early endings on 25-26 Sep, runde 233)
+    else if (sectionChanged && hold == false && dropWaiting == false && m_floorRound == false)
         m_floorRound = m_fullAuto               // FULL AUTO only: it takes the heads' programmes and aims
                     && energy >= 0.30 && rng->bounded(100) < int(30.0 + 30.0 * qBound(0.0, energy, 1.0));
     if (redraw)
@@ -7528,7 +7579,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 mv.subSteps *= 2;      // the bars never step between the beats
         }
         // a hats-only passage (highs up, no kick) sparkles rather than sits
-        if (high > 0.65 && kick >= 0.0 && kick < 0.35 && mv.pattern == ENGINE_PAT_STATIC
+        if (high > 0.65 && kick >= 0.0 && kick < 0.35 && mv.pattern == ENGINE_PAT_STATIC && g.lasers == false
             && key != base && (m_fullAuto == false || key == m_rhythmLead)
             && isCalm == false && still == false && g.parts.count() >= 3)
         {
@@ -7656,7 +7707,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // must not start a 32-beat climb with eight beats left (review)
         // not while a fake drop waits for its kick: the build's top holds
         // there, and a fresh climb would start again from the bottom
-        m_buildLen = (isBuild && dropWaiting == false) ? qMax(1, beatsToNext) : 0;
+        // ... and only when the next flag IS the drop: beatsToNext counts to
+        // the next flag of any kind, and a climb that topped out on an inner
+        // flag 40 beats before the drop was cut there (runde 233)
+        m_buildLen = (isBuild && dropWaiting == false && nextState == QStringLiteral("drop"))
+                   ? qMax(1, beatsToNext) : 0;
         bool breakLasers = isBreak && g.lasers;
         // The base may run a break programme of the show's own - but only one
         // that keeps the room lit (litOnly below, ENGINE_BREAK_LIT). Counted
@@ -7789,6 +7844,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (mf != Function::invalidId() && m_buildLen <= 0
                 && m_funcs.value(mf).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
                 mf = Function::invalidId();
+            // A long or odd build (136, 129, 93 beats): the climb joins on the
+            // one beat where the beats left are a whole pass - 32 or 16 - so
+            // its top still lands on the drop. Only when a climb is there to
+            // take; the running programme is never dropped for nothing
+            // (runde 233).
+            if (mf != Function::invalidId() && moving && hold == false && m_climbGroups.contains(key)
+                && (m_buildLen == 32 || m_buildLen == 16)
+                && m_funcs.value(mf).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive) == false)
+            {
+                const quint32 c = motionFor(key, colour, castSet, cursor, tier, bpm, division, false, stars, litFloor);
+                if (c != Function::invalidId()
+                    && m_funcs.value(c).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
+                {
+                    mf = c;
+                    m_sectionMotion.insert(key, mf);
+                }
+            }
             if (mf == Function::invalidId())
             {
                 mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
@@ -8118,7 +8190,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // white on the downbeat of a drop - that is the one moment it
             // reads as a punch rather than as a lamp somebody forgot to
             // colour. Everywhere else the accent is in the room's colour.
-            QString hue = (isDrop && dropBar == 0 && beatInBar == 0) ? QStringLiteral("white") : m_colour;
+            // White is for the BIG drops (Tobias, 2026-09-26: "fedt på store
+            // drops. Men den kom ret ofte" - 240 white landings in 4.8 h):
+            // an arriving drop, ENERGY 0.85 up (0.75 for a hard or heavy
+            // one), at most one every three minutes. Every other drop still
+            // lands with its hit, in the room's colour (runde 233).
+            const bool whiteLand = isDrop && dropBar == 0 && beatInBar == 0 && dropArrives
+                // the SLIDER, as every hard line in this engine: `energy` is
+                // scaled by the section and could not reach 0.85 before the
+                // clock's 02:00 (review)
+                && (fader >= 0.85 || ((m_dropStyle == 1 || m_dropStyle == 4) && fader >= 0.75))
+                && (m_whiteLandMs < 0 || m_clock.elapsed() - m_whiteLandMs >= 180000);
+            if (whiteLand)
+                m_whiteLandMs = m_clock.elapsed();
+            QString hue = whiteLand ? QStringLiteral("white") : m_colour;
             quint32 ff = flashFunction(castSet, hue);
             // ... but only if his scene is actually in this colour. The
             // ranking in flashFunction() falls back to white and then to
@@ -8300,6 +8385,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_curveGroove) ev << "curve-groove";
         if (dropHidden) ev << "drop-hidden";
         if (dropWaiting) ev << "drop-wait";
+        if (m_floorRound) ev << "floor";    // the moves column cannot show it (runde 233)
         if (fakeDrop) ev << QString("drop-late@%1").arg(m_dropLand);
         if (isDrop && m_dropStyle > 0) ev << ("drop-" + dropStyleName(m_dropStyle));
         if (isDrop && dropBar >= 0 && dropBar < impactBarsLog) ev << "impact";
@@ -8350,14 +8436,26 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
     move.subSteps = 1;
     move.stepBeats = qMax(4, move.stepBeats);
     move.colourBars = 0;
+    // Runde 233 (rig 25-26 Sep): the calm is the PACE - four beats a step, no
+    // sub-steps, no hits - not a blank mask. Flattening every group but the
+    // lead to STATIC left the wash and the Minis on a unison pulse 75 % of
+    // the night (09-20: odd/even 47 %, halves 41 %, fill 11 %). A wide shape
+    // drawMove chose now survives on the base, and the walks too on support.
+    // patternMask keeps the floors (heads 0.35, the ambient base 0.45 outside
+    // a drop). Sparkle stays the lead's.
+    const bool wide = drawnPattern == ENGINE_PAT_ODDEVEN || drawnPattern == ENGINE_PAT_HALVES
+                   || drawnPattern == ENGINE_PAT_FILL;
     if (group == m_compositionBase)
     {
-        move.pattern = ENGINE_PAT_STATIC;
+        // heads only: the 0.45 floor is the ambient base's (ambientBase needs
+        // heads); a base of two Minis in odd/even would stand at 0.15 (review)
+        move.pattern = (wide && m_groups.value(group).heads) ? drawnPattern : ENGINE_PAT_STATIC;
         move.bare = false;
         return move; // keep the base's requested deep kick pulse and floor
     }
     const TrackGroup &g = m_groups.value(group);
-    move.pattern = ENGINE_PAT_STATIC;
+    move.pattern = (wide || drawnPattern == ENGINE_PAT_CHASE || drawnPattern == ENGINE_PAT_PINGPONG)
+                 ? drawnPattern : ENGINE_PAT_STATIC;
     move.pulseOn = 3;
     move.bare = g.strobes;
     move.pulse = g.strobes ? 1.0 : qMin(0.30, move.pulse);
@@ -8453,7 +8551,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
                                 ENGINE_PAT_ODDEVEN, ENGINE_PAT_CHASE });
             // eight beats a step at the bottom, one at the top - and the
             // steps in between are really in between
-            mv.stepBeats = qMax(1, int(qRound(8.0 - 7.0 * busy)));
+            // on the bar grid - 1, 2, 4 or 8 beats (runde 233: 3, 5, 6 and 7
+            // against a 4/4 bar and a pulse read as random)
+            const int sb = qMax(1, int(qRound(8.0 - 7.0 * busy)));
+            mv.stepBeats = sb <= 2 ? sb : (sb <= 5 ? 4 : 8);
             mv.bare = chance(0.35 + 0.45 * busy);
         }
         else
@@ -8505,7 +8606,11 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             // busking. Det ser stilet ud." Then two beats, then a lamp a beat
             // at the top. Never faster than the beat: above it the hardware
             // shutter is what takes over (driveStrobe).
-            mv.stepBeats = wild < 0.30 ? 4 : (wild < 0.65 ? 2 : 1);
+            // a groove walks on the beat now - two beats a lamp, one at the
+            // top - so the slow beat-chase can be seen (runde 233; four beats
+            // a lamp read as one blink a bar)
+            mv.stepBeats = (tier == 1 && build == false) ? (wild < 0.65 ? 2 : 1)
+                         : (wild < 0.30 ? 4 : (wild < 0.65 ? 2 : 1));
         }
         else
         {
@@ -8554,7 +8659,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             // be. Measured from ENGINE_STROBE_ON, not from nought: the old
             // span started at 0.20, so by the time they were allowed on stage
             // they were already most of the way to every beat.
-            mv.pulseOn = chance(wild * wild) ? 0
+            mv.pulseOn = (tier == 1 || chance(wild * wild)) ? 0
                        : (chance(wild) ? pick({ 1, 2 }) : 3);
         }
         // the bar flash is the top of the ramp, not a switch at 0.75
@@ -10616,6 +10721,28 @@ void TrackEngine::loadClockCurve(const QSettings &settings)
     // 22:30) is read as it was and laid onto the quarters, so a curve set by
     // hand survives the change; it is also the default.
     m_clockCurve.clear();
+    // Runde 233 (Tobias, 2026-09-26: "Du må gerne ændre energy-kurven til at
+    // passe bedre til hvordan jeg satte den i løbet af aftenen"): the curve
+    // read off his hand on 25-26 Sep, per quarter. It replaces the curve the
+    // rig had stored then, and the old default - nothing he sets later.
+    static const int fresh[ENGINE_CLOCK_POINTS] = { 0, 0, 0, 0,  0, 0, 0, 0,  0, 5, 15, 30,
+                                                    40, 45, 55, 60,  65, 65, 65, 65,  65, 65, 65, 70,
+                                                    80, 85, 90, 90 };
+    static const char *const retired[] = {
+        "0,0,0,0,0,0,0,0,0,0,10,10,20,25,30,35,50,60,70,80,90,83,90,88,90,100,100,90",
+        "0,0,20,45,70,85" };
+    {
+        const QString raw = settings.value(SETTINGS_ENGINE_CLOCKCURVE, QString()).toString().remove(' ');
+        bool renew = raw.isEmpty();
+        for (uint i = 0; i < sizeof(retired) / sizeof(retired[0]); i++)
+            renew = renew || raw == QLatin1String(retired[i]);
+        if (renew)
+        {
+            for (int i = 0; i < ENGINE_CLOCK_POINTS; i++)
+                m_clockCurve.append(fresh[i]);
+            return;
+        }
+    }
     QStringList parts = settings.value(SETTINGS_ENGINE_CLOCKCURVE, QString()).toString().split(',', Qt::SkipEmptyParts);
     if (parts.count() == ENGINE_CLOCK_POINTS)
     {
