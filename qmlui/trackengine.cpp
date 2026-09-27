@@ -5458,6 +5458,10 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         if (lasers == false && fader < 0.95
             && info->name.contains(QStringLiteral("ballyhoo"), Qt::CaseInsensitive))
             continue;
+        // ... and at ENERGY 0 the heads take plain aims, no moving figure
+        // (runde 255): a chaser keeps its own pace where the sweep stands still
+        if (lasers == false && fader < 0.03 && info->type != int(Function::SceneType))
+            continue;
         safe.append(info);
     }
     if (safe.isEmpty())
@@ -6286,7 +6290,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // section's start - not on any bar line (runde 252, BACKLOG 94: 36 of
     // 107 timed changes on 25-26 Sep fell off the 8-beat grid). A musical
     // turn (turnUp) still takes its own bar.
-    bool holdUp = m_colourSince >= 0 && beatInBar == 0 && (bar % 2) == 0 && sectionSoon == false
+    bool holdUp = m_colourSince >= 0 && beatInBar == 0 && ((isDrop ? dropBar : bar) % 2) == 0 && sectionSoon == false
                && beat - m_colourSince >= (haveCurves ? holdBeats * 3 / 2 : holdBeats);
     bool turnUp = haveCurves && turn && m_colourSince >= 0 && beatInBar == 0 && sectionSoon == false
                && beat - m_colourSince >= holdBeats / 2;
@@ -7382,11 +7386,32 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // A position FIGURE (a chaser of aims, runde 254) finishes its loop
         // before the walk takes the next aim: at a high fader a drop walks
         // every bar or two, which cut an 8-16 beat figure off half way.
+        // A head FIGURE does not run at ENERGY 0 or under CALM (runde 255,
+        // review): the EFX sweep stops or slows there, a chaser keeps its own
+        // pace. A plain aim instead (positionFunction at fader 0 hands out
+        // scenes only).
+        if (g.heads && (still || isCalm) && want != Function::invalidId()
+            && m_funcs.value(want).type == int(Function::ChaserType))
+        {
+            quint32 np = positionFunction(key, m_motionCursor, 0, 0.0);
+            if (np != Function::invalidId() && np != want)
+            {
+                want = np;
+                m_position.insert(key, want);
+                m_aimSince.insert(key, beat);
+                m_headMoveBeats.insert(key, -8);
+            }
+        }
+        // (a CHASER of aims: info.sweep is only ever an EFX - review, runde
+        // 255 - and a PingPong loop is there and back, 2 * (n - 1) steps)
         bool figureRunning = false;
-        if (want != Function::invalidId() && m_funcs.value(want).sweep && m_funcs.value(want).beats > 0.0)
+        if (want != Function::invalidId() && m_funcs.value(want).type == int(Function::ChaserType)
+            && m_funcs.value(want).beats > 0.0)
         {
             Chaser *pc = qobject_cast<Chaser *>(m_doc->function(want));
-            const qreal loopBeats = pc != nullptr ? qreal(pc->steps().count()) * m_funcs.value(want).beats : 0.0;
+            const int n = pc != nullptr ? int(pc->steps().count()) : 0;
+            const int loopSteps = (pc != nullptr && pc->runOrder() == Function::PingPong) ? qMax(1, 2 * (n - 1)) : n;
+            const qreal loopBeats = qreal(loopSteps) * m_funcs.value(want).beats;
             figureRunning = m_aimSince.contains(key) && qreal(beat - m_aimSince.value(key)) < loopBeats;
         }
         if (g.heads && inCast && hold == false && isBreak == false && isCalm == false   // CALM: no walk (r199)
@@ -7626,7 +7651,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // only ever played in breaks. The pace floor (16 beats a
                     // figure) stays - "passende fart" - and below 50 % and on
                     // the support groups the figure stays broad and mirrored.
-                    if (key != base || energy < 0.50)
+                    if (key != base || fader < 0.50)       // the slider, as the rule says (runde 255)
                     {
                         candidate.spread = 0;
                         candidate.mirror = true;
@@ -7660,7 +7685,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         QString slot = "zoom:" + key;
         quint32 posId = m_active.value("pos:" + key, Function::invalidId());
         // only over our own positions: a position of the user's may set its own zoom
-        bool ours = posId != Function::invalidId() && m_funcs.value(posId).generated;
+        bool ours = posId != Function::invalidId()
+                    && (m_funcs.value(posId).generated
+                        // runde 255: the AUTO head figures write pan/tilt/speed only
+                        || m_funcs.value(posId).name.startsWith(QStringLiteral("AUTO ")));
         // ... and not under a programme that zooms by itself (runde 220): the
         // show has eight "AUTO Wash Zoom ..." / "... Zoom ..." chasers that
         // write only the zoom channel, and they pass every motion filter. Two
@@ -10497,7 +10525,9 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
 
         quint32 mf = m_active.value("mot:" + key, Function::invalidId());
         bool ourSweep = (mf != Function::invalidId() && m_funcs.value(mf).type != int(Function::SceneType))
-                     || m_active.contains("efx:" + key);
+                     || m_active.contains("efx:" + key)
+                     // ... or one of our AUTO head figures in the pos: slot (runde 255)
+                     || m_funcs.value(m_active.value("pos:" + key, Function::invalidId())).type == int(Function::ChaserType);
         bool moved = false;
         foreach (quint32 fid, g.fixtures)
         {
