@@ -1519,8 +1519,17 @@ Rectangle
                     objectName: "masterDrag"
                     anchors.fill: parent
                     function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
-                    onPressed: (mouse) => apply(mouse.x)
-                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                    // runde 253 (BACKLOG 103): a TAP no longer jumps MASTER to
+                    // the finger - near the left edge that was the room at 0 %.
+                    // The level follows once the finger has moved 6 px.
+                    property real pressX: 0
+                    property bool dragging: false
+                    onPressed: (mouse) => { pressX = mouse.x; dragging = false }
+                    onPositionChanged: (mouse) => {
+                        if (pressed === false) return
+                        if (dragging === false && Math.abs(mouse.x - pressX) >= 6) dragging = true
+                        if (dragging) apply(mouse.x)
+                    }
                 }
             }
 
@@ -1588,6 +1597,17 @@ Rectangle
                             active: trackEngine ? trackEngine.roomAuto : false
                             activeColor: "#7ED07E"
                             onTapped: if (trackEngine) trackEngine.roomAuto = true
+                            // runde 253 (BACKLOG 101): the tile is 24-28 px high;
+                            // the finger gets 8 px more on three sides - not
+                            // below, where the fader's top end is (r215)
+                            MouseArea
+                            {
+                                anchors.fill: parent
+                                anchors.leftMargin: -8
+                                anchors.rightMargin: -8
+                                anchors.topMargin: -8
+                                onClicked: if (trackEngine) trackEngine.roomAuto = true
+                            }
                         }
                     }
 Rectangle
@@ -2090,10 +2110,17 @@ Rectangle
             Loader
             {
                 id: setupLoader
-                parent: trackViewRoot        // overlay the whole page
+                parent: trackViewRoot        // overlay the page ...
                 z: 100
                 onLoaded: if (item) item.host = trackViewRoot
-                anchors.fill: parent
+                // ... down to the footer, not over it (runde 253, BACKLOG 100):
+                // SETUP opened mid-set covered FLASH, BLACKOUT and SHOW OFF
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                // (footerRow.y read in the binding so it re-runs when the layout moves)
+                height: footerRow.y >= 0 ? Math.max(200, footerRow.mapToItem(trackViewRoot, 0, 0).y - 6)
+                                         : parent.height
                 visible: trackViewRoot.setupOpen && trackManager
                          && trackManager.roleMode
                 active: visible

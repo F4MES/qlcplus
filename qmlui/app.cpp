@@ -380,7 +380,8 @@ bool App::event(QEvent *event)
 {
     if (event->type() == QEvent::Close)
     {
-        if (m_doc->isModified() && m_forceQuit == false)
+        // KIOSK_NO_SAVE_PROMPT_R253: kiosk quits without offering to save
+        if (m_doc->isModified() && m_forceQuit == false && accessMask() != AC_VCControl)
         {
             QMetaObject::invokeMethod(rootObject(), "saveBeforeExit");
             event->ignore();
@@ -394,7 +395,8 @@ bool App::eventFilter(QObject *obj, QEvent *event)
 {
     if (event->type() == QEvent::Quit)
     {
-        if (m_doc && m_doc->isModified() && rootObject() && m_forceQuit == false)
+        if (m_doc && m_doc->isModified() && rootObject() && m_forceQuit == false
+            && accessMask() != AC_VCControl)       // KIOSK_NO_SAVE_QUIT_R253
         {
             QMetaObject::invokeMethod(rootObject(), "saveBeforeExit");
             event->ignore();

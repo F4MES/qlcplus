@@ -5092,25 +5092,29 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // Fladviftebølge ran 1265 of 1289 break beats on 25-26 Sep and every
     // intro and outro - thirteen minutes of one picture. When the break has
     // one pattern or none, the operator's other CALM patterns join it: flat
-    // fans, small waves, static waves. Never the wild ones (moving, strobish,
-    // kanoner, flower, fingre, FY FY, DrypDryp).
+    // fans, small waves, static waves, Fingre and Flower. Tobias (runde 252b):
+    // "fingre skal hellere komme i breaks end 'wave' - wave er ret vild.
+    // Flower er også OK til breaks." Never the wild ones: Wave..., moving,
+    // strobish, kanoner, FY FY, DrypDryp (Flower is allowed although its name
+    // says Moving).
     if (tier == 0 && tagged.count() <= 1 && m_groups.value(group).patternDevice)
     {
         static const QStringList calmWords = { "flat", "flad", "static", "satic", "smallwave",
-                                               "wave", "bølge", "boelge", "vifte" };
-        static const QStringList wildWords = { "moving", "strobish", "fy fy", "dryp", "kanon",
-                                               "flower", "fingre" };
+                                               "bølge", "boelge", "vifte", "fingre", "flower" };
+        static const QStringList wildWords = { "moving", "strobish", "fy fy", "dryp", "kanon" };
         foreach (TrackFuncInfo *info, ok)
         {
             if (tagged.contains(info))
                 continue;
             const QString lowName = info->name.toLower();
             bool calmOne = false;
-            bool wildOne = false;
+            bool wildOne = lowName.startsWith(QStringLiteral("wave"));   // WaveBlue, WaveRed ...
             foreach (const QString &w, calmWords)
                 calmOne = calmOne || lowName.contains(w);
             foreach (const QString &w, wildWords)
                 wildOne = wildOne || lowName.contains(w);
+            if (lowName.contains(QStringLiteral("flower")))
+                wildOne = false;
             if (calmOne && wildOne == false)
                 tagged.append(info);
         }
