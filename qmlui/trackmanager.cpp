@@ -476,8 +476,8 @@ QString TrackManager::stateAtBeat(int beat) const
 void TrackManager::updateState()
 {
     int beat = m_currentBeat;
-    if (m_quantize > 1 && beat > 0)
-        beat = ((beat - 1) / m_quantize) * m_quantize + 1;
+    if (m_quantize > 1 && beat > m_downbeat)      // DOWNBEAT_R104_QUANT: the track's own grid
+        beat = ((beat - 1 - m_downbeat) / m_quantize) * m_quantize + 1 + m_downbeat;
 
     QString state = stateAtBeat(beat);
     if (state == m_analysedState)
@@ -1157,7 +1157,7 @@ void TrackManager::moveMarker(int index, int beat)
     // two flags on one bar make no sense: the one already there goes
     for (int i = m_markers.count() - 1; i >= 0; i--)
     {
-        if (i == index || m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt() != beat)
+        if (i == index || snapBar(m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt()) != beat)   // DOWNBEAT_R104_SAMEBAR_MOVE
             continue;
         m_markers.removeAt(i);
         if (i < index)
@@ -1638,8 +1638,8 @@ void TrackManager::runEngine(bool sectionChanged)
     // look-ahead and the section energy must use the same one, or the
     // engine is told about a section it is not in
     int stateBeat = beat;
-    if (m_quantize > 1)
-        stateBeat = ((beat - 1) / m_quantize) * m_quantize + 1;
+    if (m_quantize > 1 && beat > m_downbeat)      // DOWNBEAT_R104_QUANT_ENGINE
+        stateBeat = ((beat - 1 - m_downbeat) / m_quantize) * m_quantize + 1 + m_downbeat;
     int secStart = 1, secEnd = 1;
     sectionBounds(stateBeat, secStart, secEnd);
     // R172_QUANTISED_BOUNDS. The state flips on the quantise grid, so the
@@ -1649,8 +1649,12 @@ void TrackManager::runEngine(bool sectionChanged)
     // wait for the kick.
     if (m_quantize > 1)
     {
-        secStart = ((secStart - 1 + m_quantize - 1) / m_quantize) * m_quantize + 1;
-        secEnd = ((secEnd - 1 + m_quantize - 1) / m_quantize) * m_quantize + 1;
+        // DOWNBEAT_R104_QUANT_BOUNDS: on the track's grid; the pickup before
+        // the first bar line stays where it is
+        if (secStart > 1 + m_downbeat)
+            secStart = ((secStart - 1 - m_downbeat + m_quantize - 1) / m_quantize) * m_quantize + 1 + m_downbeat;
+        if (secEnd > 1 + m_downbeat)
+            secEnd = ((secEnd - 1 - m_downbeat + m_quantize - 1) / m_quantize) * m_quantize + 1 + m_downbeat;
     }
 
     // a jump to a cue, or two flags of the same type in a row: the state
@@ -2300,7 +2304,7 @@ bool TrackManager::refineMarkers()
 
     // 3. a drop the analysis missed: two bars without a kick, then two bars
     //    of kick, on a bar line, and no flag within two bars of it
-    for (int b = 17; b + 16 <= m_beatCount + 1; b += 4)     // R210_STEP3_END
+    for (int b = 17 + m_downbeat; b + 16 <= m_beatCount + 1; b += 4)     // R210_STEP3_END DOWNBEAT_R104_STEP3
     {
         // R194_STEP3: "two bars without a kick" is BOTH bars - the two-bar
         // mean let a one-bar fill pass; and the four-bar minimum step 1
@@ -2387,7 +2391,9 @@ void TrackManager::addMarker(int beat, QString type)
     // a flag already on this bar takes the new type instead
     for (int i = 0; i < m_markers.count(); i++)
     {
-        if (m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt() == beat)
+        // DOWNBEAT_R104_SAMEBAR: on this bar, not only on this beat - a hand
+        // flag from before the track's own bar lines sits 1-3 beats off them
+        if (snapBar(m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt()) == beat)
         {
             setMarkerType(i, type);
             return;

@@ -1202,7 +1202,7 @@ Rectangle
                     var lo = Math.min(from, snapped), hi = Math.max(from, snapped)
                     for (var i = 0; i < mk.length; i++)
                         if (i !== trackViewRoot.dragIndex
-                            && (mk[i].beat === snapped || (mk[i].beat > lo && mk[i].beat < hi)))
+                            && (trackViewRoot.snapBeat(mk[i].beat) === snapped || (mk[i].beat > lo && mk[i].beat < hi)))
                             return true
                     return false
                 }

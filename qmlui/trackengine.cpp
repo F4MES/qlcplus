@@ -6220,8 +6220,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     //
     // m_colourSince is -1 on a fresh track (trackLoaded), so the first colour
     // of a track is never held back.
+    // ... and not on a drop-out (analyse 10c): a break of two bars or less
+    // with the drop right after it took the colour change, and the floor then
+    // held it back at the drop - the room landed in a colour it had shown for
+    // one dimmed bar. The drop takes it instead, like sectionSoon above.
     bool sectionColour = sectionChanged && (isBreak || isDrop)
-                      && (m_colourSince < 0 || beat - m_colourSince >= 8);
+                      && (m_colourSince < 0 || beat - m_colourSince >= 8)
+                      && (isBreak && nextState == QStringLiteral("drop")
+                          && beatsToNext > 0 && beatsToNext <= 8) == false;
     bool changeColour;
     if (m_colour.isEmpty())
         changeColour = true;
@@ -6994,7 +7000,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_floorRound = false;
     // (not re-rolled at an inner flag of the same build - it was drawn at
     // the build's start; 13 of 16 early endings on 25-26 Sep, runde 233)
-    else if (sectionChanged && hold == false && dropWaiting == false && m_floorRound == false)
+    // (and not in a build of under four bars, analyse 10c: the heads swung to
+    // Center, had a bar of the hand-round and swung again at the landing)
+    else if (sectionChanged && hold == false && dropWaiting == false && m_floorRound == false
+             && (beatsToNext <= 0 || beatsToNext >= 16))
         m_floorRound = m_fullAuto               // FULL AUTO only: it takes the heads' programmes and aims
                     && energy >= 0.30 && rng->bounded(100) < int(30.0 + 30.0 * qBound(0.0, energy, 1.0));
     if (redraw)
