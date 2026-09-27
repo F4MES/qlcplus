@@ -1019,7 +1019,10 @@ Rectangle
                     var vc = trackViewRoot.viewCount()
                     var px = w / vc
                     var wf = trackManager.waveform
-                    var lane = Math.min(48, Math.round(h * 0.32))
+                    // a floor (fejljagt 2): at the compact minimum (h 73) the lane was
+                    // 23 px, the label rows 9 px, and bold 11 px text was clipped at
+                    // the top and ran into the row above
+                    var lane = Math.min(48, Math.max(32, Math.round(h * 0.32)))
                     var base = h - 4
 
                     function xOf(beat) { return (beat - vf) * px }
@@ -1037,7 +1040,10 @@ Rectangle
                     var gridStep = trackViewRoot.zoomActive ? 4 : 32
                     ctx.strokeStyle = "rgba(255,255,255,0.12)"
                     ctx.lineWidth = 1
-                    for (var g = Math.ceil(vf / gridStep) * gridStep; g < vf + vc; g += gridStep)
+                    // on the bar lines flags snap to - beats count from 1, so bars
+                    // start at 1, 5, 9 (tmSnapBar); the grid was at 4, 8, 12, one
+                    // beat early (fejljagt 2)
+                    for (var g = Math.ceil((vf - 1) / gridStep) * gridStep + 1; g < vf + vc; g += gridStep)
                     {
                         ctx.beginPath()
                         ctx.moveTo(xOf(g), lane)

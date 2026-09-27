@@ -349,7 +349,10 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     // run once the flags are in, and what it changed goes back to BLT's
     // cache (as automatic)
     if (keepLocal)
+    {
+        fillMarkerEnergies(false);              // FJ2_KEEP_MEASURE: before they go back
         sendMarkers(true);                      // R213_KEEP_HAND_SEND: BLT missed them
+    }
     else
         m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
     if (m_markersManual == false && keepLocal == false && refineMarkers())

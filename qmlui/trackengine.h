@@ -828,6 +828,7 @@ private:
     qint64 m_cooldownMs;      // the clock reading the cooldown is judged against: frozen per section
     bool m_accentWasWhite;    // the last accent was white: the next one is not
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
+    bool m_strobesPooled = false; // the last bar line let the strobes into the cast pool (fejljagt 2)
     bool m_curveBreak = false;   // runde 192: a groove flag with no kick in the next two bars plays as a break
     bool m_curveGroove = false;  // runde 192: a break flag with a solid kick in the next two bars plays as a groove
     int m_curveTurnBeat = -100;  // runde 193: the beat of the last such turn - four bars between turns

@@ -6645,6 +6645,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (base.isEmpty())
         effects = qMax(effects, 1);                 // no base: something must show
 
+    // the strobes' place in the pool is decided on the bar line and held to
+    // the next one (fejljagt 2, 09-27): read per beat, the pool was one
+    // shorter on beats 2-4 whenever they had lost the budget on beat 1, and
+    // two groups swapped every bar; kept in the pool and skipped instead, the
+    // group after them in the rotation led twice as often under the line
+    if (beatInBar == 0 || sectionChanged)
+        m_strobesPooled = fader >= ENGINE_STROBE_ON;
     QStringList pool;
     foreach (const QString &key, eligible)
     {
@@ -6666,11 +6673,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // ... read on the bar line (runde 242): the fader crossing the line
         // mid-bar put them in and out of a drop on beats 2-4 (24 times on
         // 25-26 Sep, the Minis standing in for 3-12 beats). Mid-bar they keep
-        // what the last bar line decided. They stay IN the pool, and are
-        // skipped in the rotation below (fejljagt 09-27): taken out here, the
-        // pool was one shorter on beats 2-4 whenever they had not made the
-        // cast on beat 1, every index after them moved, and the cast swapped
-        // two groups back and forth every bar.
+        // what the last bar line decided (m_strobesPooled, above).
+        if (m_strobesPooled == false && m_groups.value(key).strobes)
+            continue;
         pool.append(key);
     }
 
@@ -6687,10 +6692,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         QString key = pool.at((m_castCursor + i) % pool.count());
         if (m_hatsOut && m_groups.value(key).strobes)
-            continue;
-        const bool strobesOut = (beatInBar == 0 || sectionChanged)
-            ? fader < ENGINE_STROBE_ON : m_cast.contains(key) == false;
-        if (strobesOut && m_groups.value(key).strobes)
             continue;
         priority.append(key);
     }
@@ -8148,7 +8149,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // programmes FOR those programmes (runde 227). When none got
                 // through (stars, a ban, the cast) it is the old rule: a
                 // static look until half way, not an ordinary chase (review)
-                if (mf != Function::invalidId() && isBuild && prog <= 0.5 && m_climbGroups.contains(key)
+                // (barProg, as `moving`: prog <= 0.5 re-picked static on the
+                // middle's own bar line and undid the release above - fejljagt 2)
+                if (mf != Function::invalidId() && isBuild && barProg < 0.5 && m_climbGroups.contains(key)
                     && m_funcs.value(mf).type != int(Function::SceneType)
                     && m_funcs.value(mf).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive) == false)
                     mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars, litFloor);
