@@ -390,6 +390,7 @@ private:
     int m_liveBpm;
 
     QTimer m_energyTimer;
+    qint64 m_stopSinceMs = 0;    // STOP_GRACE_R105: when a playing track said stop
 
     qint64 m_lastPosMs;
     qint64 m_beatChangedMs = 0;  // R187_LAGGING_BEAT: when the beat last moved

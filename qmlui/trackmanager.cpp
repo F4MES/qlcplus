@@ -442,6 +442,11 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     if (beat != m_currentBeat)
         m_beatChangedMs = now;
     m_currentBeat = beat;
+    // STOP_GRACE_R105_MARK: a stop starts the grace, a play ends it
+    if (playing == false && m_playing)
+        m_stopSinceMs = now;
+    else if (playing)
+        m_stopSinceMs = 0;
     m_playing = playing;
     m_trackTimeMs = timeMs;
 
@@ -910,6 +915,13 @@ void TrackManager::slotEnergyTick()
         emit positionChanged();
         if (m_engine != nullptr && m_autoRun && m_roleMode)
             m_engine->idle();
+    }
+    // STOP_GRACE_R105_IDLE: a stop that lasted its second goes idle now
+    if (m_playing == false && m_stopSinceMs > 0
+        && QDateTime::currentMSecsSinceEpoch() - m_stopSinceMs >= 1000)
+    {
+        m_stopSinceMs = 0;
+        runEngine(false);
     }
     if (m_engine != nullptr)
         m_engine->closingTick(m_autoRun);         // R211_CLOSING_TICK R213_SHOW_ON
@@ -1615,6 +1627,10 @@ void TrackManager::runEngine(bool sectionChanged)
 
     if (m_playing == false)
     {
+        // STOP_GRACE_R105_HOLD: not for the first second - a touched jog
+        // says stop for a moment; slotEnergyTick() idles when it lasts
+        if (m_stopSinceMs > 0 && QDateTime::currentMSecsSinceEpoch() - m_stopSinceMs < 1000)
+            return;
         // nothing playing: the start scene, not darkness
         m_engine->idle();
         m_lastEngineBeat = -1;
