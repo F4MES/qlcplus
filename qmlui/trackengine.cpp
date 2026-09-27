@@ -6283,11 +6283,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     /* ---- cast: the base group is always lit; effects are added on top as
      *      the evening's energy rises. Decided once per section, and never
      *      more than one step from the last section. ---- */
+    // Runde 235: a "section" is mostly a phrase flag - five a minute on
+    // 25-26 Sep, a median of 21 beats - and every one of them rolled the
+    // laser bars' dice, the rotation and the rhythm lead again: 48 % of the
+    // bars' stays ended at the first section change after they came in, and
+    // Tobias called their chases random. Those three are drawn when the PART
+    // changes (drop -> break, a new track), not at every phrase inside it.
+    // m_lastState still holds the previous beat's state here.
+    const bool partChanged = m_lastState.isEmpty() || m_lastState != state;
     if (sectionChanged && hold == false)
     {
         // a random stride, so the rotation of groups, looks and positions
         // does not fall into the same order night after night
-        if (m_lastState.isEmpty() == false)
+        if (m_lastState.isEmpty() == false && partChanged)
             m_castCursor += 1 + int(rng->bounded(2));
         m_motionCursor += 1 + int(rng->bounded(3));
         // the cooldown is judged from HERE for the whole section: judged from
@@ -6320,7 +6328,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // come back in read as an arrival.
         qreal pLead = qBound(0.0, (energy - 0.25) / 0.70, 1.0);
         pLead = isDrop ? 0.15 + 0.80 * pLead : 0.10 + 0.50 * pLead;
-        m_barsLead = rng->bounded(1000) < int(pLead * 1000.0);
+        if (partChanged)
+            m_barsLead = rng->bounded(1000) < int(pLead * 1000.0);
     }
 
     QString base = baseGroup();
@@ -6506,7 +6515,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // slow chase (see `moving` and the EFX gate below) - or the animation
         // lasers on their flat fan (tier 0 favours "vifte", see tierOf()).
         // Heads, strobes and the rest sit a break out.
-        if (isBreak && m_groups.value(key).lasers == false && m_groups.value(key).patternDevice == false)
+        // Runde 235 (Tobias: "Breaks må gerne bruge andet end basen f.eks.
+        // strobelamper"): the strobes may be that one thing too - a slow,
+        // soft walk (drawMove, tier 0), never a burst (driveStrobe's kill).
+        // The other wash groups are not in this pool: they join every break
+        // outside the budget (below).
+        if (isBreak && m_groups.value(key).lasers == false && m_groups.value(key).patternDevice == false
+            && m_groups.value(key).strobes == false)
             continue;
         // the strobes are the club; under ENGINE_STROBE_ON this is a bar
         if (fader < ENGINE_STROBE_ON && m_groups.value(key).strobes)
@@ -6572,6 +6587,28 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
     }
+    // Runde 235: one laser type at a time below the top of the fader - the
+    // bars or the animation laser, whichever the order put first; the next
+    // group in line takes the other's place. On 25-26 Sep Tobias switched a
+    // laser off twelve times for over a minute, five of them while both were
+    // on stage. 0.85 is a guess from that - the rig decides.
+    if (fader < 0.85)
+    {
+        bool haveBars = false, haveAni = false;
+        for (int i = 0; i < priority.count(); )
+        {
+            const TrackGroup &pg = m_groups.value(priority.at(i));
+            const bool isBars = pg.lasers && pg.patternDevice == false;
+            if ((isBars && haveAni) || (pg.patternDevice && haveBars))
+            {
+                priority.removeAt(i);
+                continue;
+            }
+            haveBars = haveBars || isBars;
+            haveAni = haveAni || pg.patternDevice;
+            i++;
+        }
+    }
     QSet<QString> castSet;
     if (base.isEmpty() == false)
         castSet.insert(base);
@@ -6579,6 +6616,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         for (int i = 0; i < qMin(effects, int(priority.count())); i++)
             castSet.insert(priority.at(i));
+        // Runde 235: the other WASH groups stand in every break beside the
+        // base, outside the budget - the Minis with the heads, or the heads
+        // with the Minis when those are the base ("jeg forventer at minis er
+        // i breaks sammen med basen også, da de minder om hovederne
+        // lysmæssigt" - Tobias, 2026-09-27). Not under CALM or a still room:
+        // those are the base alone. HOLD rebuilds the cast from m_cast below.
+        if (isBreak && isCalm == false && still == false)
+        {
+            foreach (const QString &key, eligible)
+            {
+                const TrackGroup &wg = m_groups.value(key);
+                if (key != base && wg.strobes == false && wg.lasers == false && wg.patternDevice == false)
+                    castSet.insert(key);
+            }
+        }
     }
 
     if (hold && still == false && isCalm == false && m_cast.isEmpty() == false)
@@ -6699,7 +6751,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (tierMoved || sectionChanged)
         m_compositionTier = tier;
     bool compositionChanged = false;
-    if (m_fullAuto && (((sectionChanged || roleContextChanged) && hold == false)
+    if (m_fullAuto && (((sectionChanged && partChanged) || roleContextChanged) && hold == false)
         || (m_rhythmLead.isEmpty() == false && castSet.contains(m_rhythmLead) == false)
         || (m_rhythmLead.isEmpty() && castSet.count() > (castSet.contains(base) ? 1 : 0))))
     {
@@ -7586,7 +7638,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // a hats-only passage (highs up, no kick) sparkles rather than sits
         if (high > 0.65 && kick >= 0.0 && kick < 0.35 && mv.pattern == ENGINE_PAT_STATIC && g.lasers == false
             && key != base && (m_fullAuto == false || key == m_rhythmLead)
-            && isCalm == false && still == false && g.parts.count() >= 3)
+            && isCalm == false && still == false && isBreak == false && g.parts.count() >= 3)
         {
             mv.pattern = ENGINE_PAT_SPARKLE;
             mv.stepBeats = 2;
@@ -7727,8 +7779,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // movement a break is supposed to have. Not while CALM is held: that
         // button means "stop changing things".
         bool breakBase = isBreak && key == base && isCalm == false && still == false;
+        // ... and a wash group beside the base (runde 235) runs its own calm
+        // break programmes - the Minis have 48 (runde 234)
+        bool breakWash = isBreak && key != base && isCalm == false && still == false
+                      && g.strobes == false && g.lasers == false && g.patternDevice == false;
         bool moving = still == false
-                   && (breakLasers || breakBase
+                   && (breakLasers || breakBase || breakWash
                        || (mv.ownChaser && isBreak == false
                            && (isBuild == false || prog > 0.5
                                // a group with build programmes starts one on
@@ -8329,7 +8385,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // In a drop the only thing driveStrobe reads `bar` for IS the landing.
     driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, isDrop ? dropBar : bar, beatInBar,
                 isCalm || still || dropWaiting || m_flash || m_blackout
-                || isIntro || isOutro || exposureRest); // nobody strobes an intro/rest
+                || isBreak || isIntro || isOutro || exposureRest); // nobody strobes a break/intro/outro/rest (runde 235)
 
     checkConflicts(castSet);
 
@@ -8614,7 +8670,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             // a groove walks on the beat now - two beats a lamp, one at the
             // top - so the slow beat-chase can be seen (runde 233; four beats
             // a lamp read as one blink a bar)
+            // ... and a break walks slowly: four beats a lamp, two near the
+            // top (runde 235)
             mv.stepBeats = (tier == 1 && build == false) ? (wild < 0.65 ? 2 : 1)
+                         : tier == 0 ? (wild < 0.65 ? 4 : 2)
                          : (wild < 0.30 ? 4 : (wild < 0.65 ? 2 : 1));
         }
         else
@@ -8652,8 +8711,13 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // the downbeat while the room is quiet, the backbeat in between,
         // every beat once it is going. A build hands them over to the beat as
         // it runs out; a break gets the downbeat and nothing else.
+        // ... and in a break (runde 235) no blink at all: the lit lamp stays
+        // lit for its beats and hands on - a walk, not a hit
         if (tier == 0)
+        {
             mv.pulseOn = 3;
+            mv.pulse = 0.0;
+        }
         else if (build)
             mv.pulseOn = prog > 0.60 ? 0 : 1;
         else
@@ -8718,18 +8782,17 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // breaks" report (Tobias, 2026-09-15: it is the moving heads = the
         // base). The drop path twenty lines down has carried this same guard
         // all along; the break path never got it.
-        if (isBase == false && g.parts.count() >= 2 && chance(0.15 + 0.60 * e))
+        // Runde 235: a wash group beside the base (the Minis with the heads)
+        // is in EVERY break now, so it gets the break's calm and nothing
+        // busier: no one-lamp blink on the beat and no heartbeat - it trades
+        // and breathes with the base. The blink above was for a break that
+        // was the base alone plus, rarely, one extra - the one-lamp blink
+        // that stood here, and the heartbeat just above, are gone for it.
+        if (isBase == false)
         {
-            mv.bare = true;
-            mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
-            // the lamp hands the beat on faster the higher the fader is -
-            // four beats each at the bottom, every beat at the top
-            mv.stepBeats = qMax(1, int(qRound(4.0 - 3.0 * e)));
-            mv.subSteps = 1;
-            mv.pulse = 1.0;                          // full on the beat, dark between
-            mv.pulseOn = chance(e * e) ? 0 : (chance(e) ? 1 : 3);
-            mv.breatheBars = 0;
-            mv.texture = 0.0;
+            mv.pulse = 0.0;
+            if (mv.breatheBars == 0)
+                mv.breatheBars = 4;
         }
         if (g.parts.count() < 2)
             mv.pattern = ENGINE_PAT_STATIC;

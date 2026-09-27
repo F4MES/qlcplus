@@ -368,6 +368,8 @@ void TrackManager::handleTrack(const QJsonObject &obj)
         m_lastEngineBeat = -1;
         m_lastSecStart = -1;
         m_lastSecEnd = -1;
+        m_loopTop = -1;                   // R235_DJ_LOOP_RESET
+        m_jumpFrom = m_jumpTo = -100;
     }
     if (m_nextTitle == m_title)
     {
@@ -415,6 +417,16 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     if (beat == m_currentBeat && playing == m_playing && timeMs == m_trackTimeMs)
         return;
 
+    // R235_DJ_LOOP_SEEN: the same short step back twice is a loop
+    if (playing && m_playing && beat > 0 && beat < m_currentBeat && m_currentBeat - beat <= 32)
+    {
+        const bool again = qAbs(beat - m_jumpTo) <= 1 && qAbs(m_currentBeat - m_jumpFrom) <= 1;
+        m_jumpTo = beat;
+        m_jumpFrom = m_currentBeat;
+        m_loopTop = again ? qMax(m_loopTop, m_currentBeat) : -1;
+    }
+    else if (m_loopTop > 0 && (beat > m_loopTop || beat < m_currentBeat || playing == false))
+        m_loopTop = -1;                   // played past it, jumped away, or stopped
     if (beat != m_currentBeat)
         m_beatChangedMs = now;
     m_currentBeat = beat;
@@ -462,7 +474,7 @@ void TrackManager::updateState()
     m_analysedState = state;
     emit stateChanged();
 
-    if (m_autoRun && m_overrideState.isEmpty())
+    if (m_autoRun && m_overrideState.isEmpty() && m_loopTop <= 0)   // R235_DJ_LOOP_LOOK
         applyLook();
 }
 
@@ -1626,9 +1638,20 @@ void TrackManager::runEngine(bool sectionChanged)
     // R198_SECTION_START: a section is where it STARTS - a moved end (the
     // next flag dragged, bar by bar) is not a new one. Without flags the
     // fixed 64-beat end still turns a section (R172_FIXED_END).
+    // R235_DJ_LOOP_HOLD: inside a running DJ loop the section it wrapped in
+    // is kept - its state, bounds and energy - until the loop is let go
+    const bool loopHeld = m_loopTop > 0 && m_overrideState.isEmpty() && m_lastSecStart > 0
+                       && secStart != m_lastSecStart && stateBeat <= m_loopTop;
+    if (loopHeld)
+    {
+        stateBeat = m_lastSecStart;
+        secStart = m_lastSecStart;
+        secEnd = m_lastSecEnd;
+        state = stateAtBeat(stateBeat);
+    }
     const bool insideOld = m_lastSecStart > 0 && stateBeat >= m_lastSecStart
                         && stateBeat < m_lastSecEnd;          // R205_SAME_SECTION
-    if (m_overrideState.isEmpty()
+    if (loopHeld == false && m_overrideState.isEmpty()   // R235_DJ_LOOP_GATE
         && ((secStart != m_lastSecStart && insideOld == false)
             || (secEnd != m_lastSecEnd && m_markers.isEmpty())))
         sectionChanged = true;

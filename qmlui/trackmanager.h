@@ -411,6 +411,9 @@ private:
     int m_lastEngineBeat;
     int m_lastSecStart;                   // the section the engine was last told about
     int m_lastSecEnd;
+    int m_loopTop = -1;                   // R235_DJ_LOOP: the top of a running DJ loop, -1 none
+    int m_jumpFrom = -100;                // the last short step back: from
+    int m_jumpTo = -100;                  // ... and to
 
     /* The movement pick is sticky: it only changes when a break starts,
      * inside a one-beat dark gap. Never at a drop, never mid-section. */
