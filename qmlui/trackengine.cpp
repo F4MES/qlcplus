@@ -5466,6 +5466,19 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
     }
     if (safe.isEmpty())
         return Function::invalidId();
+    // in a build, the build's own head figures first (runde 258), as
+    // motionFor() does for programmes (runde 227)
+    if (lasers == false && m_buildLen > 0)
+    {
+        QList<TrackFuncInfo *> climbs;
+        foreach (TrackFuncInfo *info, safe)
+        {
+            if (info->name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
+                climbs.append(info);
+        }
+        if (climbs.isEmpty() == false)
+            safe = climbs;
+    }
 
     // this tier's looks first, then the untagged ones, then anything
     QList<TrackFuncInfo *> tagged, plain;
@@ -7180,6 +7193,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         else if (beat > until || until - beat >= ENGINE_DARK_BARS * 4)   // runde 201: or a long jump back
             m_darkUntil.remove(key);
     }
+    // the build's beats to go, BEFORE the aims are drawn (runde 258, review):
+    // it was only set in the motion loop further down, so the position block
+    // read last beat's value - 0 on a build's first beat, and beats-to-drop
+    // plus one on the bar lines, never a whole 16 - and a head climb could
+    // never pass candidates()'s climb rule. The motion loop sets it again,
+    // to the same value.
+    m_buildLen = (isBuild && dropWaiting == false && nextState == QStringLiteral("drop"))
+               ? qMax(1, beatsToNext) : 0;
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
