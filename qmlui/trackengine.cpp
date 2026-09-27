@@ -6023,6 +6023,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 && nextState == QStringLiteral("drop")
                 && beatsToNext > 0 && beatsToNext <= 4;
 
+    // THE DROP SETTLES (analyse 10g). Tobias, 2026-09-27: "et drop starter jo
+    // meget ekstremt, men saa laenge det ikke bliver ved med at vaere
+    // ekstremt og 'normalisere' sig lidt, er det fint med lange drop
+    // sektioner". Analysis 9 split a drop every 32 bars and every flag landed
+    // it again; analysis 10 gives a 2-4 minute drop ONE landing, and nothing
+    // in a drop had a time term - strobe lead, four effects, the hard/nervous
+    // style and the strobe bursts ran to the section's end. Sixteen bars after
+    // the kick landed (dropBar, so a kick wait moves it too), in a drop of 32
+    // bars or more: the strobes give up the lead and strobe as in a groove,
+    // one effect less at the top, and the style steps down once - on the bar
+    // line, with a redraw. The landing itself, FLASH and HOLD are untouched.
+    const bool dropSettled = isDrop && len >= 128 && dropBar >= 16;
+    const bool settleNow = dropSettled && dropBar == 16 && beatInBar == 0;
+
     // The highs climbing for bars on end with a drop ahead IS the build,
     // whatever the flag on this stretch says - the riser is in the music,
     // not in the marker. Promoted, the climb is measured to the drop, so
@@ -6641,6 +6655,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (preDrop)     // no dice here: four beats of joining and leaving would flicker
         effects = qMax(effects, int(qRound(3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0))));
     if (exposureRest) effects = qMax(0, effects - 1);
+    if (dropSettled && effects > 2) effects--;          // the drop settles (above)
     if (isCalm || still)
         effects = 0;
     // A long blend keeps its musical activity budget. There is no elapsed-
@@ -6714,7 +6729,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // (not the last bar of a BREAK before a drop, runde 236: the strobes are
     // in the break's pool now, and preDrop lifts the budget to one - they
     // took the slot before every drop and stood one lamp lit for a bar)
-    const bool strobeLead = isDrop || (preDrop && isBreak == false) || grooveStrobes;
+    const bool strobeLead = (isDrop && dropSettled == false) || (preDrop && isBreak == false) || grooveStrobes;
     if (strobeLead && hold == false && isCalm == false)
     {
         for (int i = 0; i < priority.count(); i++)
@@ -6926,6 +6941,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     else if (isDrop == false)
         m_dropStyle = 0;
+    // ... and it steps down once when the drop settles: hard -> heavy,
+    // nervous/tight -> wide (analyse 10g)
+    if (settleNow && hold == false)
+        m_dropStyle = m_dropStyle == 1 ? 4 : ((m_dropStyle == 5 || m_dropStyle == 3) ? 2 : m_dropStyle);
 
     // Stable roles for this room picture: base / rhythmic lead / support.
     // Keep the lead under HOLD and through a mix; replace it only when it
@@ -6983,7 +7002,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // The sweep's SIZE and PACE follow the fader every beat regardless
     // (applySweep); this is for the rest.
     bool redraw = hold == false
-               && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump
+               && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump || settleNow
                    || (bar > 0 && bar % 8 == 0 && beatInBar == 0 && rng->bounded(3) > 0));
     // THE FLOOR ROUND (runde 214, Tobias: "det ser sejt ud, naar alle hoveder
     // peger lige ned i gulvet og skiftes til at blinke rundt i rummet zoomet
@@ -8623,7 +8642,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // at 0.7. Nothing in the hits reads the strobe state.
     // dropBar, not bar: the landing burst waits for the kick (see m_dropLand).
     // In a drop the only thing driveStrobe reads `bar` for IS the landing.
-    driveStrobe(castSet, beat, energy, isDrop, isBuild, prog, isDrop ? dropBar : bar, beatInBar,
+    driveStrobe(castSet, beat, energy, isDrop && dropSettled == false, isBuild, prog, isDrop ? dropBar : bar, beatInBar,
                 isCalm || still || dropWaiting || m_flash || m_blackout
                 || isBreak || isIntro || isOutro || exposureRest); // nobody strobes a break/intro/outro/rest (runde 235)
 
