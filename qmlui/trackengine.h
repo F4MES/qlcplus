@@ -987,6 +987,9 @@ private:
     // outside a build); m_climbGroups the groups that have any.
     int m_buildLen = 0;
     QSet<QString> m_climbGroups;
+    // runde 237: the first flag of the build we are in (-1 outside one) - a
+    // build split by inner flags climbs from here to the drop, not from each
+    int m_buildFrom = -1;
     bool m_startScene;        // the opening picture is held by hand
     qreal m_startLevel;       // a trim on the opening picture
     bool m_startColour;       // the opening picture chose the colour, not the DJ

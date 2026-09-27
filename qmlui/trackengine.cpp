@@ -5710,6 +5710,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_fillLast = beat - 8;
         m_sequenceGroups.clear();
         m_restUntil = -1;
+        // a jump FORWARD: the build is measured from where we land (runde 237).
+        // Not back: a DJ loop is a jump back on every pass, and clearing it
+        // there brought the sawtooth back inside a looped build (review). A
+        // jump back to before the build is caught by m_buildFrom > secStart.
+        if (beat > m_lastBeat)
+            m_buildFrom = -1;
         // A jump BACK (a hot cue, a scrub) leaves every "beats since" stamp
         // later than now, and `beat - stamp` negative: no colour change, no
         // aim on a section change, no cast step and no echo until the track
@@ -5857,6 +5863,37 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     qreal prog = qBound(0.0, qreal(beat - secStart) / qreal(len), 1.0);
     int bar = (beat - secStart) / 4;
     int beatInBar = (beat - secStart) % 4;
+    // prog a bar ago, where prog is NOT the section's own clock (the kick
+    // wait, a riser-promoted build, a build of several flags); -1 = the
+    // section's own (runde 172)
+    qreal progBefore = -1.0;
+    // the build hits keep the SECTION's clock (runde 237): the last 18 % of
+    // the last flag before the drop, as before - not the last 18 % of a 128-
+    // beat build (23 beats of hits). -1 = use prog.
+    qreal hitProg = -1.0;
+    // A BUILD OF SEVERAL FLAGS climbs once (runde 237, Tobias: "ja, lav 1").
+    // 19 of the 22 builds over 64 beats on 25-26 Sep were split by inner
+    // build flags, and prog started again from nought at each: the level fell
+    // (median 0.17), a group left, the chases stopped until the middle came
+    // round again and the build hits fired before every phrase instead of
+    // before the drop - a sawtooth, not a climb. Measured from the build's
+    // FIRST flag instead: to the drop when the next flag is it; an inner
+    // section also counts 32 beats more, so it stops short of the top; and
+    // never below where the section before it ended.
+    if (isBuild)
+    {
+        if (m_buildFrom < 0 || m_buildFrom > secStart || m_lastState != QStringLiteral("build"))
+            m_buildFrom = secStart;
+        const bool inner = nextState == QStringLiteral("build");
+        const int span = qMax(1, secEnd - m_buildFrom + (inner ? 32 : 0));
+        const qreal reached = secStart > m_buildFrom
+            ? qreal(secStart - m_buildFrom) / qreal(secStart - m_buildFrom + 32) : 0.0;
+        prog = qMax(reached, qBound(0.0, qreal(beat - m_buildFrom) / qreal(span), 1.0));
+        progBefore = qMax(reached, qBound(0.0, qreal(beat - 4 - m_buildFrom) / qreal(span), 1.0));
+        hitProg = inner ? 0.0 : qBound(0.0, qreal(beat - secStart) / qreal(len), 1.0);
+    }
+    else
+        m_buildFrom = -1;
 
     // the drop is one bar away: pull the cast in now so the hit lands lit
     // A FAKE DROP: the analysis says the release is here, the kick says it is
@@ -5892,9 +5929,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_dropLand++;
     const int dropBar = isDrop ? bar - m_dropLand : bar;
     const bool dropWaiting = isDrop && dropBar < 0;
-    // prog a bar ago, where prog is NOT the section's own clock (the kick
-    // wait, a riser-promoted build); -1 = the section's own (runde 172)
-    qreal progBefore = -1.0;
     if (dropWaiting)
     {
         isDrop = false;
@@ -6125,7 +6159,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         changeColour = m_colour.isEmpty();
     if (forceNext)
         changeColour = true;
-    if ((hold || m_mixing) && m_colour.isEmpty() == false)
+    // NEXT is the operator asking for a new colour, and a mix does not
+    // overrule him (runde 237): 10 of 10 NEXT presses during a mix on 25-26
+    // Sep changed nothing - seven in nine seconds at 02:16, the room stayed
+    // magenta. The next track's colour is drawn again against the new one
+    // (the draw below clears m_nextColour). HOLD already lets NEXT through.
+    if ((hold || (m_mixing && forceNext == false)) && m_colour.isEmpty() == false)
         changeColour = false;
     if (changeColour || m_colourBar >= 0)
         m_colourBar = 0;
@@ -8258,7 +8297,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the strobes to full and the blink became a flash (runde 172)
     bool hit = isCalm == false && still == false && dropWaiting == false
             && (preDrop && beatsToNext == 1) == false
-            && ((isBuild && prog > 0.82 && crowded == false
+            && ((isBuild && (hitProg >= 0.0 ? hitProg : prog) > 0.82 && crowded == false
                  && (haveCurves == false || turn || (kick > 0.45 && riser > 0.08)))
                 || (isDrop && dropBar == 0 && beatInBar < 2)
                 || (moveHit && crowded == false));
