@@ -355,7 +355,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     }
     else
         m_markersManual = obj.value(QStringLiteral("manual")).toBool(false);
-    if (m_markersManual == false && keepLocal == false && refineMarkers())
+    // ANALYSIS10_NO_SECOND_PASS: BLT's analysis 10 is measured on the kick already
+    if (m_markersManual == false && keepLocal == false
+        && obj.value(QStringLiteral("analysis")).toInt(0) < 10 && refineMarkers())
     {
         // measure the new flags BEFORE the correction goes back to the
         // cache, or BLT stores a -1 and hands it straight back next time
