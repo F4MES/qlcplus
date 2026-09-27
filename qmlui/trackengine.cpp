@@ -9101,7 +9101,14 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // ENERGY slider is its off switch - under that this never fires - and
         // a drop is where a coloured row across the strobes is a look rather
         // than a wobble. Everything else about them is unchanged.
-        mv.ownChaser = tier == 2 && wild >= 0.15 && chance(0.25);
+        // Runde 257 (Tobias: "flere looks og chases på strobe-lysene"): the
+        // latch opens a little wider now that there are looks built for it -
+        // two drop sections in five, and one groove section in five for the
+        // slow Groove Glide (four beats a step). Same fader line, and every
+        // one of them is a support look: two beats a step or more, half the
+        // lamps lit at least, the hardware strobe shut.
+        mv.ownChaser = wild >= 0.15 && ((tier == 2 && chance(0.40))
+                                        || (tier == 1 && build == false && chance(0.20)));
         // ... and ALL the way down between the hits, at every energy. It was
         // 0.85 + 0.15 * e, so at the bottom of the fader the room sat at
         // fifteen per cent of a very bright lamp between the blinks: lit, on a
