@@ -1171,6 +1171,8 @@ void TrackManager::clear()
     m_trackTimeMs = 0;
     m_playing = false;
     m_analysedState = QStringLiteral("normal");
+    m_loopTop = -1;                       // R236_LOOP_CLEAR
+    m_jumpFrom = m_jumpTo = -100;
 
     emit trackChanged();
     emit markersChanged();
@@ -1756,7 +1758,10 @@ void TrackManager::runEngine(bool sectionChanged)
         nextState.clear();
         beatsToNext = 0;
     }
-    m_engine->tick(state, beat, secStart, secEnd, en, se,
+    int tickStart = secStart;                 // R236_LOOP_TICK_START
+    if (m_loopTop > 0 && m_jumpTo < secStart && beat <= m_loopTop)
+        tickStart = secStart > 32 ? secStart - 32 : 1 + (secStart - 1) % 4;
+    m_engine->tick(state, beat, tickStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
                    m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high,
                    turn, riser, hats, bass, kickAhead);
@@ -2414,7 +2419,8 @@ void TrackManager::markersEdited()
     // programme and accent twice on one beat (R172_ONE_ENGINE_CALL)
     const QString stateBefore = m_analysedState;
     updateState();
-    const bool engineRan = m_analysedState != stateBefore && m_overrideState.isEmpty();
+    const bool engineRan = m_analysedState != stateBefore && m_overrideState.isEmpty()
+                        && m_loopTop <= 0;   // R236_LOOP_EDIT
     if (m_autoRun && m_roleMode && engineRan == false)
     {
         m_lastEngineBeat = -1;
@@ -2497,7 +2503,8 @@ void TrackManager::undoMarkers()
     emit markersChanged();
     const QString stateBefore = m_analysedState;     // R172_ONE_ENGINE_CALL_UNDO
     updateState();
-    const bool engineRan = m_analysedState != stateBefore && m_overrideState.isEmpty();
+    const bool engineRan = m_analysedState != stateBefore && m_overrideState.isEmpty()
+                        && m_loopTop <= 0;   // R236_LOOP_UNDO
     if (m_autoRun && m_roleMode && engineRan == false)
     {
         m_lastEngineBeat = -1;

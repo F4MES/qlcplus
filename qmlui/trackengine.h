@@ -809,7 +809,7 @@ private:
     /* live state */
     QString m_override;
     QString m_colour;
-    int m_colourCursor;
+    QString m_leftColour;        // runde 236: the room colour before this one - not drawn straight back
     int m_colourBar;          // -1: a fresh track, hold the colour until a break or drop
     int m_colourSince;        // beat of the last colour change
     int m_holdNow;            // bars this colour holds - drawn each change around holdBars
