@@ -307,7 +307,12 @@ void TrackEngine::slotDocChanged()
     // show - and stopAll() there stopped whichever NEW functions had the old
     // ids, the new show's startup function among them (runde 217). Forget
     // them now, while they are dead.
-    if (m_doc != nullptr && m_doc->loadStatus() == Doc::Cleared)
+    // ... and only then (fejljagt 09-27): Doc starts out Cleared and stays so
+    // until a file is loaded, so on a workspace nobody had loaded yet every
+    // fixture edit took this branch and forgot functions that were still
+    // running. Right after clearContents() the function list is empty.
+    if (m_doc != nullptr && m_doc->loadStatus() == Doc::Cleared
+        && m_doc->functions().isEmpty())
     {
         m_active.clear();
         m_activeAttr.clear();
@@ -2044,6 +2049,12 @@ void TrackEngine::ensureSweeps()
         std::sort(ordered.begin(), ordered.end(), [this](quint32 a, quint32 b) {
             Fixture *fa = m_doc->fixture(a);
             Fixture *fb = m_doc->fixture(b);
+            // universe first, as ensureTable() sorts g.fixtures (runde 176):
+            // by address alone a row over two universes came out interleaved
+            quint32 ua = fa != nullptr ? fa->universe() : 0;
+            quint32 ub = fb != nullptr ? fb->universe() : 0;
+            if (ua != ub)
+                return ua < ub;
             quint32 aa = fa != nullptr ? fa->address() : 0;
             quint32 ab = fb != nullptr ? fb->address() : 0;
             return aa != ab ? aa < ab : a < b;
@@ -3958,7 +3969,6 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
     if (enable) m_groupOff.remove(key); else m_groupOff.insert(key);
     if (enable == false && key == m_echoKey)
         stopEcho();
-    saveRoles();
     if (changed)
         logSignal((enable ? QStringLiteral("sig:group-on:") : QStringLiteral("sig:group-off:")) + key);
     // right now, not on the next beat - and stop whatever of ours is on it
@@ -3987,6 +3997,10 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
         }
         applyGroupOff();
     }
+    // after ensureTable() (fejljagt 09-27): saveRoles() keeps an unbuilt
+    // table untouched, so called first the switch never reached GROUPOFF
+    // when the Track page had not built the table yet
+    saveRoles();
     if (m_startScene)
         startLook();                     // the opening picture follows the switches
     emit tableChanged();
@@ -4302,6 +4316,10 @@ QString TrackEngine::exportSettings()
 {
     // roles, stars, thresholds, banned colours, FULL AUTO, hold, accent ...
     // everything under trackengine/ and trackmanager/, as one JSON file
+    // ... with tonight's table in it (fejljagt 09-27): the stage counts tick()
+    // adds are only in memory until the next trackLoaded()/rate(), and this
+    // file is the only backup. saveRoles() keeps an unbuilt table untouched.
+    saveRoles();
     QSettings settings;
     QJsonObject obj;
     foreach (const QString &key, settings.allKeys())
@@ -5429,6 +5447,16 @@ bool TrackEngine::laserSweepSafe(quint32 fid, const QString &group, int downAllo
     // centre +- height (rotation 0; a rotated laser figure is the standing-
     // still bug of round 96, and nothing here makes one).
     int amp = qMax(efx->height(), efx->width());
+    // ... and a rotated one reaches w*|sin| + h*|cos| (fejljagt 09-27, from
+    // EFX::rotateAndScale): a square or diamond corner turned 45 degrees goes
+    // ~1.41 x further than max(w, h). None in the show today; an operator's
+    // rotated EFX on the bars would have passed the check and dived.
+    if (efx->rotation() % 360 != 0)
+    {
+        const double r = double(efx->rotation()) * 3.14159265358979323846 / 180.0;
+        amp = qMax(amp, int(std::ceil(double(efx->width()) * std::fabs(std::sin(r))
+                                      + double(efx->height()) * std::fabs(std::cos(r)))));
+    }
     foreach (EFXFixture *ef, efx->fixtures())
     {
         Fixture *fxi = m_doc->fixture(ef->head().fxi);
@@ -6638,11 +6666,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // ... read on the bar line (runde 242): the fader crossing the line
         // mid-bar put them in and out of a drop on beats 2-4 (24 times on
         // 25-26 Sep, the Minis standing in for 3-12 beats). Mid-bar they keep
-        // what the last bar line decided.
-        const bool strobesOut = (beatInBar == 0 || sectionChanged)
-            ? fader < ENGINE_STROBE_ON : m_cast.contains(key) == false;
-        if (strobesOut && m_groups.value(key).strobes)
-            continue;
+        // what the last bar line decided. They stay IN the pool, and are
+        // skipped in the rotation below (fejljagt 09-27): taken out here, the
+        // pool was one shorter on beats 2-4 whenever they had not made the
+        // cast on beat 1, every index after them moved, and the cast swapped
+        // two groups back and forth every bar.
         pool.append(key);
     }
 
@@ -6659,6 +6687,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         QString key = pool.at((m_castCursor + i) % pool.count());
         if (m_hatsOut && m_groups.value(key).strobes)
+            continue;
+        const bool strobesOut = (beatInBar == 0 || sectionChanged)
+            ? fader < ENGINE_STROBE_ON : m_cast.contains(key) == false;
+        if (strobesOut && m_groups.value(key).strobes)
             continue;
         priority.append(key);
     }
@@ -8073,6 +8105,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (mf != Function::invalidId() && m_faderNow < 0.995
                 && m_funcs.value(mf).name.contains(QStringLiteral("dryp"), Qt::CaseInsensitive))
                 mf = Function::invalidId();
+            // ... and a STATIC look held from the build's first half, once, on
+            // the bar line where the build passes its middle (fejljagt 09-27):
+            // `moving` turns true there, but the held scene was kept for the
+            // rest of the build - "static until halfway, then the chase"
+            // (runde 227, on barProg since runde 242) never came for it.
+            // Same clock as the figure's tightening (prog/prevProg, beat 1).
+            if (mf != Function::invalidId() && isBuild && moving && hold == false
+                && beatInBar == 0 && barProg >= 0.5
+                && (progBefore >= 0.0 ? progBefore : qreal(beat - 4 - secStart) / qreal(len)) < 0.5
+                && m_funcs.value(mf).type == int(Function::SceneType))
+                mf = Function::invalidId();
             // ... and a build programme outside a build (HOLD carried it
             // over the drop, runde 227)
             if (mf != Function::invalidId() && m_buildLen <= 0
@@ -8535,6 +8578,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         echoHue = QStringLiteral("white");
                     echoHue = colourForGroup(echoKey, echoHue);
                     quint32 ef = colourFunction(echoKey, echoHue);
+                    // not the scene the group already wears (fejljagt 09-27):
+                    // the contrast can fall back to the room's own colour, and
+                    // two slots on one function share one intensity override -
+                    // stopSlot() leaves a shared function alone, so the echo's
+                    // level stayed on the bar after it ended, and a hard stop
+                    // of col: (laserFaderCheck, selfTest) stopped nothing
+                    if (ef == m_active.value("col:" + echoKey, Function::invalidId()))
+                        ef = Function::invalidId();
                     if (ef != Function::invalidId())
                     {
                         m_echoKey = echoKey;
@@ -12027,6 +12078,12 @@ void TrackEngine::idle()
         // runs four seconds into a quiet link, not only after 30 s
         if (m_flash && (slot == QStringLiteral("flash") || slot.startsWith(QStringLiteral("flash:"))))
             continue;
+        // ... and so do the dimmers under it (fejljagt 09-27): genFlash()
+        // puts the lit groups' dimmer parts at full, the flash scenes carry
+        // only colour, and tick() never restarts a held group's parts - the
+        // held white stood at dimmer 0 until the button was let go
+        if (m_flash && slot.startsWith(QStringLiteral("dim:")) && m_flashHeld.contains(slotGroup(slot)))
+            continue;
         if (slot.startsWith("str:"))
         {
             stopSlot(slot, true);    // a shutter-only scene cannot be faded
@@ -12368,7 +12425,10 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         func->releaseAttributeOverride(m_fadeAttr.take(fid));
         m_fadeLevel.remove(fid);
     }
-    else if (func->isRunning() == false || func->stopped())
+    // not `else` (fejljagt 09-27): a function that ended by itself inside its
+    // fade (a SingleShot chase, QLC+'s stop-all) was taken over and never
+    // started again - the group stood dark until the slot changed
+    if (func->isRunning() == false || func->stopped())
         startFunction(func, division);
 
     m_active.insert(slot, fid);
@@ -12546,7 +12606,10 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
         func->releaseAttributeOverride(m_fadeAttr.take(fid));
         m_fadeLevel.remove(fid);
     }
-    else if (func->isRunning() == false || func->stopped())
+    // not `else` (fejljagt 09-27): a function that ended by itself inside its
+    // fade (a SingleShot chase, QLC+'s stop-all) was taken over and never
+    // started again - the group stood dark until the slot changed
+    if (func->isRunning() == false || func->stopped())
         func->start(m_doc->masterTimer(), FunctionParent::track());
 
     m_active.insert(slot, fid);

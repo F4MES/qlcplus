@@ -1161,8 +1161,8 @@ void TrackManager::moveMarker(int index, int beat)
     fillMarkerEnergies(true);            // the moved flag and its neighbours span other beats now
 
     emit markersChanged();
+    m_markersManual = true;              // FJ_MOVE_MANUAL_FIRST: before updateState() reads it
     updateState();
-    m_markersManual = true;
     sendMarkers(true);                   // let BLT remember the correction
 }
 
