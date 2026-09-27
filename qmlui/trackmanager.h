@@ -391,6 +391,7 @@ private:
 
     QTimer m_energyTimer;
     qint64 m_stopSinceMs = 0;    // STOP_GRACE_R105: when a playing track said stop
+    void forgetLinkState();      // LINK_FORGET_FJ3_DECL: NEXT and the mix, as BLT forgets them
 
     qint64 m_lastPosMs;
     qint64 m_beatChangedMs = 0;  // R187_LAGGING_BEAT: when the beat last moved

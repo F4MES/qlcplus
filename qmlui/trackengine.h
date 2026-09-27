@@ -938,6 +938,8 @@ private:
     bool m_floorRound = false;             // this build: heads straight down, sharp, one blinking round (runde 214)
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
+    int m_dropFrom = -1;      // the beat this drop's look was drawn (fejljagt 3: the settle clock)
+    bool m_dropCalm = false;  // this drop has settled - held to the next section (fejljagt 3)
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)
     int m_kickBeat;           // the beat it last counted - tick() can run twice on one beat
     bool m_sectionOwed = false;   // R233_SAME_BEAT: a same-beat call's landing, owed to the next beat

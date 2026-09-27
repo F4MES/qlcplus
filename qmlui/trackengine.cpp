@@ -6034,8 +6034,28 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // bars or more: the strobes give up the lead and strobe as in a groove,
     // one effect less at the top, and the style steps down once - on the bar
     // line, with a redraw. The landing itself, FLASH and HOLD are untouched.
-    const bool dropSettled = isDrop && len >= 128 && dropBar >= 16;
-    const bool settleNow = dropSettled && dropBar == 16 && beatInBar == 0;
+    // (fejljagt 3, review of 10g) counted from the beat the drop's LOOK was
+    // drawn - the kick landing, or the beat DROP was forced - not from the
+    // section under it: a DROP pressed 20 bars into a section started out
+    // settled. And latched to the next section: a DJ loop over bar 16 turned
+    // the lead back on at every pass, and HOLD over bar 16 skipped the style
+    // step for the rest of the drop (now it steps on the first bar line after
+    // HOLD lets go).
+    if (isDrop == false)
+    {
+        m_dropFrom = -1;
+        m_dropCalm = false;
+    }
+    else if (sectionChanged || m_dropFrom < 0)
+    {
+        m_dropFrom = beat;
+        m_dropCalm = false;
+    }
+    const bool settleNow = isDrop && m_dropCalm == false && m_dropFrom >= 0 && len >= 128
+                        && hold == false && beat - m_dropFrom >= 64 && beatInBar == 0;
+    if (settleNow)
+        m_dropCalm = true;
+    const bool dropSettled = isDrop && m_dropCalm;
 
     // The highs climbing for bars on end with a drop ahead IS the build,
     // whatever the flag on this stretch says - the riser is in the music,
@@ -6943,7 +6963,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_dropStyle = 0;
     // ... and it steps down once when the drop settles: hard -> heavy,
     // nervous/tight -> wide (analyse 10g)
-    if (settleNow && hold == false)
+    if (settleNow)
         m_dropStyle = m_dropStyle == 1 ? 4 : ((m_dropStyle == 5 || m_dropStyle == 3) ? 2 : m_dropStyle);
 
     // Stable roles for this room picture: base / rhythmic lead / support.
@@ -7197,8 +7217,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // "in or out of the cast", and picked these mid-swing
                     // (runde 172). Out of the cast they are not lit anyway.
                     darkGroups.insert(key);
-                    if (inCast)
                     {
+                        // (fejljagt 3) the four bars from an UNKNOWN aim hold
+                        // in the cast or not: out of the cast the bars got one
+                        // dark beat, and the echo - which lights bars in or out
+                        // of the cast - relit them while the motor still ran
                         // ... but never the base for four bars: that is the
                         // light the room stands on, and "the room never goes
                         // black" is the one promise the engine keeps
@@ -7209,7 +7232,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         // wherever it was last left - the floor, if DOWN was
                         // busked - and one beat relit the beams mid-swing
                         // (runde 190)
-                        if ((isBreak || m_position.contains(key) == false) && key != base)
+                        if (((inCast && isBreak) || m_position.contains(key) == false) && key != base)
                             m_darkUntil.insert(key, beat + ENGINE_DARK_BARS * 4 - 1);
                     }
                     m_position.insert(key, home);
@@ -7277,11 +7300,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 np = homePosition(key);
             if (np != want && (mayMove || want == Function::invalidId()))
             {
-                if (inCast && g.lasers)
+                if (g.lasers && (inCast || want == Function::invalidId()))
                 {
                     darkGroups.insert(key);
-                    // four bars from an unknown aim as well (runde 190, above)
-                    if ((isBreak || want == Function::invalidId()) && key != base)     // never the base, see above
+                    // four bars from an unknown aim as well (runde 190, above) -
+                    // in the cast or not, as above (fejljagt 3)
+                    if (((inCast && isBreak) || want == Function::invalidId()) && key != base)     // never the base, see above
                         m_darkUntil.insert(key, beat + ENGINE_DARK_BARS * 4 - 1);
                 }
                 want = np;
@@ -8545,6 +8569,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 {
                     if (m_groups.value(fg).strobes
                         && (castSet.contains(fg) == false || m_funcs.value(ff).colour != hue))
+                    {
+                        ff = Function::invalidId();
+                        break;
+                    }
+                }
+            }
+            // ... and never on a group that is dark for a move this beat or
+            // in its hold - a flash scene on the laser bars would light the
+            // beams mid-swing (fejljagt 3)
+            if (ff != Function::invalidId())
+            {
+                foreach (const QString &fg, m_funcs.value(ff).groups)
+                {
+                    if (darkGroups.contains(fg))
                     {
                         ff = Function::invalidId();
                         break;
@@ -11912,7 +11950,9 @@ void TrackEngine::selfTest()
         // forgotten, not written: the first beat after the test takes the
         // unknown-aim dark hold, as it must if the test is cut short while
         // the motor is still moving (runde 197)
-        if (m_active.value("pos:" + key, Function::invalidId()) != home)
+        // (or a figure running on the home aim: it stops below, and the beams
+        // jumped back lit - fejljagt 3)
+        if (m_active.value("pos:" + key, Function::invalidId()) != home || m_active.contains("efx:" + key))
         {
             stopSlot("col:" + key, true);
             stopSlot("mot:" + key, true);
@@ -12083,6 +12123,19 @@ void TrackEngine::idle()
     bool holdBase = list.isEmpty() && base.isEmpty() == false && m_groupOff.contains(base) == false;
 
     // everything from the track goes; the start scene(s) come on
+    // ... the bars with a FIGURE dark first, as in release() (runde 220):
+    // an EFX has no fade-out, and the beams jumped back to the aim while
+    // their colour faded over a bar - idle() runs on every deck stop and
+    // four seconds into a quiet link (fejljagt 3)
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &lg = m_groups.value(key);
+        if (lg.lasers == false || lg.patternDevice || m_active.contains("efx:" + key) == false)
+            continue;
+        stopSlot("col:" + key, true);
+        for (int i = 0; i < lg.parts.count(); i++)
+            stopSlot(partSlot(key, i), true);
+    }
     stopSweeps();
     m_strobeUntil = -1;
     // No section either. rate() reads an empty m_lastState as "nothing to
@@ -12317,6 +12370,14 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_fillUntil = -1;
     m_fillLast = -8;
     m_lookState.clear();
+    // ... but a hold still running is a motor still moving (fejljagt 3): its
+    // aim is forgotten, so the new track's first beat takes the unknown-aim
+    // hold instead of relighting the bars mid-travel
+    for (QHash<QString, int>::const_iterator it = m_darkUntil.constBegin(); it != m_darkUntil.constEnd(); ++it)
+    {
+        if (it.value() >= m_lastBeat)
+            m_position.remove(it.key());
+    }
     m_darkUntil.clear();         // its beats belong to the track that just ended
     m_kickGone = 0;              // the new track is not mid-vocal
     m_curveBreak = false;        // runde 192: its own curves decide afresh

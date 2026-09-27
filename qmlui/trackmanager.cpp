@@ -199,8 +199,25 @@ void TrackManager::slotNewConnection()
         m_buffers.insert(sock, QByteArray());
         connect(sock, SIGNAL(readyRead()), this, SLOT(slotReadyRead()));
         connect(sock, SIGNAL(disconnected()), this, SLOT(slotDisconnected()));
+        forgetLinkState();                       // LINK_FORGET_FJ3: BLT starts afresh
         emit connectedChanged();
     }
+}
+
+void TrackManager::forgetLinkState()
+{
+    // LINK_FORGET_FJ3_FN: what BLT had told us about the other decks
+    const bool had = m_mixing || m_nextTitle.isEmpty() == false || m_nextMarkers.isEmpty() == false;
+    m_mixing = false;
+    m_nextTitle.clear();
+    m_nextMarkers.clear();
+    if (m_engine != nullptr)
+    {
+        m_engine->setMixing(false);
+        m_engine->setNextKey(QString());
+    }
+    if (had)
+        emit mixChanged();
 }
 
 void TrackManager::slotDisconnected()
@@ -226,12 +243,11 @@ void TrackManager::slotDisconnected()
     // R187_MIX_ON_DISCONNECT: BLT forgets it was mixing when it reconnects
     // and only ever announces a mix starting - a mix that ended while it
     // was away held colour and calm for the whole next track
-    if (m_clients.isEmpty() && m_mixing)
+    if (m_clients.isEmpty())
     {
-        m_mixing = false;
-        if (m_engine != nullptr)
-            m_engine->setMixing(false);
-        emit mixChanged();
+        forgetLinkState();                       // LINK_FORGET_FJ3_LAST
+        m_cacheList.clear();                     // the editor's rows were BLT's
+        emit cacheChanged();
     }
     emit connectedChanged();
 }
