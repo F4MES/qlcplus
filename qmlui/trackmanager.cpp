@@ -311,6 +311,8 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     m_key = obj.value(QStringLiteral("key")).toString();      // "Am", "8A", "1m" - or nothing
     m_bpm = obj.value(QStringLiteral("bpm")).toDouble();
     m_beatCount = obj.value(QStringLiteral("beats")).toInt();
+    // DOWNBEAT_R104_READ: where the track's first bar starts (0 = beat 1)
+    m_downbeat = qBound(0, obj.value(QStringLiteral("downbeat")).toInt(0), 3);
     m_durationMs = obj.value(QStringLiteral("duration")).toInt();
 
     m_waveform.clear();
@@ -1139,7 +1141,7 @@ void TrackManager::moveMarker(int index, int beat)
         return;
 
     // a dragged flag snaps to the bar line
-    beat = qBound(1, tmSnapBar(beat), m_beatCount > 0 ? m_beatCount : beat);
+    beat = qBound(1, snapBar(beat), m_beatCount > 0 ? m_beatCount : beat);   // DOWNBEAT_R104_MOVE
 
     QVariantMap marker = m_markers.at(index).toMap();
     if (marker.value(QStringLiteral("beat")).toInt() == beat)
@@ -1178,6 +1180,7 @@ void TrackManager::clear()
     m_title.clear();
     m_bpm = 0;
     m_beatCount = 0;
+    m_downbeat = 0;                     // DOWNBEAT_R104_CLEAR
     m_durationMs = 0;
     m_waveform.clear();
     m_low.clear(); m_high.clear(); m_kick.clear();
@@ -2203,6 +2206,15 @@ static int tmSnapBar(int beat)
     return qMax(1, bar * 4 + 1);
 }
 
+int TrackManager::snapBar(int beat) const
+{
+    // DOWNBEAT_R104_SNAP: the nearest bar line of THIS track - its first bar
+    // starts on beat m_downbeat + 1. The beats before it (the pickup) go to
+    // beat 1 when that is nearer, so the first flag stays where it is.
+    const int shifted = tmSnapBar(qMax(1, beat - m_downbeat)) + m_downbeat;
+    return (m_downbeat > 0 && beat - 1 < shifted - beat) ? 1 : shifted;
+}
+
 bool TrackManager::refineMarkers()
 {
     if (m_beatCount < 64 || m_kick.isEmpty())
@@ -2217,7 +2229,7 @@ bool TrackManager::refineMarkers()
         Flag f;
         // snapping rounds up, so the last flag can land past the end -
         // nextSection() then reports a section that never arrives
-        f.beat = qBound(1, tmSnapBar(mk.value(QStringLiteral("beat")).toInt()), m_beatCount);
+        f.beat = qBound(1, snapBar(mk.value(QStringLiteral("beat")).toInt()), m_beatCount);   // DOWNBEAT_R104_REFINE
         f.type = mk.value(QStringLiteral("type")).toString();
         f.energy = mk.value(QStringLiteral("energy"), -1.0).toDouble();
         if (f.type.isEmpty())
@@ -2370,7 +2382,7 @@ void TrackManager::addMarker(int beat, QString type)
 {
     if (m_beatCount <= 0 || stateNames().contains(type) == false)
         return;
-    beat = qBound(1, tmSnapBar(beat), m_beatCount);
+    beat = qBound(1, snapBar(beat), m_beatCount);   // DOWNBEAT_R104_ADD
 
     // a flag already on this bar takes the new type instead
     for (int i = 0; i < m_markers.count(); i++)

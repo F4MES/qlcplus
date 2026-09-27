@@ -89,6 +89,7 @@ class TrackManager : public QObject
 
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
     Q_PROPERTY(int beatCount READ beatCount NOTIFY trackChanged)
+    Q_PROPERTY(int downbeat READ downbeat NOTIFY trackChanged)   // DOWNBEAT_R104
     Q_PROPERTY(QVariantList waveform READ waveform NOTIFY trackChanged)
     /** What the analysis saw, per beat 0..255: bass, highs, kick. */
     Q_PROPERTY(QVariantList lowCurve READ lowCurve NOTIFY trackChanged)
@@ -137,6 +138,7 @@ public:
 
     QString title() const;
     int beatCount() const;
+    int downbeat() const { return m_downbeat; }      // DOWNBEAT_R104_GET
     QVariantList waveform() const;
     QVariantList lowCurve() const;
     QVariantList highCurve() const;
@@ -334,6 +336,8 @@ private:
     QString m_title;
     qreal m_bpm;
     int m_beatCount;
+    int m_downbeat = 0;          // DOWNBEAT_R104_MEMBER: the first bar starts on beat m_downbeat + 1
+    int snapBar(int beat) const;
     QVariantList m_waveform;
     QVariantList m_low;
     QVariantList m_high;

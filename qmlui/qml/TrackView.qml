@@ -71,6 +71,17 @@ Rectangle
         return m + ":" + (s < 10 ? "0" : "") + s
     }
 
+    // the nearest bar line of THIS track, as TrackManager::snapBar(): the
+    // first bar starts on beat downbeat + 1 (BACKLOG 104), and a beat before it
+    // goes to beat 1 when that is nearer
+    function snapBeat(b)
+    {
+        var db = trackManager.downbeat || 0
+        var x = Math.max(1, b - db)
+        var shifted = Math.max(1, Math.floor((x - 1 + 2) / 4) * 4 + 1) + db
+        return (db > 0 && b - 1 < shifted - b) ? 1 : shifted
+    }
+
     function viewCount()
     {
         if (beatCount <= 0) return 1
@@ -1040,10 +1051,11 @@ Rectangle
                     var gridStep = trackViewRoot.zoomActive ? 4 : 32
                     ctx.strokeStyle = "rgba(255,255,255,0.12)"
                     ctx.lineWidth = 1
-                    // on the bar lines flags snap to - beats count from 1, so bars
-                    // start at 1, 5, 9 (tmSnapBar); the grid was at 4, 8, 12, one
-                    // beat early (fejljagt 2)
-                    for (var g = Math.ceil((vf - 1) / gridStep) * gridStep + 1; g < vf + vc; g += gridStep)
+                    // on the bar lines flags snap to - the track's own: its first
+                    // bar starts on beat downbeat + 1 (snapBar, BACKLOG 104); the
+                    // grid was at 4, 8, 12, one beat early (fejljagt 2)
+                    var firstBar = (trackManager.downbeat || 0) + 1
+                    for (var g = Math.ceil((vf - firstBar) / gridStep) * gridStep + firstBar; g < vf + vc; g += gridStep)
                     {
                         ctx.beginPath()
                         ctx.moveTo(xOf(g), lane)
@@ -1176,7 +1188,7 @@ Rectangle
                 // stops at the neighbour instead.
                 function barTaken(wantBeat)
                 {
-                    var snapped = Math.max(1, Math.floor((wantBeat - 1 + 2) / 4) * 4 + 1)
+                    var snapped = trackViewRoot.snapBeat(wantBeat)
                     // clamped as moveMarker() clamps it, or a flag on the last
                     // beat could still be dragged onto and deleted (runde 179)
                     if (trackViewRoot.beatCount > 0)
@@ -1200,7 +1212,7 @@ Rectangle
                     // moveMarker snapped the flag to a bar line: look for it
                     // there, or a neighbour on the next bar can be nearer to
                     // the raw beat and the drag jumps to the wrong flag
-                    var snapped = Math.max(1, Math.floor((wantBeat - 1 + 2) / 4) * 4 + 1)
+                    var snapped = trackViewRoot.snapBeat(wantBeat)
                     var mk = trackManager.markers
                     var best = -1, bd = 1e9
                     for (var i = 0; i < mk.length; i++)
