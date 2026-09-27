@@ -1060,6 +1060,7 @@ void TrackEngine::ensureTable()
         info.fixtureCount = touched.count();
         info.litShare = litShareOf(func, touched);
         info.minLit = minLitOf(func, touched);
+        info.peakLit = peakLitOf(func, touched);
         info.setsColour = setsColourOf(func);
         info.aims = aimsOf(func);
         foreach (quint32 fid, touched)
@@ -1296,7 +1297,8 @@ void TrackEngine::ensureTable()
         // (runde 231: or one that keeps every lamp at ENGINE_OWN_FLOOR, which
         // may own them on the base too - canOwnDimmers)
         if (it.value().groups.count() == 1
-            && (it.value().litShare < 0.99 || it.value().minLit >= ENGINE_OWN_FLOOR)
+            && (it.value().litShare < 0.99 || it.value().minLit >= ENGINE_OWN_FLOOR
+                || it.value().peakLit >= ENGINE_OWN_FLOOR)                         // runde 259
             && it.value().name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
             m_climbGroups.insert(*it.value().groups.constBegin());
     }
@@ -3404,6 +3406,46 @@ qreal TrackEngine::minLitOf(Function *func, const QSet<quint32> &touched) const
     return judged ? qreal(lowest) / 255.0 : 0.0;
 }
 
+qreal TrackEngine::peakLitOf(Function *func, const QSet<quint32> &touched) const
+{
+    // runde 259: the brightest master dimmer in the step where the brightest
+    // lamp is darkest, 0..1 - "at least one lamp on" in every step. A step
+    // that writes no dimmer of these lamps promises nothing: 0.
+    if (func == nullptr || touched.isEmpty() || m_doc == nullptr)
+        return 0.0;
+    QList<quint32> steps;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+    }
+    else
+        steps.append(func->id());
+    if (steps.isEmpty())
+        return 0.0;
+    int worst = 255;
+    foreach (quint32 sid, steps)
+    {
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            return 0.0;
+        int brightest = -1;
+        foreach (const SceneValue &sv, scene->values())
+        {
+            if (touched.contains(sv.fxi) == false)
+                continue;
+            Fixture *fxi = m_doc->fixture(sv.fxi);
+            if (fxi != nullptr && sv.channel == dimmerChannel(fxi))
+                brightest = qMax(brightest, int(sv.value));
+        }
+        if (brightest < 0)
+            return 0.0;
+        worst = qMin(worst, brightest);
+    }
+    return qreal(worst) / 255.0;
+}
+
 bool TrackEngine::canOwnDimmers(const TrackFuncInfo &info, bool onBase) const
 {
     // A dimmer chase takes the group's dimmers from the engine's own parts
@@ -3418,6 +3460,12 @@ bool TrackEngine::canOwnDimmers(const TrackFuncInfo &info, bool onBase) const
     if (info.dimmer == false || info.type == int(Function::SceneType))
         return false;
     if (info.minLit >= ENGINE_OWN_FLOOR)
+        return true;
+    // Runde 259, Tobias: "lamper må gerne gå under 35%, det vigtigste er bare,
+    // at der altid er mindst en lampe på". So: at least one lamp at
+    // ENGINE_OWN_FLOOR in every step owns the dimmers too, base included -
+    // the others may go as low as the figure wants.
+    if (info.peakLit >= ENGINE_OWN_FLOOR)
         return true;
     return onBase == false && info.litShare < 0.99;
 }
@@ -4894,8 +4942,12 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // than any other. So the base asks for a floor in every section, not
         // only in a break, and the floor follows what the engine's own
         // figures already do (patternMask keeps the heads at 0.35).
+        // ... unless at least ONE lamp is on in every step (runde 259, Tobias:
+        // "det vigtigste er bare, at der altid er mindst en lampe på" -
+        // "chases hvor lamperne skiftevis fader fra 0-100 skal jo gerne virke
+        // også"): the room is never dark under it, and that is the promise
         if (litFloor > 0.0 && info->type != int(Function::SceneType)
-            && info->litShare < litFloor)
+            && info->litShare < litFloor && info->peakLit < ENGINE_OWN_FLOOR)
             continue;
         // energy stars: a three-star chase waits for a full-energy drop.
         // A BREAK is always ceiling 1, and that is one rule too many: it also
@@ -5177,7 +5229,8 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         foreach (TrackFuncInfo *info, ok)
         {
             if (info->type == int(Function::SceneType)
-                || (info->litShare >= (group == m_compositionBase ? 0.60 : 0.50)
+                || ((info->litShare >= (group == m_compositionBase ? 0.60 : 0.50)
+                     || info->peakLit >= ENGINE_OWN_FLOOR)      // runde 259: one lamp always on
                     && stepBeats(*info, bpm) >= 2.0))
                 support.append(info);
         }
@@ -8342,7 +8395,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // patternMask(), runde 164)
         if (ambientBase(key) && m_compositionTier != 2
             && mf != Function::invalidId() && m_funcs.value(mf).dimmer
-            && m_funcs.value(mf).litShare < 0.99)
+            && m_funcs.value(mf).litShare < 0.99
+            && m_funcs.value(mf).peakLit < ENGINE_OWN_FLOOR)      // one lamp always on (runde 259)
         {
             mf = Function::invalidId();
             m_sectionMotion.remove(key);
@@ -9859,8 +9913,11 @@ qreal TrackEngine::pulseFactor(const QString &group) const
     // the pulse may take it down to ENGINE_OWN_FLOOR of the level, no further.
     if (group == m_compositionBase && m_motionDim.contains(group))
     {
-        const qreal ml = m_funcs.value(m_active.value(QStringLiteral("mot:") + group,
-                                                      Function::invalidId())).minLit;
+        // (runde 259: the promise is now the BRIGHTEST lamp - peakLit - so the
+        // pulse keeps that one at ENGINE_OWN_FLOOR; the dim ones may go lower)
+        const TrackFuncInfo &own = m_funcs.value(m_active.value(QStringLiteral("mot:") + group,
+                                                                 Function::invalidId()));
+        const qreal ml = qMax(own.minLit, own.peakLit);
         if (ml > 0.0)
             factor = qMax(factor, qMin(1.0, ENGINE_OWN_FLOOR / ml));
     }

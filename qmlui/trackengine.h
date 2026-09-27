@@ -189,6 +189,8 @@ struct TrackFuncInfo
     int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
     qreal litShare = 1.0;     // how much of what it touches is lit, averaged over its steps
     qreal minLit = 0.0;       // the lowest master dimmer any step leaves any of its lamps
+    qreal peakLit = 0.0;      // runde 259: the BRIGHTEST lamp in its darkest step - "at
+                              // least one lamp on" (Tobias), 0..1
                               // at (0..1); 0 = can promise nothing (runde 231)
 
     /* ---- the operator's verdict, per section kind ---- */
@@ -697,6 +699,7 @@ protected:
      *  head of seven. Measured once, when the table is built. */
     qreal litShareOf(Function *func, const QSet<quint32> &touched) const;
     qreal minLitOf(Function *func, const QSet<quint32> &touched) const;
+    qreal peakLitOf(Function *func, const QSet<quint32> &touched) const;
     bool canOwnDimmers(const TrackFuncInfo &info, bool onBase) const;
     /** Does this function write a colour of its own? A chase that only moves
      *  dimmers takes whatever colour the room is in, so it can run under all
