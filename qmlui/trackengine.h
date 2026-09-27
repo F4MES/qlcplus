@@ -167,6 +167,8 @@ struct TrackFuncInfo
                               // the heads itself, so the engine's sweep steps aside.
                               // A dimmer walk does not, and the sweep runs under it.
     QString family;           // the figure, not the name: "Row", "Eyes", "Span" ...
+    QString partner;          // runde 243: the partner of a two-colour programme
+                              // (its name's tag: Fire, Ice, Deep ...), or empty
     quint32 scatter = 0;      // nameScatter(name): the ORDER candidates() sorts by.
                               // Not the id - see candidates() for why that was
                               // the reason every section looked like the last
@@ -816,6 +818,7 @@ private:
     bool m_holdAuto = true;   // runde 189: the fader picks the hold (64/32/16/8 bars)
     qreal m_holdStretch = 1.0;  // this colour's random stretch of it, drawn at each change
     QString m_accentPick;     // the accent drawn for this section
+    QString m_partnerPick;    // runde 243: the ONE partner colour this look may show
     QString m_accentGroup;    // the group carrying it - rotates, never the same twice running
     int m_keyBias;            // this track's key: -1 unknown, 0 minor (cold side), 1 major (warm side)
     int m_nextKeyBias;        // the next track's, from BLT "next"

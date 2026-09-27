@@ -1033,6 +1033,23 @@ void TrackEngine::ensureTable()
         info.colour = colourOf(n);
         if (info.colour.isEmpty())
             info.colour = colourOf(info.name);          // case-sensitive suffix rule
+        // the partner of a two-colour programme: gen_programs names it by a
+        // tag, never by its colour, so the lead is what colourOf() reads
+        // (runde 243). One tag per name, right after the lead colour.
+        if (info.path.startsWith(ENGINE_AUTO_PATH))
+        {
+            static const QMap<QString, QString> partnerTag =
+                { { "Fire", "red" }, { "Ember", "orange" }, { "Lime", "green" }, { "Ice", "cyan" },
+                  { "Deep", "blue" }, { "Rose", "magenta" }, { "Frost", "white" } };
+            foreach (const QString &w, info.name.split(QLatin1Char(' '), Qt::SkipEmptyParts))
+            {
+                if (partnerTag.contains(w))
+                {
+                    info.partner = partnerTag.value(w);
+                    break;
+                }
+            }
+        }
 
         QSet<quint32> touched = fixturesOf(func, 0);
         info.fixtureCount = touched.count();
@@ -4806,6 +4823,20 @@ quint32 TrackEngine::motionFunction(const QString &group, const QString &colour,
     return motionFor(group, colour, cast, cursor, -1, 0.0, 1, false, 3);
 }
 
+// ONE partner colour per look (runde 243). "farverne ... skal passe sammen,
+// altid" (Tobias, 2026-09-22) - and with the two-colour library of runde
+// 238-241 every group drew its own partner: a blue room could stand in blue,
+// cyan, magenta and white at once, plus the accent (modelled: 3+ colours in
+// 23 % of hot drops with an accent, up to five). A two-colour programme fits
+// when both its colours are the room's or the look's partner.
+static bool pairFits(const TrackFuncInfo &info, const QString &room, const QString &partner)
+{
+    if (info.partner.isEmpty())
+        return true;
+    return (info.colour == room || info.colour == partner)
+        && (info.partner == room || info.partner == partner) && info.colour != info.partner;
+}
+
 quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
                                const QSet<QString> &cast, int cursor, int tier,
                                qreal bpm, int division, bool staticOnly, int maxStars,
@@ -4990,6 +5021,21 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         if (fits.isEmpty())
             return Function::invalidId();
         ok = fits;
+    }
+
+    // only the look's two colours (runde 243, pairFits): single-colour
+    // programmes and the two-colour ones in the room + the look's partner.
+    // Nothing left: the group runs the engine's own look in the room colour.
+    {
+        QList<TrackFuncInfo *> fitting;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (pairFits(*info, m_colour, m_partnerPick))
+                fitting.append(info);
+        }
+        if (fitting.isEmpty())
+            return Function::invalidId();
+        ok = fitting;
     }
 
     // In a build, the build's own programmes first (runde 227, Tobias: "Byg
@@ -6240,6 +6286,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // CALM too (runde 205: it only blocked changeColour, and the base turned
     // and the next track took the colour through a CALM mix), and on a bar
     // line, so a HOLD let go after the turn point does not turn the base mid-bar
+    // gen_programs' HARMONY without white - the pairs the mix draws from, and
+    // (runde 243) the look's partner colour below
+    static const QMap<QString, QStringList> mixesWith =
+    {
+        { "red",     { "magenta", "orange", "blue" } },
+        { "orange",  { "red", "blue" } },
+        { "magenta", { "blue", "red", "cyan" } },
+        { "blue",    { "magenta", "cyan", "orange", "red" } },
+        { "cyan",    { "blue", "green", "magenta" } },
+        { "green",   { "cyan" } },
+        { "white",   { "blue", "cyan", "magenta" } },
+    };
     if (m_mixing && m_mixBeat >= 0 && m_nextColour.isEmpty() && m_palette.isEmpty() == false
         && m_override.isEmpty() && hold == false && isCalm == false && beatInBar == 0)
     {
@@ -6251,16 +6309,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // pairs the two-colour programmes are built from - without white,
         // which is punctuation, not a room. Only if none of them is in the
         // palette does the draw fall back to any colour (runde 171).
-        static const QMap<QString, QStringList> mixesWith =
-        {
-            { "red",     { "magenta", "orange", "blue" } },
-            { "orange",  { "red", "blue" } },
-            { "magenta", { "blue", "red", "cyan" } },
-            { "blue",    { "magenta", "cyan", "orange", "red" } },
-            { "cyan",    { "blue", "green", "magenta" } },
-            { "green",   { "cyan" } },
-            { "white",   { "blue", "cyan", "magenta" } },
-        };
         QStringList pool, anyPool;
         foreach (const QString &c, m_palette)
         {
@@ -6541,10 +6589,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     int effects = m_effects;
     // a build is the room filling up: it never has fewer groups than the
     // section before it, and past the middle it reaches for one more
+    // prog on the bar's FIRST beat (runde 242): a build's steps - the extra
+    // group, the chases, the tighter figure, the faster roll - are decided on
+    // this, so they land on a bar line and at the middle together. `prog >
+    // 0.5` missed the middle itself (16/32 is exactly 0.5): on 25-26 Sep the
+    // extra group joined on offset 17 and the figure changed on offset 20,
+    // beat two of a bar and a bar later - nothing on the 16-beat phrase.
+    const qreal barProg = progBefore >= 0.0
+        ? qBound(0.0, prog - beatInBar * (prog - progBefore) / 4.0, 1.0)
+        : qBound(0.0, qreal(beat - beatInBar - secStart) / qreal(len), 1.0);
     if (isBuild)
     {
         effects = qMax(effects, m_effectsBefore);
-        if (prog > 0.5 && energy > 0.30)
+        if (barProg >= 0.5 && energy > 0.30)
             effects = qMax(effects, m_effectsBefore + 1);
     }
     if (preDrop)     // no dice here: four beats of joining and leaving would flicker
@@ -6578,7 +6635,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && m_groups.value(key).strobes == false)
             continue;
         // the strobes are the club; under ENGINE_STROBE_ON this is a bar
-        if (fader < ENGINE_STROBE_ON && m_groups.value(key).strobes)
+        // ... read on the bar line (runde 242): the fader crossing the line
+        // mid-bar put them in and out of a drop on beats 2-4 (24 times on
+        // 25-26 Sep, the Minis standing in for 3-12 beats). Mid-bar they keep
+        // what the last bar line decided.
+        const bool strobesOut = (beatInBar == 0 || sectionChanged)
+            ? fader < ENGINE_STROBE_ON : m_cast.contains(key) == false;
+        if (strobesOut && m_groups.value(key).strobes)
             continue;
         pool.append(key);
     }
@@ -6732,6 +6795,41 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_accentWasWhite = (m_accentPick == QStringLiteral("white"));
         }
         accentColour = m_accentPick;
+    }
+
+    // The look's partner colour (runde 243): the accent where there is one,
+    // the next track's colour through a mix, otherwise drawn from the room's
+    // harmony pairs once per section (and when the room colour changes). HOLD
+    // keeps it, as it keeps the accent.
+    // white sits under blue, magenta and cyan in HARMONY (the "Frost"
+    // programmes) but not in mixesWith - the mix never turns a room white
+    // (the pairs come in as an argument: the static table is not a capture)
+    const QStringList roomPairs = mixesWith.value(m_colour);
+    auto partnerOk = [this, &roomPairs](const QString &c) {
+        if (m_palette.contains(c) == false || engineBannedColour(c))
+            return false;
+        if (roomPairs.contains(c))
+            return true;
+        return c == QStringLiteral("white")
+            && (m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
+                || m_colour == QStringLiteral("cyan"));
+    };
+    if (m_override.isEmpty() == false)
+        m_partnerPick.clear();           // a colour tile is ONE colour (runde 205)
+    else if (accentColour.isEmpty() == false)
+        m_partnerPick = accentColour;
+    else if (m_mixing && m_nextColour.isEmpty() == false && m_nextColour != m_colour)
+        m_partnerPick = m_nextColour;
+    else if (((sectionChanged || changeColour) && hold == false)
+             || m_partnerPick.isEmpty() || partnerOk(m_partnerPick) == false)
+    {
+        QStringList pool;
+        foreach (const QString &c, m_palette)
+        {
+            if (c != m_colour && partnerOk(c))
+                pool << c;
+        }
+        m_partnerPick = pool.isEmpty() ? QString() : pool.at(int(rng->bounded(int(pool.count()))));
     }
 
     bool hard = sectionChanged && isDrop;
@@ -7334,7 +7432,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         qreal prevProg = progBefore >= 0.0 ? progBefore : qreal(beat - 4 - secStart) / qreal(len);
         bool fresh = redraw || m_sweep.contains(key) == false
                   || (hold == false && isCalm == false        // HOLD/CALM freeze it too (r199)
-                      && isBuild && prog > 0.5 && prevProg <= 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0);
+                      && isBuild && prog >= 0.5 && prevProg < 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0);
         // Runde 219: a bar figure is never redrawn while it runs. On 09-20
         // it lasted 10-14 s against a 30-60 s figure: every section line,
         // cast change, fader jump and two in three 8-bar lines drew a new
@@ -7595,10 +7693,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 continue;
             // lasers cut hard: their aim may change now, and a beam that is
             // still fading would swing while lit
-            stopSlot("col:" + key, g.lasers);
-            stopSlot("mot:" + key, false);
+            // ... and on a drop's landing everything that leaves cuts (runde
+            // 242): the build's groups faded out over two beats across the
+            // downbeat - a drop is a cut, not a crossfade
+            stopSlot("col:" + key, g.lasers || hard);
+            stopSlot("mot:" + key, hard);
             for (int i = 0; i < g.parts.count(); i++)
-                stopSlot(partSlot(key, i), g.lasers);    // effects fade out over a bar
+                stopSlot(partSlot(key, i), g.lasers || hard);    // effects fade out over a bar
             m_pulseDepth.remove(key);
             m_breathe.remove(key);
             continue;
@@ -7658,22 +7759,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // eighths halfway up, sixteenths at the top. And it stays
                 // BARE: nothing lit between the blinks
                 qreal reach = 1.0 + 3.0 * qBound(0.0, energy, 1.0);
-                mv.stepBeats = prog < 0.30 ? 2 : 1;
-                qreal sub = 1.0 + (reach - 1.0) * qBound(0.0, (prog - 0.30) / 0.70, 1.0);
+                // (the step decisions on the bar's first beat, runde 242)
+                mv.stepBeats = barProg < 0.30 ? 2 : 1;
+                qreal sub = 1.0 + (reach - 1.0) * qBound(0.0, (barProg - 0.30) / 0.70, 1.0);
                 int subs = sub >= 3.0 ? 4 : (sub >= 1.6 ? 2 : 1);
                 mv.subSteps = g.lasers ? 1 : qMin(g.strobes ? 2 : 4, subs);
                 if (g.strobes == false)
-                    mv.pulseOn = (prog < 0.20 && energy < 0.5) ? 1 : 0;
+                    mv.pulseOn = (barProg < 0.20 && energy < 0.5) ? 1 : 0;
             }
             else
             {
                 // the roll: steps halve as the build climbs, the pulse deepens
-                mv.stepBeats = qMax(1, mv.stepBeats >> qBound(0, int(prog * 3.0), 2));
+                mv.stepBeats = qMax(1, mv.stepBeats >> qBound(0, int(barProg * 3.0), 2));   // on a bar line (r242)
                 mv.pulse *= 0.5 + 0.5 * prog;
             }
             // the strobes are handed over to the beat as the build runs out
             if (g.strobes)
-                mv.pulseOn = prog > 0.60 ? 0 : 1;
+                mv.pulseOn = barProg > 0.60 ? 0 : 1;
         }
         // the turnaround: bars 7-8 of an eight-bar phrase move twice as
         // fast, the way a drummer fills into the next phrase - down to
@@ -7728,6 +7830,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // whole beat or slower), so the two halves now agree.
         if (g.strobes)
             mv.subSteps = qMin(mv.subSteps, tier == 2 ? 2 : 1);
+        // ... and for everyone, a ceiling in TIME (runde 244): sub-steps are
+        // fractions of a beat, so at a fast tempo a quarter-beat walk on the
+        // heads or the Minis is a full on/off flicker - 86 ms at 174 BPM, over
+        // eleven a second. Nothing faster than 110 ms a step outside the
+        // strobes' own shutter: it changes nothing below 136 BPM (the rig's
+        // nights have been 102-130).
+        while (mv.subSteps > 1 && m_beatMs > 0.0 && m_beatMs / mv.subSteps < 110.0)
+            mv.subSteps /= 2;
 
         // ... and the third place (runde 153): when the strobes have drawn one
         // of the show's chases for this drop, pinning the generated picture to
@@ -7844,7 +7954,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool moving = still == false
                    && (breakLasers || breakBase || breakWash
                        || (mv.ownChaser && isBreak == false
-                           && (isBuild == false || prog > 0.5
+                           && (isBuild == false || barProg >= 0.5
                                // a group with build programmes starts one on
                                // the build's first beat: they are made to run
                                // the whole build (runde 227)
@@ -7941,6 +8051,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // It still lets go when the room colour changes.
                 if (worn.isEmpty() == false && worn != colour
                     && ((key != accentGroup && g.patternDevice == false) || changeColour))
+                    mf = Function::invalidId();
+                // ... and a two-colour programme whose partner is no longer the
+                // look's (runde 243)
+                if (mf != Function::invalidId()
+                    && pairFits(m_funcs.value(mf), m_colour, m_partnerPick) == false)
                     mf = Function::invalidId();
             }
             // The fader moved the ceiling (ceilMoved): a programme hotter
@@ -9641,7 +9756,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     };
     sw.beats = beatsFor(sweepPace(sw.tier, e, sw.drive));
     if (build)
-        sw.beats = beatsFor(28.0 - 20.0 * e) / (prog > 0.5 ? 2 : 1);
+        sw.beats = beatsFor(28.0 - 20.0 * e) / (prog >= 0.5 ? 2 : 1);   // >= with the redraw's test (runde 246)
 
     // how the heads relate: in unison, as a wave, one after another,
     // mirrored, or fanned out around the figure
@@ -11908,6 +12023,10 @@ void TrackEngine::idle()
             continue;
         if (slot.startsWith("off:") || slot.startsWith("black:"))
             continue;                    // the masks we started four lines ago
+        // a FLASH the operator is holding stays up (runde 246): idle() now
+        // runs four seconds into a quiet link, not only after 30 s
+        if (m_flash && (slot == QStringLiteral("flash") || slot.startsWith(QStringLiteral("flash:"))))
+            continue;
         if (slot.startsWith("str:"))
         {
             stopSlot(slot, true);    // a shutter-only scene cannot be faded

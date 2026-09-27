@@ -217,6 +217,11 @@ void TrackManager::slotDisconnected()
     {
         m_linkStale = true;
         emit linkChanged();
+        if (m_engine != nullptr && m_autoRun && m_roleMode)   // R246_DISCONNECT_IDLE
+        {
+            m_lastEngineBeat = -1;
+            m_engine->idle();
+        }
     }
     // R187_MIX_ON_DISCONNECT: BLT forgets it was mixing when it reconnects
     // and only ever announces a mix starting - a mix that ended while it
@@ -882,6 +887,11 @@ void TrackManager::slotEnergyTick()
     {
         m_linkStale = stale;
         emit linkChanged();
+        if (stale && m_engine != nullptr && m_autoRun && m_roleMode)   // R244_STALE_IDLE
+        {
+            m_lastEngineBeat = -1;
+            m_engine->idle();
+        }
     }
     // half a minute without a word from BLT is not a hiccup: the track is
     // over as far as we know - fall back to the idle look instead of a

@@ -493,7 +493,7 @@ Rectangle
             {
                 Layout.preferredWidth: 96
                 Layout.minimumWidth: 96
-                text: qsTr("GROUPS") + "\n" + qsTr("tap: on / base / off")
+                text: qsTr("GROUPS") + "\n" + qsTr("tap: on / off · hold: base")   // runde 234 changed the tap (fixed runde 248)
                 lineHeight: 0.9
                 color: setupRoot.cDim
                 font.bold: true
