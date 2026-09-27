@@ -1323,6 +1323,13 @@ int TrackEngine::guessStars(const TrackFuncInfo &info) const
     // a beat is the groove, a half beat or a one-shot per beat is a drop.
     static const QStringList hot  = { "fast", "hard", "high", "drop", "dobbelt", "double", "peak", "hurtig" };
     static const QStringList cool = { "slow", "low", "calm", "break", "halftime", "half", "langsom", "soft" };
+    // runde 251: "lift" is the MIDDLE of the fader. A group that is not the
+    // rhythm lead only takes programmes of two beats a step or more, and the
+    // tempo rule makes every one of those one star - so for the support
+    // groups ENERGY 30 % and 70 % drew from the same pool. A "Lift" twin
+    // (same figure, snappier, deeper contrast) is two stars: low = glide,
+    // middle = lift, top = peak.
+    static const QStringList mid  = { "lift" };
     QString n = info.name.toLower();
 
     if (info.type == int(Function::SceneType) || info.type == int(Function::CollectionType))
@@ -1331,6 +1338,8 @@ int TrackEngine::guessStars(const TrackFuncInfo &info) const
         return 3;
     if (hasWord(n, cool))
         return 1;
+    if (hasWord(n, mid))
+        return 2;
     if (info.oneShot)
         return 3;
     if (info.type == int(Function::EFXType))
