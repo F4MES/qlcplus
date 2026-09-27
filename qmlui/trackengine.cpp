@@ -5087,6 +5087,34 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         if (info->tier == tier)
             tagged.append(info);
     }
+    // An ANIMATION LASER in a break had one pattern to play (runde 252,
+    // BACKLOG 92): only a name with a break word ("vifte") is tier 0, so
+    // Fladviftebølge ran 1265 of 1289 break beats on 25-26 Sep and every
+    // intro and outro - thirteen minutes of one picture. When the break has
+    // one pattern or none, the operator's other CALM patterns join it: flat
+    // fans, small waves, static waves. Never the wild ones (moving, strobish,
+    // kanoner, flower, fingre, FY FY, DrypDryp).
+    if (tier == 0 && tagged.count() <= 1 && m_groups.value(group).patternDevice)
+    {
+        static const QStringList calmWords = { "flat", "flad", "static", "satic", "smallwave",
+                                               "wave", "bølge", "boelge", "vifte" };
+        static const QStringList wildWords = { "moving", "strobish", "fy fy", "dryp", "kanon",
+                                               "flower", "fingre" };
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (tagged.contains(info))
+                continue;
+            const QString lowName = info->name.toLower();
+            bool calmOne = false;
+            bool wildOne = false;
+            foreach (const QString &w, calmWords)
+                calmOne = calmOne || lowName.contains(w);
+            foreach (const QString &w, wildWords)
+                wildOne = wildOne || lowName.contains(w);
+            if (calmOne && wildOne == false)
+                tagged.append(info);
+        }
+    }
     if (tagged.isEmpty() == false)
         ok = tagged;
     else if (tier >= 0)
@@ -6244,7 +6272,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_colourSince = beat;
     const bool sectionSoon = beatsToNext > 0 && beatsToNext <= 8
         && (nextState == QStringLiteral("drop") || nextState == QStringLiteral("break"));
-    bool holdUp = m_colourSince >= 0 && beatInBar == 0 && sectionSoon == false
+    // the colour clock turns on a PHRASE line - every eight beats from the
+    // section's start - not on any bar line (runde 252, BACKLOG 94: 36 of
+    // 107 timed changes on 25-26 Sep fell off the 8-beat grid). A musical
+    // turn (turnUp) still takes its own bar.
+    bool holdUp = m_colourSince >= 0 && beatInBar == 0 && (bar % 2) == 0 && sectionSoon == false
                && beat - m_colourSince >= (haveCurves ? holdBeats * 3 / 2 : holdBeats);
     bool turnUp = haveCurves && turn && m_colourSince >= 0 && beatInBar == 0 && sectionSoon == false
                && beat - m_colourSince >= holdBeats / 2;
