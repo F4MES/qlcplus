@@ -1519,17 +1519,11 @@ Rectangle
                     objectName: "masterDrag"
                     anchors.fill: parent
                     function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
-                    // runde 253 (BACKLOG 103): a TAP no longer jumps MASTER to
-                    // the finger - near the left edge that was the room at 0 %.
-                    // The level follows once the finger has moved 6 px.
-                    property real pressX: 0
-                    property bool dragging: false
-                    onPressed: (mouse) => { pressX = mouse.x; dragging = false }
-                    onPositionChanged: (mouse) => {
-                        if (pressed === false) return
-                        if (dragging === false && Math.abs(mouse.x - pressX) >= 6) dragging = true
-                        if (dragging) apply(mouse.x)
-                    }
+                    // a tap sets MASTER where the finger lands, a drag follows it
+                    // (runde 253 made it drag-only; Tobias wanted the tap back:
+                    // "så man kan trykke faderen op og ned" - runde 254)
+                    onPressed: (mouse) => apply(mouse.x)
+                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
                 }
             }
 

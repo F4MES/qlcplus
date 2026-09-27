@@ -5452,6 +5452,12 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         // EFX sweep, which it can start, shape and stop.
         if (lasers && macroPosition(info->id))
             continue;
+        // the heads' ballyhoo (runde 254) is the top of the fader only: every
+        // head on its own path, up to 44 units off the floor - "Først fra 95%
+        // skal de være helt frie" (Tobias, runde 212)
+        if (lasers == false && fader < 0.95
+            && info->name.contains(QStringLiteral("ballyhoo"), Qt::CaseInsensitive))
+            continue;
         safe.append(info);
     }
     if (safe.isEmpty())
@@ -7373,7 +7379,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      : isDrive ? qMax(1, int(qRound(6.0 - 4.5 * eWalk)))
                               : qMax(2, int(qRound(8.0 - 6.0 * eWalk)));
         int walkBars = qMax(1, walkBase * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1));
+        // A position FIGURE (a chaser of aims, runde 254) finishes its loop
+        // before the walk takes the next aim: at a high fader a drop walks
+        // every bar or two, which cut an 8-16 beat figure off half way.
+        bool figureRunning = false;
+        if (want != Function::invalidId() && m_funcs.value(want).sweep && m_funcs.value(want).beats > 0.0)
+        {
+            Chaser *pc = qobject_cast<Chaser *>(m_doc->function(want));
+            const qreal loopBeats = pc != nullptr ? qreal(pc->steps().count()) * m_funcs.value(want).beats : 0.0;
+            figureRunning = m_aimSince.contains(key) && qreal(beat - m_aimSince.value(key)) < loopBeats;
+        }
         if (g.heads && inCast && hold == false && isBreak == false && isCalm == false   // CALM: no walk (r199)
+            && figureRunning == false
             && m_floorRound == false                                                    // the floor round holds Center (r214)
             && (m_fullAuto || (m_moves.value(key).ownChaser
                                && candidates(ENGINE_ROLE_MOTION, key).isEmpty()))
@@ -7600,9 +7617,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (m_fullAuto && g.lasers == false && sweepTier > 0 && key != m_rhythmLead)
                 {
                     candidate.beats = qMax(candidate.beats, key == base ? 16 : 24);
-                    candidate.spread = 0;
-                    candidate.mirror = true;
-                    candidate.fan = 0;
+                    // runde 254 (Tobias: "flere ... bevægelser (movingheads)
+                    // på tværs af sektioner og energilevel"): from the middle of
+                    // the fader the BASE keeps the relation it drew - wave,
+                    // serial, a start offset, a fan - instead of every head
+                    // mirroring its neighbour. On 25-26 Sep the mirror was 100 %
+                    // of the heads' groove/build/drop beats: the 36 relations
+                    // only ever played in breaks. The pace floor (16 beats a
+                    // figure) stays - "passende fart" - and below 50 % and on
+                    // the support groups the figure stays broad and mirrored.
+                    if (key != base || energy < 0.50)
+                    {
+                        candidate.spread = 0;
+                        candidate.mirror = true;
+                        candidate.fan = 0;
+                    }
                 }
                 m_sweep.insert(key, candidate);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
