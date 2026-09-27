@@ -6809,7 +6809,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (tierMoved || sectionChanged)
         m_compositionTier = tier;
     bool compositionChanged = false;
-    if (m_fullAuto && (((sectionChanged && partChanged) || roleContextChanged) && hold == false)
+    if (m_fullAuto && ((((sectionChanged && partChanged) || roleContextChanged) && hold == false)
         || (m_rhythmLead.isEmpty() == false && castSet.contains(m_rhythmLead) == false)
         || (m_rhythmLead.isEmpty() && castSet.count() > (castSet.contains(base) ? 1 : 0))))
     {
@@ -8019,8 +8019,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // max(0,255), max(255,255) = WHITE. That is what turned the two-
         // colour programmes into one colour and a white (2026-09-16: of the
         // twelve pair directions, four survived, four went white, two lost
-        // the partner). The split scene is kept whatever happens: it paints
-        // the bars' per-eye channels, which no programme touches.
+        // the partner). The bars' split scene (the accent's two colours
+        // shared on the eyes) goes too (runde 239): it was kept "because no
+        // programme touches the per-eye channels" - but the eye programmes
+        // do (Sweep, Braid, Pinch, Facing, and every bar programme writes
+        // them to 0), and the split restarted at every swap and covered the
+        // programme for up to two beats every two bars.
         // ... and only when the programme is actually wearing the colour the
         // room asked for. motionFor() falls back to another colour when this
         // one has nothing to offer, and a fallback must not be allowed to
@@ -8030,7 +8034,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // touch that channel - after a burst the washes strobed on at the
         // burst's rate until the next section (runde 210). driveStrobe() runs
         // after this, so the burst still wins while it lasts.
-        if (mf != Function::invalidId() && splitScene == Function::invalidId()
+        if (mf != Function::invalidId()
             && m_funcs.value(mf).coversColour
             // ... or wearing the OTHER half of the accent trade: the held
             // programme is kept through the trade on purpose (above), and the
@@ -8754,8 +8758,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // underneath is what made them read as ugly floodlights.
         //
         // So this is deliberately the narrowest opening that is still worth
-        // seeing: A DROP ONLY, above half the fader, one section in four. The
-        // ENERGY slider is its off switch - under 50 % this never fires - and
+        // seeing: A DROP ONLY, one section in four, and only from wild 0.15 -
+        // an energy of about 0.62, not half the fader as this said until
+        // runde 239 (wild runs from ENGINE_STROBE_ON 0.55 to the top). The
+        // ENERGY slider is its off switch - under that this never fires - and
         // a drop is where a coloured row across the strobes is a look rather
         // than a wobble. Everything else about them is unchanged.
         mv.ownChaser = tier == 2 && wild >= 0.15 && chance(0.25);
