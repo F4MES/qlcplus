@@ -409,6 +409,7 @@ void TrackEngine::slotDocSettled()
     m_patterned.clear();
     m_flashHeld.clear();
     m_cast.clear();
+    m_baseCover.clear();                 // runde 260: only tick() says who covers the base
     m_pulseDepth.clear();
     m_pulseStart.clear();
     m_breathe.clear();
@@ -3467,7 +3468,34 @@ bool TrackEngine::canOwnDimmers(const TrackFuncInfo &info, bool onBase) const
     // the others may go as low as the figure wants.
     if (info.peakLit >= ENGINE_OWN_FLOOR)
         return true;
-    return onBase == false && info.litShare < 0.99;
+    // Runde 260, Tobias: "Når der er flere end en gruppe der kører samtidigt,
+    // må programmer der har helt ned til 0 på alle lamper samtidigt også
+    // gerne køre" - with another lamp group lit beside it, the base is just
+    // one group of several and its dark steps may show like theirs
+    return (onBase == false || baseCovered()) && info.litShare < 0.99;
+}
+
+bool TrackEngine::baseCovered() const
+{
+    // A lamp group in the cast beside the base (runde 260) - not dark this
+    // beat (the pre-drop blink, a move), not switched OFF, not a laser (it
+    // draws beams, it does not light the room) - the strobes DO count (runde
+    // 261, Tobias: "they are bright, so they kinda do either way") - and not
+    // itself running a chase with steps where every lamp is out: then the two
+    // could be dark on the same beat. The group beside the base always keeps
+    // its own programme; it is the base that gives way.
+    foreach (const QString &key, m_baseCover)
+    {
+        if (m_motionDim.contains(key))
+        {
+            const TrackFuncInfo &o = m_funcs.value(m_active.value(QStringLiteral("mot:") + key,
+                                                                   Function::invalidId()));
+            if (o.minLit < ENGINE_OWN_FLOOR && o.peakLit < ENGINE_OWN_FLOOR)
+                continue;
+        }
+        return true;
+    }
+    return false;
 }
 
 quint32 TrackEngine::dimmerChannel(Fixture *fxi) const
@@ -5229,7 +5257,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         foreach (TrackFuncInfo *info, ok)
         {
             if (info->type == int(Function::SceneType)
-                || ((info->litShare >= (group == m_compositionBase ? 0.60 : 0.50)
+                || ((info->litShare >= (group == m_compositionBase && baseCovered() == false ? 0.60 : 0.50)
                      || info->peakLit >= ENGINE_OWN_FLOOR)      // runde 259: one lamp always on
                     && stepBeats(*info, bpm) >= 2.0))
                 support.append(info);
@@ -7936,6 +7964,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_sequenceBeatMs = bpm > 0 ? 60000.0 / bpm : 500.0;
         }
     }
+    // Runde 260: who lights the room beside the base this beat - see
+    // baseCovered(). Decided after every dark group of the beat is known.
+    m_baseCover.clear();
+    foreach (const QString &key, castSet)
+    {
+        const TrackGroup &cg = m_groups.value(key);
+        if (key != base && key != m_compositionBase && darkGroups.contains(key) == false
+            && m_groupOff.contains(key) == false && cg.lasers == false
+            && cg.patternDevice == false && (cg.hasDimmer || cg.rgb))
+            m_baseCover.insert(key);
+    }
     bool anyPulse = !m_sequenceGroups.isEmpty();
     bool moveHit = false;
     // runde 153: did a strobe group draw one of the show's chases this beat?
@@ -8256,6 +8295,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // Not in a drop - see patternMask().
             if (ambientBase(key) && m_compositionTier != 2)
                 litFloor = qMax(litFloor, 0.99);
+            // ... unless another lamp group keeps the room lit beside it
+            // (runde 260, Tobias): then the base may go dark like the others
+            if (key == base && baseCovered())
+                litFloor = 0.0;
             // ONE figure for the section. The pick used to run on every
             // beat, and pickWeighted lands on `cursor % pool.count()` - so
             // when the star ceiling wobbled with the energy curve and a
@@ -8396,7 +8439,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (ambientBase(key) && m_compositionTier != 2
             && mf != Function::invalidId() && m_funcs.value(mf).dimmer
             && m_funcs.value(mf).litShare < 0.99
-            && m_funcs.value(mf).peakLit < ENGINE_OWN_FLOOR)      // one lamp always on (runde 259)
+            && m_funcs.value(mf).peakLit < ENGINE_OWN_FLOOR      // one lamp always on (runde 259)
+            && baseCovered() == false)                           // ... or another group on (runde 260)
         {
             mf = Function::invalidId();
             m_sectionMotion.remove(key);
@@ -11696,6 +11740,7 @@ void TrackEngine::setStartScene(bool on)
             stopSlot(slot, false);
         }
         m_cast.clear();
+        m_baseCover.clear();                 // runde 260: only tick() says who covers the base
         if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
             m_fadeTimer.start();
         m_report = tr("(stopped)");
@@ -11788,6 +11833,7 @@ void TrackEngine::startLook()
         m_fadeTimer.start();
 
     m_cast = lit;
+    m_baseCover.clear();                 // runde 260: only tick() says who covers the base
     m_pulseDepth.clear();
     m_breathe.clear();
     m_pulseTimer.stop();
@@ -12042,6 +12088,7 @@ void TrackEngine::release()
             stopSlot(slot, false);
     }
     m_cast.clear();
+    m_baseCover.clear();                 // runde 260: only tick() says who covers the base
     m_lastState.clear();
     m_autoStageKeys.clear();
     m_verdictAutoKeys.clear();
@@ -12408,10 +12455,12 @@ void TrackEngine::idle()
         if (m_groups.value(base).hasDimmer)
             setDimmer(base, 0.35);
         m_cast.clear();
+        m_baseCover.clear();                 // runde 260: only tick() says who covers the base
         m_cast.insert(base);
     }
     else
         m_cast.clear();
+        m_baseCover.clear();                 // runde 260: only tick() says who covers the base
 
     // nothing plays, so no beats tick the fades: keep them moving on a timer
     if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
@@ -12920,6 +12969,7 @@ void TrackEngine::stopAll()
     m_fadeAttr.clear();
     m_fadeLevel.clear();
     m_cast.clear();
+    m_baseCover.clear();                 // runde 260: only tick() says who covers the base
     m_position.clear();
     m_lastState.clear();
     m_autoStageKeys.clear();

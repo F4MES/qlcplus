@@ -701,6 +701,7 @@ protected:
     qreal minLitOf(Function *func, const QSet<quint32> &touched) const;
     qreal peakLitOf(Function *func, const QSet<quint32> &touched) const;
     bool canOwnDimmers(const TrackFuncInfo &info, bool onBase) const;
+    bool baseCovered() const;                // runde 260: another lit lamp group runs beside the base
     /** Does this function write a colour of its own? A chase that only moves
      *  dimmers takes whatever colour the room is in, so it can run under all
      *  of them; one that writes red is a red programme. */
@@ -934,6 +935,7 @@ private:
     QMap<QString, TrackMove> m_liveMove;   // the move as shaped for this beat (build, turnaround)
     QMap<QString, qreal> m_moveLevel;      // the level applyMove last gave a group (sub-beat steps)
     QMap<QString, bool> m_patterned;       // whether that group's pattern is live (sub-beat steps)
+    QSet<QString> m_baseCover;             // runde 260: lamp groups lit beside the base this beat (tick)
     QSet<QString> m_motionDim;             // groups whose MOTION owns the dimmers this beat
     QMap<QString, QVector<qreal> > m_texture;  // per-fixture spread, drifting slowly
     QMap<QString, QList<quint32> > m_zoomScenes; // head group -> 9 levels narrow..wide, then alternating A and B (runde 214)
