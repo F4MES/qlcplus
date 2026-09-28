@@ -462,6 +462,13 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         m_loopTop = -1;                   // played past it, jumped away, or stopped
     if (beat != m_currentBeat)
         m_beatChangedMs = now;
+    // R301_POS_BPM_READ: the deck's effective tempo (pitch included), if BLT sent it
+    const qreal posBpm = obj.value(QStringLiteral("bpm")).toDouble();
+    if (posBpm > 20.0 && posBpm < 400.0)
+    {
+        m_posBpm = posBpm;
+        m_posBpmMs = now;
+    }
     m_currentBeat = beat;
     // STOP_GRACE_R105_MARK: a stop starts the grace, a play ends it
     if (playing == false && m_playing)
@@ -994,6 +1001,18 @@ void TrackManager::applyEnergy()
 }
 
 int TrackManager::liveBpm() const { return m_liveBpm; }
+
+qreal TrackManager::engineBpm() const      // R301_ENGINE_BPM_FN
+{
+    MasterTimer *mt = m_doc != nullptr ? m_doc->masterTimer() : nullptr;
+    if (mt != nullptr && mt->linkEnabled() && mt->linkPeers() > 0 && mt->linkBpm() > 20.0)
+        return mt->linkBpm();
+    if (m_posBpm > 20.0 && QDateTime::currentMSecsSinceEpoch() - m_posBpmMs < 3000)
+        return m_posBpm;
+    if (m_bpm > 0)
+        return m_bpm;
+    return qreal(m_liveBpm);
+}
 int TrackManager::energyTrim() const { return m_energyTrim; }
 
 void TrackManager::setEnergyTrim(int percent)
@@ -1830,7 +1849,7 @@ void TrackManager::runEngine(bool sectionChanged)
         tickStart = 1 + m_downbeat;
     m_engine->tick(state, beat, tickStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
-                   m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high,
+                   engineBpm(), levelScale, kick, high,   // R301_ENGINE_BPM
                    turn, riser, hats, bass, kickAhead);
 
     if (sectionChanged)

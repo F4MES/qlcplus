@@ -221,6 +221,8 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_echoOffTimer.setSingleShot(true);
     connect(&m_echoTimer, SIGNAL(timeout()), this, SLOT(slotEchoOn()));
     connect(&m_echoOffTimer, SIGNAL(timeout()), this, SLOT(slotEchoOff()));
+    m_beatWatch.setSingleShot(true);
+    connect(&m_beatWatch, SIGNAL(timeout()), this, SLOT(slotBeatWatch()));
     // MASTER is deliberately not restored: a night that starts at 40 %
     // because someone dimmed last time is worse than one that starts bright
     m_master = 1.0;
@@ -703,6 +705,21 @@ QString TrackEngine::groupOfFixture(quint32 fid) const
     return fxi->name();
 }
 
+QList<SceneValue> TrackEngine::valuesOf(const Scene *scene) const
+{
+    // B23 H3: Scene::values() builds a new list from the scene's QMap on
+    // every call. Inside a table build nothing writes a scene before
+    // ensureColourScenes(), so one copy per scene serves every helper.
+    if (scene == nullptr)
+        return QList<SceneValue>();
+    if (m_valuesCacheOn == false)
+        return scene->values();
+    QHash<quint32, QList<SceneValue> >::const_iterator it = m_valuesCache.constFind(scene->id());
+    if (it != m_valuesCache.constEnd())
+        return it.value();
+    return m_valuesCache.insert(scene->id(), scene->values()).value();
+}
+
 QSet<quint32> TrackEngine::fixturesOf(Function *func, int depth) const
 {
     QSet<quint32> out;
@@ -716,8 +733,14 @@ QSet<quint32> TrackEngine::fixturesOf(Function *func, int depth) const
         Scene *scene = qobject_cast<Scene *>(func);
         if (scene != nullptr)
         {
-            foreach (SceneValue sv, scene->values())
+            quint32 last = Fixture::invalidId();          // B23 H4
+            for (const SceneValue &sv : valuesOf(scene))
+            {
+                if (sv.fxi == last)
+                    continue;                              // already in the set
+                last = sv.fxi;
                 out.insert(sv.fxi);
+            }
         }
         break;
     }
@@ -986,6 +1009,12 @@ void TrackEngine::ensureTable()
     QHash<quint32, TrackFuncInfo> old = m_funcs;
     m_funcs.clear();
     m_blendSkipped.clear();
+    QHash<quint32, QString> groupCache;   // B23 H2: fixture -> groupOfFixture(), this rebuild only
+    // B23 H3: every scene's values copied out of its QMap ONCE for the
+    // read-only part of the build (up to ensureColourScenes(), the first
+    // function that writes a scene)
+    m_valuesCache.clear();
+    m_valuesCacheOn = true;
 
     foreach (Function *func, m_doc->functions())
     {
@@ -1039,7 +1068,7 @@ void TrackEngine::ensureTable()
         if (t == Function::SceneType)
         {
             Scene *hollow = qobject_cast<Scene *>(func);
-            if (hollow != nullptr && hollow->values().isEmpty())
+            if (hollow != nullptr && valuesOf(hollow).isEmpty())
                 continue;
         }
         else if (t == Function::ChaserType || t == Function::SequenceType)
@@ -1089,7 +1118,10 @@ void TrackEngine::ensureTable()
         info.aims = aimsOf(func);
         foreach (quint32 fid, touched)
         {
-            QString key = groupOfFixture(fid);
+            // B23 H2: the Doc does not change inside this loop
+            QHash<quint32, QString>::const_iterator gc = groupCache.constFind(fid);
+            const QString key = gc != groupCache.constEnd() ? gc.value()
+                                                            : groupCache.insert(fid, groupOfFixture(fid)).value();
             if (key.isEmpty() == false)
                 info.groups.insert(key);
         }
@@ -1108,7 +1140,7 @@ void TrackEngine::ensureTable()
         Scene *scene = qobject_cast<Scene *>(func);
         if (scene != nullptr)
         {
-            foreach (SceneValue sv, scene->values())
+            foreach (SceneValue sv, valuesOf(scene))
             {
                 Fixture *fxi = m_doc->fixture(sv.fxi);
                 if (fxi != nullptr && sv.channel == dimmerChannel(fxi) && sv.value > 0)
@@ -1135,7 +1167,7 @@ void TrackEngine::ensureTable()
                     Scene *stepScene = qobject_cast<Scene *>(m_doc->function(step.fid));
                     if (stepScene == nullptr)
                         continue;
-                    stepValues = stepScene->values();
+                    stepValues = valuesOf(stepScene);
                 }
                 foreach (const SceneValue &sv, stepValues)
                 {
@@ -1327,6 +1359,8 @@ void TrackEngine::ensureTable()
             m_climbGroups.insert(*it.value().groups.constBegin());
     }
 
+    m_valuesCacheOn = false;          // B23 H3: scenes are written from here on
+    m_valuesCache.clear();
     ensureColourScenes();
     ensureStrobeScenes();
     ensureOffScenes();
@@ -1512,7 +1546,7 @@ void TrackEngine::learnGroups()
             if (scene == nullptr)
                 continue;
             bool touched = false;
-            foreach (SceneValue sv, scene->values())
+            foreach (SceneValue sv, valuesOf(scene))
             {
                 if (g.fixtures.contains(sv.fxi) == false)
                     continue;              // the rest of a whole-room look is not ours
@@ -3134,7 +3168,7 @@ bool TrackEngine::setsColourOf(Function *func) const
         Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
         if (scene == nullptr)
             return true;                 // cannot tell: assume it does
-        foreach (const SceneValue &sv, scene->values())
+        foreach (const SceneValue &sv, valuesOf(scene))
         {
             // A ZERO does not impose a colour, it clears one. The laser bars'
             // dimmer chases write nought to all eight eye channels in every
@@ -3242,7 +3276,7 @@ bool TrackEngine::aimsOf(Function *func) const
         Scene *scene = qobject_cast<Scene *>(sf);
         if (scene == nullptr)
             continue;
-        foreach (const SceneValue &sv, scene->values())
+        foreach (const SceneValue &sv, valuesOf(scene))
         {
             Fixture *fxi = m_doc->fixture(sv.fxi);
             const QLCChannel *qch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
@@ -3301,7 +3335,7 @@ bool TrackEngine::coversColourOf(Function *func, const QSet<QString> &groups) co
         if (scene == nullptr)
             return false;
         QSet<quint32> painted;
-        foreach (const SceneValue &sv, scene->values())
+        foreach (const SceneValue &sv, valuesOf(scene))
         {
             if (g.fixtures.contains(sv.fxi) == false)
                 continue;
@@ -3367,14 +3401,25 @@ qreal TrackEngine::litShareOf(Function *func, const QSet<quint32> &touched) cons
         // turning the lamp off, so it counts as lit.
         QSet<quint32> lit;
         QSet<quint32> dimmed;
-        foreach (const SceneValue &sv, scene->values())
+        quint32 runFid = Fixture::invalidId();         // B23 H5: the same answers for
+        bool runTouched = false;                       // every value of one fixture
+        Fixture *runFxi = nullptr;
+        quint32 runDch = QLCChannel::invalid();
+        for (const SceneValue &sv : valuesOf(scene))
         {
-            if (touched.contains(sv.fxi) == false)
+            if (sv.fxi != runFid)
+            {
+                runFid = sv.fxi;
+                runTouched = touched.contains(sv.fxi);
+                runFxi = runTouched ? m_doc->fixture(sv.fxi) : nullptr;
+                runDch = runFxi != nullptr ? dimmerChannel(runFxi) : QLCChannel::invalid();
+            }
+            if (runTouched == false)
                 continue;
-            Fixture *fxi = m_doc->fixture(sv.fxi);
+            Fixture *fxi = runFxi;
             if (fxi == nullptr)
                 continue;
-            quint32 dch = dimmerChannel(fxi);
+            quint32 dch = runDch;
             if (dch != QLCChannel::invalid() && sv.channel == dch)
             {
                 dimmed.insert(sv.fxi);
@@ -3426,6 +3471,7 @@ qreal TrackEngine::minLitOf(Function *func, const QSet<quint32> &touched) const
         Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
         if (scene == nullptr)
             return 0.0;
+        const QList<SceneValue> values = valuesOf(scene);   // B23 H1: once per step, not per lamp
         foreach (quint32 fid, touched)
         {
             Fixture *fxi = m_doc->fixture(fid);
@@ -3435,7 +3481,7 @@ qreal TrackEngine::minLitOf(Function *func, const QSet<quint32> &touched) const
             if (dch == QLCChannel::invalid())
                 continue;
             int v = -1;
-            foreach (const SceneValue &sv, scene->values())
+            for (const SceneValue &sv : values)
             {
                 if (sv.fxi == fid && sv.channel == dch)
                 {
@@ -3477,7 +3523,7 @@ qreal TrackEngine::peakLitOf(Function *func, const QSet<quint32> &touched) const
         if (scene == nullptr)
             return 0.0;
         int brightest = -1;
-        foreach (const SceneValue &sv, scene->values())
+        foreach (const SceneValue &sv, valuesOf(scene))
         {
             if (touched.contains(sv.fxi) == false)
                 continue;
@@ -4736,6 +4782,52 @@ void TrackEngine::setFlash(bool pressed)
         reapplyLevels();
     }
     emit liveChanged();
+}
+
+void TrackEngine::slotBeatWatch()
+{
+    // No tick for a beat and a half (runde 302): the one-beat events end as
+    // the next beat would have ended them. The held FLASH button is the
+    // operator's and stays; its own release does this (setFlash).
+    bool changed = false;
+    if (m_flash == false)
+    {
+        const QSet<QString> released = m_flashHeld;
+        if (m_active.contains(QStringLiteral("flash")) || released.isEmpty() == false)
+            changed = true;
+        stopSlot(QStringLiteral("flash"), true);
+        if (released.isEmpty() == false)
+            genFlash(false);
+        // the strobes on stage go back to their level now, as setFlash(false)
+        foreach (const QString &key, released)
+        {
+            if (m_cast.contains(key) == false)
+                continue;                        // genFlash(false) cut those
+            const TrackGroup &g = m_groups.value(key);
+            if (m_motionDim.contains(key))
+            {
+                for (int i = 0; i < g.parts.count(); i++)
+                    stopSlot(partSlot(key, i), true);
+            }
+            else if (g.hasDimmer)
+                setDimmer(key, m_moveLevel.value(key, 0.0));
+        }
+    }
+    foreach (const QString &key, m_groupOrder)
+    {
+        const QString slot = QStringLiteral("str:") + key;
+        if (m_active.contains(slot))
+        {
+            stopSlot(slot, true);
+            changed = true;
+        }
+    }
+    m_strobeUntil = -1;
+    if (changed)
+    {
+        reapplyLevels();
+        emit liveChanged();
+    }
 }
 
 QString TrackEngine::report() const { return m_report; }
@@ -6086,6 +6178,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 {
     if (m_doc == nullptr)
         return;
+    // B23: a Doc edit (or a project load) has not settled yet - this
+    // beat was already queued behind it, and slotDocSettled() runs on the next
+    // turn of the event loop. Not on the old ids, as the pulse, fade and
+    // closing timers already hold back (runde 202/220). Drawing it rebuilt the
+    // table, and the settle then stopped the look, cleared the scene maps and
+    // set m_dirty again: two rebuilds for one edit, and the next beat drawn a
+    // second rebuild late. A landing on this beat is owed to the next (R233).
+    if (m_docTimer.isActive())
+    {
+        m_sectionOwed = m_sectionOwed || sectionChanged;
+        return;
+    }
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
     if (m_startScene)            // the opening picture is up: nothing else runs
@@ -6235,6 +6339,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
     m_lastBeat = beat;
+    // runde 302 (bane B's B19): the hit, the automatic white/colour flash on
+    // the strobes and a hardware strobe burst each live for a beat and are
+    // ended by the NEXT beat. With the deck stopped or the link quiet no next
+    // beat comes, and they stood lit - strobing - for 1-4 s until the stop's
+    // grace or the stale link took the room idle. A beat and a half with no
+    // tick ends them (slotBeatWatch).
+    m_beatWatch.start(qBound(250, int(m_beatMs * 1.5), 1500));
 
     // the clock moves the ENERGY slider (through roomChanged), so the time
     // of night is already in the energy that arrives here
@@ -8710,7 +8821,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // 242): the build's groups faded out over two beats across the
             // downbeat - a drop is a cut, not a crossfade
             stopSlot("col:" + key, g.lasers || hard);
-            stopSlot("mot:" + key, hard);
+            // B23: the bar programme owns the dimmer and the eyes - it faded
+            // while the figure's EFX snapped the mirror home (headless run: up
+            // to 24 tilt units at dimmer 255 for 180 ms)
+            stopSlot("mot:" + key, g.lasers || hard);
             for (int i = 0; i < g.parts.count(); i++)
                 stopSlot(partSlot(key, i), g.lasers || hard);    // effects fade out over a bar
             m_pulseDepth.remove(key);
@@ -14016,6 +14130,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
 
 void TrackEngine::stopAll()
 {
+    m_beatWatch.stop();
     m_sequenceGroups.clear();
     m_restUntil = -1;
     if (m_testTimer.isActive())

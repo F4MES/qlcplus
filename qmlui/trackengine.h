@@ -44,6 +44,7 @@
 
 #include <QElapsedTimer>
 #include "trackstagepolicy.h"
+#include "scenevalue.h"      // B23 H3
 #include <QVariantList>
 #include <QPoint>
 #include <QStringList>
@@ -684,12 +685,15 @@ protected slots:
     void slotSelfTestStep();
     void slotEchoOn();
     void slotEchoOff();
+    void slotBeatWatch();     // runde 302: the beat did not come - one-beat events end
 
 
 protected:
     /* table building */
     void ensureTable();
     QSet<quint32> fixturesOf(Function *func, int depth) const;
+    /** B23 H3: Scene::values(), copied once per scene while a build reads */
+    QList<SceneValue> valuesOf(const Scene *scene) const;
     QString groupOfFixture(quint32 fid) const;
     QString colourOf(const QString &text) const;
     bool hasWord(const QString &text, const QStringList &words) const;
@@ -839,6 +843,8 @@ private:
 
     bool m_dirty;
     bool m_building;          // ensureTable() is mid-rebuild: do not re-enter
+    mutable QHash<quint32, QList<SceneValue> > m_valuesCache;   // B23 H3: scene id -> values, during a build
+    bool m_valuesCacheOn = false;
     QHash<quint32, TrackFuncInfo> m_funcs;
     /* caches over m_funcs - see invalidateCandidates(). The index holds
      * POINTERS into m_funcs: never keep it across anything that inserts. */
@@ -1017,6 +1023,7 @@ private:
     qint64 m_whiteLandMs = -1;    // runde 233: the last white drop landing (m_clock ms)
     QTimer m_echoTimer;       // the bars answer a hit half a beat later ...
     QTimer m_echoOffTimer;    // ... and let go a third of a beat after that
+    QTimer m_beatWatch;       // runde 302: a beat and a half with no tick - see slotBeatWatch()
     QString m_echoKey;        // the laser group that answers
     quint32 m_echoFid;        // in this colour scene
     int m_echoBeat;           // the beat of the last echo - at most one every four

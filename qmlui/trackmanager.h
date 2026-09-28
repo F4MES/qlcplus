@@ -388,6 +388,9 @@ private:
      *  scene SHOW ON put up comes down. */
     void noteShowRunning();
     int m_liveBpm;
+    qreal m_posBpm = 0.0;        // R301_POS_BPM: the deck's effective tempo, from BLT's pos
+    qint64 m_posBpmMs = 0;
+    qreal engineBpm() const;     // what the engine times on (runde 301)
 
     QTimer m_energyTimer;
     qint64 m_stopSinceMs = 0;    // STOP_GRACE_R105: when a playing track said stop
