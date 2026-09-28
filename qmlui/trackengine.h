@@ -275,6 +275,9 @@ struct TrackSweep
     // 24 frozen at the draw: a drop's base at 40 % and at 100 % ran the same
     // 16-beat figure, and the support heads ran 24 beats at every fader.
     int paceRole = 0;
+    // the SLIDER a laser bar figure was drawn at (runde 293): its height
+    // follows the slider live from there (applySweep), -1 = not a bar figure
+    qreal drawnF = -1.0;
     bool operator==(const TrackSweep &o) const
     {
         return shape == o.shape && width == o.width && height == o.height && rotation == o.rotation
@@ -794,7 +797,11 @@ protected:
 
     /* running */
     void run(const QString &slot, quint32 fid, qreal level, int division, bool hard);
-    void startFunction(Function *func, int division);
+    void startFunction(Function *func, int division, bool glide = false);
+    /** A head FIGURE's step (an AUTO chaser of aims, runde 254) on the slider,
+     *  in beats: x1.5 at 30 % -> x0.75 at 100 %, never under two (runde 293).
+     *  0 for anything else. */
+    int figureBeats(quint32 fid) const;
     void stopSlot(const QString &slot, bool hard);
     void tickFades();
     void setDimmer(const QString &group, qreal level);

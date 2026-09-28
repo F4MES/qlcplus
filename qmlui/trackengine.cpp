@@ -7958,7 +7958,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             Chaser *pc = qobject_cast<Chaser *>(m_doc->function(want));
             const int n = pc != nullptr ? int(pc->steps().count()) : 0;
             const int loopSteps = (pc != nullptr && pc->runOrder() == Function::PingPong) ? qMax(1, 2 * (n - 1)) : n;
-            const qreal loopBeats = qreal(loopSteps) * m_funcs.value(want).beats;
+            // (runde 293: at the step the slider gives it - figureBeats)
+            const int fb = (g.heads && g.lasers == false) ? figureBeats(want) : 0;
+            const qreal loopBeats = qreal(loopSteps) * (fb > 0 ? qreal(fb) : m_funcs.value(want).beats);
             figureRunning = m_aimSince.contains(key) && qreal(beat - m_aimSince.value(key)) < loopBeats;
         }
         if (g.heads && inCast && hold == false && isBreak == false && isCalm == false   // CALM: no walk (r199)
@@ -7982,8 +7984,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_headMoveBeats.insert(key, -8);
             }
         }
+        // Runde 293 (Tobias: "alt skal skalere efter energi-slideren ...
+        // bevægelser"): a head FIGURE runs at the slider's pace - half as slow
+        // again at 30 %, a quarter quicker at the top, never under two beats a
+        // step, its fade the step. It ran at its own step at every fader (the
+        // EFX sweep stops while a figure runs), so 35 % and 100 % moved alike.
+        // Not the laser bars: their aims are the safety rules' (runde 190).
         if (want != Function::invalidId())
-            run("pos:" + key, want, 1.0, 0, true);
+        {
+            const int fb = (g.heads && g.lasers == false) ? figureBeats(want) : 0;
+            run("pos:" + key, want, 1.0, fb > 0 ? fb * 1000 : 0, true);
+        }
     }
 
     // the bar figure below must not stop for the blink: it is a dark beat,
@@ -10960,6 +10971,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // 8-26 units of travel); it now lies on one side of it, so h is
         // halved to keep the travel - and the promise of SMALL - the same.
         sw.height = int(4 + 6 * lw) + int(rng->bounded(4));
+        sw.drawnF = m_faderNow;                  // runde 293: the height follows the slider live
         // The PERIOD is what made them read as still - not the size. The
         // travel is 2 x height = 20-26 units at the top of the fader, and the
         // operator's own scenes put a unit at about 0.78 degrees (LaserUPP
@@ -11153,8 +11165,22 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     // there are none for up to 30 s - the figure would outgrow a centre that
     // only moves on the beat. Grown here, nothing grows between beats, and
     // the safety line holds whatever the timing.
+    // Runde 293 (Tobias: "alt skal skalere efter energi-slideren"): the size
+    // follows the slider while the figure runs - the draw's 4 + 6 x lw, moved
+    // by the slider since, 4..13 as the draw allows. A bar figure is never
+    // redrawn while it runs (runde 219) and the bars change only per part, so
+    // one started at 45 % stayed that small at 100 % for minutes. Growing is
+    // still a step every second beat (barGrow), shrinking at once; the centre
+    // rule below keeps the lowest point on the aim or within the allowance.
+    int barHeight = sw.height;
+    if (laser && sw.drawnF >= 0.0)
+    {
+        const qreal lwNow = qBound(0.0, (m_faderNow - 0.40) / 0.60, 1.0);
+        const qreal lwThen = qBound(0.0, (sw.drawnF - 0.40) / 0.60, 1.0);
+        barHeight = qBound(4, sw.height + int(qRound(6.0 * (lwNow - lwThen))), 13);
+    }
     auto barGrow = [&](qreal elapsedMs, int &h, int &d) {
-        h = qMin(sw.height, int(elapsedMs / beatMs) / 2);
+        h = qMin(barHeight, int(elapsedMs / beatMs) / 2);
         d = -h + qMin(2 * h, allowed);
     };
 
@@ -13467,7 +13493,21 @@ static uint paceDuration(const Function *func, int division, qreal beatMs)
 
 static void followPace(Function *func, const QString &slot, int division, qreal beatMs)
 {
-    if (func == nullptr || slot.startsWith(QStringLiteral("mot:")) == false)
+    if (func == nullptr)
+        return;
+    // a head figure on pos: (runde 293): only when the engine paces it, and
+    // its fade goes with the step so the motors keep gliding
+    if (slot.startsWith(QStringLiteral("pos:")) && division > 0
+        && (func->type() == Function::ChaserType || func->type() == Function::SequenceType))
+    {
+        const uint want = paceDuration(func, division, beatMs);
+        if (func->overrideDuration() != want)
+            func->setOverrideDuration(want);
+        if (func->overrideFadeInSpeed() != want)
+            func->setOverrideFadeInSpeed(want);
+        return;
+    }
+    if (slot.startsWith(QStringLiteral("mot:")) == false)
         return;
     if (func->type() != Function::ChaserType && func->type() != Function::SequenceType)
         return;
@@ -13528,7 +13568,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
             // someone stopped it from the Virtual Console (or we did, this
             // very tick): it is still ours, so bring it back rather than
             // adjusting a dead function forever
-            startFunction(func, division);
+            startFunction(func, division, slot.startsWith(QStringLiteral("pos:")));
             if (attr >= 0)
                 func->releaseAttributeOverride(attr);
             attr = func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out);
@@ -13564,7 +13604,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     // fade (a SingleShot chase, QLC+'s stop-all) was taken over and never
     // started again - the group stood dark until the slot changed
     if (func->isRunning() == false || func->stopped())
-        startFunction(func, division);
+        startFunction(func, division, slot.startsWith(QStringLiteral("pos:")));
     else
         followPace(func, slot, division, m_beatMs);   // taken over from its fade, still on the old step (runde 280/281)
 
@@ -13574,7 +13614,17 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
 }
 
-void TrackEngine::startFunction(Function *func, int division)
+int TrackEngine::figureBeats(quint32 fid) const
+{
+    const TrackFuncInfo &info = m_funcs.value(fid);
+    if (info.type != int(Function::ChaserType) || info.beats <= 0.0
+        || info.name.startsWith(QStringLiteral("AUTO ")) == false)
+        return 0;
+    const qreal k = 1.5 - 0.75 * qBound(0.0, (m_faderNow - 0.30) / 0.70, 1.0);
+    return qMax(2, int(qRound(info.beats * k)));
+}
+
+void TrackEngine::startFunction(Function *func, int division, bool glide)
 {
     if (func == nullptr)
         return;
@@ -13586,9 +13636,12 @@ void TrackEngine::startFunction(Function *func, int division)
     // tempo type start() is handed.
     const bool inMs = func->tempoType() == Function::Time
                    && (func->type() == Function::ChaserType || func->type() == Function::SequenceType);
+    // a head figure (glide, runde 293): the fade is the step, as the
+    // programme was drawn - the motors glide from aim to aim
     if (division > 0)
         func->start(m_doc->masterTimer(), FunctionParent::track(), 0,
-                    Function::defaultSpeed(), Function::defaultSpeed(),
+                    glide ? paceDuration(func, division, m_beatMs) : Function::defaultSpeed(),
+                    Function::defaultSpeed(),
                     paceDuration(func, division, m_beatMs),
                     inMs ? Function::Time : Function::Beats);
     else
