@@ -272,6 +272,7 @@ Rectangle
             Layout.fillWidth: true
             Layout.preferredHeight: 56
             Layout.maximumHeight: 56
+            Layout.minimumHeight: 50
             color: trackViewRoot.cPanel
             radius: 4
 
@@ -508,6 +509,12 @@ Rectangle
                 renderStrategy: Canvas.Threaded
 
                 property string paintedColour: ""       // runde 204: see onLiveChanged
+                // the curves once per track (their NOTIFY is trackChanged), not
+                // once per paint: each read of a QVariantList property builds a
+                // fresh JS array of ~1,000 values, and this paints every beat
+                property var lowC: trackManager ? trackManager.lowCurve : []
+                property var highC: trackManager ? trackManager.highCurve : []
+                property var kickC: trackManager ? trackManager.kickCurve : []
                 // the selected flag (an index into trackManager.markers), -1 = none
                 property int selected: -1
 
@@ -535,7 +542,7 @@ Rectangle
                     var count = trackViewRoot.zoomActive ? trackViewRoot.viewCount() : total
                     if (count <= 0) count = total
                     var step = Math.max(1, Math.floor(count / w))
-                    var low = trackManager.lowCurve, high = trackManager.highCurve, kick = trackManager.kickCurve
+                    var low = lowC, high = highC, kick = kickC
 
                     // bass: a warm floor, the lower third
                     if (low && low.length > 0)
@@ -973,7 +980,7 @@ Rectangle
                         {
                             width: blameRow.cellW
                             height: 44
-                            label: modelData.group
+                            label: modelData ? modelData.group : ""
                             active: true
                             activeColor: verdictTools.blaming > 0 ? "#3E7E4E" : "#8E3A3A"
                             opacity: 0.92
@@ -1009,6 +1016,8 @@ Rectangle
             Canvas
             {
                 id: wfCanvas
+                // once per track, not per paint (see wfOverlay.lowC)
+                property var wfC: trackManager ? trackManager.waveform : []
                 anchors.fill: parent
                 anchors.margins: 1
                 anchors.bottomMargin: 56
@@ -1029,7 +1038,7 @@ Rectangle
                     var vf = trackViewRoot.viewFirst()
                     var vc = trackViewRoot.viewCount()
                     var px = w / vc
-                    var wf = trackManager.waveform
+                    var wf = wfC
                     // a floor (fejljagt 2): at the compact minimum (h 73) the lane was
                     // 23 px, the label rows 9 px, and bold 11 px text was clipped at
                     // the top and ran into the row above
@@ -1737,9 +1746,9 @@ Row
                     {
                         width: colourRow.cellW
                         height: colourRow.height
-                        objectName: "colour:"+modelData
-                        label: modelData.toUpperCase()
-                        activeColor: liveRow.swatch(modelData)
+                        objectName: "colour:"+(modelData || "")
+                        label: (modelData || "").toUpperCase()
+                        activeColor: liveRow.swatch(modelData || "")
                         active: trackEngine ? trackEngine.colourOverride === modelData : false
                         border.width: (trackEngine && trackEngine.colourOverride === ""
                                        && trackEngine.currentColour === modelData) ? 3 : 1
@@ -2371,7 +2380,7 @@ Rectangle
         }
 RowLayout {
             id: footerRow
-            Layout.fillWidth: true; Layout.preferredHeight: 56; Layout.maximumHeight: 56
+            Layout.fillWidth: true; Layout.preferredHeight: 56; Layout.maximumHeight: 56; Layout.minimumHeight: 48
             spacing: 10
 
 Rectangle

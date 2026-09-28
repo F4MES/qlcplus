@@ -1060,7 +1060,7 @@ void TrackManager::noteShowRunning()
         // anything - the room faded to black until play was pressed.
         // (From inside tick() the deck is playing, so this is not reached
         // there.)
-        if (m_playing == false && m_roleMode)
+        if ((m_playing == false || m_linkStale) && m_roleMode)   // R295_IDLE_STALE
             m_engine->idle();
     }
 }
@@ -1109,7 +1109,7 @@ void TrackManager::setAutoRun(bool enable)
         m_startAuto = m_engine->startScene();
     }
 
-    if (m_autoRun) applyLook();
+    if (m_autoRun) reroll();              // R295_SHOW_ON_REROLL: a quiet link builds the idle look
     else stopLook();
     if (m_autoRun == false && m_engine != nullptr)      // R211_SHOW_OFF_ATMOS
     {
@@ -1815,6 +1815,10 @@ void TrackManager::runEngine(bool sectionChanged)
     int tickStart = secStart;                 // R236_LOOP_TICK_START
     if (m_loopTop > 0 && m_jumpTo < secStart && beat <= m_loopTop)
         tickStart = secStart > 32 ? secStart - 32 : 1 + (secStart - 1) % 4;
+    // R295_DOWNBEAT_TICK_START: the first section starts on beat 1, its first
+    // bar on 1 + m_downbeat - the engine counts every bar line from what it gets
+    if (tickStart == 1 && m_downbeat > 0 && beat > m_downbeat)
+        tickStart = 1 + m_downbeat;
     m_engine->tick(state, beat, tickStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
                    m_liveBpm > 0 ? qreal(m_liveBpm) : m_bpm, levelScale, kick, high,

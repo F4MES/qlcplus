@@ -24,7 +24,8 @@ Rectangle
     signal tapped()
 
     radius: 3
-    color: active ? activeColor : "#3A3A3A"
+    color: tileMouse.pressed ? Qt.lighter(active ? activeColor : "#3A3A3A", 1.35)
+                             : (active ? activeColor : "#3A3A3A")
     border.width: 1
     border.color: active ? Qt.lighter(activeColor, 1.3) : "#555555"
 
@@ -39,6 +40,7 @@ Rectangle
 
     MouseArea
     {
+        id: tileMouse
         anchors.fill: parent
         onClicked: tileRoot.tapped()
     }

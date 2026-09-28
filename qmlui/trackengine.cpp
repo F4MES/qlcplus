@@ -289,6 +289,8 @@ void TrackEngine::slotFadeTimer()
 
 void TrackEngine::slotDocChanged()
 {
+    // a function or fixture went: the index's m_doc->function() test is stale
+    invalidateCandidates();
     m_autoStageKeys.clear();
     m_verdictAutoKeys.clear();
     m_verdictMs = -1;
@@ -593,10 +595,22 @@ bool TrackEngine::hasWord(const QString &text, const QStringList &words) const
     {
         if (w.length() <= 3)
         {
-            // short words must stand alone, so "up" does not match "group"
-            QRegularExpression re(QStringLiteral("(^|[^a-z\\x{00e6}\\x{00f8}\\x{00e5}])%1([^a-z\\x{00e6}\\x{00f8}\\x{00e5}]|$)").arg(w));
-            if (re.match(text).hasMatch())
-                return true;
+            // short words must stand alone, so "up" does not match "group".
+            // By hand: this built (and JIT-compiled, ~26 us) a regular
+            // expression per short word per call - some 100,000-250,000 of
+            // them in one ensureTable(). The same test: w with no a-z, æ, ø
+            // or å right before or right after it.
+            auto letter = [](QChar c) {
+                const ushort u = c.unicode();
+                return (u >= 'a' && u <= 'z') || u == 0x00e6 || u == 0x00f8 || u == 0x00e5;
+            };
+            for (qsizetype at = text.indexOf(w); at >= 0; at = text.indexOf(w, at + 1))
+            {
+                const qsizetype end = at + w.length();
+                if ((at == 0 || letter(text.at(at - 1)) == false)
+                    && (end >= text.length() || letter(text.at(end)) == false))
+                    return true;
+            }
         }
         else if (text.contains(w))
         {
@@ -641,7 +655,7 @@ QString TrackEngine::colourOf(const QString &text) const
     if (hasWord(t, QStringList() << "w"))  return "white";
 
     // "Strobe Strobes MediumB" - a single capital suffix after a lowercase run
-    QRegularExpression suffix(QStringLiteral("[a-z]([BRWG])\\s*$"));
+    static const QRegularExpression suffix(QStringLiteral("[a-z]([BRWG])\\s*$"));
     QRegularExpressionMatch m = suffix.match(text);
     if (m.hasMatch())
     {
@@ -817,7 +831,10 @@ int TrackEngine::classify(const TrackFuncInfo &info) const
                 QString sn = sf ? sf->name().toLower() : QString();
                 sn.replace("laser", " ").replace("beam", " ");
                 if (sf == nullptr || hasWord(sn, positionWords) == false)
+                {
                     allPos = false;
+                    break;               // one step that is not an aim decides it
+                }
             }
         }
         return allPos ? ENGINE_ROLE_POSITION : ENGINE_ROLE_MOTION;
@@ -851,6 +868,7 @@ void TrackEngine::ensureTable()
     // because it is cleared before any of the work starts.
     m_building = true;
     m_dirty = false;
+    invalidateCandidates();          // m_funcs is about to be cleared and refilled
 
     /* ---- groups ---- */
     m_groups.clear();
@@ -1314,6 +1332,7 @@ void TrackEngine::ensureTable()
     ensureDimmerScenes();
     ensureAtmosScenes();
 
+    invalidateCandidates();          // (belt and braces: nothing is cached while building)
     m_building = false;
     qDebug() << "[TrackEngine]" << m_groups.count() << "groups," << m_funcs.count()
              << "functions, palette" << m_palette;
@@ -1565,7 +1584,9 @@ void TrackEngine::learnGroups()
             foreach (quint32 ch, g.colourValue.value(fid).keys())
             {
                 const QLCChannel *qch = fxi->channel(ch);
-                if (qch != nullptr && qch->name().contains(QRegularExpression(QStringLiteral("(colou?r|eye)\\s*\\d+"), QRegularExpression::CaseInsensitiveOption)))
+                static const QRegularExpression eyeName(QStringLiteral("(colou?r|eye)\\s*\\d+"),
+                                                        QRegularExpression::CaseInsensitiveOption);
+                if (qch != nullptr && qch->name().contains(eyeName))
                     eyes++;
             }
             if (eyes >= 4)
@@ -3902,19 +3923,30 @@ QVariantList TrackEngine::table()
     ensureTable();
 
     QVariantList list;
-    QList<TrackFuncInfo> rows = m_funcs.values();
-    std::sort(rows.begin(), rows.end(), [](const TrackFuncInfo &a, const TrackFuncInfo &b) {
-        bool ha = a.junk || a.step || a.groups.isEmpty();
-        bool hb = b.junk || b.step || b.groups.isEmpty();
-        if (ha != hb) return hb;                 // the usable looks first
+    // The sort keys once per row: the comparator built and sorted two group
+    // lists and lower-cased two names on each of ~160,000 comparisons -
+    // ~240 ms per tableChanged with SETUP open (measured, 11,500 rows).
+    struct RowKey { bool tail; QString group; QString name; const TrackFuncInfo *info; };
+    QList<RowKey> keys;
+    keys.reserve(m_funcs.count());
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &f = it.value();
         // the same group name the row shows: a QSet iterates in hash order
-        QStringList la = a.groups.values(); la.sort();
-        QStringList lb = b.groups.values(); lb.sort();
-        QString ga = la.isEmpty() ? QString() : la.first();
-        QString gb = lb.isEmpty() ? QString() : lb.first();
-        if (ga != gb) return ga < gb;
-        return a.name.toLower() < b.name.toLower();
+        QStringList gl = f.groups.values();
+        gl.sort();
+        keys.append({ f.junk || f.step || f.groups.isEmpty(),
+                      gl.isEmpty() ? QString() : gl.first(), f.name.toLower(), &f });
+    }
+    std::sort(keys.begin(), keys.end(), [](const RowKey &a, const RowKey &b) {
+        if (a.tail != b.tail) return b.tail;     // the usable looks first
+        if (a.group != b.group) return a.group < b.group;
+        return a.name < b.name;
     });
+    QList<TrackFuncInfo> rows;
+    rows.reserve(keys.count());
+    for (const RowKey &k : keys)
+        rows.append(*k.info);
 
     // Everything the operator actually reaches sits on a Virtual Console
     // widget; the rest is show-file archaeology that only made this list
@@ -4036,16 +4068,26 @@ QVariantList TrackEngine::groups()
 {
     ensureTable();
     QVariantList list;
+    // ONE walk for every group's counts (it was one per group, each a QSet
+    // lookup on all 11,500 rows - ~16 ms per tableChanged, read twice)
+    QHash<QString, QPair<int, int> > counts;          // group -> colours, motions
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const int role = it.value().role;
+        if (role != ENGINE_ROLE_COLOR && role != ENGINE_ROLE_MOTION)
+            continue;
+        foreach (const QString &gk, it.value().groups)
+        {
+            QPair<int, int> &c = counts[gk];
+            if (role == ENGINE_ROLE_COLOR) c.first++; else c.second++;
+        }
+    }
+    const QString base = baseGroup();
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        int colours = 0, motions = 0;
-        for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
-        {
-            if (it.value().groups.contains(key) == false) continue;
-            if (it.value().role == ENGINE_ROLE_COLOR) colours++;
-            if (it.value().role == ENGINE_ROLE_MOTION) motions++;
-        }
+        const int colours = counts.value(key).first;
+        const int motions = counts.value(key).second;
         QVariantMap row;
         row.insert("key", key);
         row.insert("fixtures", g.fixtures.count());
@@ -4059,7 +4101,7 @@ QVariantList TrackEngine::groups()
         // a fader for it is a lie. The Track page gives those a button.
         row.insert("switchOnly", g.patternDevice || g.hasDimmer == false);
         row.insert("heads", g.heads);
-        row.insert("base", key == baseGroup());
+        row.insert("base", key == base);
         list.append(row);
     }
     return list;
@@ -4224,7 +4266,19 @@ void TrackEngine::setFullAuto(bool on)
     if (on == m_fullAuto)
         return;
     m_fullAuto = on;
+    invalidateCandidates();          // userAllowed() reads m_fullAuto
     QSettings().setValue(SETTINGS_ENGINE_FULLAUTO, m_fullAuto);
+    // a bar FIGURE stopping is a move, and an EFX has no fade-out: dark at
+    // once, as release() and idle() do (runde 220)
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &lg = m_groups.value(key);
+        if (lg.lasers == false || lg.patternDevice || m_active.contains("efx:" + key) == false)
+            continue;
+        stopSlot("col:" + key, true);
+        for (int i = 0; i < lg.parts.count(); i++)
+            stopSlot(partSlot(key, i), true);
+    }
     // whatever runs now may be a function that is no longer allowed
     foreach (const QString &slot, m_active.keys())
     {
@@ -4244,6 +4298,7 @@ void TrackEngine::setFullAuto(bool on)
     }
     m_position.clear();
     m_moves.clear();
+    m_sectionMotion.clear();      // a held pick was chosen under the other mode's rules
     // ensureTable() builds every TrackFuncInfo afresh and reads the verdicts
     // and stage counts back from QSettings - so whatever tick() has counted
     // since the last save is gone unless it is written first
@@ -4679,9 +4734,61 @@ QString TrackEngine::report() const { return m_report; }
  * Choosing
  *********************************************************************/
 
+int TrackEngine::candidateGate() const
+{
+    // The only inputs of candidates() that move between two rebuilds of the
+    // table: the fader for "dryp", the build's length and SPEED for "climb"
+    // (the same arithmetic buildCandidates() used to run per entry).
+    int gate = m_faderNow < 0.995 ? 1 : 0;
+    if (m_speed == 0 && (m_buildLen == 16 || m_buildLen == 32))
+        gate |= 2;
+    if (m_speed == 0 && m_buildLen == 32)
+        gate |= 4;
+    return gate;
+}
+
+void TrackEngine::invalidateCandidates()
+{
+    m_candIndex.clear();
+    m_homeCache.clear();
+    m_sharedLooks = -1;
+}
+
 QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) const
 {
+    // The walk over the whole table (0.5-4.5 ms a call at 11,500 functions,
+    // 30-45 calls a beat) is done once per (role, group) per table now.
+    // Mid-rebuild m_funcs is being refilled: nothing is kept then.
+    QList<CandEntry> fresh;
+    const QList<CandEntry> *entries = &fresh;
+    if (m_building)
+        fresh = buildCandidates(role, group);
+    else
+    {
+        const QString key = QString::number(role) + QLatin1Char('|') + group;
+        QHash<QString, QList<CandEntry> >::const_iterator ci = m_candIndex.constFind(key);
+        if (ci == m_candIndex.constEnd())
+            ci = m_candIndex.insert(key, buildCandidates(role, group));
+        entries = &ci.value();
+    }
+    const int gate = candidateGate();
     QList<TrackFuncInfo *> out;
+    out.reserve(entries->count());
+    for (const CandEntry &e : *entries)
+    {
+        // "DrypDryp" only at a full fader; a climb only where it fits
+        if ((gate & 1) && e.dryp)
+            continue;
+        if (e.climb && (gate & (e.climbLong ? 4 : 2)) == 0)
+            continue;
+        out.append(e.info);
+    }
+    return out;
+}
+
+QList<TrackEngine::CandEntry> TrackEngine::buildCandidates(int role, const QString &group) const
+{
+    QList<CandEntry> out;
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
     {
         const TrackFuncInfo &info = it.value();
@@ -4696,8 +4803,7 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         // "DrypDryp" (the animation lasers) only at a full fader. Tobias,
         // 2026-09-25: "skal kun bruges paa 100% energi. Den er alt for vild
         // til alt andet." By name, as the break's "vifte" is (tierOf).
-        if (m_faderNow < 0.995 && info.name.contains(QStringLiteral("dryp"), Qt::CaseInsensitive))
-            continue;
+        // (Per call, in candidates(): CandEntry::dryp and candidateGate().)
         // A BUILD PROGRAMME ("... Climb", runde 227) rises from sparse to
         // full over its loop - 16 beats, or 32 for "Long". It belongs in a
         // build and nowhere else, and only with room left to reach the top
@@ -4705,18 +4811,12 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         // Its top lands on the drop only when the beats left are whole
         // passes, and only at the drawn tempo - the SPEED tiles stretch or
         // halve it (runde 230, review).
-        if (info.name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
-        {
-            const bool isLong = info.name.contains(QStringLiteral("long"), Qt::CaseInsensitive);
-            const int pass = isLong ? 32 : 16;
-            // runde 287 (Tobias: "du bestemmer hvad der er bedst"): at most
-            // the last 32 beats. A 16-beat Climb started over eight times in
-            // a 128-beat build - the sawtooth runde 237 took out of the level.
-            // A long build opens static, chases from its middle, and the
-            // climb joins where 32 (or 16) are left, as an odd build does.
-            if (m_buildLen < pass || m_buildLen > 32 || (m_buildLen % pass) != 0 || m_speed != 0)
-                continue;
-        }
+        // runde 287 (Tobias: "du bestemmer hvad der er bedst"): at most
+        // the last 32 beats. A 16-beat Climb started over eight times in
+        // a 128-beat build - the sawtooth runde 237 took out of the level.
+        // A long build opens static, chases from its middle, and the
+        // climb joins where 32 (or 16) are left, as an odd build does.
+        // (Per call, in candidates(): CandEntry::climb and candidateGate().)
         // Per-group slots must never start a whole-room snapshot. Its other
         // groups would bypass cast, colour and intensity decisions. Such
         // looks remain available as START scenes and on the Virtual Console.
@@ -4753,7 +4853,12 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             continue;
         if (userAllowed(info, group) == false)
             continue;
-        out.append(const_cast<TrackFuncInfo *>(&info));
+        CandEntry e;
+        e.info = const_cast<TrackFuncInfo *>(&info);
+        e.dryp = info.name.contains(QStringLiteral("dryp"), Qt::CaseInsensitive);
+        e.climb = info.name.contains(QStringLiteral("climb"), Qt::CaseInsensitive);
+        e.climbLong = e.climb && info.name.contains(QStringLiteral("long"), Qt::CaseInsensitive);
+        out.append(e);
     }
     // NOT by id. The order of this list is the order the cursor walks, and
     // the cursor moves ONE TO THREE PLACES per section (m_motionCursor).
@@ -4779,8 +4884,10 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
     // fixed, not qHash(): Qt 6 seeds qHash per process, and an order that
     // changes on every launch cannot be reproduced when a night goes wrong.
     // Id breaks the tie, so the order is total and stable.
-    std::sort(out.begin(), out.end(), [](TrackFuncInfo *a, TrackFuncInfo *b) {
-        return a->scatter != b->scatter ? a->scatter < b->scatter : a->id < b->id;
+    // (sorted before candidates() filters: dropping entries keeps the order)
+    std::sort(out.begin(), out.end(), [](const CandEntry &a, const CandEntry &b) {
+        return a.info->scatter != b.info->scatter ? a.info->scatter < b.info->scatter
+                                                  : a.info->id < b.info->id;
     });
     return out;
 }
@@ -5163,7 +5270,9 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         {
             // a scene with no colour word paints a colour we cannot name -
             // it is not a partner of anything
-            if (partners.contains(info->colour) && engineBannedColour(info->colour) == false)
+            const bool fitsLook = m_partnerPick.isEmpty() ? partners.contains(info->colour)
+                                : (info->colour == m_partnerPick || info->colour == m_colour);
+            if (fitsLook && engineBannedColour(info->colour) == false)
                 fits.append(info);
         }
         if (fits.isEmpty())
@@ -5429,7 +5538,8 @@ QString TrackEngine::familyOf(const QString &name)
         "red", "green", "blue", "cyan", "magenta", "orange", "white", "yellow",
         "fire", "ember", "lime", "ice", "deep", "rose", "frost",
         "all", "the", "a" };
-    const QStringList parts = name.toLower().split(QRegularExpression("[^a-z0-9]+"),
+    static const QRegularExpression nonWord(QStringLiteral("[^a-z0-9]+"));
+    const QStringList parts = name.toLower().split(nonWord,
                                                    Qt::SkipEmptyParts);
     foreach (const QString &w, parts)
     {
@@ -5454,6 +5564,24 @@ int TrackEngine::tierOf(const QString &text) const
 }
 
 quint32 TrackEngine::homePosition(const QString &group) const
+{
+    // Asked on every beat for the bars, again inside every laserAimSafe() and
+    // laserSweepSafe() - once per laser candidate when positionFunction()
+    // draws - and each answer is a candidates() call plus up to two walks of
+    // the whole table. The answer only changes with the table (and with the
+    // gate, which the first pass reads through candidates()).
+    if (m_building)
+        return findHomePosition(group);
+    const QString key = group + QLatin1Char('|') + QString::number(candidateGate());
+    QHash<QString, quint32>::const_iterator hc = m_homeCache.constFind(key);
+    if (hc != m_homeCache.constEnd())
+        return hc.value();
+    const quint32 home = findHomePosition(group);
+    m_homeCache.insert(key, home);
+    return home;
+}
+
+quint32 TrackEngine::findHomePosition(const QString &group) const
 {
     // The aim the operator calls "up" - the bars shooting straight out over
     // the room. It is their normal look and the only one they get below the
@@ -6302,7 +6430,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         && bar == m_dropLand && m_dropLand < 8 && kick < 0.20)
         m_dropLand++;
     const int dropBar = isDrop ? bar - m_dropLand : bar;
-    const bool dropWaiting = isDrop && dropBar < 0;
+    const bool dropWaiting = isDrop && dropBar < 0 && m_lookState != QStringLiteral("drop");   // a loop back into a drop that has landed does not wait again
     if (dropWaiting)
     {
         isDrop = false;
@@ -6318,7 +6446,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         progBar = 0.75;
         barStep = 0.0;
     }
-    else if (isDrop && m_dropLand > 0 && dropBar == 0 && beatInBar == 0 && hold == false)
+    else if (isDrop && m_dropLand > 0 && dropBar == 0 && beatInBar == 0 && hold == false && m_lookState != QStringLiteral("drop"))
         sectionChanged = true;  // draw the drop look WHEN the kick lands
 
     bool preDrop = isDrop == false && dropWaiting == false && hold == false
@@ -7775,7 +7903,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (heldAim != Function::invalidId() && heldAim != homePosition(key))
             {
                 const TrackFuncInfo &hi = m_funcs.value(heldAim);
-                const int downNow = laserDownAllowed(fader);
+                const int downNow = (isBreak || isBuild) ? 0 : laserDownAllowed(fader);
                 heldUnsafe = (fader < 0.40 && hi.type != int(Function::SceneType))
                           || (hi.sweep ? laserSweepSafe(heldAim, key, downNow) == false
                                        : laserAimSafe(heldAim, key, downNow) == false);
@@ -8163,7 +8291,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool wanted = castSet.contains(key) && aimed && aimMoves == false
                    && userMoves == false && (g.lasers ? moveDark : darkGroups).contains(key) == false
                    && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
-                   && (g.lasers == false || (m_fullAuto && isBreak == false && isCalm == false))
+                   && (g.lasers == false || (m_fullAuto && isBreak == false && isBuild == false && isCalm == false))
                    // "Indtil 40 % energi skal de slet ikke bevaege sig"
                    // (Tobias, 2026-09-18). drawSweep() only asks on the beat
                    // a figure is DRAWN, so a figure drawn at 45 % kept running
@@ -11302,10 +11430,15 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     if (m_blendSkipped.isEmpty() == false)
         found << tr("not used, built on an override/filter scene: %1")
                  .arg(QStringList(m_blendSkipped.values()).join(", "));
-    int sharedLooks = 0;
-    foreach (const TrackFuncInfo &info, m_funcs)
-        if (info.role >= 0 && info.role != ENGINE_ROLE_IDLE && info.groups.count() > 1)
-            sharedLooks++;
+    // roles and groups only change with the table: counted once per table
+    if (m_sharedLooks < 0)
+    {
+        m_sharedLooks = 0;
+        for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+            if (it.value().role >= 0 && it.value().role != ENGINE_ROLE_IDLE && it.value().groups.count() > 1)
+                m_sharedLooks++;
+    }
+    const int sharedLooks = m_sharedLooks;
     if (sharedLooks)
         found << tr("%1 whole-room looks reserved for VC/START; AUTO uses one group per look").arg(sharedLooks);
     QList<Universe *> universes = m_doc->inputOutputMap()->universes();
@@ -11716,6 +11849,7 @@ void TrackEngine::setBanned(quint32 fid, bool on)
     if (m_funcs[fid].generated)
         return;
     m_funcs[fid].banned = on;
+    invalidateCandidates();          // no rebuild here (see below), so say it
     saveRoles();
     logSignal((on ? QStringLiteral("sig:ban:") : QStringLiteral("sig:unban:"))
               + QString::number(fid));
@@ -12833,6 +12967,16 @@ void TrackEngine::release()
     }
     stopSweeps();
     m_strobeUntil = -1;
+    // SHOW OFF hands the bars to the operator (busking, Light Rider) and a
+    // four-bar hold may still be walking them home: whatever aim we remember
+    // is not where the tilt is. Forget it, so the first aim after SHOW ON
+    // takes the unknown-aim dark hold - as idle() and trackLoaded() do.
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &rg = m_groups.value(key);
+        if (rg.lasers && rg.patternDevice == false)
+            m_position.remove(key);
+    }
     m_darkUntil.clear();              // AUTO is off: nothing is waiting to come back
     foreach (const QString &slot, m_active.keys())
     {
@@ -13063,7 +13207,7 @@ void TrackEngine::slotEchoOn()
 
 void TrackEngine::slotEchoOff()
 {
-    stopSlot("echo:" + m_echoKey, false);
+    stopSlot("echo:" + m_echoKey, true);    // a third of a beat means cut: a bar colour does not fade
 }
 
 void TrackEngine::testDark()

@@ -745,6 +745,19 @@ protected:
 
     /* choosing */
     QList<TrackFuncInfo *> candidates(int role, const QString &group) const;
+    /** candidates()' table-wide part, kept per (role, group) in m_candIndex
+     *  until invalidateCandidates(). "dryp" and "climb" are read off the name
+     *  here, once; candidateGate() says per call which of them may pass. */
+    struct CandEntry { TrackFuncInfo *info = nullptr; bool dryp = false; bool climb = false; bool climbLong = false; };
+    QList<CandEntry> buildCandidates(int role, const QString &group) const;
+    /** bit 0: the fader holds "dryp" back; bit 1: a 16-beat climb fits the
+     *  build; bit 2: a 32-beat ("Long") one does */
+    int candidateGate() const;
+    /** Drops every cache over m_funcs (the candidates index, the laser homes,
+     *  the shared-look count). On a rebuild, a Doc change, a ban, FULL AUTO. */
+    void invalidateCandidates();
+    /** homePosition()'s search; homePosition() keeps its answer */
+    quint32 findHomePosition(const QString &group) const;
     quint32 colourFunction(const QString &group, const QString &colour) const;
     /** true when the group has a scene of its own in exactly this colour */
     bool groupHasColour(const QString &group, const QString &colour) const;
@@ -827,6 +840,11 @@ private:
     bool m_dirty;
     bool m_building;          // ensureTable() is mid-rebuild: do not re-enter
     QHash<quint32, TrackFuncInfo> m_funcs;
+    /* caches over m_funcs - see invalidateCandidates(). The index holds
+     * POINTERS into m_funcs: never keep it across anything that inserts. */
+    mutable QHash<QString, QList<CandEntry> > m_candIndex;   // "role|group"
+    mutable QHash<QString, quint32> m_homeCache;              // "group|gate" -> homePosition()
+    int m_sharedLooks = -1;                                   // checkConflicts(); -1 = not counted
     QMap<QString, TrackGroup> m_groups;
     QStringList m_groupOrder;
     QSet<QString> m_groupOff;
