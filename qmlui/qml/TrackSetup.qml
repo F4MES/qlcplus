@@ -851,9 +851,10 @@ Rectangle
                 font.pixelSize: 13
             }
 
-            // runde 189: by default the ENERGY fader picks the hold - 64, 32,
-            // 16 or 8 bars over its four quarters. A bars tile fixes it; tap
-            // the lit tile again (or ENERGY) to give it back to the fader.
+            // runde 189: by default the ENERGY fader picks the hold - gliding
+            // 64 -> 8 bars since runde 291. A bars tile fixes it (the override
+            // Tobias asked for); tap the lit tile again (or ENERGY) to give it
+            // back to the fader.
             TrackTile
             {
                 Layout.preferredWidth: 96

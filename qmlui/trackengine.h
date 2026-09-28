@@ -380,9 +380,11 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool fullAuto READ fullAuto WRITE setFullAuto NOTIFY tableChanged)
     Q_PROPERTY(bool accent READ accent WRITE setAccent NOTIFY tableChanged)
     Q_PROPERTY(int holdBars READ holdBars WRITE setHoldBars NOTIFY tableChanged)
-    /** The ENERGY fader picks how long a colour holds - 64, 32, 16 or 8 bars
-     *  over its four quarters (Tobias, 2026-09-23). A holdBars tile sets a
-     *  fixed hold instead and turns this off; tapping it again turns it on. */
+    /** The ENERGY fader picks how long a colour holds - gliding from 64 bars
+     *  at the bottom to 8 at the top, through 64/32/16/8 at the middle of each
+     *  quarter (Tobias, 2026-09-23; smooth since runde 291). A holdBars tile
+     *  sets a fixed hold instead and turns this off; tapping it again turns
+     *  it on. */
     Q_PROPERTY(bool holdAuto READ holdAuto WRITE setHoldAuto NOTIFY tableChanged)
     /** ENERGY by clock: percent at 21, 22, 23, 00, 01 and 02 h (flat to 05, then 0). */
     Q_PROPERTY(QVariantList clockCurve READ clockCurve NOTIFY tableChanged)   // 28 points, 20:00..02:45 (r211)

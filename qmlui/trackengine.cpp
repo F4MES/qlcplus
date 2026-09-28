@@ -6523,8 +6523,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // a hand on the fader shortens or lengthens the colour already up. A
     // SETUP tile fixes it instead. The colour's own stretch (x0.5 .. x1.5,
     // drawn at the change) keeps it off the same beat of every track.
+    // Runde 291 (Tobias: "lad farverne glide jævnt, men med mulighed for at
+    // override i advanced settings"): the fader's hold GLIDES - halving for
+    // every quarter of the slider, and his four numbers are where it passes
+    // through the middle of each quarter (64 at 12.5 %, 32 at 37.5, 16 at
+    // 62.5, 8 at 87.5), 64 at most, 8 at least. It was four flat steps: a hand
+    // moving inside a quarter changed nothing, and 75-100 % was one value.
+    // The bars tiles in SETUP > ADVANCED ("Colour holds for") are the override.
     const int holdBase = m_holdAuto
-        ? (m_faderNow < 0.25 ? 64 : (m_faderNow < 0.50 ? 32 : (m_faderNow < 0.75 ? 16 : 8)))
+        ? qBound(8, int(qRound(64.0 * std::pow(2.0, -4.0 * (qBound(0.0, m_faderNow, 1.0) - 0.125)))), 64)
         : m_holdBars;
     m_holdNow = qMax(4, int(qRound(holdBase * m_holdStretch)));
     int holdBeats = qMax(4, m_holdNow * 4);
@@ -6569,8 +6576,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // with the drop right after it took the colour change, and the floor then
     // held it back at the drop - the room landed in a colour it had shown for
     // one dimmed bar. The drop takes it instead, like sectionSoon above.
+    // (runde 291: the floor is a quarter of the hold, never under 8 beats - a
+    // quiet room recoloured at every break and drop line as often as a full
+    // one, whatever the 64-bar hold said; "lav energi er færre skift")
     bool sectionColour = sectionChanged && (isBreak || isDrop)
-                      && (m_colourSince < 0 || beat - m_colourSince >= 8)
+                      && (m_colourSince < 0 || beat - m_colourSince >= qMax(8, holdBeats / 4))
                       && (isBreak && nextState == QStringLiteral("drop")
                           && beatsToNext > 0 && beatsToNext <= 8) == false;
     bool changeColour;
@@ -6870,7 +6880,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         want += 1.0 * qBound(0.0, (energy - 0.80) / 0.20, 1.0);
         return want;
     };
-    auto effectsFor = [&effectsWant, rng](bool drop, bool brk) {
+    auto effectsFor = [&effectsWant, rng, fader](bool drop, bool brk) {
         // a break used to empty the room down to the base. Late in the night
         // it keeps one group as well - quieter than a groove, not dark.
         // A break is a quiet section, not an empty one. It always keeps one
@@ -6881,8 +6891,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // add ONE thing, and the pool below makes sure that thing is either
         // the laser bars, at home, running a slow chase, or the animation
         // lasers on their flat fan ("flad vifte"). Nothing else, ever.
+        // (runde 291: one break in five at the bottom of the slider, one in
+        // two at the top - it was one in three at every fader)
         if (brk)
-            return rng->bounded(3) == 0 ? 1 : 0;
+            return rng->bounded(1000) < int((0.20 + 0.30 * qBound(0.0, fader, 1.0)) * 1000.0) ? 1 : 0;
         // The top of the ENERGY fader has to mean something: at full it is
         // three groups on a drop and two in a groove, not two and one.
         // four groups on a drop at the stop, three in a groove: the fader's
@@ -10392,8 +10404,14 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
     // ENGINE_DROP_SHOW is tier 1 and keeps the floor, which is right.
     // (not under the floor round either: its whole point is one sharp spot
     // walking through a dark wash, runde 214)
+    // (runde 291: the floor slides 0.45 -> 0.35 over 50-100 % on the slider,
+    // so the foundation's pump keeps deepening with the room - it stopped at
+    // ~52 %; the base still never goes under a third)
     if (ambientBase(group) && m_compositionTier != 2 && (m_floorRound && move.bare) == false)
-        for (qreal &value : mask) value = qMax(0.45, value);
+    {
+        const qreal maskFloor = 0.45 - 0.10 * qBound(0.0, (m_faderNow - 0.50) / 0.50, 1.0);
+        for (qreal &value : mask) value = qMax(maskFloor, value);
+    }
     return mask;
 }
 
@@ -10602,7 +10620,9 @@ qreal TrackEngine::pulseFactor(const QString &group) const
         factor *= TrackStage::sequenceGain(qreal(now - m_sequenceStart) / m_sequenceBeatMs,
             sequenceIndex, m_sequenceGroups.size(), group == m_compositionBase);
     // the foundation's floor - not in a drop, see patternMask()
-    if (ambientBase(group) && m_compositionTier != 2 && m_floorRound == false) factor = qMax(0.40, factor);
+    // (runde 291: 0.40 -> 0.30 over 50-100 % on the slider, as patternMask)
+    if (ambientBase(group) && m_compositionTier != 2 && m_floorRound == false)
+        factor = qMax(0.40 - 0.10 * qBound(0.0, (m_faderNow - 0.50) / 0.50, 1.0), factor);
     // A chase that OWNS the base's dimmers (runde 231, canOwnDimmers) keeps
     // every head at minLit or more - that is the promise it owns them on. The
     // pulse and the breath multiply onto it, so without this the base's
@@ -10723,8 +10743,12 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     sw.drawnE = e;
     sw.drive = drive && sw.tier == 1;
     qreal reach = sweepReach(sw.tier, e, sw.drive);
+    // a build's figure grows with the climb AND with the slider (runde 291):
+    // it was 26 + 30 x prog whatever the fader said - a build at 35 % and at
+    // 100 % drew the same size. The groove's reach x 0.9 -> 1.4 over the climb
+    // keeps today's middle and lets applySweep's live ratio follow the fader.
     if (build)
-        reach = 26.0 + 30.0 * prog;
+        reach = sweepReach(1, e, false) * (0.9 + 0.5 * qBound(0.0, prog, 1.0));
     qreal size = reach * (0.75 + 0.25 * rng->generateDouble());
     // pan has the whole room, tilt has the floor: the heads hang from the
     // ceiling and a figure must not climb the walls
