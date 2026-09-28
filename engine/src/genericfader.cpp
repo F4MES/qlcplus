@@ -34,6 +34,7 @@ GenericFader::GenericFader(QObject *parent)
     , m_enabled(true)
     , m_fadeOut(false)
     , m_deleteRequest(false)
+    , m_crossfadeOut(false)
     , m_blendMode(Universe::NormalBlend)
     , m_monitoring(false)
 {
@@ -298,6 +299,32 @@ void GenericFader::write(Universe *universe, uint elapsedMs)
         else
         {
             // treat value as a whole, so do this just once per FadeChannel
+            if (m_crossfadeOut)
+            {
+                // Replace/Filter fading out: hold the layer value and crossfade
+                // it against what is underneath (Filter: towards "no filter").
+                // fc still runs start->0 as the clock, so removal is unchanged.
+                qreal f = (fc.isReady() || fc.fadeTime() == 0)
+                          ? qreal(0) : qreal(1) - qreal(fc.elapsed()) / qreal(fc.fadeTime());
+                f = qBound(qreal(0), f, qreal(1));
+                quint32 layer = fc.start();
+                if (fc.canFade() && (flags & FadeChannel::Intensity))
+                    layer = quint32(qRound64(qreal(layer) * compIntensity));
+                if (m_blendMode == Universe::ReplaceBlend)
+                {
+                    quint32 under = 0;
+                    for (int i = 0; i < channelCount; i++)
+                        under = (under << 8) + universe->preGMValue(address + i);
+                    value = quint32(qRound64(qreal(under) + (qreal(layer) - qreal(under)) * f));
+                }
+                else
+                {
+                    const quint32 maxValue = channelCount == 1 ? 0xFFu
+                                           : (channelCount == 2 ? 0xFFFFu : 0xFFFFFFu);
+                    layer = qMin(layer, maxValue);
+                    value = quint32(qRound64(qreal(maxValue) - qreal(maxValue - layer) * f));
+                }
+            }
             universe->writeBlended(address, value, channelCount, m_blendMode);
         }
 
@@ -373,6 +400,8 @@ bool GenericFader::isFadingOut() const
 void GenericFader::setFadeOut(bool enable, uint fadeTime)
 {
     m_fadeOut = enable;
+    m_crossfadeOut = enable && fadeTime > 0 &&
+                     (m_blendMode == Universe::ReplaceBlend || m_blendMode == Universe::FilterBlend);
 
     if (fadeTime == 0)
         return;
@@ -388,7 +417,8 @@ void GenericFader::setFadeOut(bool enable, uint fadeTime)
         // to target the current universe value
         // (will be handled in the write method)
         if (((fc.flags() & FadeChannel::Flashing) == 0) &&
-            ((fc.flags() & FadeChannel::Intensity) == 0))
+            ((fc.flags() & FadeChannel::Intensity) == 0) &&
+            m_crossfadeOut == false)
             fc.addFlag(FadeChannel::SetTarget);
         fc.setTarget(0);
         fc.setElapsed(0);

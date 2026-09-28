@@ -189,6 +189,8 @@ private:
     bool m_enabled;
     bool m_fadeOut;
     bool m_deleteRequest;
+    /** Replace/Filter fade-out: crossfade against the layer underneath */
+    bool m_crossfadeOut;
     Universe::BlendMode m_blendMode;
     bool m_monitoring;
     QHash<quint32, QSharedPointer<FadeChannel>> m_channelCache;

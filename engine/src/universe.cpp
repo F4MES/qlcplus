@@ -390,6 +390,9 @@ void Universe::processFaders(uint elapsedMs)
                 kd[i] = char(0);
         dumpOutput(killed, true);
         emit universeWritten(id(), killed);
+        // Remember what was actually sent, so releasing Kill on a static
+        // look is detected as a change and the real frame goes out again.
+        memcpy(m_lastPostGMValues->data(), killed.constData(), m_usedChannels);
         return;
     }
 

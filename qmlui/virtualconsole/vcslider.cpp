@@ -110,6 +110,11 @@ VCSlider::VCSlider(Doc *doc, QObject *parent)
     , m_speedNudging(false)
 {
     setType(VCWidget::SliderWidget);
+    // A slider made after a SHOW ON (workspace load, design mode) holds
+    // nothing to let go of: start from the current serial, or its first tick
+    // reads as a reset and swallows its first write. Before setSliderMode(),
+    // which hands the slider to the timer thread.
+    m_consoleResetSeen = m_doc->masterTimer()->consoleResetSerial();
     setSliderMode(Adjust);
 
     registerExternalControl(INPUT_SLIDER_CONTROL_ID, tr("Slider Control"), false);
@@ -1814,6 +1819,16 @@ void VCSlider::writeDMXStrobe(MasterTimer* timer, QList<Universe *> universes)
     if (m_value <= 2)
     {
         m_strobeElapsed = 0;
+        // Let go of the channels: the faders would otherwise keep blending
+        // the last strobe level (255 or 0) on the rig. Letting go is all a
+        // SHOW ON asks of this slider, so take its serial as seen here -
+        // otherwise the reset check in writeDMXLevel() swallows the first
+        // write after the slider is raised again. Timer thread.
+        QMutexLocker locker(&m_levelValueMutex);
+        if (m_fadersMap.isEmpty() == false)
+            removeActiveFaders();
+        if (timer != nullptr)
+            m_consoleResetSeen = timer->consoleResetSerial();
         return;
     }
 
@@ -1827,7 +1842,21 @@ void VCSlider::writeDMXStrobe(MasterTimer* timer, QList<Universe *> universes)
     if (m_strobeElapsed >= periodMs)
         m_strobeElapsed = 0;
 
-    m_strobeLevel = (m_strobeElapsed < (periodMs / 2)) ? 255 : 0;
+    uchar level = (m_strobeElapsed < (periodMs / 2)) ? 255 : 0;
+
+    // writeDMXLevel() writes only when m_levelValueChanged is set, and only
+    // setValue() sets it: without this the strobe wrote one level when the
+    // handle moved and then held it. Mark each flip - but only while the
+    // strobe holds faders. The first write after a hand move comes from
+    // setValue(); after SHOW ON or at the bottom the faders are gone and the
+    // strobe stays dark until a hand moves it. Scoped: writeDMXLevel() takes
+    // the same (non-recursive) mutex.
+    {
+        QMutexLocker locker(&m_levelValueMutex);
+        if (level != m_strobeLevel && m_fadersMap.isEmpty() == false)
+            m_levelValueChanged = true;
+        m_strobeLevel = level;
+    }
 
     // Reuse the Level-mode channel writing with the gated level.
     writeDMXLevel(timer, universes);

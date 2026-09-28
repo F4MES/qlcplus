@@ -914,7 +914,47 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
             // sub-beat steps stay locked to Link's grid without accumulating
             // per-step rounding drift.
             if (m_chaser->tempoType() == Function::Beats && timer->linkEnabled() && step->m_duration != 0)
-                m_nextLinkBeatStart = step->m_linkBeatStart + qreal(step->m_duration) / 1000.0;
+            {
+                qreal spacing = qreal(step->m_duration) / 1000.0;
+                qreal next = step->m_linkBeatStart + spacing;
+
+                // If that boundary is ALSO already over (chaser paused/frozen while
+                // Link kept running, Link enabled mid-run, a forward jump of the Link
+                // timeline, a shortened step, or a step shorter than one tick), skip
+                // the lost steps on the same grid instead of racing one step per tick.
+                // behind < 0 (Link jumped backwards) is left alone here.
+                qreal behind = timer->linkBeat() - next;
+                if (behind >= spacing)
+                {
+                    // behind/spacing >= 1, so truncation == floor
+                    qint64 lost = qint64(behind / spacing);
+                    next += qreal(lost) * spacing;
+
+                    // Keep the pattern phase-locked to the grid: advance the step
+                    // index by the lost count too, so step 0 stays on the beat.
+                    // Only meaningful for evenly spaced, cyclic patterns.
+                    bool uniform = m_chaser->overrideDuration() != Function::defaultSpeed() ||
+                                   m_chaser->durationMode() != Chaser::PerStep;
+                    int count = m_chaser->stepsCount();
+                    qint64 period = 0;
+                    if (m_chaser->runOrder() == Function::Loop)
+                        period = count;
+                    else if (m_chaser->runOrder() == Function::PingPong)
+                        period = qMax(2, 2 * count - 2);
+
+                    if (uniform && period > 0)
+                    {
+                        for (qint64 i = lost % period; i > 0; i--)
+                        {
+                            int idx = getNextStepIndex();
+                            if (idx == -1)
+                                break;
+                            m_lastRunStepIdx = idx;
+                        }
+                    }
+                }
+                m_nextLinkBeatStart = next;
+            }
 
             m_lastFunctionID = step->m_function->type() == Function::SceneType ? step->m_function->id() : Function::invalidId();
             // Overlap mode: leave the current step's function running (it finishes
