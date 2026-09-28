@@ -9338,11 +9338,27 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 && m_override.isEmpty()           // a tile is one colour: no echo in another (runde 205)
                 && beat - m_echoBeat >= 4 && m_echoTimer.isActive() == false)
             {
+                // One laser type at a time under the one-laser line (runde 235,
+                // m_oneLaser from the bar line, runde 279): the bars answer in or
+                // out of the cast, so with the animation laser on stage the echo
+                // lit the second laser type for a third of a beat (runde 286).
+                bool aniOnStage = false;
+                if (m_oneLaser)
+                {
+                    foreach (const QString &key, castSet)
+                    {
+                        const TrackGroup &ag = m_groups.value(key);
+                        if (ag.patternDevice && m_groupOff.contains(key) == false
+                            && darkGroups.contains(key) == false)
+                            aniOnStage = true;
+                    }
+                }
                 QString echoKey;
                 foreach (const QString &key, m_groupOrder)
                 {
                     const TrackGroup &eg = m_groups.value(key);
-                    if (eg.lasers && eg.patternDevice == false && m_groupOff.contains(key) == false
+                    if (aniOnStage == false
+                        && eg.lasers && eg.patternDevice == false && m_groupOff.contains(key) == false
                         && darkGroups.contains(key) == false)
                     {
                         echoKey = key;
@@ -9362,7 +9378,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         { "red", "blue" }, { "blue", "magenta" }, { "cyan", "magenta" }, { "magenta", "cyan" },
                         { "green", "cyan" }, { "orange", "blue" }, { "white", "blue" }, { "amber", "red" },
                         { "purple", "blue" }, { "pink", "magenta" }, { "uv", "magenta" } };
-                    QString echoHue = contrast.value(m_colour, QStringLiteral("white"));
+                    // ... and the LOOK'S partner where it has one (runde 286). One
+                    // partner colour per look (runde 243): the table gave its own
+                    // contrast whatever the look had drawn, so a red room with an
+                    // orange partner (or accent, or the next track's colour in a
+                    // mix) echoed blue - three colours. The table is only the
+                    // fallback for a look with no partner.
+                    QString echoHue = (m_partnerPick.isEmpty() == false && m_partnerPick != m_colour)
+                        ? m_partnerPick
+                        : contrast.value(m_colour, QStringLiteral("white"));
                     if (m_palette.contains(echoHue) == false || engineBannedColour(echoHue))
                         echoHue = QStringLiteral("white");
                     echoHue = colourForGroup(echoKey, echoHue);
