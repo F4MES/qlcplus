@@ -4707,7 +4707,12 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
         {
             const bool isLong = info.name.contains(QStringLiteral("long"), Qt::CaseInsensitive);
             const int pass = isLong ? 32 : 16;
-            if (m_buildLen < pass || (m_buildLen % pass) != 0 || m_speed != 0)
+            // runde 287 (Tobias: "du bestemmer hvad der er bedst"): at most
+            // the last 32 beats. A 16-beat Climb started over eight times in
+            // a 128-beat build - the sawtooth runde 237 took out of the level.
+            // A long build opens static, chases from its middle, and the
+            // climb joins where 32 (or 16) are left, as an odd build does.
+            if (m_buildLen < pass || m_buildLen > 32 || (m_buildLen % pass) != 0 || m_speed != 0)
                 continue;
         }
         // Per-group slots must never start a whole-room snapshot. Its other
@@ -7261,6 +7266,28 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 castSet.insert(key);
         }
         if (base.isEmpty() == false) castSet.insert(base);
+        // ... nor the one-laser line (runde 287): held with both laser types
+        // on above 85 % and the fader brought under it, the first type in
+        // the room's order stays and the other goes, as it does unheld. The
+        // hand on the fader is read through HOLD, like the strobe line.
+        if (m_oneLaser)
+        {
+            bool heldBars = false, heldAni = false;
+            foreach (const QString &key, m_groupOrder)
+            {
+                if (castSet.contains(key) == false)
+                    continue;
+                const TrackGroup &hg = m_groups.value(key);
+                const bool isBars = hg.lasers && hg.patternDevice == false;
+                if ((isBars && heldAni) || (hg.patternDevice && heldBars))
+                {
+                    castSet.remove(key);
+                    continue;
+                }
+                heldBars = heldBars || isBars;
+                heldAni = heldAni || hg.patternDevice;
+            }
+        }
     }
 
     /* ---- accent: a partner colour on one effect group in drops ---- */
@@ -7395,6 +7422,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             styles << 1;
         m_dropStyle = styles.at(int(rng->bounded(styles.count())));
         m_dropStyleDrawn = true;
+        m_landCoin = rng->bounded(2) == 1;     // runde 287: see `landing`
     }
     else if (isDrop == false)
     {
@@ -8123,7 +8151,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 {
                     // the floor, not the curve: applySweep() scales `beats`
                     // with the fader and lays this under it (runde 271)
-                    candidate.minBeats = qMax(candidate.minBeats, key == base ? 16 : 24);
+                    // ... not in a build (runde 287, Tobias: "de skal være fri
+                    // for tempo-gulv på full-auto"): the build's halving is
+                    // what makes the heads speed up to the drop
+                    if (isBuild == false)
+                        candidate.minBeats = qMax(candidate.minBeats, key == base ? 16 : 24);
                     // runde 254 (Tobias: "flere ... bevægelser (movingheads)
                     // på tværs af sektioner og energilevel"): from the middle of
                     // the fader the BASE keeps the relation it drew - wave,
@@ -8291,6 +8323,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool turnaround = phraseAllowed && (haveCurves ? beat <= m_fillUntil
                                       : (bar >= 6 && (phraseBar == 6 || phraseBar == 7)));
     bool landing = isDrop && dropBar == 0 && isCalm == false;
+    // Runde 287 (Tobias: "du bestemmer, men måske det skal variere?"): the
+    // landing bar is the fast IMPACT chase or the still, full-on picture by
+    // the drop's character - hard and nervous land on the chase, wide and
+    // heavy stand still, a plain or tight drop tosses a coin drawn with the
+    // character. A settled drop has stepped down to heavy/wide, so a drop
+    // flag inside it lands still and the impact comes in bar two (from 60 %).
+    const bool landChase = isDrop && (m_dropStyle == 1 || m_dropStyle == 5
+                                      || ((m_dropStyle == 0 || m_dropStyle == 3) && m_landCoin));
     // With curves a blackout accent needs a real gap. Never blank the kick
     // as it returns. The explicit pre-drop cue above remains unchanged.
     bool phraseDark = haveCurves ? (kick < 0.20 && high >= 0.0 && high < 0.20)
@@ -8426,6 +8466,28 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             continue;
         }
 
+        // Runde 287 (Tobias: "En rolig laser chase må gerne bruges helt ned
+        // til bevægelserne starter og skaleres op med energi-slideren så
+        // chase farten følger"): from where the bars start to move (0.40)
+        // the pace of their chase is the SLIDER's, read on every bar line -
+        // eight beats a step at 40 %, four from 61, two from 87, one from 96
+        // (the bar grid, runde 233) - not the section's roll, fixed at the
+        // draw. Written into the drawn move, so composeMove (FULL AUTO's
+        // support floor) and the SPEED tiles still apply on top.
+        // Not in a break, an intro or an outro (tier 0): there the bars stand
+        // calm in their home at the section's slow pace whatever the slider.
+        if (g.lasers && g.patternDevice == false && beatInBar == 0 && hold == false
+            && tier > 0 && isCalm == false && fader >= 0.40 && m_moves.contains(key))
+        {
+            TrackMove &dm = m_moves[key];
+            if (dm.pattern == ENGINE_PAT_CHASE || dm.pattern == ENGINE_PAT_PINGPONG
+                || dm.pattern == ENGINE_PAT_ODDEVEN)
+            {
+                const qreal lf = qBound(0.0, (fader - 0.40) / 0.60, 1.0);
+                const int sb = qMax(1, int(qRound(8.0 - 7.0 * lf)));
+                dm.stepBeats = sb <= 2 ? sb : (sb <= 5 ? 4 : 8);
+            }
+        }
         TrackMove mv = m_moves.value(key);
         if (m_fullAuto)
             mv = composeMove(key, mv, tier);
@@ -8440,6 +8502,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // (animation lasers) and the base sit it out; the bars step on the
         // beat, never between (they never do).
         int impactBars = energy >= 0.60 ? 2 : 1;
+        bool impactNow = false;                  // runde 287: the landing reads it
         if (isDrop && dropBar >= 0 && dropBar < impactBars && key != base
             && (m_fullAuto == false || key == m_rhythmLead || g.strobes)
             && hold == false && isCalm == false
@@ -8451,6 +8514,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mv.pulse = qMax(mv.pulse, 0.85);
             mv.pulseOn = 0;
             mv.ownChaser = false;
+            impactNow = true;
         }
         // the floor round: the heads hand ONE lit head round (runde 214) - bare,
         // so the acceleration below takes it from every other beat to sixteenths
@@ -8508,7 +8572,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // full bank standing lit, which is the one picture Tobias ruled out.
         // They keep walking through it; the landing is still audible in the
         // rest of the room.
-        else if (key != base && landing && g.strobes == false)
+        else if (key != base && landing && g.strobes == false
+                 && (landChase == false || impactNow == false))
             mv.pattern = ENGINE_PAT_STATIC;
         else if (key != base && (m_fullAuto == false || key == m_rhythmLead) && turnaround && mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_FILL)
         {
@@ -9647,7 +9712,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         mv.breatheBars = 0;
         mv.texture = 0.0;
         mv.ownChaser = tier > 0 && chance(0.25 + 0.45 * busy);
-        if (chance(busy))
+        // runde 287: from the line where they start to move (0.40 on the
+        // slider) a calm chase is at least as likely as the still picture;
+        // its pace follows the slider in tick()
+        if (chance(m_faderNow >= 0.40 ? qMax(busy, 0.50) : busy))
         {
             mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG,
                                 ENGINE_PAT_ODDEVEN, ENGINE_PAT_CHASE });

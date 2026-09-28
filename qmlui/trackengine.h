@@ -966,6 +966,7 @@ private:
     bool m_floorRound = false;             // this build: heads straight down, sharp, one blinking round (runde 214)
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
+    bool m_landCoin = false;  // runde 287: a plain or tight drop lands on the impact chase (true) or still
     bool m_dropStyleDrawn = false; // m_dropStyle was drawn for the drop on stage - 0 is a style too (runde 282)
     int m_dropFrom = -1;      // the beat this drop's look was drawn (fejljagt 3: the settle clock)
     bool m_dropCalm = false;  // this drop has settled - held to the next section (fejljagt 3)
