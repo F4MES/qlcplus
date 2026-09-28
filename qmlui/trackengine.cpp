@@ -42,6 +42,7 @@
 #include "qlcchannel.h"
 #include "rgbmatrix.h"
 #include "virtualconsole.h"   // usageList(): which functions a VC widget points at
+#include "vcbutton.h"         // releaseAllHolds(): SHOW ON (runde 300)
 #include "efxfixture.h"
 #include "function.h"
 #include "fixture.h"
@@ -12915,12 +12916,12 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     out << QDateTime::currentDateTime().toString(Qt::ISODateWithMs) << ','
         << beat << ',' << state << ','
         // group names cleaned of commas like every other name column (runde 178)
-        << QString(castSorted.join('+')).replace(',', ' ') << ',' << m_colour << ','
+        << QString(castSorted.join('+')).replace(',', ' ').remove('"') << ',' << m_colour << ','   // runde 300: and quotes
         << QString::number(level, 'f', 2) << ','
         << QString::number(energy, 'f', 2) << ','
         << QString::number(sectionEnergy, 'f', 2) << ','
         << QString::number(m_master, 'f', 2) << ','
-        << QString(m_lastMoves).replace(',', ';') << ','
+        << QString(m_lastMoves).replace(',', ';').remove('"') << ','
         << running.join(';') << ','
         // last, and appended like funcs was: bane B reads the older columns
         // by position. Commas and quotes out - the log is read with a plain
@@ -12938,7 +12939,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
                .replace('\n', ' ').replace('\r', ' ').simplified() << ','
         // runde 47, appended again: the accent ("Strobes All=white") and what
         // moved on this beat (section / turn / colour-on-turn / ...)
-        << QString(m_logAccent).replace(',', ' ') << ',' << m_logEvent << ',' << csv(build) << ','
+        << QString(m_logAccent).replace(',', ' ').remove('"') << ',' << m_logEvent << ',' << csv(build) << ','
         << m_logSettingsId << ',' << csv(snapshot) << '\n';
     out.flush();
     m_log.flush();                       // the report script reads while we play
@@ -13486,6 +13487,10 @@ void TrackEngine::resetConsole()
         if (f != nullptr && f->isRunning() && f->startedByConsole())
             f->stop(FunctionParent::master());
     }
+    // ... a held Freeze or Kill button (runde 300, bane B's B18 hook): the
+    // show could start black, or with our own layers frozen - Freeze pauses
+    // TRACK's functions too, and setPart() only restarts a stopped one
+    VCButton::releaseAllHolds();
     // ... and the Level sliders, which never start a function: each lets go
     // of its channels on its next tick (VCSlider::writeDMXLevel)
     m_doc->masterTimer()->resetConsole();
@@ -13506,6 +13511,10 @@ void TrackEngine::setNextKey(const QString &key)
 
 void TrackEngine::trackLoaded(const QString &title, const QString &key)
 {
+    // a NEXT pressed on the old track's last beat is about that track: kept,
+    // the new track's first beat drew a fresh colour over the one the mix
+    // handed over (runde 300, bane B's B19)
+    m_forceNext = false;
     // Stage time is counted every beat but only written when something else
     // triggers a save, and a whole night can pass without one. Once per track
     // bounds the loss to the track that was playing when the power went, and
