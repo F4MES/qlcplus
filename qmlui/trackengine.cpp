@@ -335,6 +335,10 @@ void TrackEngine::slotDocSettled()
     bool wasIdle = false;
     if (m_lastState.isEmpty())
     {
+        // B22: idle()'s held base has no idle: slot, and a project load has
+        // already emptied m_active (slotDocChanged) - idle()'s report still
+        // says what was up
+        wasIdle = m_report == tr("(idle - base held)") || m_report == tr("(start scene)");
         foreach (const QString &slot, m_active.keys())
         {
             if (slot.startsWith(QStringLiteral("idle:")))
@@ -4278,6 +4282,11 @@ void TrackEngine::setFullAuto(bool on)
         stopSlot("col:" + key, true);
         for (int i = 0; i < lg.parts.count(); i++)
             stopSlot(partSlot(key, i), true);
+        // B22: a dimmer chase (mot:) is the only writer when it runs on the
+        // bars, and the echo lights them too - both went soft further down,
+        // so the beams jumped back to the aim still lit for up to 2 s
+        stopSlot("mot:" + key, true);
+        stopSlot("echo:" + key, true);
     }
     // whatever runs now may be a function that is no longer allowed
     foreach (const QString &slot, m_active.keys())
@@ -5250,18 +5259,19 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // so in a green room this branch could hand the animation laser a RED
         // pattern - red on green, the one pairing the colour rules leave out
         // on purpose. Every room colour still has a partner here (green ->
-        // cyan/white, magenta -> blue/white, orange -> red, red -> white), so
-        // the group is not left dark by this on this rig.
+        // cyan, magenta -> blue/white, orange -> red, red -> magenta/blue), so
+        // the group is not left dark by this on this rig. White only where
+        // HARMONY allows it: under blue, magenta and cyan (B22).
         static const QMap<QString, QStringList> goesWith =
         {
             { "blue",    { "white", "cyan" } },
-            { "red",     { "amber", "white" } },
+            { "red",     { "magenta", "blue" } },    // B22: HARMONY - white only under blue/magenta/cyan
             { "cyan",    { "magenta", "white" } },
-            { "green",   { "cyan", "white" } },
+            { "green",   { "cyan" } },
             { "magenta", { "blue", "white" } },
             { "white",   { "blue", "cyan" } },
             { "orange",  { "amber", "red" } },
-            { "amber",   { "red", "white" } },
+            { "amber",   { "red", "blue" } },
             { "uv",      { "magenta", "blue", "white" } },
         };
         const QStringList partners = goesWith.value(colour);
@@ -9975,7 +9985,11 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             // against a 4/4 bar and a pulse read as random)
             const qreal paceBy = slider ? qBound(0.0, (m_faderNow - 0.40) / 0.60, 1.0) : busy;
             const int sb = qMax(1, int(qRound(8.0 - 7.0 * paceBy)));
-            mv.stepBeats = sb <= 2 ? sb : (sb <= 5 ? 4 : 8);
+            // B22: the rule's own lines - "4 fra 61, 2 fra 87, 1 fra 96" - on
+            // the slider's percent; the rounded ramp switched at 62 and 88
+            const int pct = qRound(m_faderNow * 100.0);
+            mv.stepBeats = slider ? (pct >= 96 ? 1 : (pct >= 87 ? 2 : (pct >= 61 ? 4 : 8)))
+                                  : (sb <= 2 ? sb : (sb <= 5 ? 4 : 8));
             mv.bare = chance(0.35 + 0.45 * busy);
         }
         else
@@ -12964,6 +12978,11 @@ void TrackEngine::release()
         stopSlot("col:" + key, true);
         for (int i = 0; i < lg.parts.count(); i++)
             stopSlot(partSlot(key, i), true);
+        // B22: a dimmer chase (mot:) is the only writer when it runs on the
+        // bars, and the echo lights them too - both went soft further down,
+        // so the beams jumped back to the aim still lit for up to 2 s
+        stopSlot("mot:" + key, true);
+        stopSlot("echo:" + key, true);
     }
     stopSweeps();
     m_strobeUntil = -1;
@@ -13188,7 +13207,7 @@ void TrackEngine::stopEcho()
     m_echoTimer.stop();
     m_echoOffTimer.stop();
     if (m_echoKey.isEmpty() == false)
-        stopSlot("echo:" + m_echoKey, false);
+        stopSlot("echo:" + m_echoKey, true);    // B22: cut, as slotEchoOff() does (runde 295)
     m_echoKey.clear();
     m_echoFid = Function::invalidId();
 }
@@ -13301,6 +13320,11 @@ void TrackEngine::idle()
         stopSlot("col:" + key, true);
         for (int i = 0; i < lg.parts.count(); i++)
             stopSlot(partSlot(key, i), true);
+        // B22: a dimmer chase (mot:) is the only writer when it runs on the
+        // bars, and the echo lights them too - both went soft further down,
+        // so the beams jumped back to the aim still lit for up to 2 s
+        stopSlot("mot:" + key, true);
+        stopSlot("echo:" + key, true);
     }
     stopSweeps();
     m_strobeUntil = -1;
