@@ -927,7 +927,8 @@ private:
 
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group
-    qreal m_movesEnergy = -1.0;            // the energy the moves were last drawn at (a fader jump redraws)
+    qreal m_movesEnergy = -1.0;            // the energy the moves were last drawn at (the pulse's reference)
+    qreal m_movesFader = -1.0;             // ... and the SLIDER then: a jump of a fifth redraws (runde 289)
     QString m_rhythmLead;                 // one leading effect, other groups support it
     QString m_compositionBase;
     TrackStage::Exposure m_exposure;
@@ -942,7 +943,7 @@ private:
     qreal m_mixMotionScale = 1.0;
     int m_compositionTier = 0;
     int m_dropLand = 0;                    // FAKE DROP: the bar of the drop the kick actually arrived on
-    qreal m_castEnergy = -1.0;             // the energy the cast size was last decided at (a nudge steps it)
+    qreal m_castEnergy = -1.0;             // the SLIDER the cast size was last decided at (a nudge steps it; runde 289)
     qreal m_ceilEnergy = -1.0;             // the energy the star ceiling was last drawn at (a nudge redraws it)
     QSet<QString> m_blendSkipped;         // functions left out for building on a mask
     QMap<QString, quint32> m_sweepFunc;    // head group -> its hidden relative EFX

@@ -6887,13 +6887,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // ikke rigtigt noget." Two per cent is inside the live curves (level,
     // figure, pace, pulse); five is where a discrete step is owed.
     bool faderNudge = hold == false && beatInBar == 0 && isBreak == false
-                   && m_castEnergy >= 0.0 && qAbs(energy - m_castEnergy) >= 0.05;
+                   && m_castEnergy >= 0.0 && qAbs(fader - m_castEnergy) >= 0.05;
     // A hand on the ENERGY fader: a fifth of it or more since the moves
     // were last drawn, read on the bar line. Used here for the cast and
     // further down for the moves, the figure, the zoom, the star ceiling and
     // the held programme - see the comment at `redraw`.
-    bool faderJump = hold == false && beatInBar == 0 && m_movesEnergy >= 0.0
-                  && qAbs(energy - m_movesEnergy) >= 0.20;
+    // (runde 289: both on the SLIDER, as their comments say. On the section-
+    // scaled energy a quiet section needed 7 % for a nudge and 25 % for a
+    // jump, and a section energy measured late (a -1 flag, a BLT resend)
+    // moved the scaled value up to 16 % with no hand on the fader at all.)
+    bool faderJump = hold == false && beatInBar == 0 && m_movesFader >= 0.0
+                  && qAbs(fader - m_movesFader) >= 0.20;
     bool nudgeOwed = false;
     if ((sectionChanged || m_lastState.isEmpty()) && hold == false)
     {
@@ -6952,7 +6956,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // move so no nudge put it back. m_movesEnergy is the jump's own
         // reference and is only moved further down (redraw).
         const int jumpRoll = effectsFor(isDrop, false);
-        m_effects = energy > m_movesEnergy ? qMax(m_effects, jumpRoll) : qMin(m_effects, jumpRoll);
+        m_effects = fader > m_movesFader ? qMax(m_effects, jumpRoll) : qMin(m_effects, jumpRoll);
         // AFTER the new value (runde 262): "a build never has fewer groups
         // than the section before it" is about the music, and the operator's
         // hand is the new "before". Set first, a build pulled from 90 to 40 %
@@ -6980,7 +6984,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // ... and only the way the fader moved. m_effects came from a dice
         // roll, so a fader pushed UP could round `want` below it and take a
         // group OFF (runde 172).
-        const bool sameWay = (want > m_effects) == (energy > m_castEnergy);
+        const bool sameWay = (want > m_effects) == (fader > m_castEnergy);
         if (want != m_effects && sameWay && (m_effectsBeat < 0 || beat - m_effectsBeat >= 8))
         {
             m_effects = qBound(m_effects - 1, want, m_effects + 1);
@@ -6998,7 +7002,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // that has gone back by then asks for nothing (want == m_effects) and is
     // spent as before.
     if (sectionChanged || faderJump || (faderNudge && nudgeOwed == false) || m_castEnergy < 0.0)
-        m_castEnergy = energy;
+        m_castEnergy = fader;
     // Every re-pick below sits behind `hold == false`, so this is exactly the
     // moment the look on stage may change. A verdict belongs in the section
     // the look was CHOSEN for, not the one the track happens to have reached:
@@ -7548,7 +7552,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_floorRound = m_fullAuto               // FULL AUTO only: it takes the heads' programmes and aims
                     && fader >= 0.30 && rng->bounded(100) < int(30.0 + 30.0 * qBound(0.0, energy, 1.0));
     if (redraw)
+    {
         m_movesEnergy = energy;
+        m_movesFader = fader;
+    }
     if (faderJump)
         m_sectionMotion.clear();
     foreach (const QString &key, castSorted)
@@ -13068,7 +13075,7 @@ void TrackEngine::idle()
     }
     else
         m_cast.clear();
-        m_baseCover.clear();                 // runde 260: only tick() says who covers the base
+    m_baseCover.clear();                     // runde 260 (braces: -Wmisleading-indentation, runde 289)
 
     // nothing plays, so no beats tick the fades: keep them moving on a timer
     if (m_fadeAttr.isEmpty() == false && m_fadeTimer.isActive() == false)
