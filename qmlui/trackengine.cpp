@@ -5056,6 +5056,11 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             || m_groups.value(group).patternDevice)
             ok.append(info);
     }
+    // a pattern device is never in the cast and dark (review 294): when the
+    // ceiling left it nothing that passes the other filters, it may show
+    // any of its patterns - its calmest were counted over all candidates
+    if (ok.isEmpty() && patternGroup && maxStars < 3)
+        return motionFor(group, colour, cast, cursor, tier, bpm, division, staticOnly, 3, litFloor);
     if (ok.isEmpty())
         return Function::invalidId();
 
@@ -7414,7 +7419,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // runde 292 (Tobias: "alt skal skalere efter energi-slideren"): a
         // quiet room is one colour more often - a partner in one look of ten
         // at 30 %, every look from 70 %. Drawn with the partner, held with it.
-        m_partnerSolo = rng->bounded(1000) >= int(1000.0 * (0.10 + 0.90 * qBound(0.0, (fader - 0.30) / 0.40, 1.0)));
+        m_partnerSolo = pool.isEmpty()           // nothing to pair with: one colour (review 294)
+                     || rng->bounded(1000) >= int(1000.0 * (0.10 + 0.90 * qBound(0.0, (fader - 0.30) / 0.40, 1.0)));
         if (m_partnerSolo)
             m_partnerPick.clear();
     }
@@ -8260,7 +8266,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         const int drawnFan = candidate.fan;
                         candidate.spread = 0;
                         candidate.mirror = true;
-                        candidate.fan = (key != base && fader >= 0.75) ? drawnFan : 0;
+                        candidate.fan = (key != base && fader >= 0.75) ? qMin(drawnFan, 45) : 0;   // a trail, not a criss-cross (review 294)
                     }
                 }
                 m_sweep.insert(key, candidate);
@@ -8503,7 +8509,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // and the drop at 40 cut it (runde 262). beatsToNext <= 0: no flag known.
     if (m_fullAuto && m_sequenceGroups.isEmpty() && !hold && !isCalm && !isBreak
         && !isBuild && !m_blackout && !m_mixing && !sectionChanged && !exposureRest
-        && !preDrop && (beatsToNext <= 0 || beatsToNext >= 12)
+        && !preDrop
+        // (review 294: a voice is 1-2 beats since runde 292 - the whole
+        // sequence 12-24 beats - and a flag inside it cut it mid-phrase)
+        && (beatsToNext <= 0 || beatsToNext >= int(std::ceil(12.0 * (2.0 - qBound(0.0, (fader - 0.45) / 0.45, 1.0)))))
         && fader >= 0.45 && beatInBar == 0 && (beat - secStart) % 32 == 0
         && stageNow - m_sequenceLast >= qint64(60000.0 - 30000.0 * qBound(0.0, (fader - 0.45) / 0.45, 1.0)))
     {
@@ -9724,14 +9733,12 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
     // on the slider: the pulse deepens 0.25 -> 0.50 over 40-100 %, lands on
     // beats one and three from 75 %, and a chase may step every two beats
     // from 80 % (REGLER: support >= 2 beats a step). The bars keep four
-    // (runde 288), the animation laser its drawn gate (pulse is its gate
-    // length, not a depth).
+    // (runde 288). (The animation laser's gate is capped the same way - review
+    // 294: uncapped it opened wider than before at every fader.)
     const qreal sf = qBound(0.0, m_faderNow, 1.0);
     move.pulseOn = sf >= 0.75 ? 1 : 3;
     move.bare = g.strobes;
-    move.pulse = g.strobes ? 1.0
-               : (g.patternDevice ? move.pulse
-                  : qMin(0.25 + 0.25 * qBound(0.0, (sf - 0.40) / 0.60, 1.0), move.pulse));
+    move.pulse = g.strobes ? 1.0 : qMin(0.25 + 0.25 * qBound(0.0, (sf - 0.40) / 0.60, 1.0), move.pulse);
     if (sf >= 0.80 && g.lasers == false)
         move.stepBeats = qMax(2, drawnStepBeats);
     // ... except that a STROBE group must never stand still (runde 154). This
@@ -10470,7 +10477,8 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
     // walking through a dark wash, runde 214)
     // (runde 291: the floor slides 0.45 -> 0.35 over 50-100 % on the slider,
     // so the foundation's pump keeps deepening with the room - it stopped at
-    // ~52 %; the base still never goes under a third)
+    // ~52 %. With pulseFactor's floor (0.40 -> 0.30) multiplied on, the base's
+    // darkest moment is ~0.18 at 50 % and ~0.10 at 100 % - never out.)
     if (ambientBase(group) && m_compositionTier != 2 && (m_floorRound && move.bare) == false)
     {
         const qreal maskFloor = 0.45 - 0.10 * qBound(0.0, (m_faderNow - 0.50) / 0.50, 1.0);
@@ -11196,6 +11204,11 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         {
             int h = 0, d = 0;
             barGrow(qreal(efx->elapsed()), h, d);
+            // (review 294: the EFX clock never resets, so after 26 beats barGrow
+            // handed the slider's new size over at once - a unit a beat instead,
+            // either way; the centre follows from the same h, so it stays safe)
+            h = qBound(int(efx->height()) - 1, h, int(efx->height()) + 1);
+            d = -h + qMin(2 * h, allowed);
             int y = qBound(0, 127 + d, 255);
             // down one step a beat (a fader pushed up, a figure growing past
             // the fader's allowance); up - the safe way - at once
@@ -13505,6 +13518,8 @@ static void followPace(Function *func, const QString &slot, int division, qreal 
             func->setOverrideDuration(want);
         if (func->overrideFadeInSpeed() != want)
             func->setOverrideFadeInSpeed(want);
+        if (func->overrideFadeOutSpeed() != want)
+            func->setOverrideFadeOutSpeed(want);
         return;
     }
     if (slot.startsWith(QStringLiteral("mot:")) == false)
@@ -13620,6 +13635,10 @@ int TrackEngine::figureBeats(quint32 fid) const
     if (info.type != int(Function::ChaserType) || info.beats <= 0.0
         || info.name.startsWith(QStringLiteral("AUTO ")) == false)
         return 0;
+    // a CLIMB keeps its drawn tempo: its top lands on the drop only at it
+    // (candidates' climb rule, runde 230/287; review 294)
+    if (info.name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
+        return 0;
     const qreal k = 1.5 - 0.75 * qBound(0.0, (m_faderNow - 0.30) / 0.70, 1.0);
     return qMax(2, int(qRound(info.beats * k)));
 }
@@ -13641,7 +13660,7 @@ void TrackEngine::startFunction(Function *func, int division, bool glide)
     if (division > 0)
         func->start(m_doc->masterTimer(), FunctionParent::track(), 0,
                     glide ? paceDuration(func, division, m_beatMs) : Function::defaultSpeed(),
-                    Function::defaultSpeed(),
+                    glide ? paceDuration(func, division, m_beatMs) : Function::defaultSpeed(),
                     paceDuration(func, division, m_beatMs),
                     inMs ? Function::Time : Function::Beats);
     else
