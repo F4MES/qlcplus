@@ -5958,7 +5958,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         else
             m_fillLast = beat - 8;
         m_sequenceGroups.clear();
-        m_restUntil = -1;
+        // The exposure rest counts beats PLAYED (runde 284), like the stamps
+        // below: it was cleared, and its charge was already spent (90 s
+        // before the next), so a DJ loop inside the four bars brought the
+        // group back on the loop's first pass and the room got no rest at
+        // all. A jump forward lands somewhere new and ends it, as before.
+        // (+ 1: the beat after the jump is the next one PLAYED - a two-bar
+        // loop would otherwise add a beat per pass and end it mid-bar)
+        if (beat < m_lastBeat && m_restUntil > m_lastBeat)
+            m_restUntil -= m_lastBeat + 1 - beat;
+        else
+            m_restUntil = -1;
         // a jump FORWARD: the build is measured from where we land (runde 237).
         // Not back: a DJ loop is a jump back on every pass, and clearing it
         // there brought the sawtooth back inside a looped build (review). A
@@ -5970,8 +5980,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // aim on a section change, no cast step and no echo until the track
         // had played back past where it was. Treat the jump as the moment
         // they last moved - the floors hold for their bar or two, and then
-        // the room is free (runde 168; m_hitBeats and m_darkUntil already
-        // did this).
+        // the room is free (runde 168). The stamps that count beats PLAYED
+        // move back with the jump instead (m_dropFrom, m_hitBeats, the
+        // colour's age, m_darkUntil - runde 266/283/285).
         // CALM and the mix are counted in track beats too: a loop inside CALM
         // never reached its end, and a looped outgoing track (the common way
         // to stretch a mix) never turned the base - or turned it back and
@@ -5988,6 +5999,36 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // on every pass, and a loop under 64 beats never settled
             if (m_dropFrom >= 0)
                 m_dropFrom = qMax(0, m_dropFrom - back);
+            // ... and the hits' own window (runde 283). The comment above
+            // said m_hitBeats "already did this", but it was CLEARED on a
+            // jump back (the ceiling line below): no stamp, so neither the
+            // ceiling nor the gap held, and every pass of a DJ loop was a
+            // fresh 32 beats - a two-bar loop at the top of a build (eNow
+            // 0.5: five in 32 beats, five apart) flashed on beats 0 and 5 of
+            // every pass, eight in 32 and three apart across the loop point.
+            // Moved back with the jump, the window counts beats PLAYED.
+            for (int &h : m_hitBeats)
+                h -= back;
+            // ... and the colour's age and the bars' planned dark (runde
+            // 285), both in beats PLAYED. The colour was only clamped to the
+            // loop's start (below), so its age never got past the loop's
+            // length: a four-bar DJ loop in a drop at 90 % (the eight-bar
+            // clock) never changed colour for as long as it ran. 0 (adopted)
+            // and -1 (fresh track) are not beats and stay.
+            // m_darkUntil did NOT do this (the comment above said it did):
+            // four bars of dark planned on beat b end on b + 15, and a
+            // two-bar loop from b never got there - the bars stood dark for
+            // the whole loop, and one that had just ended came back dark.
+            const int played = m_lastBeat + 1 - beat;
+            if (m_colourSince > 0)
+                m_colourSince = qMax(1, m_colourSince - played);
+            foreach (const QString &key, m_darkUntil.keys())
+            {
+                if (m_darkUntil.value(key) > m_lastBeat)
+                    m_darkUntil[key] -= played;
+                else
+                    m_darkUntil.remove(key);
+            }
         }
         // ... and forward (a hot cue ahead, or the next track, whose first
         // beat is wherever the deck stands - trackLoaded() leaves CALM as a
@@ -6615,8 +6656,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         { "white",   { "blue", "cyan", "magenta" } },
     };
     if (m_mixing && m_mixBeat >= 0 && m_nextColour.isEmpty() && m_palette.isEmpty() == false
-        && m_override.isEmpty() && hold == false && isCalm == false && beatInBar == 0)
+        && m_override.isEmpty() && hold == false && isCalm == false
+        && (beatInBar == 0 || forceNext))
     {
+        // ... or on NEXT's own beat (runde 285): NEXT clears the next colour
+        // (above), and off the bar line the base, already turned, fell back
+        // to the room's new colour for one to three beats and turned again
+        // on the bar line - to a draw that could be the colour it had just
+        // left (A-B-A on the base), and a handover in those beats found the
+        // base unturned. NEXT is the operator's beat; the base turns on it.
         // Through the mix's second half the base wears the next colour while
         // every other group still wears this one - two colours on the rig for
         // four to eight bars, so they have to go together: "farverne ... skal
@@ -6968,9 +7016,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     const qreal density = (m_fullAuto && !m_blackout && !m_flash)
         ? fader * qBound(0.0, qreal(m_cast.count()) / 4.0, 1.0) : 0.0;
     m_exposure.sample(stageNow, density);
-    if (!m_fullAuto || hold || isDrop || isBuild || isBreak || isCalm || m_mixing)
+    // Runde 284: the rest is four WHOLE bars, or it waits. It was taken on
+    // the first bar line the charge was ready, whatever came next, and a
+    // build/drop/break flag cleared it: after a drop, a 12-beat groove into
+    // the next drop lost a group for three bars and got it back on the drop -
+    // and the pre-drop bar, which pulls the cast IN so the drop lands lit
+    // (runde 262), was the rest's last bar and pulled one OUT. A groove/drive
+    // flag does not end it, so only the others must be 16 beats away (a
+    // drop 20: its pre-drop bar ends a rest); the charge stays ready and the
+    // rest comes a bar or a section later. The pre-drop bar ends one that is
+    // running (a flag the operator moved closer).
+    const bool restFits = beatsToNext <= 0
+        || beatsToNext >= (nextState == QStringLiteral("drop") ? 20 : 16)
+        || nextState == QStringLiteral("groove") || nextState == QStringLiteral("drive");
+    if (!m_fullAuto || hold || isDrop || isBuild || isBreak || isCalm || m_mixing || preDrop)
         m_restUntil = -1;
-    else if (beatInBar == 0 && m_restUntil < beat && m_exposure.ready(stageNow))
+    else if (beatInBar == 0 && m_restUntil < beat && restFits && m_exposure.ready(stageNow))
     {
         m_restUntil = beat + 16;
         m_exposure.rest(stageNow);
@@ -8810,6 +8871,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_sectionMotion.remove(key);
         }
         quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
+        const quint32 cfWanted = cf;      // runde 285: the colour scene the group should wear
         // The programme paints a colour on every lamp in this group, so the
         // group's colour scene under it has nothing left to say - and it does
         // not stay silent: colour channels are QLCChannel::Intensity, which
@@ -8852,10 +8914,29 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             cf = Function::invalidId();
         // colour scenes swap hard: a soft fade left the old colour adding up
         // with the new one on RGB fixtures for a bar - a blend nobody asked for
+        // ... and so does every other way a colour leaves the group (runde
+        // 285). Only the col: swap was hard: a held programme let go for the
+        // room's new colour, a programme giving way to the colour scene, or
+        // the colour scene giving way to a programme in the new colour all
+        // faded the old colour out over a second while the new one stood at
+        // full - colour channels are HTP, so red -> green passed through
+        // yellow ("aldrig gul"), red -> blue through a purple nobody drew.
+        // A cut when the colour the group wore goes; a programme swap in the
+        // same colour still crossfades.
+        const quint32 motWas = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        QString wearsNow = colour;
+        if (mf != Function::invalidId() && m_funcs.value(mf).coversColour
+            && m_funcs.value(mf).colour.isEmpty() == false)
+            wearsNow = m_funcs.value(mf).colour;
+        const bool motColourCut = motWas != Function::invalidId() && motWas != mf
+            && m_funcs.value(motWas).setsColour
+            && m_funcs.value(motWas).colour.isEmpty() == false
+            && m_funcs.value(motWas).colour != wearsNow;
         if (cf != Function::invalidId())
             run("col:" + key, cf, m_funcs.value(cf).dimmer ? glBase : 1.0, 0, true);
         else
-            stopSlot("col:" + key, false);
+            stopSlot("col:" + key,
+                     m_active.value(QStringLiteral("col:") + key, Function::invalidId()) != cfWanted);
 
         if (mf != Function::invalidId())
         {
@@ -8887,13 +8968,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     motionDivision = qMax(tier == 2 ? 500 : 1000, motionDivision);
                 // the bare level: run() adds MASTER and the trim (slotScale)
                 const bool mayOwn = canOwnDimmers(mi, key == base);   // see motionOwns (runde 231)
-                run("mot:" + key, mf, mayOwn ? glBase : 1.0, motionDivision, hard);
+                run("mot:" + key, mf, mayOwn ? glBase : 1.0, motionDivision, hard || motColourCut);
                 m_recentUse.insert(mf, m_clock.elapsed());     // the cooldown starts from its last beat
             }
         }
         else
         {
-            stopSlot("mot:" + key, false);
+            stopSlot("mot:" + key, motColourCut);     // runde 285
             m_motionDim.remove(key);
             m_sectionMotion.remove(key);
         }
@@ -9125,19 +9206,33 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // beats when the room is quiet, ten when it is not, and never two on top
     // of each other. Quiet nights stay calm; a full fader gets a real show.
     // Two ramps, no steps: from two accents in thirty-two beats at the
-    // bottom of the fader to twelve at the top, and the shortest gap between
-    // two of them slides from eight beats down to one.
+    // bottom to twelve at the top, and the shortest gap between two of them
+    // slides from eight beats down to one. Both read eNow, the section-
+    // scaled energy, not the slider: a quiet section at 100 % gets eight and
+    // two (runde 283, comment only - the ramp is continuous, not a line on
+    // the screen).
     int hitCeil = 2 + int(qRound(10.0 * eNow * eNow));
     int hitGap = qMax(1, int(qRound(8.0 - 7.0 * eNow)));
     bool crowded = m_hitBeats.count() >= hitCeil
                 || (m_hitBeats.isEmpty() == false && beat - m_hitBeats.last() < hitGap);
     // ... and never on the pre-drop's one dark beat: a build hit there drove
     // the strobes to full and the blink became a flash (runde 172)
+    // Not under BLACKOUT (runde 283): the hit ran its flash slots at nought
+    // and spent the budget - and a white landing in the dark stamped
+    // m_whiteLandMs, so the next big drop within three minutes landed in the
+    // room's colour. driveStrobe is already held back there.
+    // The landing passes the ceiling only where the drop ARRIVED (m_dropFrom
+    // is its beat, moved back with a jump): a DJ loop over the drop's first
+    // bar was "the drop's own landing" on every pass - two hits in four
+    // beats for as long as the loop ran, what the ceiling calls a strobe
+    // show (runde 283).
     bool hit = isCalm == false && still == false && dropWaiting == false
+            && m_blackout == false
             && (preDrop && beatsToNext == 1) == false
             && ((isBuild && (hitProg >= 0.0 ? hitProg : prog) > 0.82 && crowded == false
                  && (haveCurves == false || turn || (kick > 0.45 && riser > 0.08)))
-                || (isDrop && dropBar == 0 && beatInBar < 2)
+                || (isDrop && dropBar == 0 && beatInBar < 2
+                    && (crowded == false || (m_dropFrom >= 0 && beat - m_dropFrom < 2)))
                 || (moveHit && crowded == false));
     if (m_flash == false)
     {
@@ -9157,7 +9252,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // scaled by the section and could not reach 0.85 before the
                 // clock's 02:00 (review)
                 && (fader >= 0.85 || ((m_dropStyle == 1 || m_dropStyle == 4) && fader >= 0.75))
-                && (m_whiteLandMs < 0 || m_clock.elapsed() - m_whiteLandMs >= 180000);
+                && (m_whiteLandMs < 0 || m_clock.elapsed() - m_whiteLandMs >= 180000)
+                // ... and not under a colour tile: a tile is ONE colour (runde
+                // 205), as the echo, the accent and the partner already hold -
+                // the BLUE tile at 90 % landed a drop on white strobes (runde 283)
+                && m_override.isEmpty();
             if (whiteLand)
                 m_whiteLandMs = m_clock.elapsed();
             QString hue = whiteLand ? QStringLiteral("white") : m_colour;
