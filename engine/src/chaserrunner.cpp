@@ -24,6 +24,7 @@
 #include <QRandomGenerator>
 #endif
 #include <QDebug>
+#include <cmath>
 
 #include "chaserrunner.h"
 #include "mastertimer.h"
@@ -46,6 +47,7 @@ ChaserRunner::ChaserRunner(const Doc *doc, const Chaser *chaser, quint32 startTi
     , m_beatMs(0)
     , m_beatDurationMs(0)
     , m_nextLinkBeatStart(-1)
+    , m_beatCarryMs(0)
 {
     Q_ASSERT(chaser != NULL);
 
@@ -96,12 +98,22 @@ ChaserRunner::~ChaserRunner()
 
 void ChaserRunner::slotChaserChanged()
 {
+    // The runner lives on the GUI thread, so this runs there - a Speed/nudge
+    // slider fires it many times a second - while write() walks and deletes
+    // m_runnerSteps on the timer thread. Only raise a flag here.
+    m_chaserChanged.storeRelease(1);
+}
+
+void ChaserRunner::applyChaserChange()
+{
     // Handle (possible) speed change on the next write() pass
     m_updateOverrideSpeeds = true;
     QList<ChaserRunnerStep*> delList;
     foreach (ChaserRunnerStep *step, m_runnerSteps)
     {
-        if (!m_chaser->steps().contains(ChaserStep(step->m_function->id())))
+        // m_fid, not m_function->id(): when a Function is deleted from the
+        // Doc, this runs after it has been freed
+        if (!m_chaser->steps().contains(ChaserStep(step->m_fid)))
         {
             // Disappearing function: remove step
             delList.append(step);
@@ -116,7 +128,11 @@ void ChaserRunner::slotChaserChanged()
     }
     foreach (ChaserRunnerStep *step, delList)
     {
-        step->m_function->stop(functionParent());
+        // Only stop a Function that still exists (removed from the chaser,
+        // not deleted from the Doc)
+        Function *f = m_doc->function(step->m_fid);
+        if (f != NULL && f == step->m_function)
+            f->stop(functionParent());
         m_runnerSteps.removeAll(step);
         delete step;
     }
@@ -225,6 +241,39 @@ uint ChaserRunner::stepDuration(int stepIdx) const
     }
 
     return speed;
+}
+
+uint ChaserRunner::stepFadeUnits(const Function *func, uint fade) const
+{
+    // Overlap starts a step function in its OWN tempo (so it can finish on
+    // its own), but the chaser's fades are in the chaser's units: a 1/4-beat
+    // fade is 250 in Beats and must not reach a Time function as 250 ms.
+    if (m_chaser->overlapMode() == false || func == NULL ||
+        m_chaser->tempoType() != Function::Beats || func->tempoType() != Function::Time ||
+        fade == Function::defaultSpeed())
+        return fade;
+    return Function::beatsToTime(fade, m_doc->masterTimer()->beatTimeDuration());
+}
+
+/** Beat length of a Beats-mode step on the Link grid. Durations are uint
+ *  beats*1000, so 1/16 (62.5), 1/3, 1/6, 1/12 cannot be held exactly, and a
+ *  chain of rounded steps walks off the beat. Only a duration that IS the
+ *  rounded 1/n value (within 1 unit) is taken as 1/n; any other duration
+ *  (a nudge, 3/4, 2/3, dotted values) keeps its exact length.
+ *  0 for "no grid" (zero or infinite duration). */
+static qreal linkSpacing(uint duration)
+{
+    if (duration == 0 || duration == Function::infiniteSpeed())
+        return 0.0;
+    qreal spacing = qreal(duration) / 1000.0;
+    if (duration < 1000)
+    {
+        qreal perBeat = 1000.0 / qreal(duration);
+        qreal n = qRound(perBeat);
+        if (n >= 1.0 && qAbs(qreal(duration) - 1000.0 / n) < 1.0)
+            spacing = 1.0 / n;
+    }
+    return spacing;
 }
 
 /****************************************************************************
@@ -480,13 +529,18 @@ void ChaserRunner::adjustStepIntensity(qreal fraction, int requestedStepIndex, i
 
 void ChaserRunner::clearRunningList()
 {
+    // A pending chaser edit may name a deleted Function: apply it first
+    // (a paused chaser does not write(), and postRun() lands here)
+    if (m_chaserChanged.testAndSetAcquire(1, 0))
+        applyChaserChange();
+
     // empty the running queue
     foreach (ChaserRunnerStep *step, m_runnerSteps)
     {
         if (step->m_function)
         {
             // restore the original Function fade out time
-            step->m_function->setOverrideFadeOutSpeed(stepFadeOut(step->m_index));
+            step->m_function->setOverrideFadeOutSpeed(stepFadeUnits(step->m_function, stepFadeOut(step->m_index)));
             step->m_function->stop(functionParent(), m_chaser->type() == Function::SequenceType);
             m_lastFunctionID = step->m_function->type() == Function::SceneType ? step->m_function->id() : Function::invalidId();
         }
@@ -496,6 +550,8 @@ void ChaserRunner::clearRunningList()
     // Manual jump (next/prev/goto): drop any carried Link boundary so the
     // next step re-snaps to Link's grid instead of continuing the old chain.
     m_nextLinkBeatStart = -1;
+    // A jump also drops the sub-beat overrun carried to the next step
+    m_beatCarryMs = 0;
 }
 
 void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity, qreal sIntensity,
@@ -515,6 +571,7 @@ void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity,
     ChaserRunnerStep *newStep = new ChaserRunnerStep();
     newStep->m_index = index;
     newStep->m_function = func;
+    newStep->m_fid = func->id();
     newStep->m_masterIntensity = mIntensity;
     newStep->m_stepIntensity = sIntensity;
     newStep->m_intensityOverrideId = Function::invalidAttributeId();
@@ -570,7 +627,12 @@ void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity,
     else
         newStep->m_elapsed = MasterTimer::tick() + elapsed;
     newStep->m_elapsedBeats = 0; //(newStep->m_elapsed / timer->beatTimeDuration()) * 1000;
-    newStep->m_elapsedAtLastBeat = newStep->m_elapsed;
+    // The first write() of this step comes one tick after it started, just as
+    // m_elapsed already counts that tick: start the sub-beat clock one tick
+    // back, plus whatever the previous sub-beat step overran its end by, so a
+    // fractional step neither runs a tick long nor rounds every step up.
+    newStep->m_elapsedAtLastBeat = newStep->m_elapsed - MasterTimer::tick() - m_beatCarryMs;
+    m_beatCarryMs = 0;
 
     // Ableton Link sub-beat anchoring. Either continue from the previous
     // step's exact boundary (carry-forward, set when the last step advanced)
@@ -584,19 +646,20 @@ void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity,
         }
         else
         {
-            qreal spacing = qreal(newStep->m_duration) / 1000.0;
+            qreal spacing = linkSpacing(newStep->m_duration);
             qreal now = timer->linkBeat();
-            if (spacing <= 0.0 || now <= 0.0)
+            // std::floor, not a qint64 cast: Link beats can be negative
+            if (spacing <= 0.0)
                 newStep->m_linkBeatStart = now;
             else if (spacing >= 1.0)
                 // Whole-beat (or multi-beat) steps: snap to the step grid so the
                 // first transition lands on a beat (the chase aligns itself).
-                newStep->m_linkBeatStart = qreal(qint64(now / spacing)) * spacing;
+                newStep->m_linkBeatStart = std::floor(now / spacing) * spacing;
             else
                 // Sub-beat (fractional) steps: begin the pattern on the NEXT whole
                 // beat, so a chase triggered between beats still locks its cycle to
                 // the beat instead of running off-grid. (epsilon absorbs fp jitter)
-                newStep->m_linkBeatStart = qreal(qint64(now - 0.001) + 1);
+                newStep->m_linkBeatStart = std::floor(now - 0.001) + 1.0;
         }
     }
     else
@@ -634,8 +697,16 @@ void ChaserRunner::startNewStep(int index, MasterTimer *timer, qreal mIntensity,
         newStep->m_intensityOverrideId = func->requestAttributeOverride(Function::Intensity, mIntensity * sIntensity);
     }
 
+    // Overlap: a function still running from an earlier lap must fire again.
+    // start() returns early while this chaser is still one of its sources.
+    // preserveAttributes: the restart's postRun() must not wipe the intensity
+    // override requested just above.
+    if (m_overlapFids.removeAll(func->id()) > 0)
+        func->stop(functionParent(), true);
+
     // Start the fire up!
-    func->start(timer, functionParent(), 0, newStep->m_fadeIn, newStep->m_fadeOut,
+    func->start(timer, functionParent(), 0, stepFadeUnits(func, newStep->m_fadeIn),
+                stepFadeUnits(func, newStep->m_fadeOut),
                 func->defaultSpeed(),
                 m_chaser->overlapMode() ? Function::Original : m_chaser->tempoType());
     m_runnerSteps.append(newStep);
@@ -794,6 +865,10 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
     if (m_chaser->stepsCount() == 0)
         return false;
 
+    // Chaser edits (speed, nudge, steps) are applied here, on the timer thread
+    if (m_chaserChanged.testAndSetAcquire(1, 0))
+        applyChaserChange();
+
     switch (m_pendingAction.m_action)
     {
         case ChaserNextStep:
@@ -848,6 +923,7 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
     }
 
     quint32 prevStepRoundElapsed = 0;
+    int subBeatMs = 0;      // beat length the sub-beat interpolation used this tick
 
     foreach (ChaserRunnerStep *step, m_runnerSteps)
     {
@@ -863,8 +939,27 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
             // advances precisely m_duration/1000 beats after its anchored start,
             // and the per-step boundary is carried forward (below) so the error
             // never accumulates. (The old interpolation drifted on sub-beats.)
+            qreal spacing = linkSpacing(step->m_duration);
             qreal delta = timer->linkBeat() - step->m_linkBeatStart;
-            stepProgress = delta > 0 ? quint32(delta * 1000.0) : 0;
+            // No anchor lies more than a beat (+ a step) ahead of Link: this is
+            // the timeline jumping back (session join, a peer forcing the beat).
+            // Re-anchor on the new grid rather than hold the step until Link is
+            // back where it was.
+            if (delta < -(1.0 + spacing))
+            {
+                qreal now = timer->linkBeat();
+                step->m_linkBeatStart = spacing > 0.0 ? std::floor(now / spacing) * spacing : now;
+                delta = now - step->m_linkBeatStart;
+            }
+            // Judge the end against the exact grid spacing (1/16 is stored as
+            // 62 or 63, not 62.5)
+            if (delta <= 0)
+                stepProgress = 0;
+            else if (spacing > 0.0 && delta >= spacing)
+                stepProgress = step->m_duration;
+            else
+                stepProgress = qMin(quint32(delta * 1000.0),
+                                    step->m_duration > 0 ? step->m_duration - 1 : 0);
         }
         else if (m_chaser->tempoType() == Function::Beats)
         {
@@ -899,6 +994,7 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
                 beatFraction = frac > 999 ? 999 : quint32(frac);
             }
             stepProgress = step->m_elapsedBeats + beatFraction;
+            subBeatMs = beatDuration;
 
             qDebug() << "[ChaserRunner] Function" << step->m_function->name() << "duration:" << step->m_duration << "beats:" << stepProgress;
         }
@@ -910,13 +1006,32 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
             if (step->m_duration != 0)
                 prevStepRoundElapsed = step->m_elapsed % step->m_duration;
 
+            // Beats without Link: credit what this sub-beat step ran past its
+            // end to the next one, so tick rounding does not pile up across the
+            // beat. A beat tick re-phases everything to 0 instead.
+            if (subBeatMs > 0 && timer->isBeat() == false && stepProgress > step->m_duration)
+                m_beatCarryMs = qMin(quint32(subBeatMs),
+                                     quint32(quint64(stepProgress - step->m_duration) * quint32(subBeatMs) / 1000));
+
             // Link: carry the exact next-step boundary forward so successive
             // sub-beat steps stay locked to Link's grid without accumulating
             // per-step rounding drift.
             if (m_chaser->tempoType() == Function::Beats && timer->linkEnabled() && step->m_duration != 0)
             {
-                qreal spacing = qreal(step->m_duration) / 1000.0;
+                qreal spacing = linkSpacing(step->m_duration);
                 qreal next = step->m_linkBeatStart + spacing;
+                // Back onto the beat grid: drops the fp residue of a long chain,
+                // and pulls the pattern back onto the beat once a nudge is
+                // released. Only when every step has this length and the step
+                // grid IS the beat grid (1/n or whole beats) - otherwise the
+                // rounding would change step lengths (PerStep, 3/4, 2/3, nudged).
+                bool uniformLen = m_chaser->overrideDuration() != Function::defaultSpeed() ||
+                                  m_chaser->durationMode() != Chaser::PerStep;
+                qreal perBeat = 1.0 / spacing;
+                bool beatGrid = qAbs(perBeat - qRound(perBeat)) < 1e-6 ||
+                                qAbs(spacing - qRound(spacing)) < 1e-6;
+                if (uniformLen && beatGrid)
+                    next = std::floor(next / spacing + 0.5) * spacing;
 
                 // If that boundary is ALSO already over (chaser paused/frozen while
                 // Link kept running, Link enabled mid-run, a forward jump of the Link
@@ -961,6 +1076,8 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
             // on its own) so successive inner functions overlap.
             if (m_chaser->overlapMode() == false)
                 step->m_function->stop(functionParent(), m_chaser->type() == Function::SequenceType);
+            else if (m_overlapFids.contains(step->m_function->id()) == false)
+                m_overlapFids.append(step->m_function->id());
             m_runnerSteps.removeOne(step);
             delete step;
         }
@@ -977,8 +1094,8 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
                 m_updateOverrideSpeeds = false;
                 if (step->m_function != NULL)
                 {
-                    step->m_function->setOverrideFadeInSpeed(step->m_fadeIn);
-                    step->m_function->setOverrideFadeOutSpeed(step->m_fadeOut);
+                    step->m_function->setOverrideFadeInSpeed(stepFadeUnits(step->m_function, step->m_fadeIn));
+                    step->m_function->setOverrideFadeOutSpeed(stepFadeUnits(step->m_function, step->m_fadeOut));
                 }
             }
         }
@@ -997,6 +1114,8 @@ bool ChaserRunner::write(MasterTimer *timer, QList<Universe *> universes)
         }
         else
         {
+            // Natural end: overlapping tails finish on their own, as before
+            m_overlapFids.clear();
             m_pendingAction.m_action = ChaserNoAction;
             return false;
         }
@@ -1013,4 +1132,14 @@ void ChaserRunner::postRun(MasterTimer *timer, QList<Universe*> universes)
 
     qDebug() << Q_FUNC_INFO;
     clearRunningList();
+
+    // Overlap mode, stopped from outside: what the steps left running goes
+    // with the chaser
+    foreach (quint32 fid, m_overlapFids)
+    {
+        Function *f = m_doc->function(fid);
+        if (f != NULL)
+            f->stop(functionParent());
+    }
+    m_overlapFids.clear();
 }

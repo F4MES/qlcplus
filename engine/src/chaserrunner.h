@@ -24,6 +24,7 @@
 
 #include <QList>
 #include <QMap>
+#include <QAtomicInt>
 
 #include "function.h"
 #include "chaseraction.h"
@@ -44,6 +45,7 @@ typedef struct
 {
     int m_index;                        //! Index of the step from the original Chaser
     Function *m_function;               //! Currently active function
+    quint32 m_fid;                      //! ID of m_function - still valid after the Function is deleted
     qreal m_masterIntensity;            //! Current master intensity applied to this step
     qreal m_stepIntensity;              //! Current step intensity applied to this step
     quint32 m_elapsed;                  //! Elapsed milliseconds
@@ -86,8 +88,17 @@ private:
     /** Get the currently active duration value (See Chaser::SpeedMode) */
     uint stepDuration(int stepIdx) const;
 
+    /** A fade of the chaser in the units the step function will read it in */
+    uint stepFadeUnits(const Function *func, uint fade) const;
+
+    /** Timer-thread half of slotChaserChanged() */
+    void applyChaserChange();
+
 private:
     bool m_updateOverrideSpeeds;
+    /** Raised by slotChaserChanged() on the GUI thread, consumed by write()
+     *  on the timer thread - the only thread that touches m_runnerSteps. */
+    QAtomicInt m_chaserChanged;
 
     /************************************************************************
      * Step control
@@ -165,6 +176,8 @@ private:
     quint32 m_beatMs;                       //! ms accumulated since the last beat (Beats mode)
     quint32 m_beatDurationMs;               //! measured duration of the last beat in ms
     qreal m_nextLinkBeatStart;              //! carried-forward exact Link beat boundary for the next step (-1 = none/fresh)
+    quint32 m_beatCarryMs;                  //! Beats without Link: ms the last sub-beat step ran past its end
+    QList <quint32> m_overlapFids;          //! Overlap mode: step functions left running, stopped with the chaser
 
     /************************************************************************
      * Intensity

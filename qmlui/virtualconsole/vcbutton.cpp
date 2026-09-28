@@ -57,6 +57,8 @@
 
 #define INPUT_PRESSURE_ID   0
 
+QList<VCButton*> VCButton::s_buttons;
+
 VCButton::VCButton(Doc *doc, QObject *parent)
     : VCWidget(doc, parent)
     , m_functionID(Function::invalidId())
@@ -71,10 +73,15 @@ VCButton::VCButton(Doc *doc, QObject *parent)
     setType(VCWidget::ButtonWidget);
 
     registerExternalControl(INPUT_PRESSURE_ID, tr("Pressure"), true);
+    s_buttons.append(this);
 }
 
 VCButton::~VCButton()
 {
+    s_buttons.removeAll(this);
+    // Only a held button touches the Doc - at teardown it may be gone
+    if (m_state == Active)
+        releaseHold();
     if (m_item)
         delete m_item;
 }
@@ -452,14 +459,18 @@ void VCButton::requestStateChange(bool pressed)
         break;
         case Freeze:
         {
+            // A press that repeats the current state does nothing
+            if (pressed == (state() == Active))
+                break;
             // Pause all running functions so the look holds and then
             // continues from where it was when released (no jump).
+            // Functions already paused by someone else stay theirs.
             if (pressed)
             {
                 m_frozenFunctions.clear();
                 foreach (Function *f, m_doc->functions())
                 {
-                    if (f != NULL && f->isRunning())
+                    if (f != NULL && f->isRunning() && !f->isPaused())
                     {
                         f->setPause(true);
                         m_frozenFunctions.append(f->id());
@@ -468,22 +479,20 @@ void VCButton::requestStateChange(bool pressed)
             }
             else
             {
-                foreach (quint32 fid, m_frozenFunctions)
-                {
-                    Function *f = m_doc->function(fid);
-                    if (f != NULL)
-                        f->setPause(false);
-                }
-                m_frozenFunctions.clear();
+                releaseHold();
             }
             setState(pressed ? Active : Inactive);
         }
         break;
         case Kill:
         {
+            // A press that repeats the current state does nothing
+            if (pressed == (state() == Active))
+                break;
             // Full blackout keeping position: everything to 0 except Pan/Tilt
             QList<Universe*> unis = m_doc->inputOutputMap()->universes();
-            if (pressed)
+            // Another held Kill already built the protect mask
+            if (pressed && otherKillHeld() == false)
             {
                 for (Universe *u : unis)
                     u->clearKillProtect();
@@ -501,13 +510,16 @@ void VCButton::requestStateChange(bool pressed)
                             u->setKillProtect(fxi->address() + i, true);
                     }
                 }
+            }
+            if (pressed)
+            {
                 for (Universe *u : unis)
                     u->setKill(true);
             }
             else
             {
-                for (Universe *u : unis)
-                    u->setKill(false);
+                // Kill stays on while another Kill button is held
+                releaseHold();
             }
             setState(pressed ? Active : Inactive);
         }
@@ -542,10 +554,64 @@ void VCButton::setActionType(ButtonAction actionType)
     if (m_actionType == actionType)
         return;
 
+    // Changing the action lets go of a held Freeze/Kill first (while
+    // actionType() still names the old action)
+    if (m_state == Active)
+    {
+        releaseHold();
+        setState(Inactive);
+    }
+
     Tardis::instance()->enqueueAction(Tardis::VCButtonSetActionType, id(), m_actionType, actionType);
 
     m_actionType = actionType;
     emit actionTypeChanged(actionType);
+}
+
+void VCButton::releaseHold()
+{
+    if (m_doc == nullptr)
+        return;
+
+    if (actionType() == Freeze)
+    {
+        foreach (quint32 fid, m_frozenFunctions)
+        {
+            Function *f = m_doc->function(fid);
+            if (f != NULL)
+                f->setPause(false);
+        }
+        m_frozenFunctions.clear();
+    }
+    else if (actionType() == Kill && otherKillHeld() == false)
+    {
+        for (Universe *u : m_doc->inputOutputMap()->universes())
+            u->setKill(false);
+    }
+}
+
+bool VCButton::otherKillHeld() const
+{
+    for (VCButton *b : s_buttons)
+        if (b != this && b->actionType() == Kill && b->state() == Active)
+            return true;
+    return false;
+}
+
+void VCButton::releaseAllHolds()
+{
+    // A copy: setState() emits, and a slot must not change what we walk
+    const QList<VCButton*> buttons = s_buttons;
+    for (VCButton *b : buttons)
+    {
+        if ((b->actionType() == Freeze || b->actionType() == Kill) && b->state() == Active)
+        {
+            // Inactive first, so the buttons released after this one no
+            // longer count it as held and the last one switches Kill off
+            b->setState(Inactive);
+            b->releaseHold();
+        }
+    }
 }
 
 QString VCButton::actionToString(VCButton::ButtonAction action)

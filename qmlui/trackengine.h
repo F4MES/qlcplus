@@ -268,11 +268,19 @@ struct TrackSweep
     // under its own floor. The closing's slow fall sped the support heads up
     // at every redraw.
     int minBeats = 3;
+    // FULL AUTO's role floor (runde 290, Tobias: "alt skal skalere efter
+    // energi-slideren"): 0 none, 1 the base, 2 a support group. applySweep()
+    // reads the floor off the SLIDER on every beat - the base 16 -> 8 beats a
+    // figure over 50-100 %, support 24 -> 12 over 40-100 %. It was a flat 16 /
+    // 24 frozen at the draw: a drop's base at 40 % and at 100 % ran the same
+    // 16-beat figure, and the support heads ran 24 beats at every fader.
+    int paceRole = 0;
     bool operator==(const TrackSweep &o) const
     {
         return shape == o.shape && width == o.width && height == o.height && rotation == o.rotation
             && beats == o.beats && spread == o.spread && mirror == o.mirror && fan == o.fan
-            && fx == o.fx && fy == o.fy && dx == o.dx && dy == o.dy && minBeats == o.minBeats;
+            && fx == o.fx && fy == o.fy && dx == o.dx && dy == o.dy && minBeats == o.minBeats
+            && paceRole == o.paceRole;
     }
 };
 
@@ -701,6 +709,9 @@ protected:
     TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads,
                          bool laser, bool drive = false) const;
     void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm, qreal energy);
+    /** The floor under a figure's pace: the draw's minBeats and FULL AUTO's
+     *  role floor off the slider (runde 290). */
+    int sweepFloor(const TrackSweep &sweep) const;
     QString sweepName(const TrackSweep &sweep) const;
     void stopSweeps();
     bool userAllowed(const TrackFuncInfo &info, const QString &group = QString()) const;

@@ -46,6 +46,9 @@ public:
     VCButton(Doc* doc = nullptr, QObject *parent = nullptr);
     virtual ~VCButton();
 
+    /** Let go of every held Freeze/Kill button (e.g. a console reset) */
+    static void releaseAllHolds();
+
     /** @reimp */
     QString defaultCaption() const override;
 
@@ -198,6 +201,14 @@ protected:
     int m_stopAllFadeOutTime;
     /** Functions paused by a Freeze button, to resume on release */
     QList<quint32> m_frozenFunctions;
+
+private:
+    /** Undo what a held Freeze/Kill button is doing */
+    void releaseHold();
+    /** Is a Kill button other than this one held down? */
+    bool otherKillHeld() const;
+    /** Every live button, so Kill can be handed over between buttons */
+    static QList<VCButton*> s_buttons;
 
     /*****************************************************************************
      * Function startup intensity adjustment

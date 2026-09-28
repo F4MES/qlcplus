@@ -53,7 +53,7 @@ Universe::Universe(quint32 id, GrandMaster *gm, QObject *parent)
     , m_grandMaster(gm)
     , m_passthrough(false)
     , m_monitor(false)
-    , m_kill(false)
+    , m_kill(0)
     , m_killProtect(new QByteArray(UNIVERSE_SIZE, char(0)))
     , m_inputPatch(NULL)
     , m_fbPatch(NULL)
@@ -189,12 +189,12 @@ bool Universe::monitor() const
 
 void Universe::setKill(bool enable)
 {
-    m_kill = enable;
+    m_kill.storeRelease(enable ? 1 : 0);
 }
 
 bool Universe::kill() const
 {
-    return m_kill;
+    return m_kill.loadAcquire() != 0;
 }
 
 void Universe::setKillProtect(int channel, bool protect)
@@ -377,24 +377,33 @@ void Universe::processFaders(uint elapsedMs)
     foreach (const QSharedPointer<GenericFader> &fader, activeFaders)
         fader->write(this, elapsedMs);
 
-    bool dataChanged = hasChanged();
-
     // Kill: full blackout that keeps position - output 0 for every channel
     // except the protected (Pan/Tilt) ones, so moving heads hold position.
-    if (m_kill)
+    if (m_kill.loadAcquire())
     {
         QByteArray killed(m_postGMValues->constData(), m_usedChannels);
         char *kd = killed.data();
         for (int i = 0; i < m_usedChannels; i++)
             if (i >= m_killProtect->size() || m_killProtect->at(i) == char(0))
                 kd[i] = char(0);
-        dumpOutput(killed, true);
-        emit universeWritten(id(), killed);
         // Remember what was actually sent, so releasing Kill on a static
         // look is detected as a change and the real frame goes out again.
-        memcpy(m_lastPostGMValues->data(), killed.constData(), m_usedChannels);
+        // Only a frame that differs from the last one sent is 'changed'.
+        bool killChanged =
+            memcmp(m_lastPostGMValues->constData(), killed.constData(), m_usedChannels) != 0;
+        if (killChanged)
+        {
+            memcpy(m_lastPostGMValues->data(), killed.constData(), m_usedChannels);
+            dumpOutput(killed, true);
+            emit universeWritten(id(), killed);
+        }
+        else
+            dumpOutput(killed, false);
         return;
     }
+
+    // After the kill branch: it owns m_lastPostGMValues while Kill is on
+    bool dataChanged = hasChanged();
 
     const QByteArray postGM = QByteArray::fromRawData(m_postGMValues->constData(), m_usedChannels);
     dumpOutput(postGM, dataChanged);

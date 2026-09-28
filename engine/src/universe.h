@@ -22,6 +22,7 @@
 #define UNIVERSE_H
 
 #include <QScopedPointer>
+#include <QAtomicInt>
 #include <QSemaphore>
 #include <QByteArray>
 #include <QThread>
@@ -197,7 +198,7 @@ protected:
     /** Flag to monitor the universe changes */
     bool m_monitor;
     /** Full-blackout-keep-position flag and its protected-channel mask */
-    bool m_kill;
+    QAtomicInt m_kill;
     QScopedPointer<QByteArray> m_killProtect;
 
     /************************************************************************

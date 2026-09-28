@@ -5311,10 +5311,27 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     int top = 0;
     foreach (TrackFuncInfo *info, ok)
         top = qMax(top, qMax(1, info->stars));
+    // Runde 290 (Tobias: "alt skal skalere efter energi-slideren ...
+    // programmer"): above 60 % the top star goes in once more for every
+    // fifth of the slider (1 extra copy as before up to 60 %, 3 at 100 %) -
+    // with the ceiling at three stars from ~75 % in a drop, the pool was the
+    // same from there to the top. And the PACE: a programme whose step is
+    // near the slider's target (4 beats at 30 % down to 1 at 100 %, within
+    // half an octave) goes in once more. AUTO chasers keep their own tempo -
+    // the slider picks the ones that fit.
+    const qreal pf = qBound(0.0, m_faderNow, 1.0);
+    const int topCopies = 1 + int(qRound(2.0 * qBound(0.0, (pf - 0.60) / 0.40, 1.0)));
+    const qreal paceTarget = 4.0 - 3.0 * qBound(0.0, (pf - 0.30) / 0.70, 1.0);
     QList<TrackFuncInfo *> pool = ok;
     foreach (TrackFuncInfo *info, ok)
     {
         if (qMax(1, info->stars) == top)
+        {
+            for (int c = 0; c < topCopies; c++)
+                pool.append(info);
+        }
+        const qreal sb = info->type == int(Function::SceneType) ? 0.0 : stepBeats(*info, bpm);
+        if (sb > 0.0 && qAbs(std::log2(sb / paceTarget)) <= 0.5)
             pool.append(info);
     }
 
@@ -7429,6 +7446,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             styles << 5 << 5;
         if (energy > 0.7)
             styles << 1;
+        if (fader > 0.85)                        // runde 290: the top keeps getting harder
+            styles << 1 << 5;
         m_dropStyle = styles.at(int(rng->bounded(styles.count())));
         m_dropStyleDrawn = true;
         m_landCoin = rng->bounded(2) == 1;     // runde 287: see `landing`
@@ -8169,7 +8188,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // for tempo-gulv på full-auto"): the build's halving is
                     // what makes the heads speed up to the drop
                     if (isBuild == false)
-                        candidate.minBeats = qMax(candidate.minBeats, key == base ? 16 : 24);
+                        candidate.paceRole = key == base ? 1 : 2;     // the floor, live (runde 290)
                     // runde 254 (Tobias: "flere ... bevægelser (movingheads)
                     // på tværs af sektioner og energilevel"): from the middle of
                     // the fader the BASE keeps the relation it drew - wave,
@@ -8503,8 +8522,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             mv.pattern = ENGINE_PAT_CHASE;
             mv.stepBeats = 1;
-            mv.subSteps = g.lasers ? 1 : 2;
-            mv.pulse = qMax(mv.pulse, 0.85);
+            // runde 290: on the slider - quarters until 70 %, eighths above;
+            // the hit 0.55 deep at 30 % and 0.90 at the top (was 0.85 flat)
+            mv.subSteps = (g.lasers || fader < 0.70) ? 1 : 2;
+            mv.pulse = qMax(mv.pulse, 0.55 + 0.35 * qBound(0.0, (fader - 0.30) / 0.70, 1.0));
             mv.pulseOn = 0;
             mv.ownChaser = false;
             impactNow = true;
@@ -8685,8 +8706,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_kickGone >= 4 && isBreak == false && isCalm == false && key != base
             && isBuild == false && preDrop == false)
             duck = 1.0 - 0.45 * qBound(0.0, qreal(m_kickGone - 4) / 4.0, 1.0);
+        // (runde 290: + 0.15 over 50-100 % on the slider - the support comes
+        // up with the room instead of sitting at 70 % of it at every fader)
         qreal support = (m_fullAuto && tier > 0 && key != base && key != m_rhythmLead)
-                      ? (g.strobes ? 0.55 : 0.70) : 1.0;
+                      ? (g.strobes ? 0.55 : 0.70) + 0.15 * qBound(0.0, (fader - 0.50) / 0.50, 1.0) : 1.0;
         qreal groupLevel = qBound(0.0, level * ((isBreak && key == base && still == false) ? 1.4 : 1.0) * duck * support, 1.0);
         // run() puts MASTER and the trim on for us now, so the colour scene
         // gets the bare level - or the two would multiply. (The level WITH them,
@@ -9617,9 +9640,24 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
     const TrackGroup &g = m_groups.value(group);
     move.pattern = (wide || drawnPattern == ENGINE_PAT_CHASE || drawnPattern == ENGINE_PAT_PINGPONG)
                  ? drawnPattern : ENGINE_PAT_STATIC;
-    move.pulseOn = 3;
+    // Runde 290 (Tobias: "det er vigtigt at alt skalerer efter energi-
+    // slideren"): the support is still the calm part of the room, but not
+    // equally calm at 40 % and at 100 %. It was four beats a step, one pulse
+    // a bar and at most 0.30 deep at every fader - two or three of the four
+    // or five groups on stage changed only in brightness from 50 % up. Now,
+    // on the slider: the pulse deepens 0.25 -> 0.50 over 40-100 %, lands on
+    // beats one and three from 75 %, and a chase may step every two beats
+    // from 80 % (REGLER: support >= 2 beats a step). The bars keep four
+    // (runde 288), the animation laser its drawn gate (pulse is its gate
+    // length, not a depth).
+    const qreal sf = qBound(0.0, m_faderNow, 1.0);
+    move.pulseOn = sf >= 0.75 ? 1 : 3;
     move.bare = g.strobes;
-    move.pulse = g.strobes ? 1.0 : qMin(0.30, move.pulse);
+    move.pulse = g.strobes ? 1.0
+               : (g.patternDevice ? move.pulse
+                  : qMin(0.25 + 0.25 * qBound(0.0, (sf - 0.40) / 0.60, 1.0), move.pulse));
+    if (sf >= 0.80 && g.lasers == false)
+        move.stepBeats = qMax(2, drawnStepBeats);
     // ... except that a STROBE group must never stand still (runde 154). This
     // is the composition rule making every group but the lead calm, and for
     // the strobes "calm" was a lit bank pulsing once a bar. They keep their
@@ -9791,9 +9829,13 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             // a lamp read as one blink a bar)
             // ... and a break walks slowly: four beats a lamp, two near the
             // top (runde 235)
-            mv.stepBeats = (tier == 1 && build == false) ? (wild < 0.65 ? 2 : 1)
-                         : tier == 0 ? (wild < 0.65 ? 4 : 2)
-                         : (wild < 0.30 ? 4 : (wild < 0.65 ? 2 : 1));
+            // (runde 290: drawn by chance along the slider, so the pace a room
+            // gets on average climbs with every per cent - it was 2 beats flat
+            // from 55 to 84 % in a groove. Whole beats still.)
+            mv.stepBeats = (tier == 1 && build == false) ? (chance(qBound(0.0, (wild - 0.20) / 0.70, 1.0)) ? 1 : 2)
+                         : tier == 0 ? (chance(qBound(0.0, (wild - 0.30) / 0.60, 1.0)) ? 2 : 4)
+                         : (chance(qBound(0.0, wild / 0.50, 1.0))
+                            ? (chance(qBound(0.0, (wild - 0.40) / 0.50, 1.0)) ? 1 : 2) : 4);
         }
         else
         {
@@ -10907,6 +10949,16 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     return sw;
 }
 
+int TrackEngine::sweepFloor(const TrackSweep &sw) const
+{
+    if (sw.paceRole <= 0)
+        return sw.minBeats;
+    const qreal pf = qBound(0.0, m_faderNow, 1.0);
+    return qMax(sw.minBeats, sw.paceRole == 1
+                ? int(qRound(16.0 - 8.0 * qBound(0.0, (pf - 0.50) / 0.50, 1.0)))
+                : int(qRound(24.0 - 12.0 * qBound(0.0, (pf - 0.40) / 0.60, 1.0))));
+}
+
 void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal bpm, qreal energy)
 {
     quint32 fid = m_sweepFunc.value(group, Function::invalidId());
@@ -10936,7 +10988,10 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     bool laser = m_groups.value(group).lasers;
     int width = sw.width;
     int height = sw.height;
-    int beats = qMax(sw.minBeats, sw.beats);       // the draw's floor under it (runde 271)
+    // the draw's floor under it (runde 271), and FULL AUTO's role floor off the
+    // slider, live (runde 290: see TrackSweep::paceRole)
+    const int floorBeats = sweepFloor(sw);
+    int beats = qMax(floorBeats, sw.beats);
     // the lasers' one live control: how far under the home aim the figure
     // may reach. Drawn up-only (dy = -height); the fader slides it down.
     int dy = sw.dy;
@@ -10993,7 +11048,7 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // 80 to 99 % halved its beats - 2x on top made it frantic (runde 199)
         // ... and the draw's floor goes under the scaled CURVE, never into
         // it (runde 271: see TrackSweep::minBeats)
-        beats = qMax(sw.minBeats, qMax(3, qMax(int(qRound(sw.beats * pace)), sw.beats * 3 / 4)));
+        beats = qMax(floorBeats, qMax(3, qMax(int(qRound(sw.beats * pace)), sw.beats * 3 / 4)));
     }
     // Not for the lasers. drawSweep() fixes their pace - "nothing here is ever
     // allowed to hurry" - and then this halved it whenever the DJ hit 2x. The
@@ -11106,7 +11161,7 @@ QString TrackEngine::sweepName(const TrackSweep &sw) const
         return QString();
     QString shape = EFX::algorithmToString(EFX::Algorithm(sw.shape)).toLower();
     QString rel = sw.spread == 1 ? "~" : (sw.spread == 2 ? ">" : (sw.mirror ? "><" : (sw.fan ? "*" : "")));
-    return QString("(%1%2 %3 %4b)").arg(shape).arg(rel).arg(sw.width).arg(qMax(sw.minBeats, sw.beats));
+    return QString("(%1%2 %3 %4b)").arg(shape).arg(rel).arg(sw.width).arg(qMax(sweepFloor(sw), sw.beats));
 }
 
 void TrackEngine::stopSweeps()
@@ -11600,7 +11655,7 @@ QMap<QString, QString> TrackEngine::autoLookKeys(const QSet<QString> &cast, qrea
           << QString::number(mv.bare) << QString::number(mv.ownChaser)
           << QString::number(mv.breatheBars > 0) << QString::number(mv.colourBars)
           << QString::number(sw.shape) << QString::number(sw.width / 16)
-          << QString::number(sw.height / 16) << QString::number(qMax(sw.minBeats, sw.beats) / 8)
+          << QString::number(sw.height / 16) << QString::number(qMax(sweepFloor(sw), sw.beats) / 8)
           << QString::number(sw.spread) << QString::number(sw.mirror)
           // the zoom in its three old bands (narrow / mid / wide), so the saved
           // ratings still match and a build's step a bar does not split them (r214)
@@ -13512,10 +13567,14 @@ void TrackEngine::tickFades()
     if (m_fadeAttr.isEmpty())
         return;
 
-    // 20 ms x 0.02 = one second from full to silent, in fifty steps. It used
-    // to be four steps of a quarter, 250 ms apart, which is what "the fades
-    // chop" was: you could count them.
-    const qreal step = 0.02;
+    // 20 ms a step. It used to be four steps of a quarter, 250 ms apart, which
+    // is what "the fades chop" was: you could count them. Then a flat second
+    // at every fader (runde 290, Tobias: "alt skal skalere efter energi-
+    // slideren ... fades"): now four beats at the bottom of the slider down to
+    // one at the top, within 0.4 - 2 s.
+    const qreal fadeMs = qBound(400.0, (m_beatMs > 0.0 ? m_beatMs : 500.0)
+                                       * (4.0 - 3.0 * qBound(0.0, m_faderNow, 1.0)), 2000.0);
+    const qreal step = 20.0 / fadeMs;
     foreach (quint32 fid, m_fadeAttr.keys())
     {
         Function *func = m_doc->function(fid);
