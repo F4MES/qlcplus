@@ -7273,7 +7273,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_oneLaser)
         {
             bool heldBars = false, heldAni = false;
+            // the room's order as unheld: `priority` first (the bars' lead
+            // puts them in front), then the rest (runde 288)
+            QStringList order = priority;
             foreach (const QString &key, m_groupOrder)
+                if (order.contains(key) == false) order << key;
+            foreach (const QString &key, order)
             {
                 if (castSet.contains(key) == false)
                     continue;
@@ -7704,7 +7709,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                        : laserAimSafe(heldAim, key, downNow) == false);
             }
         }
-        if (g.lasers && (hold == false || still || heldUnsafe))
+        // (runde 288: or out of the cast under HOLD - the one-laser line takes
+        // a type out there now, and dark bars go home, below)
+        if (g.lasers && (hold == false || still || heldUnsafe || inCast == false))
         {
             // ... and only while they are LIT. A bar outside the cast stood
             // at the top of the fader running its slow tilt chase in the dark
@@ -8330,7 +8337,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // character. A settled drop has stepped down to heavy/wide, so a drop
     // flag inside it lands still and the impact comes in bar two (from 60 %).
     const bool landChase = isDrop && (m_dropStyle == 1 || m_dropStyle == 5
-                                      || ((m_dropStyle == 0 || m_dropStyle == 3) && m_landCoin));
+                                      || ((m_dropStyle == 0 || m_dropStyle == 3) && m_landCoin
+                                          && dropSettled == false));
     // With curves a blackout accent needs a real gap. Never blank the kick
     // as it returns. The explicit pre-drop cue above remains unchanged.
     bool phraseDark = haveCurves ? (kick < 0.20 && high >= 0.0 && high < 0.20)
@@ -8466,34 +8474,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             continue;
         }
 
-        // Runde 287 (Tobias: "En rolig laser chase må gerne bruges helt ned
-        // til bevægelserne starter og skaleres op med energi-slideren så
-        // chase farten følger"): from where the bars start to move (0.40)
-        // the pace of their chase is the SLIDER's, read on every bar line -
-        // eight beats a step at 40 %, four from 61, two from 87, one from 96
-        // (the bar grid, runde 233) - not the section's roll, fixed at the
-        // draw. Written into the drawn move, so composeMove (FULL AUTO's
-        // support floor) and the SPEED tiles still apply on top.
-        // Not in a break, an intro or an outro (tier 0): there the bars stand
-        // calm in their home at the section's slow pace whatever the slider.
-        if (g.lasers && g.patternDevice == false && beatInBar == 0 && hold == false
-            && tier > 0 && isCalm == false && fader >= 0.40 && m_moves.contains(key))
-        {
-            TrackMove &dm = m_moves[key];
-            if (dm.pattern == ENGINE_PAT_CHASE || dm.pattern == ENGINE_PAT_PINGPONG
-                || dm.pattern == ENGINE_PAT_ODDEVEN)
-            {
-                const qreal lf = qBound(0.0, (fader - 0.40) / 0.60, 1.0);
-                const int sb = qMax(1, int(qRound(8.0 - 7.0 * lf)));
-                dm.stepBeats = sb <= 2 ? sb : (sb <= 5 ? 4 : 8);
-            }
-        }
         TrackMove mv = m_moves.value(key);
         if (m_fullAuto)
             mv = composeMove(key, mv, tier);
         if (isCalm || still)
             mv = TrackMove();
-        // The drop's first bar (two, from three fifths of the fader) is the
+        // The drop's first bar (two, from 60 % on the slider) is the
         // IMPACT: every effect group runs a fast chase through its lamps,
         // pulsing hard, whatever it drew for the section - the white hit lands
         // on the downbeat above it, and from bar two the section's own look
@@ -8501,7 +8487,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the same look it would then run for thirty-two bars. Pattern devices
         // (animation lasers) and the base sit it out; the bars step on the
         // beat, never between (they never do).
-        int impactBars = energy >= 0.60 ? 2 : 1;
+        int impactBars = fader >= 0.60 ? 2 : 1;    // the slider, as the comment says (runde 288)
         bool impactNow = false;                  // runde 287: the landing reads it
         if (isDrop && dropBar >= 0 && dropBar < impactBars && key != base
             && (m_fullAuto == false || key == m_rhythmLead || g.strobes)
@@ -8575,7 +8561,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         else if (key != base && landing && g.strobes == false
                  && (landChase == false || impactNow == false))
             mv.pattern = ENGINE_PAT_STATIC;
-        else if (key != base && (m_fullAuto == false || key == m_rhythmLead) && turnaround && mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_FILL)
+        else if (key != base && (m_fullAuto == false || key == m_rhythmLead) && turnaround && mv.pattern != ENGINE_PAT_STATIC && mv.pattern != ENGINE_PAT_FILL
+                 && impactNow == false)     // the landing's impact is fast enough (runde 288)
         {
             if (mv.stepBeats > 1)
                 mv.stepBeats = qMax(1, mv.stepBeats / 2);
@@ -9496,7 +9483,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     checkConflicts(castSet);
 
     m_autoStageKeys.clear();
-    bool impactActive = isDrop && dropBar >= 0 && dropBar < (energy >= 0.60 ? 2 : 1);
+    bool impactActive = isDrop && dropBar >= 0 && dropBar < (fader >= 0.60 ? 2 : 1);
     if (m_fullAuto && m_blackout == false && m_flash == false && m_mixing == false
         && isCalm == false && still == false && m_override.isEmpty()
         && darkGroups.isEmpty() && hit == false && impactActive == false && turnaround == false)
@@ -9536,7 +9523,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // beat - so "did the colour change on a turn or on the clock" and "how
     // much white on the strobes" can be read off a log instead of guessed
     m_logAccent = accentColour.isEmpty() ? QString() : accentGroup + "=" + accentColour;
-    int impactBarsLog = energy >= 0.60 ? 2 : 1;
+    int impactBarsLog = fader >= 0.60 ? 2 : 1;
     const bool fakeDrop = isDrop && m_dropLand > 0;
     {
         QStringList ev;
@@ -9702,7 +9689,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
     }
 
     // The laser bars. Their movement is handled in drawSweep - none at all
-    // below three fifths of the fader - so what is left here is how hard they
+    // below 40 % of the fader - so what is left here is how hard they
     // work: at the bottom they simply stand lit, and from there the fader
     // adds a chase down the row, then a blink on the beat, then both at once.
     // Nothing about this changes their aim.
@@ -9712,10 +9699,17 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         mv.breatheBars = 0;
         mv.texture = 0.0;
         mv.ownChaser = tier > 0 && chance(0.25 + 0.45 * busy);
-        // runde 287: from the line where they start to move (0.40 on the
-        // slider) a calm chase is at least as likely as the still picture;
-        // its pace follows the slider in tick()
-        if (chance(m_faderNow >= 0.40 ? qMax(busy, 0.50) : busy))
+        // Runde 287 (Tobias: "En rolig laser chase må gerne bruges helt ned
+        // til bevægelserne starter og skaleres op med energi-slideren så
+        // chase farten følger"): from the line where they start to move (0.40
+        // on the slider), outside a break/intro/outro, a calm chase is at
+        // least as likely as the still picture, and its pace is the SLIDER's -
+        // eight beats a step at 40 %, four from 61, two from 87, one from 96.
+        // Read at the draw (runde 288): every section, the 8-bar redraw and a
+        // fader jump draw again. Written into a running move on the bar line
+        // it made the chase jump across the row (step = beat / stepBeats).
+        const bool slider = tier > 0 && m_faderNow >= 0.40;
+        if (chance(slider ? qMax(busy, 0.50) : busy))
         {
             mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG,
                                 ENGINE_PAT_ODDEVEN, ENGINE_PAT_CHASE });
@@ -9723,7 +9717,8 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             // steps in between are really in between
             // on the bar grid - 1, 2, 4 or 8 beats (runde 233: 3, 5, 6 and 7
             // against a 4/4 bar and a pulse read as random)
-            const int sb = qMax(1, int(qRound(8.0 - 7.0 * busy)));
+            const qreal paceBy = slider ? qBound(0.0, (m_faderNow - 0.40) / 0.60, 1.0) : busy;
+            const int sb = qMax(1, int(qRound(8.0 - 7.0 * paceBy)));
             mv.stepBeats = sb <= 2 ? sb : (sb <= 5 ? 4 : 8);
             mv.bare = chance(0.35 + 0.45 * busy);
         }
