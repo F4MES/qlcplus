@@ -804,6 +804,14 @@ void Scene::processValue(MasterTimer *timer, QList<Universe*> ua, uint fadeIn, c
                 else
                     fc.setFadeTime(fadeInTime);
             }
+            else if (overrideFadeInSpeed() != defaultSpeed() && overrideTempoType() == Beats)
+            {
+                // B24_PARENT_FADE_IN: a fade handed in by the parent (a Beats
+                // chaser's step) is in the parent's units - start() keeps them
+                // as overrideTempoType(). A Time scene took 24 beats as 24 s.
+                // No beat re-alignment: the step already starts on the grid.
+                fc.setFadeTime(beatsToTime(fadeIn, timer->beatTimeDuration()));
+            }
             else
             {
                 fc.setFadeTime(fadeIn);
@@ -826,6 +834,9 @@ void Scene::handleFadersEnd(MasterTimer *timer)
     else
     {
         if (tempoType() == Beats)
+            fadeout = beatsToTime(fadeout, timer->beatTimeDuration());
+        // B24_PARENT_FADE_OUT: the parent's fade-out, in the parent's units
+        else if (overrideFadeOutSpeed() != defaultSpeed() && overrideTempoType() == Beats)
             fadeout = beatsToTime(fadeout, timer->beatTimeDuration());
 
         foreach (QSharedPointer<GenericFader> fader, m_fadersMap)

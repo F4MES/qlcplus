@@ -717,7 +717,9 @@ protected:
      *  are read half way towards the drop's. See tick(), isDrive. */
     TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads,
                          bool laser, bool drive = false) const;
-    void applySweep(const QString &group, const TrackSweep &sweep, qreal bpm, qreal energy);
+    /** true when a running laser bar figure was lifted by 2 units or more
+     *  (runde 303: the caller darkens the bars for that beat) */
+    bool applySweep(const QString &group, const TrackSweep &sweep, qreal bpm, qreal energy);
     /** The floor under a figure's pace: the draw's minBeats and FULL AUTO's
      *  role floor off the slider (runde 290). */
     int sweepFloor(const TrackSweep &sweep) const;
@@ -781,6 +783,9 @@ protected:
     quint32 positionFunction(const QString &group, int cursor, int tier, qreal fader) const;
     /** True if this scene switches a fixture's own effect/movement macro on. */
     bool macroPosition(quint32 fid) const;
+    /** A function (a scene, or a chaser's step scenes) writes a non-zero
+     *  value on a channel of the fixture's own effect engine (runde 303). */
+    bool ownEffectOf(quint32 fid) const;
     /** A laser aim (scene or chaser) that never leaves the group's home aim
      *  by more than ENGINE_AIM_REACH, and never writes anything but pan and
      *  tilt. Safe to run without the operator having promised it by name. */

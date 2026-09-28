@@ -268,12 +268,33 @@ void TrackManager::slotReadyRead()
     // walk it once and cut it once: a packet of many lines otherwise
     // moves the rest of the buffer per line
     int start = 0, idx;
+    QList<QByteArray> lines;             // R303_POS_BURST: cut first, then handle
     while ((idx = buf.indexOf('\n', start)) >= 0)
     {
         QByteArray line = buf.mid(start, idx - start).trimmed();
         start = idx + 1;
         if (line.isEmpty() == false)
-            handleLine(line);
+            lines.append(line);
+    }
+    // a playing pos with a later, higher playing pos right behind it: skip it
+    auto playingBeat = [](const QByteArray &l) -> int {
+        if (l.contains("\"pos\"") == false)
+            return -1;
+        const QJsonObject o = QJsonDocument::fromJson(l).object();
+        if (o.value(QStringLiteral("evt")).toString() != QStringLiteral("pos")
+            || o.value(QStringLiteral("playing")).toBool(true) == false)
+            return -1;
+        return o.value(QStringLiteral("beat")).toInt();
+    };
+    for (int i = 0; i < lines.count(); i++)
+    {
+        if (i + 1 < lines.count())
+        {
+            const int here = playingBeat(lines.at(i));
+            if (here > 0 && playingBeat(lines.at(i + 1)) > here)
+                continue;
+        }
+        handleLine(lines.at(i));
     }
     if (start > 0)
         buf.remove(0, start);

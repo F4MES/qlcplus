@@ -4955,6 +4955,17 @@ QList<TrackEngine::CandEntry> TrackEngine::buildCandidates(int role, const QStri
             continue;
         if (userAllowed(info, group) == false)
             continue;
+        // the laser bars' MOTION never switches on the bar's own effects
+        // (runde 303, ownEffectOf) - the operator's programmes only: ours
+        // hold those channels at nought (gen_programs bar_lit / bar_tilt)
+        if (role == ENGINE_ROLE_MOTION && group.isEmpty() == false && info.generated == false
+            && info.path.startsWith(ENGINE_AUTO_PATH) == false)
+        {
+            QMap<QString, TrackGroup>::const_iterator bg = m_groups.constFind(group);
+            if (bg != m_groups.constEnd() && bg->lasers && bg->patternDevice == false
+                && ownEffectOf(info.id))
+                continue;
+        }
         CandEntry e;
         e.info = const_cast<TrackFuncInfo *>(&info);
         e.dryp = info.name.contains(QStringLiteral("dryp"), Qt::CaseInsensitive);
@@ -6037,6 +6048,46 @@ bool TrackEngine::macroPosition(quint32 fid) const
         if (qch->group() == QLCChannel::Pan || qch->group() == QLCChannel::Tilt)
             continue;
         return true;
+    }
+    return false;
+}
+
+bool TrackEngine::ownEffectOf(quint32 fid) const
+{
+    // Runde 303 (bane B's headless B23 D2): in plain AUTO the engine took the
+    // operator's "Laser Chase 1 Preset Red" as the bars' MOTION - it writes
+    // their Effect / Effect Speed channels (79 / 165), the bar's own show,
+    // which REGLER keeps at nought ("aldrig barens egen Movement Effect").
+    // macroPosition() only judged aims. A channel of the Effect group, or one
+    // whose name says "Effect" (the Yuer's "Movement Effect" has no group).
+    if (m_doc == nullptr)
+        return false;
+    QList<quint32> ids;
+    Chaser *chaser = qobject_cast<Chaser *>(m_doc->function(fid));
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            ids.append(step.fid);
+    }
+    else
+        ids.append(fid);
+    foreach (quint32 sid, ids)
+    {
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            continue;
+        foreach (const SceneValue &sv, scene->values())
+        {
+            if (sv.value == 0)
+                continue;
+            Fixture *fxi = m_doc->fixture(sv.fxi);
+            const QLCChannel *qch = fxi == nullptr ? nullptr : fxi->channel(sv.channel);
+            if (qch == nullptr)
+                continue;
+            if (qch->group() == QLCChannel::Effect
+                || qch->name().contains(QStringLiteral("effect"), Qt::CaseInsensitive))
+                return true;
+        }
     }
     return false;
 }
@@ -8433,6 +8484,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // levels below read darkGroups.
             if (g.lasers && m_active.contains(slot) && castSet.contains(key))
                 darkGroups.insert(key);
+            // leaving the cast: the light goes before the mirror does (runde
+            // 303, bane B's headless B23 R1). The MasterTimer can tick between
+            // this stop and the cast loop's cuts (col:/mot:/parts below); in
+            // that order it showed the beam lit on the home aim for a frame
+            // (headless A2 76.07 s: dimmer 45, 10 units)
+            if (g.lasers && m_active.contains(slot) && castSet.contains(key) == false
+                && m_flashHeld.contains(key) == false)
+            {
+                stopSlot("col:" + key, true);
+                stopSlot("mot:" + key, true);
+                for (int i = 0; i < g.parts.count(); i++)
+                    stopSlot(partSlot(key, i), true);
+            }
             if (m_active.contains(slot))
                 stopSlot(slot, true);
             m_sweep.remove(key);
@@ -8535,7 +8599,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
         // the floor round: no figure on the heads - they stand straight down (r214)
-        applySweep(key, (m_floorRound && g.heads) ? TrackSweep() : m_sweep.value(key), bpm, energy);
+        if (applySweep(key, (m_floorRound && g.heads) ? TrackSweep() : m_sweep.value(key), bpm, energy)
+            && g.lasers)
+            darkGroups.insert(key);              // a lift is a reposition: dark (runde 303)
     }
 
     /* ---- zoom: a move of its own on the heads. Wide in a break, mid in
@@ -11313,18 +11379,18 @@ int TrackEngine::sweepFloor(const TrackSweep &sw) const
                 : int(qRound(24.0 - 12.0 * qBound(0.0, (pf - 0.40) / 0.60, 1.0))));
 }
 
-void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal bpm, qreal energy)
+bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal bpm, qreal energy)
 {
     quint32 fid = m_sweepFunc.value(group, Function::invalidId());
     EFX *efx = m_doc ? qobject_cast<EFX *>(m_doc->function(fid)) : nullptr;
     if (efx == nullptr)
-        return;
+        return false;
     QString slot = "efx:" + group;
     if (sw.shape < 0 && sw.dx == 0 && sw.dy == 0)
     {
         if (m_active.contains(slot))
             stopSlot(slot, true);
-        return;
+        return false;
     }
 
     // the EFX counts milliseconds, the music beats: one figure = beats x the
@@ -11472,18 +11538,23 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             const int cur = int(efx->yOffset());
             if (y > cur)
                 y = qMin(y, cur + 1);
+            // ... and a lift of two units or more is a reposition: dark for
+            // the beat (runde 303, bane B's headless B23 R2 - the fader from
+            // 100 to 50 % lifted the bars 8 units lit; REGLER: mørke ved
+            // genplacering). The caller puts the group in darkGroups.
+            const bool lifted = cur - y >= 2;
             // the centre first: lifted before the figure grows under it
             if (efx->yOffset() != y)
                 efx->setYOffset(y);
             if (efx->height() != h)
                 efx->setHeight(h);
-            return;
+            return lifted;
         }
         if (sw.shape >= 0 && efx->width() != width)
             efx->setWidth(width);
         if (sw.shape >= 0 && efx->height() != height)
             efx->setHeight(height);
-        return;
+        return false;
     }
     // (Point 4 - a new figure taking over from where the heads actually are -
     // was begun in runde 162 as a call to EFXFixture::requestPointTransition()
@@ -11526,6 +11597,7 @@ void TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     }
     m_sweepShown.insert(group, sw);
     run(slot, fid, 1.0, 0, true);
+    return false;
 }
 
 QString TrackEngine::sweepName(const TrackSweep &sw) const
