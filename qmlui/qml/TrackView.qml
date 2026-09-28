@@ -422,10 +422,22 @@ Button
                     focusPolicy: Qt.NoFocus
                     anchors.verticalCenter: parent.verticalCenter
                     checked: trackManager ? trackManager.autoRun : false
+                    id: showSwitch
                     objectName: "showSwitch"
+                    // runde 296 (Tobias: "Ja, men lav et 'er du sikker' ligesom
+                    // knapperne i Advanced settings"): SHOW OFF asks SURE? and
+                    // waits 4 s for the second tap, as RE-GUESS/FORGET/IMPORT do;
+                    // SHOW ON stays one tap (bane B, B20 U1)
+                    property bool armOff: false
+                    Timer { id: showOffArm; interval: 4000; onTriggered: showSwitch.armOff = false }
                 ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "showSwitch" }
-                    text: checked ? qsTr("SHOW ON") : qsTr("SHOW OFF")
-                    onClicked: trackManager.autoRun = !checked
+                    text: checked ? (armOff ? qsTr("SURE?") : qsTr("SHOW ON")) : qsTr("SHOW OFF")
+                    onClicked: {
+                        if (!checked) { trackManager.autoRun = true; return }
+                        if (!armOff) { armOff = true; showOffArm.restart(); return }
+                        armOff = false
+                        trackManager.autoRun = false
+                    }
 
                     contentItem: Text
                     {
@@ -439,9 +451,9 @@ Button
                     background: Rectangle
                     {
                         radius: 5
-                        color: parent.checked ? "#3FBF3F" : "#4A1E1E"
+                        color: parent.armOff ? "#E3B44F" : (parent.checked ? "#3FBF3F" : "#4A1E1E")
                         border.width: 3
-                        border.color: parent.checked ? "#9BE89B" : "#B03030"
+                        border.color: parent.armOff ? "#FFE3A0" : (parent.checked ? "#9BE89B" : "#B03030")
                     }
                 }
                 Button
@@ -2478,7 +2490,14 @@ Rectangle
                     }
                     // the grab taken away from us counts as "finger left the
                     // button": latched, not released
-                    onCanceled: blackoutTile.armed = false
+                    // runde 296 (Tobias: "Ja blackout skal slippe", B20 U3):
+                    // a grab taken away (page hidden) is not a finger sliding
+                    // out: let go, as FLASH does
+                    onCanceled: {
+                        if (blackoutTile.armed && trackEngine)
+                            trackEngine.blackout = false
+                        blackoutTile.armed = false
+                    }
                 }
             }
 

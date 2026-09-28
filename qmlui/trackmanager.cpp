@@ -406,6 +406,11 @@ void TrackManager::handleTrack(const QJsonObject &obj)
         if (m_engine != nullptr) m_engine->setNextKey(QString());   // R202_NEXT_KEY
         emit mixChanged(); // the preview now belongs to the playing deck
     }
+    if (resent == false && m_overrideState.isEmpty() == false)   // R296_OVERRIDE_NEW_TRACK
+    {
+        m_overrideState.clear();
+        emit stateChanged();
+    }
     if (m_engine != nullptr && resent == false)   // R187_SAME_TRACK_ENGINE
         m_engine->trackLoaded(m_title, m_key);
 

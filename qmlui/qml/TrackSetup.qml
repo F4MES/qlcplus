@@ -230,10 +230,21 @@ Rectangle
             {
                 Layout.preferredWidth: 110
                 Layout.preferredHeight: 34
-                label: qsTr("FULL AUTO")
-                active: trackEngine ? trackEngine.fullAuto : false
+                id: fullAutoTile
+                property bool armed: false
+                label: armed ? qsTr("SURE?") : qsTr("FULL AUTO")
+                active: armed || (trackEngine ? trackEngine.fullAuto : false)
                 activeColor: "#E3B44F"
-                onTapped: if (trackEngine) trackEngine.fullAuto = !trackEngine.fullAuto
+                onTapped:
+                {
+                    if (!trackEngine) return
+                    // runde 296 (Tobias: "skal også have en bekræftelse inden den
+                    // slår fra", B20 U5): ON is one tap, OFF asks SURE?
+                    if (trackEngine.fullAuto && armed === false) { armed = true; fullAutoArm.restart(); return }
+                    armed = false
+                    trackEngine.fullAuto = !trackEngine.fullAuto
+                }
+                Timer { id: fullAutoArm; interval: 4000; onTriggered: fullAutoTile.armed = false }
             }
 
             // every enabled group in red, green, blue, white - two seconds
