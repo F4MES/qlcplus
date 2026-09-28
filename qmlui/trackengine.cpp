@@ -2216,7 +2216,9 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             int keepBreath = m_breathe.value(key, 0);
             m_pulseDepth.insert(key, 0.0);
             m_breathe.insert(key, 0);
-            setDimmer(key, 1.0);
+            // an automatic hit (a colour is given) follows the slider (runde 292)
+            setDimmer(key, colour.isEmpty() ? 1.0
+                                            : 0.70 + 0.30 * qBound(0.0, (m_faderNow - 0.55) / 0.45, 1.0));
             m_pulseDepth.insert(key, keepDepth);
             m_breathe.insert(key, keepBreath);
         }
@@ -4973,6 +4975,16 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     Q_UNUSED(division)
     QList<TrackFuncInfo *> all = candidates(ENGINE_ROLE_MOTION, group);
     QList<TrackFuncInfo *> ok;
+    // runde 292: a pattern device follows the ceiling too, down to its own
+    // calmest patterns - it was exempt, and the top-star doubling below then
+    // drew its wildest patterns at 35 % twice as often as at 100 %
+    const bool patternGroup = m_groups.value(group).patternDevice;
+    int calmest = 3;
+    if (patternGroup)
+    {
+        foreach (TrackFuncInfo *info, all)
+            calmest = qMin(calmest, qMax(1, info->stars));
+    }
     foreach (TrackFuncInfo *info, all)
     {
         // a static pattern scene is a look and may show in any section; a
@@ -5019,7 +5031,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // At the bottom of the fader (ceiling 1) all of its scenes are two
         // stars, so the group had nothing to show - check_reach: "Animation
         // Laser groove ceil 1: EMPTY". It shows its calmest instead.
-        if (qMax(1, info->stars) > allow && m_groups.value(group).patternDevice == false)
+        if (qMax(1, info->stars) > (patternGroup ? qMax(allow, calmest) : allow))
             continue;
         // a motion that also lights groups outside the cast is not allowed
         bool inside = true;
@@ -7374,13 +7386,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 || m_colour == QStringLiteral("cyan"));
     };
     if (m_override.isEmpty() == false)
+    {
         m_partnerPick.clear();           // a colour tile is ONE colour (runde 205)
+        m_partnerSolo = false;
+    }
     else if (accentColour.isEmpty() == false)
+    {
         m_partnerPick = accentColour;
+        m_partnerSolo = false;
+    }
     else if (m_mixing && m_nextColour.isEmpty() == false && m_nextColour != m_colour)
+    {
         m_partnerPick = m_nextColour;
-    else if (((sectionChanged || changeColour) && hold == false)
-             || m_partnerPick.isEmpty() || partnerOk(m_partnerPick) == false)
+        m_partnerSolo = false;
+    }
+    else if (((sectionChanged || changeColour || faderJump) && hold == false)   // runde 292: a hand redraws it
+             || (m_partnerPick.isEmpty() && m_partnerSolo == false)
+             || (m_partnerPick.isEmpty() == false && partnerOk(m_partnerPick) == false))
     {
         QStringList pool;
         foreach (const QString &c, m_palette)
@@ -7389,6 +7411,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 pool << c;
         }
         m_partnerPick = pool.isEmpty() ? QString() : pool.at(int(rng->bounded(int(pool.count()))));
+        // runde 292 (Tobias: "alt skal skalere efter energi-slideren"): a
+        // quiet room is one colour more often - a partner in one look of ten
+        // at 30 %, every look from 70 %. Drawn with the partner, held with it.
+        m_partnerSolo = rng->bounded(1000) >= int(1000.0 * (0.10 + 0.90 * qBound(0.0, (fader - 0.30) / 0.40, 1.0)));
+        if (m_partnerSolo)
+            m_partnerPick.clear();
     }
 
     bool hard = sectionChanged && isDrop;
@@ -8210,11 +8238,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // only ever played in breaks. The pace floor (16 beats a
                     // figure) stays - "passende fart" - and below 50 % and on
                     // the support groups the figure stays broad and mirrored.
-                    if (key != base || fader < 0.50)       // the slider, as the rule says (runde 255)
+                    // (runde 292: the base keeps it by chance along the slider,
+                    // 0 at 40 % -> always from 70 % - it was a hard switch at 50;
+                    // support heads keep a start offset (a trail) from 75 %,
+                    // still mirrored and in one wave)
+                    const bool keepRelation = key == base
+                        && rng->bounded(1000) < int(1000.0 * qBound(0.0, (fader - 0.40) / 0.30, 1.0));
+                    if (keepRelation == false)
                     {
+                        const int drawnFan = candidate.fan;
                         candidate.spread = 0;
                         candidate.mirror = true;
-                        candidate.fan = 0;
+                        candidate.fan = (key != base && fader >= 0.75) ? drawnFan : 0;
                     }
                 }
                 m_sweep.insert(key, candidate);
@@ -8319,6 +8354,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         w3 = 1;
                 }
                 want = w3 * 4;
+                // runde 292: on the slider - a break's wide beam tightens a
+                // little (8 -> 6), and a drop leans one half-step narrower
+                // more and more often from 50 %
+                if (isBreak && w3 == 2)
+                    want = qBound(6, int(qRound(8.0 - 2.0 * qBound(0.0, fader, 1.0))), 8);
+                else if (isDrop && want > 0
+                         && rng->bounded(1000) < int(1000.0 * qBound(0.0, (fader - 0.50) / 0.50, 1.0)))
+                    want -= 2;
                 m_zoom.insert(key, want);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
                 total += weight;
@@ -8332,8 +8375,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mode = 0;
             if (isDrop && (m_dropStyle == 1 || m_dropStyle == 5) && energy >= 0.55)     // hard, nervous
                 mode = 1;
-            else if (isDrop == false && isBreak == false && energy >= 0.45 && rng->bounded(3) == 0)
-                mode = 2;
+            else if (isDrop == false && isBreak == false && energy >= 0.45
+                     && rng->bounded(1000) < int(500.0 * qBound(0.0, (energy - 0.45) / 0.45, 1.0)))
+                mode = 2;                            // runde 292: 0 -> 1 in 2 over 45-90 % (was 1 in 3)
         }
         m_zoom.insert(key, want);
         m_zoomMode.insert(key, mode);
@@ -8450,7 +8494,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         && !isBuild && !m_blackout && !m_mixing && !sectionChanged && !exposureRest
         && !preDrop && (beatsToNext <= 0 || beatsToNext >= 12)
         && fader >= 0.45 && beatInBar == 0 && (beat - secStart) % 32 == 0
-        && stageNow - m_sequenceLast >= 45000)
+        && stageNow - m_sequenceLast >= qint64(60000.0 - 30000.0 * qBound(0.0, (fader - 0.45) / 0.45, 1.0)))
     {
         QStringList conversation;
         if (castSet.contains(base) && ambientBase(base)) conversation << base;
@@ -8468,7 +8512,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             m_sequenceGroups = conversation.mid(0, 3);
             m_sequenceStart = m_sequenceLast = stageNow;
-            m_sequenceBeatMs = bpm > 0 ? 60000.0 / bpm : 500.0;
+            // runde 292: each voice two beats at 45 %, one at 90 % (was one
+            // beat, one every 45 s at every fader); 60 -> 30 s apart
+            m_sequenceBeatMs = (bpm > 0 ? 60000.0 / bpm : 500.0)
+                             * (2.0 - qBound(0.0, (fader - 0.45) / 0.45, 1.0));
         }
     }
     // Runde 260: who lights the room beside the base this beat - see
@@ -9403,8 +9450,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     }
                 }
             }
+            // runde 292: the engine's own hit is 70 % bright at 55 % on the
+            // slider and full at the top (was full at every fader); the held
+            // FLASH button stays full strength (runde 199)
             if (ff != Function::invalidId())
-                run("flash", ff, 1.0, 0, true);
+                run("flash", ff, 0.70 + 0.30 * qBound(0.0, (fader - 0.55) / 0.45, 1.0), 0, true);
             // ... and the generated flash as well, not only as a fallback -
             // the same correction the manual button got in runde 131, for
             // the same reason. Measured on the show file (runde 134), every
@@ -9478,7 +9528,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // orange partner (or accent, or the next track's colour in a
                     // mix) echoed blue - three colours. The table is only the
                     // fallback for a look with no partner.
-                    QString echoHue = (m_partnerPick.isEmpty() == false && m_partnerPick != m_colour)
+                    // (runde 292: a one-colour look echoes in its own colour -
+                    // which the bars already wear, so no echo)
+                    QString echoHue = m_partnerSolo ? m_colour
+                        : (m_partnerPick.isEmpty() == false && m_partnerPick != m_colour)
                         ? m_partnerPick
                         : contrast.value(m_colour, QStringLiteral("white"));
                     if (m_palette.contains(echoHue) == false || engineBannedColour(echoHue))

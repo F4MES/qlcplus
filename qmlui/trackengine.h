@@ -848,6 +848,7 @@ private:
     qreal m_holdStretch = 1.0;  // this colour's random stretch of it, drawn at each change
     QString m_accentPick;     // the accent drawn for this section
     QString m_partnerPick;    // runde 243: the ONE partner colour this look may show
+    bool m_partnerSolo = false; // runde 292: this look was drawn with no partner - one colour
     QString m_accentGroup;    // the group carrying it - rotates, never the same twice running
     int m_keyBias;            // this track's key: -1 unknown, 0 minor (cold side), 1 major (warm side)
     int m_nextKeyBias;        // the next track's, from BLT "next"
