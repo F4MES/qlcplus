@@ -227,6 +227,7 @@ struct TrackMove
     int subSteps = 1;         // pattern steps per beat: 1, 2 = eighths, 4 = sixteenths (stepBeats 1 only)
     qreal texture = 0.0;      // per-fixture level spread among the lit ones, 0..0.3 - a flat group looks static
     bool bare = false;        // strobes: blink one at a time with nothing lit behind them
+    qreal drawnE = -1.0;      // the energy this move was drawn at (-1 = m_movesEnergy's) - runde 264
 };
 
 /** A figure for a group of moving heads: a hidden EFX run RELATIVE to the
@@ -256,11 +257,22 @@ struct TrackSweep
     bool drive = false;       // a groove high in the track's own range: the
                               // curves are read half way towards the drop's
     qreal drawnE = 0.5;       // the energy the size and pace were drawn at
+    // The draw's FLOOR on the pace, kept apart from `beats` (runde 271).
+    // `beats` is the curve's value (sweepPace x dice) and is what the live
+    // ratio in applySweep() scales; the floors - FULL AUTO's 16/24 beats on
+    // the heads, a drop style's 8 or 16 - are applied after the scaling. They
+    // used to be written INTO `beats`, and the ratio then scaled the floor:
+    // a base drawn at 100 % in a drop (curve 4, floor 16) pulled to 81 %
+    // ran 16 x 1.95 = 31 beats, and the next draw at 81 % gave 16 again - a
+    // sawtooth on the heads' pace; pushed from 60 to 79 % it quickened to 12,
+    // under its own floor. The closing's slow fall sped the support heads up
+    // at every redraw.
+    int minBeats = 3;
     bool operator==(const TrackSweep &o) const
     {
         return shape == o.shape && width == o.width && height == o.height && rotation == o.rotation
             && beats == o.beats && spread == o.spread && mirror == o.mirror && fan == o.fan
-            && fx == o.fx && fy == o.fy && dx == o.dx && dy == o.dy;
+            && fx == o.fx && fy == o.fy && dx == o.dx && dy == o.dy && minBeats == o.minBeats;
     }
 };
 
@@ -833,6 +845,8 @@ private:
     bool m_accentWasWhite;    // the last accent was white: the next one is not
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
     bool m_strobesPooled = false; // the last bar line let the strobes into the cast pool (fejljagt 2)
+    bool m_dropShown = true;      // the last bar line had the fader at the drop line (ENGINE_DROP_SHOW, runde 279)
+    bool m_oneLaser = true;       // the last bar line had the fader under the one-laser line (0.85, runde 279)
     bool m_curveBreak = false;   // runde 192: a groove flag with no kick in the next two bars plays as a break
     bool m_curveGroove = false;  // runde 192: a break flag with a solid kick in the next two bars plays as a groove
     int m_curveTurnBeat = -100;  // runde 193: the beat of the last such turn - four bars between turns
@@ -849,7 +863,8 @@ private:
     qreal m_master;
     bool m_blackout;
     bool m_mixing;
-    int m_mixBeat;                        // the beat a mix began DURING this track (-1: none) - the mix-out fade counts from it
+    int m_mixBeat;                        // the beat a mix began DURING this track (-1: none) - the base's turn to the next colour counts from it
+    bool m_mixTurnLatched = false;        // runde 270: the base has turned to m_nextColour in this mix (tick)
     QMap<QString, quint32> m_splitScenes;  // "group|a|b" -> hidden two-colour scene
     int m_speed;                          // -1 half, 0 as the music, +1 double
     qreal m_faderNow = 0.0;               // this beat's FADER (the slider, before the section scaled it),
@@ -868,7 +883,15 @@ private:
     // cannot drift a group on and off stage every bar (runde 159). In-class
     // default, deliberately: out of the constructor's list, out of -Wreorder.
     int m_effectsBeat = -1;
-    int m_starCeil;           // hottest star allowed this section (drawn from the energy)
+    // the one extra group a break may show, rolled when the part turns into
+    // a break (runde 263): one break in three, whatever came before it.
+    // In-class default, out of the constructor's list as m_effectsBeat.
+    int m_breakExtra = 0;
+    // runde 275: the moves on stage were drawn BY this build (tick). A build
+    // is drawn once, where it starts, and climbs live on every beat - an
+    // inner flag, the kick wait and the 8-bar roll keep what it drew.
+    bool m_buildDrawn = false;
+    int m_starCeil;          // hottest star allowed this section (drawn from the energy)
     int m_lastBeat;
     int m_calmUntil;          // beat until which the panic look holds
     QTimer m_fadeTimer;       // keeps fades ticking after a release
@@ -943,6 +966,7 @@ private:
     bool m_floorRound = false;             // this build: heads straight down, sharp, one blinking round (runde 214)
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
+    bool m_dropStyleDrawn = false; // m_dropStyle was drawn for the drop on stage - 0 is a style too (runde 282)
     int m_dropFrom = -1;      // the beat this drop's look was drawn (fejljagt 3: the settle clock)
     bool m_dropCalm = false;  // this drop has settled - held to the next section (fejljagt 3)
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)
@@ -967,6 +991,7 @@ private:
     QMap<QString, qreal> m_pulseStrength;  // how hard that beat hit, 0.5..1 - the kick's say
     QMap<QString, int> m_subStepSeen;      // the last sub-step the pulse timer masked, per group
     QMap<QString, int> m_breathe;          // groups on a slow sine, and over how many bars
+    QMap<QString, qreal> m_breathPhase;    // where that sine stands at the beat, in cycles (runde 273)
     QElapsedTimer m_clock;
     qreal m_beatMs;
     qint64 m_beatStartMs;                  // clock reading of the last beat
