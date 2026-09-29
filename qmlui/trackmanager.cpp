@@ -371,6 +371,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     for (int i = 0; i < highArr.count(); i++) m_high.append(highArr.at(i).toInt());
     QJsonArray kickArr = obj.value(QStringLiteral("kick")).toArray();
     for (int i = 0; i < kickArr.count(); i++) m_kick.append(kickArr.at(i).toInt());
+    if (m_engine != nullptr)            // R317_PUNCH: how hard, not how full
+        m_engine->setTrackPunch(obj.value(QStringLiteral("kickRef")).toDouble(-1.0),
+                                obj.value(QStringLiteral("lowRef")).toDouble(-1.0));
 
     const bool keepLocal = resent && m_markersManual;       // R213_KEEP_HAND_FLAGS
     if (keepLocal == false)

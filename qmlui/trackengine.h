@@ -87,6 +87,7 @@ class QRandomGenerator;
 #define SETTINGS_ENGINE_GROUPOFF  QStringLiteral("trackengine/groupoff")
 #define SETTINGS_ENGINE_MASTER    QStringLiteral("trackengine/master")
 #define SETTINGS_ENGINE_ACCENT    QStringLiteral("trackengine/accent")
+#define SETTINGS_ENGINE_PUNCH     QStringLiteral("trackengine/punch")   // runde 317: kick/bass per track, the last 40
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
 #define SETTINGS_ENGINE_HOLDAUTO  QStringLiteral("trackengine/holdauto")  // runde 189: the fader picks the hold
 #define SETTINGS_ENGINE_CLOCKCURVE QStringLiteral("trackengine/clockcurve")   // 28 percents: 20:00, 20:15 ... 02:45 (runde 211; six hourly ones before, still read)
@@ -673,6 +674,11 @@ public:
     void resetConsole();
     void setNextKey(const QString &key);
     void setIncomingProfile(const QString &title, const QString &state, qreal energy);
+    /** runde 317: how hard this track's kick and bass are in absolute terms
+     *  (BLT's kickRef / lowRef, the numbers its curves were divided by) - the
+     *  curves themselves are relative to the track, so a drop reads full in
+     *  every track. -1: BLT did not send them. */
+    void setTrackPunch(qreal kickRef, qreal lowRef);
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** AUTO switched off: fade everything out over a bar, then let go. */
@@ -1045,6 +1051,14 @@ private:
     int m_dropKickLast = -1;      // the beat last counted - tick() can run twice on one
     bool m_dropKickLocked = false;
     bool m_strobeOnKick = true;   // true: a beat a step; false: eighths
+    // runde 317: the curves are normalised per track (BLT: kick to its 90th,
+    // lows to its 75th percentile), so a drop is "full" in EVERY track. What
+    // tells a hard kick from a soft one is the number they were divided by -
+    // this track's, and the same for the last tracks played (QSettings).
+    qreal m_kickRef = -1.0;
+    qreal m_lowRef = -1.0;
+    QList<qreal> m_punchKick;
+    QList<qreal> m_punchLow;
     int m_dropFrom = -1;      // the beat this drop's look was drawn (fejljagt 3: the settle clock)
     bool m_dropCalm = false;  // this drop has settled - held to the next section (fejljagt 3)
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)

@@ -235,6 +235,19 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
 {
     QSettings settings;
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
+    // runde 317: the kick/bass of the last tracks played, "kick:low" each
+    foreach (const QString &pair, settings.value(SETTINGS_ENGINE_PUNCH).toStringList())
+    {
+        const QStringList kl = pair.split(QLatin1Char(':'));
+        bool okK = false, okL = false;
+        const qreal k = kl.count() == 2 ? kl.at(0).toDouble(&okK) : -1.0;
+        const qreal l = kl.count() == 2 ? kl.at(1).toDouble(&okL) : -1.0;
+        if (okK && okL && k > 0.0 && l > 0.0)
+        {
+            m_punchKick.append(k);
+            m_punchLow.append(l);
+        }
+    }
     m_docTimer.setSingleShot(true);
     m_docTimer.setInterval(0);         // the next turn of the event loop
     connect(&m_docTimer, SIGNAL(timeout()), this, SLOT(slotDocSettled()));
@@ -1462,6 +1475,42 @@ int TrackEngine::guessStars(const TrackFuncInfo &info) const
     if (b >= 0.75)
         return 2;
     return 3;
+}
+
+// runde 317: where x stands among the values, 0..1 (ties count half)
+static qreal engineRankIn(const QList<qreal> &values, qreal x)
+{
+    if (values.isEmpty())
+        return 0.5;
+    qreal below = 0.0;
+    foreach (qreal v, values)
+        below += v < x ? 1.0 : (qFuzzyCompare(v + 1.0, x + 1.0) ? 0.5 : 0.0);
+    return below / qreal(values.count());
+}
+
+void TrackEngine::setTrackPunch(qreal kickRef, qreal lowRef)
+{
+    m_kickRef = kickRef;
+    m_lowRef = lowRef;
+    if (kickRef <= 0.0 || lowRef <= 0.0)
+        return;
+    // the same track sent again (a reconnect, a resend) is not a new one
+    if (m_punchKick.isEmpty() == false
+        && qFuzzyCompare(m_punchKick.last() + 1.0, kickRef + 1.0)
+        && qFuzzyCompare(m_punchLow.last() + 1.0, lowRef + 1.0))
+        return;
+    m_punchKick.append(kickRef);
+    m_punchLow.append(lowRef);
+    while (m_punchKick.count() > 40)
+    {
+        m_punchKick.removeFirst();
+        m_punchLow.removeFirst();
+    }
+    QStringList keep;
+    for (int i = 0; i < m_punchKick.count(); i++)
+        keep << QString::number(m_punchKick.at(i), 'f', 4) + QLatin1Char(':')
+                + QString::number(m_punchLow.at(i), 'f', 4);
+    QSettings().setValue(SETTINGS_ENGINE_PUNCH, keep);
 }
 
 qreal TrackEngine::strobePaceFloor(int tier) const
@@ -8128,14 +8177,32 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         if (dropBar >= 2)
         {
+            // Runde 317 (review of 316): the curves are relative to the
+            // track - kick divided by its 90th percentile, the lows by their
+            // 75th - so a drop reads close to 1.0 in every track and 316
+            // stepped on the kick every time. Back to absolute terms with the
+            // numbers BLT divided by (setTrackPunch), then HOW HARD compared
+            // with the tracks played before: harder than most, on the kick;
+            // softer than most, eighths; blended between. Until six tracks
+            // are known (or without BLT's numbers) it stays on the kick.
             qreal hard = -1.0;
-            if (m_dropKickN > 0)
-                hard = m_dropKickSum / qreal(m_dropKickN);
-            if (bass >= 0.0)
-                hard = hard >= 0.0 ? 0.5 * hard + 0.5 * bass : bass;
-            const qreal onKick = hard < 0.0 ? 1.0 : qBound(0.0, (hard - 0.35) / 0.40, 1.0);
+            if (m_punchKick.count() >= 6 && m_kickRef > 0.0 && m_lowRef > 0.0)
+            {
+                const qreal k = (m_dropKickN > 0 ? m_dropKickSum / qreal(m_dropKickN) : 1.0) * m_kickRef;
+                const qreal l = (bass >= 0.0 ? bass : 1.0) * m_lowRef;
+                hard = 0.5 * engineRankIn(m_punchKick, k) + 0.5 * engineRankIn(m_punchLow, l);
+            }
+            const qreal onKick = hard < 0.0 ? 1.0 : qBound(0.0, (hard - 0.25) / 0.50, 1.0);
             m_strobeOnKick = rng->bounded(1000) < int(onKick * 1000.0);
             m_dropKickLocked = true;
+            // ... and the strobes pick again now, at the pace just decided:
+            // what they hold was picked in the impact bars, before the kick
+            // had been heard (runde 317, review)
+            foreach (const QString &sk, m_groupOrder)
+            {
+                if (m_groups.value(sk).strobes)
+                    m_sectionMotion.remove(sk);
+            }
             logSignal(QStringLiteral("sig:strobe-pace:") + (m_strobeOnKick ? QStringLiteral("kick")
                                                                            : QStringLiteral("eighths"))
                       + QStringLiteral(":") + QString::number(hard, 'f', 2));
