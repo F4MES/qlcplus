@@ -1778,6 +1778,30 @@ Row
                                       ? (trackEngine.colourOverrides.length > 1 ? "#FFFFFF" : liveRow.swatch(modelData))
                                       : "#555555"
                         onTapped: trackEngine.toggleColourOverride(modelData)
+                        // runde 313 (B27, Tobias): a colour the engine cannot use
+                        // (gone from the palette, banned) blinks - the press
+                        // arrived, it was refused
+                        Rectangle
+                        {
+                            anchors.fill: parent
+                            radius: 4
+                            color: "#FFFFFF"
+                            opacity: 0.0
+                            z: 5
+                            SequentialAnimation on opacity
+                            {
+                                id: rejectBlink
+                                running: false
+                                loops: 3
+                                NumberAnimation { to: 0.8; duration: 90 }
+                                NumberAnimation { to: 0.0; duration: 140 }
+                            }
+                        }
+                        Connections
+                        {
+                            target: trackEngine
+                            function onColourRejected(colour) { if (colour === modelData) rejectBlink.restart() }
+                        }
                     }
                 }
             }

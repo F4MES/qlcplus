@@ -229,7 +229,6 @@ struct TrackMove
     qreal texture = 0.0;      // per-fixture level spread among the lit ones, 0..0.3 - a flat group looks static
     bool bare = false;        // strobes: blink one at a time with nothing lit behind them
     qreal drawnE = -1.0;      // the energy this move was drawn at (-1 = m_movesEnergy's) - runde 264
-    bool fastStrobe = false;  // strobes, a high drop: the show's FAST chases may run (runde 312)
 };
 
 /** A figure for a group of moving heads: a hidden EFX run RELATIVE to the
@@ -683,6 +682,9 @@ public:
 signals:
     void tableChanged();
     void liveChanged();
+    /** a colour tile was pressed but the colour cannot be used (not in the
+     *  palette any more, banned): the tile blinks (runde 313, B27/Tobias) */
+    void colourRejected(const QString &colour);
     /** ROOM in percent of energy (55 / 80 / 100 / 125): TrackManager puts it
      *  on the ENERGY trim, so ROOM and the ENERGY slider are one dial. */
     void roomChanged(int percent);
@@ -755,9 +757,9 @@ protected:
     bool coversColourOf(Function *func, const QSet<QString> &groups) const;
     int guessStars(const TrackFuncInfo &info) const;
     qreal stepBeats(const TrackFuncInfo &info, qreal bpm) const;
-    /** runde 312: a strobe group in a high drop whose move drew a fast chase -
-     *  the support pace (two beats a step) does not hold it, eighths do */
-    bool strobeFastOk(const QString &group, int tier) const;
+    /** runde 313: the fastest a strobe chase may step, in beats, on the
+     *  slider - 2 under 50 %, 1 from 50 %, an eighth from 75 % in a drop */
+    qreal strobePaceFloor(int tier) const;
     int divisionFor(const TrackFuncInfo &info, qreal bpm, int division) const;
     void ensureAtmosScenes();
     void applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32> > &channels, qreal level);

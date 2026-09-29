@@ -119,8 +119,8 @@ class TrackManager : public QObject
     Q_PROPERTY(QVariantList roleActivity READ roleActivity NOTIFY engineChanged)
 
     Q_PROPERTY(int liveBpm READ liveBpm NOTIFY energyChanged)
-    Q_PROPERTY(double engineTempo READ engineBpm NOTIFY positionChanged)      // R308_TEMPO_SOURCE
-    Q_PROPERTY(QString tempoSource READ tempoSource NOTIFY positionChanged)
+    Q_PROPERTY(double engineTempo READ engineBpm NOTIFY tempoChanged)      // R308_TEMPO_SOURCE R313_TEMPO_NOTIFY
+    Q_PROPERTY(QString tempoSource READ tempoSource NOTIFY tempoChanged)
     Q_PROPERTY(qreal energy READ energy NOTIFY energyChanged)
     Q_PROPERTY(qreal appliedEnergy READ appliedEnergy NOTIFY energyChanged)
     Q_PROPERTY(int energyTrim READ energyTrim WRITE setEnergyTrim NOTIFY energyChanged)
@@ -258,6 +258,7 @@ signals:
     void listenPortChanged();
     void connectedChanged();
     void linkChanged();
+    void tempoChanged();        // R313_TEMPO_SIGNAL: engineTempo / tempoSource
     void trackChanged();
     void markersChanged();
     void mixChanged();
@@ -403,6 +404,7 @@ private:
     qint64 m_beatChangedMs = 0;  // R187_LAGGING_BEAT: when the beat last moved
     int m_trackPlayer = -1;      // R188_TRACK_PLAYER: the deck the track came from (-1: not sent)
     bool m_linkStale;
+    QString m_tempoShown;       // R313_TEMPO_SHOWN: what the tempo line last showed
 
     /* ---- roles ---- */
     bool m_roleMode;

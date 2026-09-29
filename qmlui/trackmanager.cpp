@@ -944,6 +944,14 @@ void TrackManager::saveLooks()
 
 void TrackManager::slotEnergyTick()
 {
+    {   // R313_TEMPO_TICK: a deck that went quiet leaves the line at once
+        const QString shown = tempoSource() + QLatin1Char('|') + QString::number(engineBpm(), 'f', 1);
+        if (shown != m_tempoShown)
+        {
+            m_tempoShown = shown;
+            emit tempoChanged();
+        }
+    }
     // watchdog: a playing track that stops sending positions for four
     // seconds is a broken link, not a pause
     // no client at all is a broken link right away
