@@ -253,7 +253,9 @@ uint ChaserRunner::stepFadeUnits(const Function *func, uint fade) const
     // Tilt" glide never reached its target and the tilt jumped at every step.
     // A chaser from the Virtual Console is left exactly as it always ran
     // (Tobias, 2026-09-28).
-    const bool convert = m_chaser->overlapMode() || m_chaser->startedByTrackEngine();
+    if (m_trackStarted == false && m_chaser->startedByTrackEngine())
+        m_trackStarted = true;
+    const bool convert = m_chaser->overlapMode() || m_trackStarted;
     if (convert == false || func == NULL ||
         m_chaser->tempoType() != Function::Beats || func->tempoType() != Function::Time ||
         fade == Function::defaultSpeed())

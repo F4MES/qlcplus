@@ -96,6 +96,9 @@ private:
 
 private:
     bool m_updateOverrideSpeeds;
+    /** B24: TRACK started this chaser - remembered, because stop(master)
+     *  clears the sources before the last step's fade-out is computed */
+    mutable bool m_trackStarted = false;
     /** Raised by slotChaserChanged() on the GUI thread, consumed by write()
      *  on the timer thread - the only thread that touches m_runnerSteps. */
     QAtomicInt m_chaserChanged;
