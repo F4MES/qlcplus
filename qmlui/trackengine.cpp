@@ -1479,7 +1479,9 @@ qreal TrackEngine::strobePaceFloor(int tier) const
         return 2.0;
     if (f < 0.75 || tier != 2)
         return 1.0;
-    return 0.5;
+    // runde 316: over 75 % in a drop the kick decides - a hard one a beat
+    // a step, a soft one eighths (tick(), m_strobeOnKick, held per drop)
+    return m_strobeOnKick ? 1.0 : 0.5;
 }
 
 qreal TrackEngine::stepBeats(const TrackFuncInfo &info, qreal bpm) const
@@ -5723,6 +5725,22 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
                     && stepBeats(*info, bpm) >= 2.0))
                 support.append(info);
         }
+        // runde 316: over 75 % in a drop the kick has spoken (strobePaceFloor)
+        // - PREFER that pace, not only allow it: a soft kick gets the eighth
+        // chases, a hard one the chases that step on every beat. The slower
+        // ones stay as the fallback when the pool has none at that pace.
+        if (strobeGroup && tier == 2 && m_faderNow >= 0.75 && support.isEmpty() == false)
+        {
+            QList<TrackFuncInfo *> atPace;
+            foreach (TrackFuncInfo *info, support)
+            {
+                if (info->type != int(Function::SceneType)
+                    && qAbs(stepBeats(*info, bpm) - strobeFloor) < 0.01)
+                    atPace.append(info);
+            }
+            if (atPace.isEmpty() == false)
+                support = atPace;
+        }
         if (support.isEmpty())
         {
             // Pattern devices have no generated substitute: keep an eligible
@@ -8081,6 +8099,48 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // (settleNow sets m_dropCalm above), and there it is the same one step.
     if (dropSettled)
         m_dropStyle = m_dropStyle == 1 ? 4 : ((m_dropStyle == 5 || m_dropStyle == 3) ? 2 : m_dropStyle);
+
+    // RUNDE 316 (Tobias, 2026-09-29): over 75 % the strobes' chase follows
+    // the KICK - "et hårdt kick/bas er 1 trin pr slag, og et blødere
+    // (hurtigere kick) er 1/8". Heard, not drawn: m_dropStyle above is a
+    // look the engine picks at random, this is what the analysis measures -
+    // the kick on each beat of the drop's first two bars (the impact runs
+    // there anyway) and the lows over them. Then held for the drop: a chase
+    // that changes pace from beat to beat reads as one that stutters.
+    // Blended, not a switch at one line: from a kick+bass of 0.35 (eighths
+    // every time) to 0.75 (on the kick every time), a draw in between.
+    // Without the curves from BLT it stays on the kick, as before.
+    if (isDrop == false)
+    {
+        m_dropKickSum = 0.0;
+        m_dropKickN = 0;
+        m_dropKickLast = -1;
+        m_dropKickLocked = false;
+        m_strobeOnKick = true;
+    }
+    else if (m_dropKickLocked == false)
+    {
+        if (dropBar >= 0 && dropBar < 2 && kick >= 0.0 && beat != m_dropKickLast)
+        {
+            m_dropKickSum += kick;
+            m_dropKickN++;
+            m_dropKickLast = beat;
+        }
+        if (dropBar >= 2)
+        {
+            qreal hard = -1.0;
+            if (m_dropKickN > 0)
+                hard = m_dropKickSum / qreal(m_dropKickN);
+            if (bass >= 0.0)
+                hard = hard >= 0.0 ? 0.5 * hard + 0.5 * bass : bass;
+            const qreal onKick = hard < 0.0 ? 1.0 : qBound(0.0, (hard - 0.35) / 0.40, 1.0);
+            m_strobeOnKick = rng->bounded(1000) < int(onKick * 1000.0);
+            m_dropKickLocked = true;
+            logSignal(QStringLiteral("sig:strobe-pace:") + (m_strobeOnKick ? QStringLiteral("kick")
+                                                                           : QStringLiteral("eighths"))
+                      + QStringLiteral(":") + QString::number(hard, 'f', 2));
+        }
+    }
 
     // Stable roles for this room picture: base / rhythmic lead / support.
     // Keep the lead under HOLD and through a mix; replace it only when it

@@ -1037,6 +1037,14 @@ private:
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
     bool m_landCoin = false;  // runde 287: a plain or tight drop lands on the impact chase (true) or still
     bool m_dropStyleDrawn = false; // m_dropStyle was drawn for the drop on stage - 0 is a style too (runde 282)
+    // runde 316: how hard the drop's kick is, heard over its first two bars -
+    // the strobes' chase steps on the kick for a hard one, in eighths for a
+    // soft one (strobePaceFloor, over 75 %). Once per drop, then held.
+    qreal m_dropKickSum = 0.0;
+    int m_dropKickN = 0;
+    int m_dropKickLast = -1;      // the beat last counted - tick() can run twice on one
+    bool m_dropKickLocked = false;
+    bool m_strobeOnKick = true;   // true: a beat a step; false: eighths
     int m_dropFrom = -1;      // the beat this drop's look was drawn (fejljagt 3: the settle clock)
     bool m_dropCalm = false;  // this drop has settled - held to the next section (fejljagt 3)
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)
