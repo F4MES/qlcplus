@@ -291,7 +291,10 @@ void TrackManager::slotReadyRead()
         if (i + 1 < lines.count())
         {
             const int here = playingBeat(lines.at(i));
-            if (here > 0 && playingBeat(lines.at(i + 1)) > here)
+            const int after = here > 0 ? playingBeat(lines.at(i + 1)) : -1;
+            if (here > 0 && after > here                        // R305_POS_BURST_LANDING
+                && ((here - 1 - m_downbeat) % 4 + 4) % 4 != 0
+                && stateAtBeat(here) == stateAtBeat(after))
                 continue;
         }
         handleLine(lines.at(i));

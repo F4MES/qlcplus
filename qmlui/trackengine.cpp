@@ -139,6 +139,29 @@ static bool engineBannedColour(const QString &colour)
 {
     return colour == QLatin1String("yellow");
 }
+
+// gen_programs' HARMONY without white - the pairs the mix draws from, the
+// look's partner colour (runde 243) and, since review 305, the tiles' partner
+// with three colours or more. At file scope so setPartnerOf() can ask it.
+static const QMap<QString, QStringList> &engineMixesWith()
+{
+    static const QMap<QString, QStringList> mixesWith =
+    {
+        { "red",     { "magenta", "orange", "blue" } },
+        { "orange",  { "red", "blue" } },
+        { "magenta", { "blue", "red", "cyan" } },
+        { "blue",    { "magenta", "cyan", "orange", "red" } },
+        { "cyan",    { "blue", "green", "magenta" } },
+        { "green",   { "cyan" } },
+        { "white",   { "blue", "cyan", "magenta" } },
+    };
+    return mixesWith;
+}
+
+static bool engineColoursPair(const QString &a, const QString &b)
+{
+    return engineMixesWith().value(a).contains(b) || engineMixesWith().value(b).contains(a);
+}
 #define ENGINE_HAZE_SCENE     QStringLiteral("TRACK Haze")
 #define ENGINE_FAN_SCENE      QStringLiteral("TRACK Fan")
 
@@ -1341,6 +1364,19 @@ void TrackEngine::ensureTable()
     }
     if (m_palette.count() < 2)
         m_palette.append(singles);
+    // a colour the show no longer has leaves the tiles' set (review 305)
+    if (m_overrideSet.isEmpty() == false)
+    {
+        QStringList kept;
+        foreach (const QString &c, m_overrideSet)
+            if (m_palette.contains(c)) kept << c;
+        if (kept != m_overrideSet)
+        {
+            m_overrideSet = kept;
+            m_overrideIdx = kept.contains(m_override) ? int(kept.indexOf(m_override)) : 0;
+            m_override = kept.isEmpty() ? QString() : kept.at(m_overrideIdx);
+        }
+    }
 
     // the groups that have a programme made for builds (runde 227)
     m_climbGroups.clear();
@@ -4414,9 +4450,19 @@ void TrackEngine::setColourOverride(QString colour)
     const QStringList one = colour.isEmpty() ? QStringList() : QStringList(colour);
     if (colour == m_override && m_overrideSet == one)
         return;
+    const bool setChanged = m_overrideSet != one;
     m_overrideSet = one;
     m_overrideIdx = 0;
+    const QString was = m_override;
     applyOverride(colour);
+    // the lead did not change, the set did (a tile taken out down to the one
+    // leading): applyOverride() returned early - say so (review 305)
+    if (setChanged && was == colour)
+    {
+        logSignal(colour.isEmpty() ? QStringLiteral("sig:colour-auto")
+                                   : QStringLiteral("sig:colour:") + colour);
+        emit liveChanged();
+    }
 }
 
 QStringList TrackEngine::colourOverrides() const { return m_overrideSet; }
@@ -4432,7 +4478,10 @@ void TrackEngine::toggleColourOverride(const QString &colour)
     // NEXT) the lead turns to the next one. One tile is the old single lock.
     if (colour.isEmpty() || engineBannedColour(colour) || m_palette.contains(colour) == false)
         return;
-    QStringList set = m_overrideSet;
+    // the start scene's red is not the DJ's (review 305): a tile tapped while
+    // it is up starts a set of its own, and outlives it (m_startColour)
+    QStringList set = m_startColour ? QStringList() : m_overrideSet;
+    const int wasAt = int(set.indexOf(m_override));
     if (set.contains(colour))
         set.removeAll(colour);
     else
@@ -4442,12 +4491,38 @@ void TrackEngine::toggleColourOverride(const QString &colour)
         setColourOverride(set.isEmpty() ? QString() : set.first());
         return;
     }
-    const QString lead = set.contains(m_override) ? m_override : set.first();
+    // the lead stays; taken out, the NEXT tile in order leads (review 305:
+    // it jumped back to the first)
+    const QString lead = set.contains(m_override) ? m_override
+                       : set.at(qBound(0, wasAt, int(set.count()) - 1));
     m_overrideSet = set;
     m_overrideIdx = int(set.indexOf(lead));
+    logSignal(QStringLiteral("sig:colour:") + set.join('+'));   // every change of the set is on the log
     applyOverride(lead);
     // applyOverride() returns early when the lead did not change: the set did
     emit liveChanged();
+}
+
+QString TrackEngine::setPartnerOf(int leadIdx) const
+{
+    // The look's partner from the tiles (runde 304): the next one after the
+    // lead - but with three tiles or more, the first after it that the colour
+    // rules pair with the lead (HARMONY's mixesWith), so [red, blue, green]
+    // does not stand green by red (review 305). None pairs: the next one.
+    const int n = int(m_overrideSet.count());
+    if (n < 2)
+        return QString();
+    const QString lead = m_overrideSet.at(((leadIdx % n) + n) % n);
+    if (n > 2)
+    {
+        for (int k = 1; k < n; k++)
+        {
+            const QString c = m_overrideSet.at((leadIdx + k) % n);
+            if (engineColoursPair(lead, c))
+                return c;
+        }
+    }
+    return m_overrideSet.at((leadIdx + 1) % n);
 }
 
 void TrackEngine::applyOverride(const QString &colour)
@@ -5006,7 +5081,7 @@ QList<TrackEngine::CandEntry> TrackEngine::buildCandidates(int role, const QStri
         {
             QMap<QString, TrackGroup>::const_iterator bg = m_groups.constFind(group);
             if (bg != m_groups.constEnd() && bg->lasers && bg->patternDevice == false
-                && ownEffectOf(info.id))
+                && ownEffectOf(info.id, group))
                 continue;
         }
         CandEntry e;
@@ -6095,8 +6170,11 @@ bool TrackEngine::macroPosition(quint32 fid) const
     return false;
 }
 
-bool TrackEngine::ownEffectOf(quint32 fid) const
+bool TrackEngine::ownEffectOf(quint32 fid, const QString &group) const
 {
+    // (review 305: only the group's own fixtures - a programme that also runs
+    // the animation laser's or a strobe's macro is not the bars' own effect)
+    const QList<quint32> mine = m_groups.value(group).fixtures;
     // Runde 303 (bane B's headless B23 D2): in plain AUTO the engine took the
     // operator's "Laser Chase 1 Preset Red" as the bars' MOTION - it writes
     // their Effect / Effect Speed channels (79 / 165), the bar's own show,
@@ -6121,7 +6199,7 @@ bool TrackEngine::ownEffectOf(quint32 fid) const
             continue;
         foreach (const SceneValue &sv, scene->values())
         {
-            if (sv.value == 0)
+            if (sv.value == 0 || mine.contains(sv.fxi) == false)
                 continue;
             Fixture *fxi = m_doc->fixture(sv.fxi);
             const QLCChannel *qch = fxi == nullptr ? nullptr : fxi->channel(sv.channel);
@@ -6439,7 +6517,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // beat comes, and they stood lit - strobing - for 1-4 s until the stop's
     // grace or the stale link took the room idle. A beat and a half with no
     // tick ends them (slotBeatWatch).
-    m_beatWatch.start(qBound(250, int(m_beatMs * 1.5), 1500));
+    m_beatWatch.start(qBound(400, int(m_beatMs * 1.5) + 150, 2500));   // + a lost beat packet's status (review 305)
 
     // the clock moves the ENERGY slider (through roomChanged), so the time
     // of night is already in the energy that arrives here
@@ -7046,16 +7124,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // line, so a HOLD let go after the turn point does not turn the base mid-bar
     // gen_programs' HARMONY without white - the pairs the mix draws from, and
     // (runde 243) the look's partner colour below
-    static const QMap<QString, QStringList> mixesWith =
-    {
-        { "red",     { "magenta", "orange", "blue" } },
-        { "orange",  { "red", "blue" } },
-        { "magenta", { "blue", "red", "cyan" } },
-        { "blue",    { "magenta", "cyan", "orange", "red" } },
-        { "cyan",    { "blue", "green", "magenta" } },
-        { "green",   { "cyan" } },
-        { "white",   { "blue", "cyan", "magenta" } },
-    };
+    const QMap<QString, QStringList> &mixesWith = engineMixesWith();   // file scope since review 305
     if (m_mixing && m_mixBeat >= 0 && m_nextColour.isEmpty() && m_palette.isEmpty() == false
         && m_override.isEmpty() && hold == false && isCalm == false
         && (beatInBar == 0 || forceNext))
@@ -7702,8 +7771,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // runde 304: two tiles or more - the next one is the accent in every
     // section (not only drops, whatever the "Accent colour in drops" tile
     // says): the DJ asked for both colours in the room
-    const QString setPartner = m_overrideSet.count() >= 2
-        ? m_overrideSet.at((m_overrideIdx + 1) % int(m_overrideSet.count())) : QString();
+    const QString setPartner = setPartnerOf(m_overrideIdx);
     if (setPartner.isEmpty() == false && setPartner != m_colour && isCalm == false && castSet.count() >= 2)
         accentColour = setPartner;
     else if (m_accent && isDrop && isCalm == false && castSet.count() >= 2 && m_override.isEmpty()
@@ -7792,6 +7860,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool hard = sectionChanged && isDrop;
     QStringList castSorted = castSet.values();
     castSorted.sort();
+    // runde 306: the groups the tiles' colours spread over, in the rig's own
+    // order - not the cast's, so a group joining or leaving mid-section does
+    // not recolour the others (the base wears the lead)
+    QStringList spreadKeys = m_groupOrder;
+    spreadKeys.removeAll(base);
     // The accent's group is drawn per section from the effect groups in the
     // cast, and never the same group twice running. It used to be "the last
     // effect group" of an alphabetically sorted list - which was the strobes
@@ -9123,9 +9196,36 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the mix's second half: the base stands in the incoming track's colour
         if (key == base && mixTurnDue && m_nextColour.isEmpty() == false && m_override.isEmpty())
             colour = m_nextColour;
+        // Runde 306 (Tobias: "Når jeg har valgt fliser, må man vælge så mange
+        // som man har lyst til"): EVERY tile on the rig at once. The base wears
+        // the lead; the other groups in the cast take the tiles after it in
+        // turn (the partner first), each the first of them it can actually
+        // show (the bars have no orange: the next tile, never a substitute).
+        // The lead turns at each colour change, and the whole spread with it.
+        const bool spread = m_overrideSet.count() >= 2 && key != base;
+        if (spread)
+        {
+            const int n = int(m_overrideSet.count());
+            const int j = int(spreadKeys.indexOf(key));
+            for (int t = 0; t < n; t++)
+            {
+                const QString c = m_overrideSet.at((m_overrideIdx + 1 + qMax(0, j) + t) % n);
+                if (colourForGroup(key, c) == c)
+                {
+                    colour = c;
+                    break;
+                }
+            }
+        }
         quint32 splitScene = Function::invalidId();
         QString tradeOther;   // the accent group's other half of the trade (runde 230)
-        if (accentColour.isEmpty() == false && key == accentGroup)
+        // (review 305: with the tiles' set, a group that cannot show the
+        // partner - the bars have no orange - keeps the room colour, rather
+        // than a substitute that makes a third colour)
+        // (runde 306: with the tiles' set every group already has its own tile
+        // colour - the spread above - so the accent sits out)
+        if (accentColour.isEmpty() == false && key == accentGroup && spread == false
+            && (m_overrideSet.count() < 2 || colourForGroup(key, accentColour) == accentColour))
         {
             // the accent either holds, or trades places with the palette
             // colour every few bars - never a third colour
@@ -9938,8 +10038,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         : contrast.value(m_colour, QStringLiteral("white"));
                     if (m_palette.contains(echoHue) == false || engineBannedColour(echoHue))
                         echoHue = QStringLiteral("white");
+                    const bool echoShows = m_overrideSet.count() < 2
+                                        || colourForGroup(echoKey, echoHue) == echoHue;   // review 305
                     echoHue = colourForGroup(echoKey, echoHue);
-                    quint32 ef = colourFunction(echoKey, echoHue);
+                    quint32 ef = echoShows ? colourFunction(echoKey, echoHue) : Function::invalidId();
                     // not the scene the group already wears (fejljagt 09-27):
                     // the contrast can fall back to the room's own colour, and
                     // two slots on one function share one intensity override -
@@ -11606,6 +11708,17 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             // 100 to 50 % lifted the bars 8 units lit; REGLER: mørke ved
             // genplacering). The caller puts the group in darkGroups.
             const bool lifted = cur - y >= 2;
+            // ... and the light goes BEFORE the mirror moves (review 305, as R1):
+            // setYOffset() is read by the MasterTimer thread at once, and the
+            // darkGroups the caller sets only reach the levels later in tick()
+            if (lifted && m_flashHeld.contains(group) == false)
+            {
+                const TrackGroup &lg = m_groups.value(group);
+                stopSlot("col:" + group, true);
+                stopSlot("mot:" + group, true);
+                for (int i = 0; i < lg.parts.count(); i++)
+                    stopSlot(partSlot(group, i), true);
+            }
             // the centre first: lifted before the figure grows under it
             if (efx->yOffset() != y)
                 efx->setYOffset(y);

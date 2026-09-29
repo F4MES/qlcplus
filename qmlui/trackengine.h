@@ -508,6 +508,8 @@ public:
     QStringList colourOverrides() const;
     /** A tile tapped: in the set, it leaves it; not, it joins (runde 304). */
     Q_INVOKABLE void toggleColourOverride(const QString &colour);
+    /** the tiles' partner for the lead at leadIdx (review 305) */
+    QString setPartnerOf(int leadIdx) const;
     QString currentColour() const;
     QStringList cast() const;
     qreal master() const;
@@ -792,7 +794,7 @@ protected:
     bool macroPosition(quint32 fid) const;
     /** A function (a scene, or a chaser's step scenes) writes a non-zero
      *  value on a channel of the fixture's own effect engine (runde 303). */
-    bool ownEffectOf(quint32 fid) const;
+    bool ownEffectOf(quint32 fid, const QString &group) const;
     /** A laser aim (scene or chaser) that never leaves the group's home aim
      *  by more than ENGINE_AIM_REACH, and never writes anything but pan and
      *  tilt. Safe to run without the operator having promised it by name. */
