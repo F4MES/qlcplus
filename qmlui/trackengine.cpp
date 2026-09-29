@@ -4493,11 +4493,31 @@ void TrackEngine::toggleColourOverride(const QString &colour)
     }
     // the lead stays; taken out, the NEXT tile in order leads (review 305:
     // it jumped back to the first)
-    const QString lead = set.contains(m_override) ? m_override
-                       : set.at(qBound(0, wasAt, int(set.count()) - 1));
+    QString lead = set.contains(m_override) ? m_override
+                 : set.at(qBound(0, wasAt, int(set.count()) - 1));
+    // white is punctuation (REGLER: "en hvid base ser ud som arbejdslys"): in a
+    // set it is worn by the other groups, never the base's lead (review 307)
+    if (lead == QStringLiteral("white"))
+    {
+        foreach (const QString &c, set)
+        {
+            if (c != QStringLiteral("white"))
+            {
+                lead = c;
+                break;
+            }
+        }
+    }
     m_overrideSet = set;
     m_overrideIdx = int(set.indexOf(lead));
     logSignal(QStringLiteral("sig:colour:") + set.join('+'));   // every change of the set is on the log
+    // the spread moves with the set even when the lead stays: a pattern device
+    // lets go of the scene it holds, as a lead change makes it (review 307)
+    foreach (const QString &pk, m_groupOrder)
+    {
+        if (m_groups.value(pk).patternDevice)
+            m_sectionMotion.remove(pk);
+    }
     applyOverride(lead);
     // applyOverride() returns early when the lead did not change: the set did
     emit liveChanged();
@@ -7057,7 +7077,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // NEXT); HOLD and a mix hold it as they hold the room colour
     if (m_overrideSet.count() >= 2 && changeColour)
     {
-        m_overrideIdx = (m_overrideIdx + 1) % int(m_overrideSet.count());
+        const int n = int(m_overrideSet.count());
+        m_overrideIdx = (m_overrideIdx + 1) % n;
+        // white is never the lead (review 307): the next tile leads instead
+        if (m_overrideSet.at(m_overrideIdx) == QStringLiteral("white"))
+            m_overrideIdx = (m_overrideIdx + 1) % n;
         m_override = m_overrideSet.at(m_overrideIdx);
     }
     if (engineBannedColour(m_override))
@@ -7821,6 +7845,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         m_partnerPick = setPartner;      // runde 304: the tiles' pair is the look's pair
         m_partnerSolo = false;
+        // (review 307: the spread wears it, not the accent block - so no accent
+        // on the log either)
+        accentColour.clear();
     }
     else if (m_override.isEmpty() == false)
     {
@@ -7891,6 +7918,54 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
             accentGroup = m_accentGroup;
         }
+    }
+
+    // Runde 306 / review 307: the tiles' colours per group, worked out once a
+    // beat. The order: the look's partner first, the other tiles after the
+    // lead in turn, the lead last - so the colour next to the base is the one
+    // the rules pair with it (setPartnerOf). Each group takes the first of them
+    // from its own place (the rig's order) that it can show. With two tiles the
+    // odd places wear the lead; when no group in the cast shows anything but the
+    // lead, the accent group wears the partner (runde 304's promise).
+    QHash<QString, QString> spreadColour;
+    if (m_overrideSet.count() >= 2)
+    {
+        const QString partnerTile = setPartnerOf(m_overrideIdx);
+        const int n = int(m_overrideSet.count());
+        QStringList order;
+        if (partnerTile.isEmpty() == false)
+            order << partnerTile;
+        for (int t = 1; t < n; t++)
+        {
+            const QString c = m_overrideSet.at((m_overrideIdx + t) % n);
+            if (order.contains(c) == false)
+                order << c;
+        }
+        if (order.contains(m_colour) == false)
+            order << m_colour;
+        bool otherShown = false;
+        for (int j = 0; j < int(spreadKeys.count()); j++)
+        {
+            const QString &sk = spreadKeys.at(j);
+            QString pick;
+            for (int t = 0; t < int(order.count()); t++)
+            {
+                const QString c = order.at((j + t) % int(order.count()));
+                if (colourForGroup(sk, c) == c)
+                {
+                    pick = c;
+                    break;
+                }
+            }
+            if (pick.isEmpty())
+                pick = m_colour;
+            spreadColour.insert(sk, pick);
+            if (castSet.contains(sk) && pick != m_colour)
+                otherShown = true;
+        }
+        if (otherShown == false && accentGroup.isEmpty() == false && partnerTile.isEmpty() == false
+            && colourForGroup(accentGroup, partnerTile) == partnerTile)
+            spreadColour.insert(accentGroup, partnerTile);
     }
 
     /* ---- the drop's character: one draw that leans every group's dice
@@ -9204,19 +9279,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // The lead turns at each colour change, and the whole spread with it.
         const bool spread = m_overrideSet.count() >= 2 && key != base;
         if (spread)
-        {
-            const int n = int(m_overrideSet.count());
-            const int j = int(spreadKeys.indexOf(key));
-            for (int t = 0; t < n; t++)
-            {
-                const QString c = m_overrideSet.at((m_overrideIdx + 1 + qMax(0, j) + t) % n);
-                if (colourForGroup(key, c) == c)
-                {
-                    colour = c;
-                    break;
-                }
-            }
-        }
+            colour = spreadColour.value(key, colour);    // worked out once, above (review 307)
         quint32 splitScene = Function::invalidId();
         QString tradeOther;   // the accent group's other half of the trade (runde 230)
         // (review 305: with the tiles' set, a group that cannot show the
@@ -9422,7 +9485,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // scene was thrown away and re-picked on every beat (runde 171).
                 // It still lets go when the room colour changes.
                 if (worn.isEmpty() == false && worn != colour
-                    && ((key != accentGroup && g.patternDevice == false) || changeColour))
+                    && (((key != accentGroup || spread) && g.patternDevice == false) || changeColour))
                     mf = Function::invalidId();
                 // ... and a two-colour programme whose partner is no longer the
                 // look's (runde 243)
@@ -9903,6 +9966,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (whiteLand)
                 m_whiteLandMs = m_clock.elapsed();
             QString hue = whiteLand ? QStringLiteral("white") : m_colour;
+            // with the tiles' set the strobes flash in the tile they wear
+            // (review 307), not the lead's
+            if (whiteLand == false && spreadColour.isEmpty() == false)
+            {
+                foreach (const QString &sk, castSorted)
+                {
+                    if (m_groups.value(sk).strobes && spreadColour.contains(sk))
+                    {
+                        hue = spreadColour.value(sk);
+                        break;
+                    }
+                }
+            }
             quint32 ff = flashFunction(castSet, hue);
             // ... but only if his scene is actually in this colour. The
             // ranking in flashFunction() falls back to white and then to
