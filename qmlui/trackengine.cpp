@@ -9189,10 +9189,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && still == false && g.patternDevice == false && darkGroups.contains(key) == false)
         {
             mv.pattern = ENGINE_PAT_CHASE;
-            mv.stepBeats = 1;
+            // runde 313 (review): the strobes' impact keeps the slider's pace
+            // too (strobePaceFloor) - two beats a lamp under 50 %, eighths
+            // only from 75 %; they are on from 30 % now
+            mv.stepBeats = (g.strobes && fader < 0.50) ? 2 : 1;
             // runde 290: on the slider - quarters until 70 %, eighths above;
             // the hit 0.55 deep at 30 % and 0.90 at the top (was 0.85 flat)
-            mv.subSteps = (g.lasers || fader < 0.70) ? 1 : 2;
+            mv.subSteps = (g.lasers || fader < (g.strobes ? 0.75 : 0.70)) ? 1 : 2;
             mv.pulse = qMax(mv.pulse, 0.55 + 0.35 * qBound(0.0, (fader - 0.30) / 0.70, 1.0));
             mv.pulseOn = 0;
             mv.ownChaser = false;
