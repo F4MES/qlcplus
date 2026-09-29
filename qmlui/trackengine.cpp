@@ -1455,6 +1455,15 @@ int TrackEngine::guessStars(const TrackFuncInfo &info) const
     return 3;
 }
 
+bool TrackEngine::strobeFastOk(const QString &group, int tier) const
+{
+    // runde 312: see drawMove, the strobe branch. The move is the section's
+    // draw; the fader is asked again, so a hand pulled under 70 % takes the
+    // fast chases away at the next pick instead of at the next section.
+    return m_fullAuto && tier == 2 && m_faderNow >= 0.70
+        && m_groups.value(group).strobes && m_moves.value(group).fastStrobe;
+}
+
 qreal TrackEngine::stepBeats(const TrackFuncInfo &info, qreal bpm) const
 {
     if (info.beats > 0.0)
@@ -5656,8 +5665,17 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     if (m_fullAuto && m_compositionTier > 0 && group != m_rhythmLead)
     {
         QList<TrackFuncInfo *> support;
+        // runde 312: a strobe group in a high drop may take the show's fast
+        // chases - eighths at the most, the motion block holds it there
+        const bool fastStrobe = strobeFastOk(group, tier);
         foreach (TrackFuncInfo *info, ok)
         {
+            if (fastStrobe && info->type != int(Function::SceneType)
+                && stepBeats(*info, bpm) >= 0.5)
+            {
+                support.append(info);
+                continue;
+            }
             if (info->type == int(Function::SceneType)
                 || ((info->litShare >= (group == m_compositionBase && baseCovered() == false ? 0.60 : 0.50)
                      || info->peakLit >= ENGINE_OWN_FLOOR)      // runde 259: one lamp always on
@@ -9497,6 +9515,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // than the new ceiling, or two notches colder, is not what the
             // hand asked for. One notch colder stays - the pool doubles the
             // top star, so the next pick will most likely be hotter anyway.
+            // runde 312: a fast strobe chase held from a high drop lets go
+            // when the fast door shuts (the fader under 70 %, a redraw that
+            // drew the blink): held, the support pace would stretch it to two
+            // beats a step - a slow version of a fast figure
+            if (mf != Function::invalidId() && m_fullAuto && tier > 0 && g.strobes
+                && strobeFastOk(key, tier) == false
+                && m_funcs.value(mf).type != int(Function::SceneType)
+                && stepBeats(m_funcs.value(mf), bpm) < 2.0)
+                mf = Function::invalidId();
             if (mf != Function::invalidId() && ceilMoved)
             {
                 int have = qMax(1, m_funcs.value(mf).stars);
@@ -9660,8 +9687,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 int motionDivision = divisionFor(mi, bpm, division);
                 // Enforce the support pace AFTER SETUP and SPEED overrides.
                 // Scenes and EFX do not use the chaser's step-beat scale.
+                // (runde 312: not a fast strobe chase in a high drop - the
+                // strobes' own ceiling below holds it at eighths)
                 if (m_fullAuto && tier > 0 && key != m_rhythmLead
-                    && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType)))
+                    && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType))
+                    && strobeFastOk(key, tier) == false)
                     motionDivision = qMax(2000, motionDivision);
                 // Runde 219: the strobes' ceiling above (a whole beat, eighths
                 // at most in a drop) held for the engine's own picture only.
@@ -10518,6 +10548,21 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // lamps lit at least, the hardware strobe shut.
         mv.ownChaser = wild >= 0.15 && ((tier == 2 && chance(0.40))
                                         || (tier == 1 && build == false && chance(0.20)));
+        // RUNDE 312 (Tobias, 2026-09-29: "stroberne må gerne køre hurtigere
+        // end 2 slag ... kan motoren ikke bruge nogle af de hurtige strobe-
+        // chases til drops"): 632 of the show's strobe chases step faster
+        // than two beats, and the support pace (motionFor, the composition
+        // gate) shut every one of them out - the strobes are never the
+        // rhythm lead. In a DROP, from 70 % on the fader, about one section
+        // in three may draw one: eighths at the most (the strobe ceiling in
+        // the motion block), the engine's own blink stands aside while it
+        // runs (the chase owns the dimmers), and the rest of the drops keep
+        // the blink as before. Under 70 % nothing changes.
+        if (tier == 2 && build == false && fNow >= 0.70 && chance(0.34))
+        {
+            mv.ownChaser = true;
+            mv.fastStrobe = true;
+        }
         // ... and ALL the way down between the hits, at every energy. It was
         // 0.85 + 0.15 * e, so at the bottom of the fader the room sat at
         // fifteen per cent of a very bright lamp between the blinks: lit, on a
