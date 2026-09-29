@@ -119,6 +119,8 @@ class TrackManager : public QObject
     Q_PROPERTY(QVariantList roleActivity READ roleActivity NOTIFY engineChanged)
 
     Q_PROPERTY(int liveBpm READ liveBpm NOTIFY energyChanged)
+    Q_PROPERTY(double engineTempo READ engineBpm NOTIFY positionChanged)      // R308_TEMPO_SOURCE
+    Q_PROPERTY(QString tempoSource READ tempoSource NOTIFY positionChanged)
     Q_PROPERTY(qreal energy READ energy NOTIFY energyChanged)
     Q_PROPERTY(qreal appliedEnergy READ appliedEnergy NOTIFY energyChanged)
     Q_PROPERTY(int energyTrim READ energyTrim WRITE setEnergyTrim NOTIFY energyChanged)
@@ -391,6 +393,7 @@ private:
     qreal m_posBpm = 0.0;        // R301_POS_BPM: the deck's effective tempo, from BLT's pos
     qint64 m_posBpmMs = 0;
     qreal engineBpm() const;     // what the engine times on (runde 301)
+    QString tempoSource() const; // LINK / DECK / TRACK / CLOCK (runde 308)
 
     QTimer m_energyTimer;
     qint64 m_stopSinceMs = 0;    // STOP_GRACE_R105: when a playing track said stop

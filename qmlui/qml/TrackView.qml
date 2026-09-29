@@ -363,13 +363,18 @@ Rectangle
                     }
                     Text
                     {
+                        // runde 308: the tempo the engine times on, and from where.
+                        // Anything but LINK is amber: busking (QLC+'s own clock) and
+                        // the engine may then not run on the same tempo.
                         text: (trackManager && trackManager.playing
                                ? qsTr("PLAYING") : qsTr("PAUSED"))
-                              + "   " + (trackManager ? trackManager.liveBpm : 0) + " BPM"
+                              + "   " + (trackManager ? trackManager.engineTempo.toFixed(1) : "0") + " BPM"
+                              + (trackManager ? " · " + trackManager.tempoSource : "")
                               + "   " + (trackManager && trackManager.connected
                                          ? qsTr("BLT ok") : qsTr("no BLT"))
-                        color: trackManager && trackManager.playing ? "#3FBF3F"
-                                                                    : trackViewRoot.cDim
+                        color: trackManager && trackManager.playing
+                               ? (trackManager.tempoSource === "LINK" ? "#3FBF3F" : "#E3B44F")
+                               : trackViewRoot.cDim
                         font.pixelSize: 14
                     }
                 }

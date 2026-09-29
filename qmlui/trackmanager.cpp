@@ -1037,6 +1037,18 @@ qreal TrackManager::engineBpm() const      // R301_ENGINE_BPM_FN
         return m_bpm;
     return qreal(m_liveBpm);
 }
+
+QString TrackManager::tempoSource() const    // R308_TEMPO_SOURCE_FN: as engineBpm() decides
+{
+    MasterTimer *mt = m_doc != nullptr ? m_doc->masterTimer() : nullptr;
+    if (mt != nullptr && mt->linkEnabled() && mt->linkPeers() > 0 && mt->linkBpm() > 20.0)
+        return QStringLiteral("LINK");
+    if (m_posBpm > 20.0 && QDateTime::currentMSecsSinceEpoch() - m_posBpmMs < 3000)
+        return QStringLiteral("DECK");
+    if (m_bpm > 0)
+        return QStringLiteral("TRACK");
+    return QStringLiteral("CLOCK");
+}
 int TrackManager::energyTrim() const { return m_energyTrim; }
 
 void TrackManager::setEnergyTrim(int percent)
