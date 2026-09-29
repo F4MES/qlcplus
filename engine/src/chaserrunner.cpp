@@ -248,7 +248,13 @@ uint ChaserRunner::stepFadeUnits(const Function *func, uint fade) const
     // Overlap starts a step function in its OWN tempo (so it can finish on
     // its own), but the chaser's fades are in the chaser's units: a 1/4-beat
     // fade is 250 in Beats and must not reach a Time function as 250 ms.
-    if (m_chaser->overlapMode() == false || func == NULL ||
+    // B24_TRACK_FADES: ... and so does a chaser the TRACK engine started - a
+    // Time scene read the chaser's 24-beat fade as 24000 ms, so an "AUTO Bars
+    // Tilt" glide never reached its target and the tilt jumped at every step.
+    // A chaser from the Virtual Console is left exactly as it always ran
+    // (Tobias, 2026-09-28).
+    const bool convert = m_chaser->overlapMode() || m_chaser->startedByTrackEngine();
+    if (convert == false || func == NULL ||
         m_chaser->tempoType() != Function::Beats || func->tempoType() != Function::Time ||
         fade == Function::defaultSpeed())
         return fade;

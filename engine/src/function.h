@@ -458,6 +458,12 @@ public:
     /** Set the override speed type (done by a Chaser) */
     void setOverrideTempoType(TempoType type);
 
+    /** B24: is FunctionParent::Track (the TRACK engine) among this
+     *  function's sources? A chaser the engine started converts its beat
+     *  fades for Time steps (ChaserRunner::stepFadeUnits); one started from
+     *  the Virtual Console keeps its fades exactly as they always ran. */
+    bool startedByTrackEngine() const;
+
 protected:
     /** Save function's tempo type in $doc */
     bool saveXMLTempoType(QXmlStreamWriter *doc) const;

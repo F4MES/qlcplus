@@ -582,6 +582,17 @@ void Function::setOverrideTempoType(Function::TempoType type)
     m_overrideTempoType = type;
 }
 
+bool Function::startedByTrackEngine() const
+{
+    QMutexLocker sourcesLocker(const_cast<QMutex*>(&m_sourcesMutex));
+    foreach (FunctionParent source, m_sources)
+    {
+        if (source.type() == FunctionParent::Track)
+            return true;
+    }
+    return false;
+}
+
 void Function::slotBPMChanged(int bpmNumber)
 {
     Q_UNUSED(bpmNumber)
