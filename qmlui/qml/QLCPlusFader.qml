@@ -58,9 +58,14 @@ Slider
             GradientStop { position: 1.0; color: "#ccc" }
         }
 
-    // A bar that fills from the bottom, with a lit top edge - the Track
-    // page's language. The old groove was a thin blue line with grey painted
-    // over the unused part, which reads backwards on a dark desk.
+    // TRACK_GRIP_V1 (runde 310): the Track page's fader, stood on its end.
+    // A dark box with an edge, the level filled inside it 3 px in, ticks at
+    // a quarter, a half and three quarters, and a raised grip with three
+    // ridges where the level is (track_view_touch.qml, SliderGrip and
+    // SliderTicks, runde 140: "hvordan gør vi så alle sliders faktisk viser
+    // at det er sliders?"). The mode is still the colour of the fill.
+    property real gripSize: Math.max(12, Math.min(18, slider.availableHeight * 0.12))
+
     background:
         Rectangle
         {
@@ -69,43 +74,60 @@ Slider
             implicitHeight: slider.height
             width: slider.availableWidth
             height: slider.availableHeight
-            radius: UISettings.vcRadius - 1
+            radius: 4
             color: UISettings.vcBarBg
             border.width: 1
             border.color: UISettings.vcTileBorder
 
+            // the fill reaches the middle of the grip, wherever the grip is
             Rectangle
             {
-                x: 1
-                width: parent.width - 2
-                y: 1 + slider.visualPosition * (parent.height - 2)
-                height: parent.height - 2 - slider.visualPosition * (parent.height - 2)
-                radius: parent.radius
+                x: 3
+                width: parent.width - 6
+                y: Math.min(parent.height - 3,
+                            slider.visualPosition * (parent.height - slider.gripSize) + slider.gripSize / 2)
+                height: Math.max(0, parent.height - 3 - y)
+                radius: 3
                 color: trackColor
+            }
 
-                // the lit top edge: where the level is, seen from across a room
-                Rectangle
+            // a quarter, a half, three quarters - short marks at both sides
+            Repeater
+            {
+                model: [ 0.25, 0.5, 0.75 ]
+                Item
                 {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
+                    y: slider.gripSize / 2 + (1.0 - modelData) * (parent.height - slider.gripSize) - 1
+                    width: parent.width
                     height: 2
-                    color: UISettings.vcBarEdge
-                    visible: parent.height > 3
+                    Rectangle { x: 0; width: 6; height: 2; color: "#4A4A4A" }
+                    Rectangle { x: parent.width - 6; width: 6; height: 2; color: "#4A4A4A" }
                 }
             }
         }
 
-    // No grip: the Track page draws a line where the level is and lets
-    // the filled body do the rest. Dragging anywhere on the fader still works.
+    // the grip: raised, light, three ridges - brighter while it is held
     handle:
         Rectangle
         {
             y: slider.leftPadding + slider.visualPosition * (slider.availableHeight - height)
-            x: slider.topPadding
-            implicitWidth: slider.availableWidth
-            implicitHeight: Math.max(3, slider.height * 0.012)
-            color: slider.pressed ? "#FFFFFF" : UISettings.vcBarEdge
-            radius: 1
+            x: slider.topPadding + 2
+            implicitWidth: Math.max(8, slider.availableWidth - 4)
+            implicitHeight: slider.gripSize
+            radius: 4
+            color: slider.pressed ? "#FFFFFF" : Qt.lighter(slider.trackColor, 1.45)
+            border.width: 1
+            border.color: "#0E0E0E"
+
+            Row
+            {
+                anchors.centerIn: parent
+                spacing: 3
+                Repeater
+                {
+                    model: 3
+                    Rectangle { width: 2; height: Math.min(9, slider.gripSize - 6); radius: 1; color: "#1A1A1A"; opacity: 0.75 }
+                }
+            }
         }
 }
