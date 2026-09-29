@@ -235,17 +235,18 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
 {
     QSettings settings;
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
-    // runde 317: the kick/bass of the last tracks played, "kick:low" each
-    foreach (const QString &pair, settings.value(SETTINGS_ENGINE_PUNCH).toStringList())
+    // runde 317: the kick/bass of the last tracks played, "kick:low:title"
+    // each (the title after the second colon, so a colon in it is kept)
+    foreach (const QString &entry, settings.value(SETTINGS_ENGINE_PUNCH).toStringList())
     {
-        const QStringList kl = pair.split(QLatin1Char(':'));
         bool okK = false, okL = false;
-        const qreal k = kl.count() == 2 ? kl.at(0).toDouble(&okK) : -1.0;
-        const qreal l = kl.count() == 2 ? kl.at(1).toDouble(&okL) : -1.0;
+        const qreal k = entry.section(QLatin1Char(':'), 0, 0).toDouble(&okK);
+        const qreal l = entry.section(QLatin1Char(':'), 1, 1).toDouble(&okL);
         if (okK && okL && k > 0.0 && l > 0.0)
         {
             m_punchKick.append(k);
             m_punchLow.append(l);
+            m_punchTitle.append(entry.section(QLatin1Char(':'), 2));
         }
     }
     m_docTimer.setSingleShot(true);
@@ -1488,28 +1489,35 @@ static qreal engineRankIn(const QList<qreal> &values, qreal x)
     return below / qreal(values.count());
 }
 
-void TrackEngine::setTrackPunch(qreal kickRef, qreal lowRef)
+void TrackEngine::setTrackPunch(const QString &title, qreal kickRef, qreal lowRef)
 {
     m_kickRef = kickRef;
     m_lowRef = lowRef;
     if (kickRef <= 0.0 || lowRef <= 0.0)
         return;
-    // the same track sent again (a reconnect, a resend) is not a new one
-    if (m_punchKick.isEmpty() == false
-        && qFuzzyCompare(m_punchKick.last() + 1.0, kickRef + 1.0)
-        && qFuzzyCompare(m_punchLow.last() + 1.0, lowRef + 1.0))
-        return;
+    // One entry per TRACK (runde 318, review): BLT resends after a reconnect
+    // and the same song comes from the other deck - counted twice, a track
+    // weighed double in the rank. The newest reading replaces the old one.
+    const int was = int(m_punchTitle.indexOf(title));
+    if (was >= 0)
+    {
+        m_punchKick.removeAt(was);
+        m_punchLow.removeAt(was);
+        m_punchTitle.removeAt(was);
+    }
     m_punchKick.append(kickRef);
     m_punchLow.append(lowRef);
+    m_punchTitle.append(title);
     while (m_punchKick.count() > 40)
     {
         m_punchKick.removeFirst();
         m_punchLow.removeFirst();
+        m_punchTitle.removeFirst();
     }
     QStringList keep;
     for (int i = 0; i < m_punchKick.count(); i++)
         keep << QString::number(m_punchKick.at(i), 'f', 4) + QLatin1Char(':')
-                + QString::number(m_punchLow.at(i), 'f', 4);
+                + QString::number(m_punchLow.at(i), 'f', 4) + QLatin1Char(':') + m_punchTitle.at(i);
     QSettings().setValue(SETTINGS_ENGINE_PUNCH, keep);
 }
 
@@ -8197,11 +8205,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_dropKickLocked = true;
             // ... and the strobes pick again now, at the pace just decided:
             // what they hold was picked in the impact bars, before the kick
-            // had been heard (runde 317, review)
-            foreach (const QString &sk, m_groupOrder)
+            // had been heard (runde 317, review). Only where it changes
+            // anything (runde 318, review): over 75 % and a soft kick - the
+            // pick made before the lock was made on the kick already, and a
+            // re-pick at bar 2 of EVERY drop swapped the strobes' chase for
+            // nothing below 75 %.
+            if (m_strobeOnKick == false && m_faderNow >= 0.75)
             {
-                if (m_groups.value(sk).strobes)
-                    m_sectionMotion.remove(sk);
+                foreach (const QString &sk, m_groupOrder)
+                {
+                    if (m_groups.value(sk).strobes)
+                        m_sectionMotion.remove(sk);
+                }
             }
             logSignal(QStringLiteral("sig:strobe-pace:") + (m_strobeOnKick ? QStringLiteral("kick")
                                                                            : QStringLiteral("eighths"))

@@ -678,7 +678,7 @@ public:
      *  (BLT's kickRef / lowRef, the numbers its curves were divided by) - the
      *  curves themselves are relative to the track, so a drop reads full in
      *  every track. -1: BLT did not send them. */
-    void setTrackPunch(qreal kickRef, qreal lowRef);
+    void setTrackPunch(const QString &title, qreal kickRef, qreal lowRef);
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** AUTO switched off: fade everything out over a bar, then let go. */
@@ -1059,6 +1059,7 @@ private:
     qreal m_lowRef = -1.0;
     QList<qreal> m_punchKick;
     QList<qreal> m_punchLow;
+    QStringList m_punchTitle;     // one entry per TRACK (runde 318): a resend or the other deck is not a new one
     int m_dropFrom = -1;      // the beat this drop's look was drawn (fejljagt 3: the settle clock)
     bool m_dropCalm = false;  // this drop has settled - held to the next section (fejljagt 3)
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)
