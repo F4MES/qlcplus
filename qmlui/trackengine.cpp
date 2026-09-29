@@ -21,6 +21,7 @@
 #include <QStandardPaths>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>        // runde 304: colourOverrides in the settings log
 #include <QDateTime>
 #include <QTime>
 #include <QTextStream>
@@ -4409,6 +4410,48 @@ void TrackEngine::setColourOverride(QString colour)
     // the house rule holds for the palette tiles too
     if (engineBannedColour(colour))
         colour.clear();
+    // one tile (or AUTO): the set is that one (runde 304)
+    const QStringList one = colour.isEmpty() ? QStringList() : QStringList(colour);
+    if (colour == m_override && m_overrideSet == one)
+        return;
+    m_overrideSet = one;
+    m_overrideIdx = 0;
+    applyOverride(colour);
+}
+
+QStringList TrackEngine::colourOverrides() const { return m_overrideSet; }
+
+void TrackEngine::toggleColourOverride(const QString &colour)
+{
+    // Runde 304 (Tobias, 2026-09-29: "Når man vælger farve den skal bruge
+    // selv, så kan man aktivere mere end én. Så f.eks. trykker man på blå og
+    // lilla og så bruger den begge 2 i mix"). The room LEADS in one of them
+    // and the next is the look's partner: two-colour programmes pair them,
+    // the accent group wears it in every section, the bars' echo answers in
+    // it - and at every colour change (the hold clock, a break or a drop,
+    // NEXT) the lead turns to the next one. One tile is the old single lock.
+    if (colour.isEmpty() || engineBannedColour(colour) || m_palette.contains(colour) == false)
+        return;
+    QStringList set = m_overrideSet;
+    if (set.contains(colour))
+        set.removeAll(colour);
+    else
+        set.append(colour);
+    if (set.count() <= 1)
+    {
+        setColourOverride(set.isEmpty() ? QString() : set.first());
+        return;
+    }
+    const QString lead = set.contains(m_override) ? m_override : set.first();
+    m_overrideSet = set;
+    m_overrideIdx = int(set.indexOf(lead));
+    applyOverride(lead);
+    // applyOverride() returns early when the lead did not change: the set did
+    emit liveChanged();
+}
+
+void TrackEngine::applyOverride(const QString &colour)
+{
     if (colour == m_override)
         return;
     m_override = colour;
@@ -4429,7 +4472,7 @@ void TrackEngine::setColourOverride(QString colour)
             m_sectionMotion.remove(pk);
     }
     logSignal(colour.isEmpty() ? QStringLiteral("sig:colour-auto")
-                               : QStringLiteral("sig:colour:") + colour);
+                               : QStringLiteral("sig:colour:") + m_overrideSet.join('+'));
     m_startColour = false;               // a tile the DJ tapped is theirs
     if (colour.isEmpty() == false)
         m_colour = colour;
@@ -6931,6 +6974,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_holdStretch = stretch[rng->bounded(4)];
     }
 
+    // runde 304: two tiles or more - the lead turns to the next at every
+    // colour change the room would have made anyway (hold clock, sections,
+    // NEXT); HOLD and a mix hold it as they hold the room colour
+    if (m_overrideSet.count() >= 2 && changeColour)
+    {
+        m_overrideIdx = (m_overrideIdx + 1) % int(m_overrideSet.count());
+        m_override = m_overrideSet.at(m_overrideIdx);
+    }
     if (engineBannedColour(m_override))
         m_override.clear();
     if (m_override.isEmpty() == false)
@@ -7648,7 +7699,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     /* ---- accent: a partner colour on one effect group in drops ---- */
     QString accentColour;
-    if (m_accent && isDrop && isCalm == false && castSet.count() >= 2 && m_override.isEmpty()
+    // runde 304: two tiles or more - the next one is the accent in every
+    // section (not only drops, whatever the "Accent colour in drops" tile
+    // says): the DJ asked for both colours in the room
+    const QString setPartner = m_overrideSet.count() >= 2
+        ? m_overrideSet.at((m_overrideIdx + 1) % int(m_overrideSet.count())) : QString();
+    if (setPartner.isEmpty() == false && setPartner != m_colour && isCalm == false && castSet.count() >= 2)
+        accentColour = setPartner;
+    else if (m_accent && isDrop && isCalm == false && castSet.count() >= 2 && m_override.isEmpty()
         && mixTurned == false)
     {
         // a section turn under HOLD redraws nothing else, so not this either -
@@ -7691,7 +7749,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && (m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
                 || m_colour == QStringLiteral("cyan"));
     };
-    if (m_override.isEmpty() == false)
+    if (setPartner.isEmpty() == false && setPartner != m_colour)
+    {
+        m_partnerPick = setPartner;      // runde 304: the tiles' pair is the look's pair
+        m_partnerSolo = false;
+    }
+    else if (m_override.isEmpty() == false)
     {
         m_partnerPick.clear();           // a colour tile is ONE colour (runde 205)
         m_partnerSolo = false;
@@ -9818,7 +9881,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // a break, calm or a still room. (Tobias, 2026-09-16, forslag 5.)
             if (energy >= 0.40 && isBreak == false && isCalm == false && still == false
                 && mixTurned == false
-                && m_override.isEmpty()           // a tile is one colour: no echo in another (runde 205)
+                && (m_override.isEmpty() || m_overrideSet.count() >= 2)   // one tile: no echo in another (205); two: yes (304)
                 && beat - m_echoBeat >= 4 && m_echoTimer.isActive() == false)
             {
                 // One laser type at a time under the one-laser line (runde 235,
@@ -12836,6 +12899,8 @@ void TrackEngine::setStartScene(bool on)
             if (want.isEmpty() == false)
             {
                 m_override = want;
+                m_overrideSet = QStringList(want);   // runde 304
+                m_overrideIdx = 0;
                 m_colour = want;
                 m_startColour = true;
             }
@@ -12850,7 +12915,11 @@ void TrackEngine::setStartScene(bool on)
         // is exactly that distinction, and it was being written in three places
         // and read in none, so the DJ's tile was thrown away every time.
         if (m_startColour)
+        {
             m_override.clear();
+            m_overrideSet.clear();               // runde 304
+            m_overrideIdx = 0;
+        }
         m_startColour = false;
         foreach (const QString &slot, m_active.keys())
         {
@@ -13011,6 +13080,7 @@ QByteArray TrackEngine::logSettings() const
     live.insert("blackout", m_blackout);
     live.insert("accent", m_accent);
     live.insert("colourOverride", m_override);
+    live.insert("colourOverrides", QJsonArray::fromStringList(m_overrideSet));   // runde 304
     live.insert("roomAuto", m_roomAuto);
     live.insert("rating", m_ratingOn);
     QJsonObject trims, disabled;

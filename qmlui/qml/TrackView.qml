@@ -1761,13 +1761,18 @@ Row
                         objectName: "colour:"+(modelData || "")
                         label: (modelData || "").toUpperCase()
                         activeColor: liveRow.swatch(modelData || "")
-                        active: trackEngine ? trackEngine.colourOverride === modelData : false
-                        border.width: (trackEngine && trackEngine.colourOverride === ""
-                                       && trackEngine.currentColour === modelData) ? 3 : 1
+                        // runde 304 (Tobias: "man kan aktivere mere end én ... trykker
+                        // man paa blaa og lilla og saa bruger den begge 2 i mix"):
+                        // every tile lit is in the mix; a tap adds or takes it out.
+                        // The ring marks the colour that leads right now.
+                        active: trackEngine ? trackEngine.colourOverrides.indexOf(modelData) >= 0 : false
+                        border.width: (trackEngine && trackEngine.currentColour === modelData
+                                       && (trackEngine.colourOverride === ""
+                                           || trackEngine.colourOverrides.length > 1)) ? 3 : 1
                         border.color: (trackEngine && trackEngine.currentColour === modelData)
-                                      ? liveRow.swatch(modelData) : "#555555"
-                        onTapped: trackEngine.colourOverride =
-                                      (trackEngine.colourOverride === modelData) ? "" : modelData
+                                      ? (trackEngine.colourOverrides.length > 1 ? "#FFFFFF" : liveRow.swatch(modelData))
+                                      : "#555555"
+                        onTapped: trackEngine.toggleColourOverride(modelData)
                     }
                 }
             }

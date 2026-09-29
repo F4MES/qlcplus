@@ -394,6 +394,10 @@ class TrackEngine : public QObject
     Q_PROPERTY(QVariantList clockCurve READ clockCurve NOTIFY tableChanged)   // 28 points, 20:00..02:45 (r211)
 
     Q_PROPERTY(QString colourOverride READ colourOverride WRITE setColourOverride NOTIFY liveChanged)
+    /** Runde 304 (Tobias): the colour tiles may be MORE than one - "trykker man
+     *  paa blaa og lilla og saa bruger den begge 2 i mix". The chosen colours,
+     *  in the order they were tapped; colourOverride is the one leading now. */
+    Q_PROPERTY(QStringList colourOverrides READ colourOverrides NOTIFY liveChanged)
     Q_PROPERTY(QString currentColour READ currentColour NOTIFY liveChanged)
     Q_PROPERTY(QStringList cast READ cast NOTIFY liveChanged)
     /** The DJ's fader per group, 0..1, on top of everything the engine does.
@@ -501,6 +505,9 @@ public:
     /* ---- live ---- */
     QString colourOverride() const;
     void setColourOverride(QString colour);
+    QStringList colourOverrides() const;
+    /** A tile tapped: in the set, it leaves it; not, it joins (runde 304). */
+    Q_INVOKABLE void toggleColourOverride(const QString &colour);
     QString currentColour() const;
     QStringList cast() const;
     qreal master() const;
@@ -875,6 +882,9 @@ private:
 
     /* live state */
     QString m_override;
+    QStringList m_overrideSet;   // runde 304: the tiles lit; m_override leads, the next is the partner
+    int m_overrideIdx = 0;       // which of them leads now (turns at every colour change)
+    void applyOverride(const QString &colour);   // a tile's side effects (was setColourOverride's body)
     QString m_colour;
     QString m_leftColour;        // runde 236: the room colour before this one - not drawn straight back
     int m_colourBar;          // -1: a fresh track, hold the colour until a break or drop
