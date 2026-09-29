@@ -110,9 +110,11 @@ VCWidgetItem
         QLCPlusFader
         {
             enabled: !audioTriggerObj.isDisabled
-            Layout.alignment: Qt.AlignHCenter
+            // TRACK_GRIP_V2 (runde 315): the whole box, as on the Track page
+            Layout.fillWidth: true
+            Layout.leftMargin: 6
+            Layout.rightMargin: 6
             Layout.fillHeight: true
-            width: parent.width
             from: 0
             to: 100
             value: audioTriggerObj.volumeLevel

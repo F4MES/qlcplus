@@ -118,9 +118,11 @@ VCWidgetItem
             id: slFader
             visible: sliderObj ? sliderObj.widgetStyle === VCSlider.WSlider : false
             enabled: visible && !sliderObj.isDisabled
-            Layout.alignment: Qt.AlignHCenter
+            // TRACK_GRIP_V2 (runde 315): the whole box, as on the Track page
+            Layout.fillWidth: true
+            Layout.leftMargin: 6
+            Layout.rightMargin: 6
             Layout.fillHeight: true
-            width: parent.width
             rotation: sliderObj ? (sliderObj.invertedAppearance ? 180 : 0) : 0
             from: sliderObj ? sliderObj.rangeLowLimit : 0
             to: sliderObj ? sliderObj.rangeHighLimit : 255

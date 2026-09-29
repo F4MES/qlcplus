@@ -32,6 +32,8 @@ Slider
     to: 255
     stepSize: 1.0
     wheelEnabled: true
+    // TRACK_GRIP_V2 (runde 315): a Layout reads this, not `width`
+    implicitWidth: 32
 
     property Gradient handleGradient: defaultGradient
     property Gradient handleGradientHover: defaultGradientHover
