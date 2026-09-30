@@ -1916,6 +1916,16 @@ void TrackManager::runEngine(bool sectionChanged)
         kickAhead = curveMean(m_kick, beat, beat + 7);
     }
 
+    int rawGapNow = -1, rawQuietNow = -1;        // R324_RAW_FILL_CALC
+    if (m_kickRaw.isEmpty() == false && m_kickRaw.count() == m_kick.count())
+    {
+        const qreal r0 = curveAt(m_kickRaw, beat), r1 = curveAt(m_kickRaw, beat - 1);
+        const qreal h0 = curveAt(m_highRaw, beat);
+        if (r0 >= 0.0 && r1 >= 0.0)
+            rawGapNow = (r0 < 0.20 && r1 < 0.20) ? 1 : 0;
+        if (r0 >= 0.0 && h0 >= 0.0)
+            rawQuietNow = (r0 < 0.20 && h0 < 0.20) ? 1 : 0;
+    }
     if (m_markersManual)                        // R210_MANUAL_WINS
         kickAhead = -1.0;
     if (m_overrideState.isEmpty() == false)     // R199_OVERRIDE_WINS
@@ -1935,7 +1945,8 @@ void TrackManager::runEngine(bool sectionChanged)
     m_engine->tick(state, beat, tickStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
                    engineBpm(), levelScale, kick, high,   // R301_ENGINE_BPM
-                   turn, riser, hats, bass, kickAhead);
+                   turn, riser, hats, bass, kickAhead,
+                   rawGapNow, rawQuietNow);   // R324_RAW_FILL
 
     if (sectionChanged)
         emit stateChanged();

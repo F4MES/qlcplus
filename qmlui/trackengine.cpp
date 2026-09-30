@@ -6503,7 +6503,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                        qreal energy, qreal sectionEnergy, int division, bool sectionChanged,
                        const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
                        qreal kick, qreal high, bool turn, qreal riser, qreal hats, qreal bass,
-                       qreal kickAhead)
+                       qreal kickAhead, int rawGap, int rawQuiet)
 {
     if (m_doc == nullptr)
         return;
@@ -9155,7 +9155,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool phraseAllowed = hold == false && isCalm == false && still == false
                       && preDrop == false && dropWaiting == false
                       && (isDrop || (tier == 1 && energy > 0.5));
-    bool fillSignal = haveCurves && (turn || (high > 0.65 && kick < 0.35 && riser > 0.08));
+    // Runde 324: with the RAW per-beat kick (BLT 323+) the fill is the fill
+    // itself - no kick on this beat nor the one before. Measured in the drops
+    // of 92 library tracks: of the smoothed rule's fires 68 % sat in a real
+    // kick gap, and it caught about a third as many; the raw gap is in one
+    // by definition. The kick COMING BACK (turn) is the end of the fill, and
+    // accelerating the lead from there put the turnaround in the new phrase
+    // rather than into it - so with the raw curves it is not a fill signal.
+    bool fillSignal = haveCurves && (rawGap >= 0
+                                     ? (rawGap == 1 || (high > 0.65 && kick < 0.35 && riser > 0.08))
+                                     : (turn || (high > 0.65 && kick < 0.35 && riser > 0.08)));
     if (phraseAllowed && fillSignal && beat - m_fillLast >= 8)
     {
         m_fillLast = beat;
@@ -9175,7 +9184,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                           && dropSettled == false));
     // With curves a blackout accent needs a real gap. Never blank the kick
     // as it returns. The explicit pre-drop cue above remains unchanged.
-    bool phraseDark = haveCurves ? (kick < 0.20 && high >= 0.0 && high < 0.20)
+    // (runde 324: on the raw beat when BLT sends it - the smoothed curves
+    // average a silent beat with the four around it and rarely reach 0.20)
+    bool phraseDark = haveCurves ? (rawQuiet >= 0 ? rawQuiet == 1
+                                                  : (kick < 0.20 && high >= 0.0 && high < 0.20))
                                  : (phraseBar == 7 && beatInBar == 3 && ((bar / 8) % 2) == 0);
     if (turnaround && phraseDark && energy > 0.6)
     {

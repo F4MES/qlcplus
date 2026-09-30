@@ -663,7 +663,11 @@ public:
               const QString &nextState, int beatsToNext, qreal bpm, qreal levelScale,
               qreal kick = -1.0, qreal high = -1.0,
               bool turn = false, qreal riser = 0.0, qreal hats = -1.0,
-              qreal bass = -1.0, qreal kickAhead = -1.0);
+              qreal bass = -1.0, qreal kickAhead = -1.0,
+              int rawGap = -1, int rawQuiet = -1);
+    // rawGap / rawQuiet (runde 324): from the RAW per-beat curves (BLT 323+),
+    // -1 without them. rawGap 1: no kick on this beat nor the one before (a
+    // fill, a drop-out); rawQuiet 1: neither kick nor highs on this beat.
     /** $title is the track TrackManager just loaded. Defaulted so an
      *  un-patched trackmanager.cpp still compiles; the patch passes it. */
     void trackLoaded(const QString &title = QString(), const QString &key = QString());
