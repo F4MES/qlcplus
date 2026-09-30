@@ -345,6 +345,8 @@ private:
     QVariantList m_low;
     QVariantList m_high;
     QVariantList m_kick;
+    QVariantList m_kickRaw;     // R323_RAW_CURVES: per beat, unsmoothed (BLT 323+)
+    QVariantList m_highRaw;
     QVariantList m_markers;
     bool m_markersManual;     // the flags are the operator's, or a cached correction
     qreal m_dropKick;         // learned: the kick a drop needs

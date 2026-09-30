@@ -371,6 +371,11 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     for (int i = 0; i < highArr.count(); i++) m_high.append(highArr.at(i).toInt());
     QJsonArray kickArr = obj.value(QStringLiteral("kick")).toArray();
     for (int i = 0; i < kickArr.count(); i++) m_kick.append(kickArr.at(i).toInt());
+    m_kickRaw.clear(); m_highRaw.clear();          // R323_RAW_PARSE
+    QJsonArray kickRawArr = obj.value(QStringLiteral("kickRaw")).toArray();
+    for (int i = 0; i < kickRawArr.count(); i++) m_kickRaw.append(kickRawArr.at(i).toInt());
+    QJsonArray highRawArr = obj.value(QStringLiteral("highRaw")).toArray();
+    for (int i = 0; i < highRawArr.count(); i++) m_highRaw.append(highRawArr.at(i).toInt());
     if (m_engine != nullptr)            // R317_PUNCH: how hard, not how full
         m_engine->setTrackPunch(m_title,                // R318_PUNCH_TITLE: one entry per track
                                 obj.value(QStringLiteral("kickRef")).toDouble(-1.0),
@@ -1286,6 +1291,7 @@ void TrackManager::clear()
     m_durationMs = 0;
     m_waveform.clear();
     m_low.clear(); m_high.clear(); m_kick.clear();
+    m_kickRaw.clear(); m_highRaw.clear();          // R323_RAW_CLEAR
     m_markers.clear();
     m_currentBeat = 0;
     m_trackTimeMs = 0;
@@ -1856,6 +1862,36 @@ void TrackManager::runEngine(bool sectionChanged)
     qreal kickAhead = -1.0;              // R192_KICK_AHEAD_DECL
     if (kick >= 0.0)
     {
+        // R323_RAW_TURN (runde 323): the turn read on the RAW per-beat kick
+        // and highs when BLT sends them. On the smoothed curves (four beats)
+        // the three rules below were measured on 92 tracks of the library:
+        // the kick coming back landed on beat 1 in 35 % of its fires, the
+        // crash fired on 0.05 % of beats, and the bass jump - 7 % of beats -
+        // was on beat 1 as often as chance (24 %). The raw kick back lands
+        // on beat 1 in 71 % (38 % on a four-bar line, chance is 6 %); the raw
+        // crash 35 %. The bass jump is left out: it was noise, and it was
+        // most of the turns.
+        const bool rawCurves = m_kickRaw.isEmpty() == false && m_kickRaw.count() == m_kick.count();
+        if (rawCurves)
+        {
+            const qreal r0 = curveAt(m_kickRaw, beat);
+            bool back = r0 >= 0.45;
+            for (int i = 1; i <= 2 && back; i++)
+            {
+                const qreal ri = curveAt(m_kickRaw, beat - i);
+                back = ri >= 0.0 && ri < 0.20;
+            }
+            if (back)
+                turn = true;
+            const qreal h0 = curveAt(m_highRaw, beat);
+            qreal hm = -1.0;
+            for (int i = 1; i <= 8; i++)
+                hm = qMax(hm, curveAt(m_highRaw, beat - i));
+            if (h0 >= 0.75 && hm >= 0.0 && h0 >= hm + 0.15)
+                turn = true;
+        }
+        else
+        {
         qreal k1 = curveAt(m_kick, beat - 3), k2 = curveAt(m_kick, beat - 4);   // R211_KICK_BACK
         if (kick >= 0.45 && k1 >= 0.0 && k1 < 0.20 && k2 >= 0.0 && k2 < 0.20)
             turn = true;
@@ -1868,6 +1904,7 @@ void TrackManager::runEngine(bool sectionChanged)
         qreal lowMean = curveMean(m_low, beat - 16, beat - 1);
         if (low >= 0.0 && lowMean >= 0.0 && low >= lowMean + 0.25)
             turn = true;
+        }
         qreal hNow = curveMean(m_high, beat - 8, beat - 1);
         qreal hThen = curveMean(m_high, beat - 32, beat - 9);
         if (hNow >= 0.0 && hThen >= 0.0)
