@@ -1505,6 +1505,16 @@ void TrackEngine::setTrackPunch(const QString &title, qreal kickRef, qreal lowRe
 
 void TrackEngine::rememberDropPunch(qreal kick, qreal low)
 {
+    // runde 327 (review): the same drop again - a DJ loop over the build/drop
+    // line locks at bar 2 on every pass - is not a new drop: the last entry
+    // of this track with (nearly) the same kick is replaced, not added to
+    if (m_punchTitle.isEmpty() == false && m_punchTitle.last() == m_punchNow
+        && qAbs(m_punchKick.last() - kick) < 0.02 && qAbs(m_punchLow.last() - low) < 0.02)
+    {
+        m_punchKick.removeLast();
+        m_punchLow.removeLast();
+        m_punchTitle.removeLast();
+    }
     m_punchKick.append(kick);
     m_punchLow.append(low);
     m_punchTitle.append(m_punchNow);
@@ -5775,7 +5785,10 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         {
             if (strobeGroup)
             {
-                if (info->type == int(Function::SceneType) || stepBeats(*info, bpm) >= strobeFloor)
+                // (runde 327: 5 % slack - a chase timed in milliseconds reads
+                // 0.996 of a beat on a deck pitched a hair off its tempo, and
+                // divisionFor() snaps it to the beat when it runs)
+                if (info->type == int(Function::SceneType) || stepBeats(*info, bpm) >= strobeFloor * 0.95)
                     support.append(info);
                 continue;
             }
@@ -5795,7 +5808,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             foreach (TrackFuncInfo *info, support)
             {
                 if (info->type != int(Function::SceneType)
-                    && qAbs(stepBeats(*info, bpm) - strobeFloor) < 0.01)
+                    && qAbs(stepBeats(*info, bpm) - strobeFloor) < strobeFloor * 0.05)
                     atPace.append(info);
             }
             if (atPace.isEmpty() == false)
@@ -9479,7 +9492,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // back exactly the wobble the chase replaced. The chase IS the picture
         // in that case.
         if (m_fullAuto && tier > 0 && key != m_rhythmLead && g.strobes
-            && mv.ownChaser == false)
+            && mv.ownChaser == false
+            && impactNow == false)   // runde 327: the landing's impact keeps its eighths (313)
         {
             // runde 154: this used to pin the picture to STATIC and the pulse
             // to the downbeat - a lit bank blinking once a bar, which is
@@ -9725,7 +9739,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // would stretch it - a slow version of a fast figure
             if (mf != Function::invalidId() && m_fullAuto && tier > 0 && g.strobes
                 && m_funcs.value(mf).type != int(Function::SceneType)
-                && stepBeats(m_funcs.value(mf), bpm) < strobePaceFloor(tier))
+                && stepBeats(m_funcs.value(mf), bpm) < strobePaceFloor(tier) * 0.95)
                 mf = Function::invalidId();
             if (mf != Function::invalidId() && ceilMoved)
             {
@@ -14293,6 +14307,13 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     }
     m_dropStyle = 0;
     m_dropStyleDrawn = false;    // the new track's drop draws its own character (runde 282)
+    // runde 327 (review): nor its kick - a drop-to-drop mix never had a tick
+    // outside a drop, so the old track's lock and half-counted kicks stayed
+    m_dropKickSum = 0.0;
+    m_dropKickN = 0;
+    m_dropKickLast = -1;
+    m_dropKickLocked = false;
+    m_strobeOnKick = true;
     m_dropFrom = -1;             // the settle clock is a beat of the track that ended (runde 266)
     m_dropCalm = false;
     // CALM counts beats of this track: carry only what is left of it
@@ -14753,6 +14774,11 @@ void TrackEngine::stopAll()
     // already the whole of what this line was for.
     m_dropStyle = 0;
     m_dropStyleDrawn = false;
+    m_dropKickSum = 0.0;         // runde 327: the drop's kick is heard again
+    m_dropKickN = 0;
+    m_dropKickLast = -1;
+    m_dropKickLocked = false;
+    m_strobeOnKick = true;
     m_strobeUntil = -1;          // or the next tick walks straight back into a burst
     m_strobeRate = 0;
     m_pulseDepth.clear();

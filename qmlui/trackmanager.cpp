@@ -1745,6 +1745,7 @@ void TrackManager::runEngine(bool sectionChanged)
         return;
     if (sectionChanged == false && beat == m_lastEngineBeat)
         return;
+    const int prevEngineBeat = m_lastEngineBeat;     // R327_PREV_BEAT: the beat ticked before this one
     m_lastEngineBeat = beat;
 
     QString state = currentState();
@@ -1874,19 +1875,28 @@ void TrackManager::runEngine(bool sectionChanged)
         const bool rawCurves = m_kickRaw.isEmpty() == false && m_kickRaw.count() == m_kick.count();
         if (rawCurves)
         {
+            // R327_TURN_CONTEXT (review): the kick back only out of a four-on-
+            // the-floor - kicks on the two beats before the gap, or a gap of
+            // four or more. A kick on beat 1 only (half time, a broken drop)
+            // matched "back after two quiet beats" on EVERY downbeat. Measured
+            // on 92 tracks: beat 1 in 78 % of fires (71 % before), a four-bar
+            // line in 50 % (38 %).
             const qreal r0 = curveAt(m_kickRaw, beat);
-            bool back = r0 >= 0.45;
-            for (int i = 1; i <= 2 && back; i++)
-            {
-                const qreal ri = curveAt(m_kickRaw, beat - i);
-                back = ri >= 0.0 && ri < 0.20;
-            }
-            if (back)
+            const qreal q1 = curveAt(m_kickRaw, beat - 1), q2 = curveAt(m_kickRaw, beat - 2);
+            const qreal q3 = curveAt(m_kickRaw, beat - 3), q4 = curveAt(m_kickRaw, beat - 4);
+            const bool quiet12 = q1 >= 0.0 && q1 < 0.20 && q2 >= 0.0 && q2 < 0.20;
+            const bool fourFloor = (q3 >= 0.45 && q4 >= 0.45)
+                                || (q3 >= 0.0 && q3 < 0.20 && q4 >= 0.0 && q4 < 0.20);
+            if (r0 >= 0.45 && quiet12 && fourFloor)
                 turn = true;
-            const qreal h0 = curveAt(m_highRaw, beat);
+            // the crash on the raw highs - or on the smoothed ones when BLT
+            // sent a raw kick but no raw highs (R327_CRASH_FALLBACK)
+            const bool rawHigh = m_highRaw.count() == m_kick.count();
+            const QVariantList &hc = rawHigh ? m_highRaw : m_high;
+            const qreal h0 = curveAt(hc, beat);
             qreal hm = -1.0;
             for (int i = 1; i <= 8; i++)
-                hm = qMax(hm, curveAt(m_highRaw, beat - i));
+                hm = qMax(hm, curveAt(hc, beat - i));
             if (h0 >= 0.75 && hm >= 0.0 && h0 >= hm + 0.15)
                 turn = true;
         }
@@ -1921,8 +1931,23 @@ void TrackManager::runEngine(bool sectionChanged)
     {
         const qreal r0 = curveAt(m_kickRaw, beat), r1 = curveAt(m_kickRaw, beat - 1);
         const qreal h0 = curveAt(m_highRaw, beat);
+        // R327_GAP_WINDOW (review, replaces R325_GAP_ONSET): the gap's onset on ANY beat since the last
+        // tick - a burst or a lost message skips beats, and the one onset beat
+        // was lost with it - and only out of a four-on-the-floor (kicks on the
+        // two beats before the gap): a half-time kick opened a "gap" on beat 3
+        // of every bar
         if (r0 >= 0.0 && r1 >= 0.0)
-            rawGapNow = (r0 < 0.20 && r1 < 0.20) ? 1 : 0;
+        {
+            rawGapNow = 0;
+            const int from = qMax(beat - 3, prevEngineBeat > 0 ? prevEngineBeat + 1 : beat);
+            for (int b = from; b <= beat && rawGapNow == 0; b++)
+            {
+                const qreal g0 = curveAt(m_kickRaw, b), g1 = curveAt(m_kickRaw, b - 1);
+                const qreal g2 = curveAt(m_kickRaw, b - 2), g3 = curveAt(m_kickRaw, b - 3);
+                if (r0 < 0.20 && g0 >= 0.0 && g0 < 0.20 && g1 >= 0.0 && g1 < 0.20 && g2 >= 0.45 && g3 >= 0.45)
+                    rawGapNow = 1;
+            }
+        }
         if (r0 >= 0.0 && h0 >= 0.0)
             rawQuietNow = (r0 < 0.20 && h0 < 0.20) ? 1 : 0;
     }
