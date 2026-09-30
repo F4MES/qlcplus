@@ -7987,13 +7987,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // white sits under blue, magenta and cyan in HARMONY (the "Frost"
     // programmes) but not in mixesWith - the mix never turns a room white
     // (the pairs come in as an argument: the static table is not a capture)
+    // RUNDE 331 (headless audit, 20 Sep): ... and only in a DROP - Tobias,
+    // 2026-09-22: "Hvid (RGB hvid) generelt skal kun bruges i drops". Runde
+    // 246 let white be the partner in every section, so a cyan break ran the
+    // Minis in "Break Blend Cyan Frost Slow" (cyan + white) for 120 beats.
+    // A white partner drawn in a drop is let go at the next section (the
+    // redraw below); HOLD keeps it, as it keeps the rest of the look.
+    const bool whiteHere = isDrop || hold;
     const QStringList roomPairs = mixesWith.value(m_colour);
-    auto partnerOk = [this, &roomPairs](const QString &c) {
+    auto partnerOk = [this, &roomPairs, whiteHere](const QString &c) {
         if (m_palette.contains(c) == false || engineBannedColour(c))
             return false;
         if (roomPairs.contains(c))
             return true;
-        return c == QStringLiteral("white")
+        return c == QStringLiteral("white") && whiteHere
             && (m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
                 || m_colour == QStringLiteral("cyan"));
     };
