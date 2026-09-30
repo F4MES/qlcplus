@@ -114,7 +114,7 @@ Slider
         {
             y: slider.leftPadding + slider.visualPosition * (slider.availableHeight - height)
             x: slider.topPadding + 2
-            implicitWidth: Math.max(8, slider.availableWidth - 4)
+            implicitWidth: Math.max(0, slider.availableWidth - 4)   // TRACK_GRIP_V3: never wider than the track
             implicitHeight: slider.gripSize
             radius: 4
             color: slider.pressed ? "#FFFFFF" : Qt.lighter(slider.trackColor, 1.45)

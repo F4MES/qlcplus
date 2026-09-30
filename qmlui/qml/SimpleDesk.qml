@@ -216,7 +216,8 @@ Rectangle
                             QLCPlusFader
                             {
                                 padding: 0
-                                width: parent.width * 0.95
+                                // TRACK_GRIP_V3 (runde 328): a Layout reads this, not `width`
+                                Layout.preferredWidth: parent.width * 0.95
                                 Layout.alignment: Qt.AlignHCenter
                                 Layout.fillHeight: true
                                 focusPolicy: Qt.NoFocus

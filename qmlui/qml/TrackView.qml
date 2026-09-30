@@ -1774,9 +1774,11 @@ Row
                         border.width: (trackEngine && trackEngine.currentColour === modelData
                                        && (trackEngine.colourOverride === ""
                                            || trackEngine.colourOverrides.length > 1)) ? 3 : 1
+                        // (runde 328, review: a tile in the mix but not leading kept
+                        // TrackTile's own lit edge, not the grey of an unlit one)
                         border.color: (trackEngine && trackEngine.currentColour === modelData)
                                       ? (trackEngine.colourOverrides.length > 1 ? "#FFFFFF" : liveRow.swatch(modelData))
-                                      : "#555555"
+                                      : (active ? Qt.lighter(activeColor, 1.3) : "#555555")
                         onTapped: trackEngine.toggleColourOverride(modelData)
                         // runde 313 (B27, Tobias): a colour the engine cannot use
                         // (gone from the palette, banned) blinks - the press
