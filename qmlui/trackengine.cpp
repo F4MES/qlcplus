@@ -9586,6 +9586,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the colour this group can actually show (a wheel has seven, the
         // palette has more) - and the motion pick below matches on it too,
         // so a bar programme in the substituted colour is found
+        // RUNDE 330 (headless colour audit, 4 tracks of 20 Sep): a wheel with
+        // no ROOM colour wears the look's partner when it has it, before a
+        // neighbour. An orange room with a blue partner had the wash in
+        // "Scissor Lift Orange Deep" (orange + blue) while the bars and the
+        // animation laser, which have no orange, stood in red - three colours
+        // in one look, against one partner colour per look (runde 243). With
+        // a red partner (the common case) nothing changes: red is both. Not
+        // with the tiles' set (it has its own spread, review 305/306). An
+        // accent group on such a wheel keeps the partner through its trade
+        // - the other half of the trade was the substitute, a third colour.
+        // The bars' echo is then skipped (they already wear its hue, 286).
+        if (colour == m_colour && m_partnerPick.isEmpty() == false && m_partnerPick != m_colour
+            && m_overrideSet.count() < 2
+            && colourForGroup(key, colour) != colour
+            && colourForGroup(key, m_partnerPick) == m_partnerPick)
+            colour = m_partnerPick;
         colour = colourForGroup(key, colour);
 
         // motion: real movement (chases, EFX) in drops, the climbing half of
