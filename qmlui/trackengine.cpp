@@ -10445,7 +10445,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     QStringList moveNames;
     foreach (const QString &key, castSorted)
     {
-        QString mn = isCalm ? QString() : moveName(m_moves.value(key));
+        // (runde 332, headless ENERGY sweep: under STILL the move is not run
+        // - mv = TrackMove() above - but the log still wrote the drawn one,
+        // "pulse 55" at slider 0 in a drop, and tracklog_report counted it)
+        QString mn = (isCalm || still) ? QString() : moveName(m_moves.value(key));
         if (m_active.contains("efx:" + key))
             mn = (mn.isEmpty() ? QString() : mn + " ") + sweepName(m_sweep.value(key));
         moveNames << (mn.isEmpty() ? key : QString("%1 %2").arg(key).arg(mn));
