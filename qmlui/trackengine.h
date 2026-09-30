@@ -87,7 +87,7 @@ class QRandomGenerator;
 #define SETTINGS_ENGINE_GROUPOFF  QStringLiteral("trackengine/groupoff")
 #define SETTINGS_ENGINE_MASTER    QStringLiteral("trackengine/master")
 #define SETTINGS_ENGINE_ACCENT    QStringLiteral("trackengine/accent")
-#define SETTINGS_ENGINE_PUNCH     QStringLiteral("trackengine/punch")   // runde 317: kick/bass per track, the last 40
+#define SETTINGS_ENGINE_PUNCH     QStringLiteral("trackengine/punchdrops")   // runde 322: kick/bass of the last 60 DROPS (317/318: "trackengine/punch", per track - not read)
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
 #define SETTINGS_ENGINE_HOLDAUTO  QStringLiteral("trackengine/holdauto")  // runde 189: the fader picks the hold
 #define SETTINGS_ENGINE_CLOCKCURVE QStringLiteral("trackengine/clockcurve")   // 28 percents: 20:00, 20:15 ... 02:45 (runde 211; six hourly ones before, still read)
@@ -679,6 +679,8 @@ public:
      *  curves themselves are relative to the track, so a drop reads full in
      *  every track. -1: BLT did not send them. */
     void setTrackPunch(const QString &title, qreal kickRef, qreal lowRef);
+    /** runde 322: one drop's absolute kick and bass into the history */
+    void rememberDropPunch(qreal kick, qreal low);
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** AUTO switched off: fade everything out over a bar, then let go. */
@@ -1059,7 +1061,8 @@ private:
     qreal m_lowRef = -1.0;
     QList<qreal> m_punchKick;
     QList<qreal> m_punchLow;
-    QStringList m_punchTitle;     // one entry per TRACK (runde 318): a resend or the other deck is not a new one
+    QStringList m_punchTitle;     // the track each drop was in (runde 322: the history is drops, not tracks)
+    QString m_punchNow;           // the track setTrackPunch() last heard
     int m_dropFrom = -1;      // the beat this drop's look was drawn (fejljagt 3: the settle clock)
     bool m_dropCalm = false;  // this drop has settled - held to the next section (fejljagt 3)
     int m_kickGone;           // beats in a row the analysis heard no kick (0 without curves)

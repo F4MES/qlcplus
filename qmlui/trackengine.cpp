@@ -1491,24 +1491,24 @@ static qreal engineRankIn(const QList<qreal> &values, qreal x)
 
 void TrackEngine::setTrackPunch(const QString &title, qreal kickRef, qreal lowRef)
 {
+    // Runde 322 (review): only the numbers for the track on the decks now.
+    // The history is filled by the drops themselves (tick(), the lock) - it
+    // held each TRACK's reference (its 90th-percentile kick) and a drop's
+    // kick was ranked against those, but a drop reads 0.7 of that reference
+    // on average (measured, 282 drops in the library), so a drop sat low
+    // in its own history every time and 58 of 282 went to eighths for sure
+    // against 11 on the kick. Drops against drops now.
     m_kickRef = kickRef;
     m_lowRef = lowRef;
-    if (kickRef <= 0.0 || lowRef <= 0.0)
-        return;
-    // One entry per TRACK (runde 318, review): BLT resends after a reconnect
-    // and the same song comes from the other deck - counted twice, a track
-    // weighed double in the rank. The newest reading replaces the old one.
-    const int was = int(m_punchTitle.indexOf(title));
-    if (was >= 0)
-    {
-        m_punchKick.removeAt(was);
-        m_punchLow.removeAt(was);
-        m_punchTitle.removeAt(was);
-    }
-    m_punchKick.append(kickRef);
-    m_punchLow.append(lowRef);
-    m_punchTitle.append(title);
-    while (m_punchKick.count() > 40)
+    m_punchNow = title;
+}
+
+void TrackEngine::rememberDropPunch(qreal kick, qreal low)
+{
+    m_punchKick.append(kick);
+    m_punchLow.append(low);
+    m_punchTitle.append(m_punchNow);
+    while (m_punchKick.count() > 60)
     {
         m_punchKick.removeFirst();
         m_punchLow.removeFirst();
@@ -8193,15 +8193,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // 75th - so a drop reads close to 1.0 in every track and 316
             // stepped on the kick every time. Back to absolute terms with the
             // numbers BLT divided by (setTrackPunch), then HOW HARD compared
-            // with the tracks played before: harder than most, on the kick;
-            // softer than most, eighths; blended between. Until six tracks
+            // with the drops heard before: harder than most, on the kick;
+            // softer than most, eighths; blended between. Until six drops
             // are known (or without BLT's numbers) it stays on the kick.
+            // Runde 322: ranked against earlier DROPS (rememberDropPunch),
+            // not against the tracks' references - like against like.
             qreal hard = -1.0;
-            if (m_punchKick.count() >= 6 && m_kickRef > 0.0 && m_lowRef > 0.0)
+            if (m_kickRef > 0.0 && m_lowRef > 0.0 && m_dropKickN > 0 && bass >= 0.0)
             {
-                const qreal k = (m_dropKickN > 0 ? m_dropKickSum / qreal(m_dropKickN) : 1.0) * m_kickRef;
-                const qreal l = (bass >= 0.0 ? bass : 1.0) * m_lowRef;
-                hard = 0.5 * engineRankIn(m_punchKick, k) + 0.5 * engineRankIn(m_punchLow, l);
+                const qreal k = m_dropKickSum / qreal(m_dropKickN) * m_kickRef;
+                const qreal l = bass * m_lowRef;
+                if (m_punchKick.count() >= 6)
+                    hard = 0.5 * engineRankIn(m_punchKick, k) + 0.5 * engineRankIn(m_punchLow, l);
+                rememberDropPunch(k, l);
             }
             const qreal onKick = hard < 0.0 ? 1.0 : qBound(0.0, (hard - 0.25) / 0.50, 1.0);
             m_strobeOnKick = rng->bounded(1000) < int(onKick * 1000.0);
