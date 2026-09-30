@@ -1900,10 +1900,13 @@ void TrackEngine::learnHome()
                 if (g.fixtures.contains(fxid) == false
                     || gotPan.contains(fxid) == false || gotTilt.contains(fxid) == false)
                     continue;
-                // ... and nought/nought is no aim either. lr_import.py writes
-                // these scenes HIDDEN, and QLC+ saves a hidden scene's values as
-                // zero (Scene::saveXML, see CLAUDE.md): in PSMAIN.qxw both Home
-                // scenes of the wash are 0/0 on all seven heads. Learned as an
+                // ... and nought/nought is no aim either. lr_import.py used to
+                // write these scenes HIDDEN (until runde B17 - a re-import now
+                // replaces them in place, visible, with real values), and QLC+
+                // saves a hidden scene's values as zero (Scene::saveXML, see
+                // CLAUDE.md): in a file nobody has re-imported both Home scenes
+                // of the wash are 0/0 on all seven heads. The guard stays for
+                // those files (bane B, B17 point 2). Learned as an
                 // aim, the fan folded onto one side of the range (runde 176).
                 // Without it the engine falls back to the middle, as it does
                 // with no Home scene at all.
