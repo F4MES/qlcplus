@@ -5634,7 +5634,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             { "white",   { "blue", "cyan" } },
             { "orange",  { "amber", "red" } },
             { "amber",   { "red", "blue" } },
-            { "uv",      { "magenta", "blue", "white" } },
+            { "uv",      { "magenta", "blue" } },          // B26/runde 329: no white under uv
         };
         const QStringList partners = goesWith.value(colour);
         QList<TrackFuncInfo *> fits;
@@ -6410,35 +6410,41 @@ QString TrackEngine::drawColour(const QStringList &pool, int keyBias, QRandomGen
 
 QString TrackEngine::accentFor(const QString &colour, bool allowWhite) const
 {
-    // pairs that sit well together - what the hands would pick. Every colour
-    // has a coloured partner as well as white, so a rig can say no to white
-    // and still get an accent.
-    static const QMap<QString, QStringList> pairs =
+    // RUNDE 329: the accent's partners are gen_programs' HARMONY - the same
+    // pairs the mix, the look's partner and the tiles draw from
+    // (engineMixesWith) - and white only under blue, magenta and cyan (B22,
+    // as partnerOk). The table this replaced was written for a rig with
+    // amber: on this one (no amber) a RED drop's only accent was white -
+    // red/white, not a pair - so three red drops in four had no accent at
+    // all, and green's and amber's could be white too. The accent becomes
+    // the look's partner (m_partnerPick) and the bars' echo colour, so it
+    // has to be one of the pairs. Drawn like a room colour (drawColour):
+    // green one ticket where the others have three (runde 233).
+    // Colours HARMONY does not name keep a coloured partner of their own.
+    static const QMap<QString, QStringList> offRig =
     {
-        { "blue",    { "white", "cyan" } },
-        { "red",     { "amber", "white" } },
-        { "cyan",    { "magenta", "white" } },
-        { "green",   { "cyan", "yellow", "white" } },
-        { "magenta", { "blue", "white" } },
-        { "white",   { "blue", "cyan" } },
-        { "yellow",  { "amber", "white" } },
-        { "orange",  { "amber", "red" } },
-        { "amber",   { "red", "white" } },
-        { "uv",      { "magenta", "blue", "white" } },
+        { "yellow",  { "amber" } },
+        { "amber",   { "red", "orange" } },
+        { "uv",      { "magenta", "blue" } },
     };
+    QStringList partners = engineMixesWith().value(colour);
+    if (partners.isEmpty())
+        partners = offRig.value(colour);
+    const bool whiteFits = colour == QLatin1String("blue") || colour == QLatin1String("magenta")
+                        || colour == QLatin1String("cyan");
+    if (allowWhite && whiteFits)
+        partners << QStringLiteral("white");
     // of the partners the palette has, one at random - the same pair every
     // drop would be a habit, not a choice
     QStringList have;
-    foreach (const QString &p, pairs.value(colour))
+    foreach (const QString &p, partners)
     {
-        if (allowWhite == false && p == QStringLiteral("white"))
-            continue;
         if (m_palette.contains(p) && engineBannedColour(p) == false && p != colour)
             have << p;
     }
     if (have.isEmpty())
         return QString();
-    return have.at(int(QRandomGenerator::global()->bounded(have.count())));
+    return drawColour(have, -1, QRandomGenerator::global());
 }
 
 qreal TrackEngine::tempoScore(const TrackFuncInfo &info, qreal bpm) const
