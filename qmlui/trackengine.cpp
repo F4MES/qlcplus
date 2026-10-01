@@ -9750,8 +9750,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // runde 170), and `worn` then never equals `colour` - the held
                 // scene was thrown away and re-picked on every beat (runde 171).
                 // It still lets go when the room colour changes.
+                // RUNDE 333 (headless, 20 Sep, a mix out of a drop): the trade
+                // exemption needs an ACCENT. accentGroup is drawn whether or
+                // not there is one, so when the accent went (the mix's turn
+                // cleared it, the cast fell under two, CALM) the bars kept
+                // "Drop Eyes Row Snake Red" in a magenta room with the base on
+                // the next track's blue - three colours, until the section ended.
                 if (worn.isEmpty() == false && worn != colour
-                    && (((key != accentGroup || spread) && g.patternDevice == false) || changeColour))
+                    && (((key != accentGroup || accentColour.isEmpty() || spread) && g.patternDevice == false)
+                        || changeColour))
                     mf = Function::invalidId();
                 // ... and a two-colour programme whose partner is no longer the
                 // look's (runde 243)
