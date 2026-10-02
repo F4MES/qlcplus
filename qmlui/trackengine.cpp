@@ -13158,6 +13158,18 @@ void TrackEngine::laserFaderCheck(qreal slider)
         // a figure: nothing moves under 40 %
         if (fader < 0.40 && m_active.contains("efx:" + key))
         {
+            // RUNDE 336: dark first, as tick() does (runde 220/303): an EFX
+            // has no fade-out, and the beams went straight back on the aim
+            // lit - up to 26 steps. The next beat lights them again where
+            // tick() says they may be. Not under a held FLASH (as tick()).
+            if (m_flashHeld.contains(key) == false)
+            {
+                stopSlot("col:" + key, true);
+                stopSlot("mot:" + key, true);
+                for (int i = 0; i < g.parts.count(); i++)
+                    stopSlot(partSlot(key, i), true);
+                m_cast.remove(key);
+            }
             stopSlot("efx:" + key, true);
             m_sweep.remove(key);
         }

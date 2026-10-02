@@ -1086,7 +1086,10 @@ void TrackManager::setEnergyTrim(int percent)
     // laser bars are measured against the fader now, not in 30 s. With
     // beats arriving tick() does it on the next one (and a call from
     // inside tick, via the clock, is never this branch).
-    if (m_engine != nullptr && m_autoRun && m_roleMode && (m_linkStale || m_playing == false))
+    // R336_LASER_HAND: ... and a hand on the slider reaches them at once,
+    // beats or not; the clock does not (it sets roomPercent first)
+    if (m_engine != nullptr && m_autoRun && m_roleMode
+        && (m_linkStale || m_playing == false || percent != m_engine->roomPercent()))
         m_engine->laserFaderCheck(energy());
     noteShowRunning();                   // R184_START_SCENE_ENERGY
 }
