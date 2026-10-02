@@ -685,6 +685,10 @@ public:
     void setTrackPunch(const QString &title, qreal kickRef, qreal lowRef);
     /** runde 322: one drop's absolute kick and bass into the history */
     void rememberDropPunch(qreal kick, qreal low);
+    /** runde 335: the operator forced a section on the Track page (or let it
+     *  go: state empty) - a sig: line in the tracklog, so a night's presses
+     *  can be read as corrections of the analysis. Log only. */
+    void noteSectionOverride(const QString &state, const QString &analysed);
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** AUTO switched off: fade everything out over a bar, then let go. */

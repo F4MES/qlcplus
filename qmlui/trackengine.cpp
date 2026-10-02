@@ -1503,6 +1503,17 @@ void TrackEngine::setTrackPunch(const QString &title, qreal kickRef, qreal lowRe
     m_punchNow = title;
 }
 
+void TrackEngine::noteSectionOverride(const QString &state, const QString &analysed)
+{
+    // RUNDE 335: "sig:section:<forced>:was:<analysed>" or
+    // "sig:section-auto:was:<analysed>" - the analysis' state at the press, so
+    // the line says what the operator corrected without scanning back. The
+    // engine's choices are untouched: logSignal() only writes the log.
+    const QString was = analysed.isEmpty() ? QStringLiteral("-") : analysed;
+    logSignal(state.isEmpty() ? QStringLiteral("sig:section-auto:was:") + was
+                              : QStringLiteral("sig:section:") + state + QStringLiteral(":was:") + was);
+}
+
 void TrackEngine::rememberDropPunch(qreal kick, qreal low)
 {
     // runde 327 (review): the same drop again - a DJ loop over the build/drop

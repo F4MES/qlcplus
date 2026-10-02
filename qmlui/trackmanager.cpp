@@ -571,6 +571,8 @@ void TrackManager::setOverrideState(QString state)
         return;
 
     m_overrideState = state;
+    if (m_engine != nullptr)                    // R335_SECTION_SIG: the press on the tracklog
+        m_engine->noteSectionOverride(state, m_analysedState);
     emit stateChanged();
 
     if (m_autoRun)
