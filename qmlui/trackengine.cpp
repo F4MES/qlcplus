@@ -13395,6 +13395,9 @@ void TrackEngine::setStartScene(bool on)
     m_startScene = on;
     if (on)
     {
+        // the palette is the table's: SHOW ON before the Track page had built
+        // it found no red and opened on the first colour, blue (runde 337)
+        ensureTable();
         // it always opens on red (Tobias, 2026-09-23: "den skal altid starte
         // paa roed") - also over a tile the DJ left picked, which it replaces
         // - and the tile lights up, so it is clear which it is. A tile tapped
@@ -14594,6 +14597,19 @@ void TrackEngine::startFunction(Function *func, int division, bool glide)
 {
     if (func == nullptr)
         return;
+    // A stop asked for on this same turn - a fade that just ended, stopAll(),
+    // a VC button, SHOW ON's console reset - has not reached the MasterTimer
+    // yet. Started now, the timer runs postRun() and preRun() back to back,
+    // and postRun() wiped the intensity override run() requests next: the
+    // function came back at FULL, past MASTER, until something asked again.
+    // The start picture with MASTER at 20 % went to the rider's full dimmer
+    // and red when ENERGY moved with the deck stopped, for up to half a
+    // minute (runde 337, Tobias: "har master-faderen nede, saa starter den
+    // paa fuld dimmer"). preserveAttributes, as ChaserRunner does for its
+    // overlap restarts; the engine releases its own override before every
+    // stop, so nothing of ours outlives one.
+    if (func->isRunning() && func->stopped())
+        func->stop(FunctionParent::master(), true);
     // The division goes in as an overrideDuration, so Ableton Link stays the
     // only clock: we change how long a step lasts, never the timing source.
     // In the chaser's own unit (paceDuration, runde 281): a Beats chaser gets
