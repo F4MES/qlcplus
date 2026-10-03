@@ -193,6 +193,10 @@ struct TrackFuncInfo
     qreal minLit = 0.0;       // the lowest master dimmer any step leaves any of its lamps
     qreal peakLit = 0.0;      // runde 259: the BRIGHTEST lamp in its darkest step - "at
                               // least one lamp on" (Tobias), 0..1
+    qreal beamShare = 1.0;    // runde 338: litShare counted in BEAMS - a laser bar's eight
+                              // eyes each count, so "one eye per bar" is 1/8, not 1
+    bool fullBank = false;    // runde 338: some step has 3/4 or more of the lamps it touches
+                              // at 200+ on their dimmer (3 lamps or more) - a bank at full
                               // at (0..1); 0 = can promise nothing (runde 231)
 
     /* ---- the operator's verdict, per section kind ---- */
@@ -229,6 +233,7 @@ struct TrackMove
     int subSteps = 1;         // pattern steps per beat: 1, 2 = eighths, 4 = sixteenths (stepBeats 1 only)
     qreal texture = 0.0;      // per-fixture level spread among the lit ones, 0..0.3 - a flat group looks static
     bool bare = false;        // strobes: blink one at a time with nothing lit behind them
+    int width = 1;            // chase / pingpong: how many neighbours are lit together (runde 338)
     qreal drawnE = -1.0;      // the energy this move was drawn at (-1 = m_movesEnergy's) - runde 264
 };
 
@@ -708,6 +713,9 @@ signals:
 protected slots:
     void slotDocChanged();
     void slotDocSettled();
+    /** runde 345: the start picture's watchdog (see the definition) */
+    void slotFunctionStopped(quint32 fid);
+    void slotStartWatch();
     void slotFadeTimer();
     void slotPulseTimer();
     void slotSelfTestStep();
@@ -762,6 +770,8 @@ protected:
     qreal litShareOf(Function *func, const QSet<quint32> &touched) const;
     qreal minLitOf(Function *func, const QSet<quint32> &touched) const;
     qreal peakLitOf(Function *func, const QSet<quint32> &touched) const;
+    qreal beamShareOf(Function *func, const QSet<quint32> &touched) const;
+    bool fullBankOf(Function *func, const QSet<quint32> &touched) const;
     bool canOwnDimmers(const TrackFuncInfo &info, bool onBase) const;
     bool baseCovered() const;                // runde 260: another lit lamp group runs beside the base
     /** Does this function write a colour of its own? A chase that only moves
@@ -929,6 +939,7 @@ private:
     bool m_accentWasWhite;    // the last accent was white: the next one is not
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
     bool m_strobesPooled = false; // the last bar line let the strobes into the cast pool (fejljagt 2)
+    bool m_aniPooled = false;     // ... and the animation lasers, from ENGINE_ANI_ON (runde 344)
     bool m_dropShown = true;      // the last bar line had the fader at the drop line (ENGINE_DROP_SHOW, runde 279)
     bool m_oneLaser = true;       // the last bar line had the fader under the one-laser line (0.85, runde 279)
     bool m_curveBreak = false;   // runde 192: a groove flag with no kick in the next two bars plays as a break
@@ -1049,6 +1060,7 @@ private:
     QMap<QString, QList<quint32> > m_zoomScenes; // head group -> 9 levels narrow..wide, then alternating A and B (runde 214)
     QMap<QString, int> m_zoomMode;         // per head group: 0 held, 1 the drop's pulse, 2 alternating heads (runde 214)
     bool m_floorRound = false;             // this build: heads straight down, sharp, one blinking round (runde 214)
+    int m_buildStyle = 0;                  // runde 339: this build's shape - 0 fill, 1 odd/even roll, 2 swell, 3 halves
     QMap<QString, int> m_zoom;             // the zoom pick per group, -1 none
     int m_dropStyle;          // this drop's character: 0 none, 1 hard, 2 wide, 3 tight, 4 heavy, 5 nervous
     bool m_landCoin = false;  // runde 287: a plain or tight drop lands on the impact chase (true) or still
@@ -1089,6 +1101,7 @@ private:
     int m_strobeUntil;        // the beat the burst ends on (-1: not strobing)
     int m_strobeSeen;         // the beat driveStrobe last saw, to catch a scrub
     int m_strobeRate;         // which of the rates is up
+    bool m_strobeHeadsOnly = false;   // runde 346: the burst up is the heads' own, in a drop
     int m_strobeWindow;       // first beat of the current 64-beat strobe budget window (-1: none)
     int m_strobeSpent;        // strobe beats used in that window
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
@@ -1135,10 +1148,19 @@ private:
     qreal m_startLevel;       // a trim on the opening picture
     bool m_startColour;       // the opening picture chose the colour, not the DJ
     bool m_forceNext;
+    /** runde 338: a fixture's per-eye channels (4 or more) and its master
+     *  dimmer, for beamShareOf/fullBankOf - read once per table build: the
+     *  regex over every channel of every fixture of every programme doubled
+     *  the rebuild (553 -> 1105 ms headless) */
+    mutable QHash<quint32, QSet<quint32> > m_eyeCache;
+    mutable QHash<quint32, quint32> m_dimmerCache;
     QList<int> m_hitBeats;                 // beats that carried a hit, last 32 beats
 
     /* what is running: slot name -> fid, and its attribute override */
     QMap<QString, quint32> m_active;
+    bool m_startWatchPending = false;      // runde 345: one restart per burst of stops
+    int m_startWatchCount = 0;             // runde 345: restarts in the current 10 s
+    qint64 m_startWatchSince = 0;          // runde 345: when that 10 s began (ms)
     QMap<QString, int> m_activeAttr;
     QMap<QString, qreal> m_activeLevel;
     QMap<QString, qreal> m_activeOut;      // what was actually written (pulse, trim, master, blackout applied)

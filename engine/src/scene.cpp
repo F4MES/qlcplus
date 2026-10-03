@@ -142,6 +142,7 @@ void Scene::setValue(const SceneValue& scv, bool blind, bool checkHTP)
 
         // if the scene is running, we must
         // update/add the changed channel
+        QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_SCENE_SETVALUE (inside m_valueListMutex, as in write)
         if (blind == false && m_fadersMap.isEmpty() == false)
         {
             Fixture *fixture = doc()->fixture(scv.fxi);
@@ -696,6 +697,7 @@ void Scene::writeDMX(MasterTimer *timer, QList<Universe *> ua)
 
     if (flashing() == true)
     {
+        QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_SCENE_FLASH
         if (m_fadersMap.isEmpty())
         {
             // Keep HTP and LTP channels up. Flash is more or less a forceful intervention
@@ -754,6 +756,7 @@ void Scene::processValue(MasterTimer *timer, QList<Universe*> ua, uint fadeIn, c
 
     Universe *universe = ua.at(universeIndex);
 
+    QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_SCENE_PROCESS
     QSharedPointer<GenericFader> fader = m_fadersMap.value(universe->id(), QSharedPointer<GenericFader>());
     if (fader.isNull())
     {
@@ -814,6 +817,7 @@ void Scene::processValue(MasterTimer *timer, QList<Universe*> ua, uint fadeIn, c
 
 void Scene::handleFadersEnd(MasterTimer *timer)
 {
+    QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_SCENE_END
     uint fadeout = overrideFadeOutSpeed() == defaultSpeed() ? fadeOutSpeed() : overrideFadeOutSpeed();
 
     /* If no fade out is needed, dismiss all the requested faders.
@@ -851,7 +855,12 @@ void Scene::write(MasterTimer *timer, QList<Universe*> ua)
         return;
     }
 
-    if (m_fadersMap.isEmpty())
+    bool noFaders;
+    {
+        QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_SCENE_WRITE
+        noFaders = m_fadersMap.isEmpty();
+    }
+    if (noFaders)
     {
         uint fadeIn = overrideFadeInSpeed() == defaultSpeed() ? fadeInSpeed() : overrideFadeInSpeed();
 
@@ -897,10 +906,13 @@ void Scene::setPause(bool enable)
     if (!isRunning())
         return;
 
-    foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
     {
-        if (!fader.isNull())
-            fader->setPaused(enable);
+        QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_SCENE_PAUSE
+        foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
+        {
+            if (!fader.isNull())
+                fader->setPaused(enable);
+        }
     }
     Function::setPause(enable);
 }
@@ -913,6 +925,8 @@ int Scene::adjustAttribute(qreal fraction, int attributeId)
 {
     int attrIndex = Function::adjustAttribute(fraction, attributeId);
 
+    // R346_SCENE_ADJUST: THE crash of 10-02 - this walk raced write/postRun
+    QMutexLocker fadersLocker(&m_fadersMapMutex);
     if (attrIndex == Intensity)
     {
         foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
@@ -944,10 +958,13 @@ void Scene::setBlendMode(Universe::BlendMode mode)
 
     qDebug() << "Scene" << name() << "blend mode set to" << Universe::blendModeToString(mode);
 
-    foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
     {
-        if (!fader.isNull())
-            fader->setBlendMode(mode);
+        QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_SCENE_BLEND
+        foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
+        {
+            if (!fader.isNull())
+                fader->setBlendMode(mode);
+        }
     }
 
     Function::setBlendMode(mode);
@@ -963,6 +980,7 @@ void Scene::setBlendFunctionID(quint32 fid)
     m_blendFunctionID = fid;
     if (isRunning() && fid == Function::invalidId())
     {
+        QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_SCENE_BLENDFN
         foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
         {
             if (!fader.isNull())

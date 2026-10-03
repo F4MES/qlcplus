@@ -752,6 +752,8 @@ void RGBMatrix::postRun(MasterTimer *timer, QList<Universe *> universes)
     /* If no fade out is needed, dismiss all the requested faders.
      * Otherwise, set all the faders to fade out and let Universe dismiss them
      * when done */
+    {
+    QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_RGB_POSTRUN
     if (fadeout == 0)
     {
         dismissAllFaders();
@@ -769,6 +771,7 @@ void RGBMatrix::postRun(MasterTimer *timer, QList<Universe *> universes)
     }
 
     m_fadersMap.clear();
+    }
 
     {
         QMutexLocker algorithmLocker(&m_algorithmMutex);
@@ -803,6 +806,7 @@ QSharedPointer<GenericFader> RGBMatrix::getFader(Universe *universe)
     if (universe == NULL)
         return QSharedPointer<GenericFader>();
 
+    QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_RGB_FADER
     QSharedPointer<GenericFader> fader = m_fadersMap.value(universe->id(), QSharedPointer<GenericFader>());
     if (fader.isNull())
     {
@@ -976,6 +980,7 @@ int RGBMatrix::adjustAttribute(qreal fraction, int attributeId)
 
     if (attrIndex == Intensity)
     {
+        QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_RGB_ADJUST
         foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
         {
             if (!fader.isNull())
@@ -1061,6 +1066,7 @@ void RGBMatrix::setBlendMode(Universe::BlendMode mode)
     if (mode == blendMode())
         return;
 
+    QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_RGB_BLEND
     foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
     {
         if (!fader.isNull())

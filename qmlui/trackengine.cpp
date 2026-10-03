@@ -114,6 +114,8 @@ static quint32 nameScatter(const QString &name)
 // from 50 % a beat a step; from 75 % in a drop an eighth. strobePaceFloor().
 #define ENGINE_STROBE_ON      0.30
 #define ENGINE_HWSTROBE_ON    0.55    // the hardware shutter's own line (runde 313)
+// runde 344, Tobias 10-03: "animationslaseren skal foerst komme i spil ved 70%"
+#define ENGINE_ANI_ON         0.70
 #define ENGINE_DARK_BARS      4
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
@@ -136,7 +138,9 @@ static quint32 nameScatter(const QString &name)
 // strobe-lamperne". The ceiling came down from 16 to 10 beats per 64 - a
 // third less at the top of the fader, unchanged at the bottom.
 #define ENGINE_STROBE_BUDGET_LOW   2
-#define ENGINE_STROBE_BUDGET_HIGH  10
+// 2026-10-03 (runde 338), the other way: "slet ikke nogle hurtige strob".
+// 16 at the top - still a quarter of the window, and the bottom unchanged.
+#define ENGINE_STROBE_BUDGET_HIGH  16
 
 /* colours the house does not like: never in the palette, never as an accent,
  * never generated - even when a scene of that colour exists */
@@ -302,6 +306,10 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     if (m_doc != nullptr)
     {
         connect(m_doc, SIGNAL(loaded()), this, SLOT(slotDocChanged()));
+        // runde 345: the start picture's watchdog - queued, the timer thread emits it
+        if (m_doc->masterTimer() != nullptr)
+            connect(m_doc->masterTimer(), SIGNAL(functionStopped(quint32)),
+                    this, SLOT(slotFunctionStopped(quint32)), Qt::QueuedConnection);
         connect(m_doc, SIGNAL(cleared()), this, SLOT(slotDocChanged()));
         connect(m_doc, SIGNAL(functionRemoved(quint32)), this, SLOT(slotDocChanged()));
         connect(m_doc, SIGNAL(fixtureRemoved(quint32)), this, SLOT(slotDocChanged()));
@@ -373,6 +381,59 @@ void TrackEngine::slotDocChanged()
         m_docTimer.start();
 }
 
+// THE START PICTURE'S WATCHDOG (runde 345). Tobias, 2026-10-02: the start
+// scene "resetter en gang i mellem, spinner heads lige rundt og gaar tilbage
+// til start". The start picture is held by functions the engine started once
+// (startLook) and nothing re-runs while it stands - no beats, no tick. One
+// of them is the rider's START scene, which is also on a Virtual Console
+// button: a press of that button (or anything else that stops it) stops it
+// for everyone - Function::stop() with ManualVCWidget clears every source -
+// and pan/tilt let go, so the heads swing home until the next startLook().
+// Now a stop of one of the start picture's own functions puts the picture
+// back at once. Stops the engine makes itself are not seen: stopSlot() takes
+// the slot out of m_active before the queued signal lands, and the
+// stop-then-start restart (runde 337) is running again by then. A burst of
+// stops (STOP ALL) is one restart, and more than three in 10 s is someone
+// meaning it - the watchdog lets go until the picture is set again.
+void TrackEngine::slotFunctionStopped(quint32 fid)
+{
+    if (m_startScene == false || m_doc == nullptr || m_testTimer.isActive())
+        return;
+    bool ours = false;
+    for (auto it = m_active.constBegin(); it != m_active.constEnd(); ++it)
+    {
+        if (it.value() == fid)
+        {
+            ours = true;
+            break;
+        }
+    }
+    if (ours == false || m_startWatchPending)
+        return;
+    Function *f = m_doc->function(fid);
+    if (f == nullptr || (f->isRunning() && f->stopped() == false))
+        return;
+    m_startWatchPending = true;
+    QTimer::singleShot(0, this, SLOT(slotStartWatch()));
+}
+
+void TrackEngine::slotStartWatch()
+{
+    m_startWatchPending = false;
+    if (m_startScene == false || m_doc == nullptr)
+        return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_startWatchSince > 10000)
+    {
+        m_startWatchSince = now;
+        m_startWatchCount = 0;
+    }
+    if (++m_startWatchCount > 3)
+        return;
+    qDebug() << "[TRACK] start picture: a function of it was stopped from outside - put back";
+    startLook();
+}
+
 void TrackEngine::slotDocSettled()
 {
     // the between-tracks look was up (no section, an idle: slot running): an
@@ -416,6 +477,7 @@ void TrackEngine::slotDocSettled()
     m_strobeUntil = -1;
     m_strobeSeen = -1;
     m_strobeRate = 0;
+    m_strobeHeadsOnly = false;           // runde 346
     m_strobeWindow = -1;
     m_strobeSpent = 0;
     m_mixBeat = -1;
@@ -940,6 +1002,8 @@ void TrackEngine::ensureTable()
     m_building = true;
     m_dirty = false;
     invalidateCandidates();          // m_funcs is about to be cleared and refilled
+    m_eyeCache.clear();              // runde 338: the fixtures may have changed
+    m_dimmerCache.clear();
 
     /* ---- groups ---- */
     m_groups.clear();
@@ -1167,6 +1231,19 @@ void TrackEngine::ensureTable()
                                                             : groupCache.insert(fid, groupOfFixture(fid)).value();
             if (key.isEmpty() == false)
                 info.groups.insert(key);
+        }
+        // runde 338, only where they are read (the table rebuild grew by a
+        // tenth with both on every function): the beams on a laser group's
+        // programme, the full bank on a strobe group's
+        info.beamShare = info.litShare;
+        info.fullBank = false;
+        foreach (const QString &gk, info.groups)
+        {
+            const TrackGroup &tg = m_groups.value(gk);
+            if (tg.lasers && tg.patternDevice == false)
+                info.beamShare = beamShareOf(func, touched);
+            if (tg.strobes)
+                info.fullBank = fullBankOf(func, touched);
         }
         // after the groups are known, not before: this info is still a local
         // and is not in m_funcs yet, so the helper cannot look itself up
@@ -2424,8 +2501,10 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             m_pulseDepth.insert(key, 0.0);
             m_breathe.insert(key, 0);
             // an automatic hit (a colour is given) follows the slider (runde 292)
-            setDimmer(key, colour.isEmpty() ? 1.0
-                                            : 0.70 + 0.30 * qBound(0.0, (m_faderNow - 0.55) / 0.45, 1.0));
+            // full: the button, and since runde 344 the only automatic hit
+            // left - the drop's landing - "100% paa droppet" (it followed the
+            // slider from 0.70, runde 292)
+            setDimmer(key, 1.0);
             m_pulseDepth.insert(key, keepDepth);
             m_breathe.insert(key, keepBreath);
         }
@@ -3162,6 +3241,18 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     // ramp rather than a threshold, so 55 % and 65 % are different, and so
     // are 90 % and 100 %.
     qreal w = qBound(0.0, (e - 0.33) / 0.67, 1.0);
+    // RUNDE 346 (Tobias, after 10-02: "hold de vilde strobs til naar Energien
+    // er 100%. 100% er ment til fuldstaendigt amok. Hvor der saa langsomt
+    // skalerer baglaens med energi-slideren"). How OFTEN, how LONG and how
+    // FAST a burst is now ride on w squared: the same ramp, bent down, so it
+    // is still nought at a third and one at the stop, but 70 % gives 0.30
+    // (was 0.55) and 85 % 0.60 (was 0.78). The top is unchanged - the
+    // bottom half of the strobes' life is calmer, and the last 15 % on the
+    // slider is where they go wild. On Friday the bursts ran 4-7 % of the
+    // beats at 70-89 % and 14 % above 90 %.
+    const qreal w2 = w * w;
+    // the stop's own last stretch: nought at 85 % on the slider, one at 100
+    const qreal amok = qBound(0.0, (m_faderNow - 0.85) / 0.15, 1.0);
 
     // The DJ scrubbed backwards. A burst is at most four beats, so any
     // backwards jump can leave an end beat in the future - and then
@@ -3189,7 +3280,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         m_strobeSpent = 0;
     }
     int budget = ENGINE_STROBE_BUDGET_LOW
-                 + int(qRound(w * qreal(ENGINE_STROBE_BUDGET_HIGH - ENGINE_STROBE_BUDGET_LOW)));
+                 + int(qRound(w2 * qreal(ENGINE_STROBE_BUDGET_HIGH - ENGINE_STROBE_BUDGET_LOW)));   // w2: runde 346
     auto affordable = [this, budget](int beats) { return m_strobeSpent + beats <= budget; };
 
     if (quiet)
@@ -3207,7 +3298,11 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // the fader the draw stays in the slow half of the six rates, at the
         // top it has them all. A slow hardware strobe at low energy is a
         // flicker; the fast one is the club (Tobias, 2026-09-18).
-        int drawn = qBound(0, int(qRound(qreal(rng->bounded(rateCount)) * (0.35 + 0.65 * w))), rateCount - 1);
+        int drawn = qBound(0, int(qRound(qreal(rng->bounded(rateCount)) * (0.35 + 0.65 * w2))), rateCount - 1);
+        // runde 338: at the top of the fader the slow end of the band is a
+        // flicker, not the club - the draw starts two rates up from w 1
+        // (runde 346: from the last 15 % of the slider, the amok)
+        drawn = qMax(drawn, qMin(rateCount - 1, int(qRound(2.0 * amok))));
         // The riser starts earlier in the build the higher the fader is: at a
         // quarter it only arrives in the last eighth, at the top it runs the
         // last third of the build - and there it does climb, because a riser
@@ -3222,21 +3317,21 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         else if (isDrop && bar == 0 && beatInBar == 0 && m_faderNow >= ENGINE_DROP_SHOW)
         {
             want = drawn;                                // the drop lands
-            beats = 1 + int(qRound(2.0 * w));
+            beats = 1 + int(qRound(3.0 * w2));           // a whole bar at the top (runde 338; w2 runde 346)
         }
         // bar >= 0 too: a drop whose kick has not arrived yet is handed a
         // NEGATIVE bar (see m_dropLand in tick). The landing above already
         // waits for it; without this the "and again" bursts fired straight
         // through the delay, which is the fake drop given away by the strobes.
-        else if (isDrop && bar >= 0 && w > 0.0 && beatInBar == 0 && roll(0.05 + 0.70 * w)
-                 && affordable(1 + int(qRound(3.0 * w))))
+        else if (isDrop && bar >= 0 && w > 0.0 && beatInBar == 0 && roll(0.05 + 0.70 * w2)
+                 && affordable(1 + int(qRound(3.0 * w2))))
         {
             want = drawn;                                // and again, more of it
-            beats = 1 + int(qRound(3.0 * w));
+            beats = 1 + int(qRound(3.0 * w2));
         }
         else if (isDrop == false && isBuild == false && w > 0.0
                  && (bar % qMax(2, 10 - int(qRound(8.0 * w)))) == 0
-                 && beatInBar == 3 && roll(0.10 + 0.50 * w) && affordable(1))
+                 && beatInBar == 3 && roll(0.10 + 0.50 * w2) && affordable(1))
         {
             want = drawn;                                // a groove gets a taste
             beats = 1;
@@ -3248,10 +3343,26 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // pace, not for bursts at a bar's level.
         if (want >= 0 && m_faderNow < ENGINE_HWSTROBE_ON)
             want = -1;
+        bool headsOnly = false;
+        // THE HEADS' OWN (runde 346, Tobias: "Movingheads kunne godt strobe
+        // lidt mere i drops"). Between the drop's bursts, on the first beat of
+        // every second bar, the heads alone take one beat of their shutter -
+        // slow rates at 60 %, the top of the band at the stop, and more often
+        // the higher the slider. Outside the strobe budget: it is the heads'
+        // accent, not the strobes'.
+        const qreal hh = qBound(0.0, (m_faderNow - 0.60) / 0.40, 1.0);
+        if (want < 0 && isDrop && bar >= 0 && (bar % 2) == 1 && beatInBar == 0
+            && m_faderNow >= 0.60 && roll(0.25 + 0.45 * hh))
+        {
+            want = qBound(0, int(qRound(hh * qreal(rateCount - 1))) - int(rng->bounded(2)), rateCount - 1);
+            beats = 1;
+            headsOnly = true;
+        }
         if (want >= 0)
         {
             m_strobeRate = want;
             m_strobeUntil = beat + beats - 1;
+            m_strobeHeadsOnly = headsOnly;
         }
     }
 
@@ -3274,7 +3385,17 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // leaves the fixtures strobing for ever.
         // The strobe group joins whenever it is lit; everyone else only once
         // the room is at the top of the fader - that is the "abefest".
-        bool joins = cast.contains(key) && (g.strobes || w > 0.55);
+        // runde 346: the laser bars only in the amok - a drop from 95 % on the
+        // slider (they strobed 11 % of the beats above 90 % on Friday, and the
+        // shutter on a single walking eye is the "strobing" Tobias saw); the
+        // heads in every drop from 60 %; the rest from w2 0.30 (w 0.55, as
+        // before). A heads-only burst is the heads'.
+        bool joins = cast.contains(key)
+                     && (m_strobeHeadsOnly ? g.heads
+                         : (g.strobes
+                            || (g.lasers ? (isDrop && amok >= 0.67)
+                               : (g.heads ? ((isDrop && m_faderNow >= 0.60) || w2 > 0.30)
+                                  : w2 > 0.30))));
         if (on == false || joins == false || ids.isEmpty()
             || m_groupOff.contains(key) || g.generatable() == false)
         {
@@ -3285,7 +3406,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // not deduce a common type
         // everyone but the strobe group runs a notch slower, so the strobes
         // still lead when the whole rig joins in at the top of the fader
-        int r = qBound(0, g.strobes ? m_strobeRate : qMax(0, m_strobeRate - 2),
+        int r = qBound(0, (g.strobes || m_strobeHeadsOnly) ? m_strobeRate : qMax(0, m_strobeRate - 2),
                        int(ids.count()) - 1);
         if (ids.at(r) == Function::invalidId())
         {
@@ -3300,7 +3421,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         run(slot, ids.at(r), 1.0, 0, true);
         lit = true;
     }
-    if (lit)
+    if (lit && m_strobeHeadsOnly == false)
         m_strobeSpent++;
 }
 
@@ -3690,6 +3811,147 @@ qreal TrackEngine::peakLitOf(Function *func, const QSet<quint32> &touched) const
         worst = qMin(worst, brightest);
     }
     return qreal(worst) / 255.0;
+}
+
+qreal TrackEngine::beamShareOf(Function *func, const QSet<quint32> &touched) const
+{
+    // Runde 338 (Tobias, 2026-10-03: "laser-bars i de hoeje energier brugte
+    // for meget 'et-oeje' chases"). litShare counts FIXTURES by their master
+    // dimmer, so "Bars Drop Eyes Single Cyan Fast" - every bar lit, one of its
+    // eight eyes on - read 1.0, the fullest picture there is. This counts
+    // beams: a fixture with per-eye channels ("Laser Color 1..8", the names
+    // splitColourFunction reads) is that many beams, lit where its eye channel
+    // is non-zero - or all of them when the step writes no eye at all (the
+    // bar's colour channel or the group's colour scene paints them). Every
+    // other fixture is one beam, lit as litShareOf reads it.
+    if (func == nullptr || touched.isEmpty() || m_doc == nullptr)
+        return 1.0;
+    QList<quint32> steps;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+    }
+    else
+        steps.append(func->id());
+    if (steps.isEmpty())
+        return 1.0;
+    static const QRegularExpression eyeName(QStringLiteral("(colou?r|eye)\\s*\\d+"),
+                                            QRegularExpression::CaseInsensitiveOption);
+    QHash<quint32, QSet<quint32> > eyes;      // fixture -> its eye channels (4 or more)
+    QHash<quint32, quint32> dimmers;
+    foreach (quint32 fid, touched)
+    {
+        if (m_dimmerCache.contains(fid) == false)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr)
+                continue;
+            m_dimmerCache.insert(fid, dimmerChannel(fxi));
+            QSet<quint32> e;
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch != nullptr && qch->name().contains(eyeName))
+                    e.insert(ch);
+            }
+            if (e.count() >= 4)
+                m_eyeCache.insert(fid, e);
+        }
+        dimmers.insert(fid, m_dimmerCache.value(fid));
+        if (m_eyeCache.contains(fid))
+            eyes.insert(fid, m_eyeCache.value(fid));
+    }
+    qreal sum = 0.0;
+    int counted = 0;
+    foreach (quint32 sid, steps)
+    {
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            return 1.0;                  // not something we can measure: no claim
+        QHash<quint32, int> dimVal;      // -1: not written
+        QHash<quint32, int> eyesOn;
+        foreach (const SceneValue &sv, valuesOf(scene))
+        {
+            if (touched.contains(sv.fxi) == false)
+                continue;
+            if (sv.channel == dimmers.value(sv.fxi, QLCChannel::invalid()))
+                dimVal.insert(sv.fxi, int(sv.value));
+            else if (sv.value > 0 && eyes.value(sv.fxi).contains(sv.channel))
+                eyesOn[sv.fxi] += 1;
+        }
+        int total = 0, lit = 0;
+        foreach (quint32 fid, touched)
+        {
+            const int beams = eyes.contains(fid) ? int(eyes.value(fid).count()) : 1;
+            total += beams;
+            if (dimVal.value(fid, -1) == 0)
+                continue;
+            if (eyes.contains(fid))
+                lit += eyesOn.value(fid, 0) > 0 ? eyesOn.value(fid) : beams;
+            else
+                lit += 1;
+        }
+        if (total > 0)
+        {
+            sum += qreal(lit) / qreal(total);
+            counted++;
+        }
+    }
+    return counted > 0 ? sum / counted : 1.0;
+}
+
+bool TrackEngine::fullBankOf(Function *func, const QSet<quint32> &touched) const
+{
+    // Runde 338: a step that puts (nearly) EVERY lamp it touches at 200 or more
+    // on its master dimmer, three lamps or more - on the strobes that is the whole
+    // bank flashing at full, the picture Tobias wants gone ("strobe-lamperne
+    // ... paa 100% dimmer (puler op et kort oejeblik)"). 432 of the show's
+    // 1111 strobe programmes have one: Wide Row Pulse, Blink, Burst, the
+    // two-colour Duo/Swap scenes.
+    if (func == nullptr || touched.count() < 3 || m_doc == nullptr)
+        return false;
+    QList<quint32> steps;
+    Chaser *chaser = qobject_cast<Chaser *>(func);
+    if (chaser != nullptr)
+    {
+        foreach (const ChaserStep &step, chaser->steps())
+            steps.append(step.fid);
+    }
+    else
+        steps.append(func->id());
+    foreach (quint32 sid, steps)
+    {
+        Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+        if (scene == nullptr)
+            continue;
+        int withDimmer = 0, full = 0;
+        QSet<quint32> seen;
+        foreach (const SceneValue &sv, valuesOf(scene))
+        {
+            if (touched.contains(sv.fxi) == false || seen.contains(sv.fxi))
+                continue;
+            // beamShareOf (called first, on the same fixtures) filled the cache
+            quint32 dch = m_dimmerCache.value(sv.fxi, QLCChannel::invalid());
+            if (m_dimmerCache.contains(sv.fxi) == false)
+            {
+                Fixture *fxi = m_doc->fixture(sv.fxi);
+                dch = fxi != nullptr ? dimmerChannel(fxi) : QLCChannel::invalid();
+            }
+            if (sv.channel != dch)
+                continue;
+            seen.insert(sv.fxi);
+            withDimmer++;
+            if (sv.value >= 200)
+                full++;
+        }
+        // three in four or more: five of six is the same picture ("Row Gap",
+        // headless 10-03) - only the one dark lamp says it is a chase
+        if (withDimmer >= 3 && full * 4 >= withDimmer * 3)
+            return true;
+    }
+    return false;
 }
 
 bool TrackEngine::canOwnDimmers(const TrackFuncInfo &info, bool onBase) const
@@ -5487,6 +5749,11 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // rather than a programme - and it was a candidate in every colour.
         if (info->type != int(Function::SceneType) && info->litShare <= 0.0)
             continue;
+        // ... nor, on the strobes, one that puts the whole bank on full (runde
+        // 338, fullBankOf): "fjern det der faar strobe-lamperne til at gaa paa
+        // 100% dimmer". Their accent is the walk and the hardware shutter.
+        if (m_groups.value(group).strobes && info->fullBank)
+            continue;
         // How much of the group a chase has to leave lit. This matters far
         // more since the dimmers were handed over (runde 69): before, the
         // engine's own parts held the light up and a chase that walks one
@@ -5710,7 +5977,11 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // Flower er også OK til breaks." Never the wild ones: Wave..., moving,
     // strobish, kanoner, FY FY, DrypDryp (Flower is allowed although its name
     // says Moving).
-    if (tier == 0 && tagged.count() <= 1 && m_groups.value(group).patternDevice)
+    // RUNDE 339: ALWAYS, not only with one pattern or none. Fladviftebølge
+    // still ran 79 % of the break beats on 10-02 - "Flad vifte (hvid)" and the
+    // FLAT scenes counted as the break's own, so the calm ones never joined.
+    // Tobias, 10-03: "jeg synes bare det er ensformigt".
+    if (tier == 0 && m_groups.value(group).patternDevice)
     {
         static const QStringList calmWords = { "flat", "flad", "static", "satic", "smallwave",
                                                "bølge", "boelge", "vifte", "fingre", "flower" };
@@ -5834,6 +6105,29 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         }
         else
             ok = support;
+    }
+
+    // RUNDE 338 (Tobias, after the night of 10-02: "laser-bars i de hoeje
+    // energier brugte for meget 'et-oeje' chases"). Measured on that night's
+    // log: from 80 % on the slider the bars stood with a sixth of their beams
+    // or less - one bar, or one eye per bar - 47 % of the time, half of it the
+    // show's own "Eyes Single", "Row Run", "Comet" programmes. From 60 % in a
+    // groove or a drop the programmes that keep a third of the beams lit or
+    // more come first (beamShareOf); the thin ones stay as the fallback when
+    // nothing else is left, so the bars are never left without a programme.
+    {
+        const TrackGroup &lg = m_groups.value(group);
+        if (lg.lasers && lg.patternDevice == false && tier >= 1 && m_faderNow >= 0.60)
+        {
+            QList<TrackFuncInfo *> broad;
+            foreach (TrackFuncInfo *info, ok)
+            {
+                if (info->type == int(Function::SceneType) || info->beamShare >= 0.30)
+                    broad.append(info);
+            }
+            if (broad.isEmpty() == false)
+                ok = broad;
+        }
     }
 
     // Of what is allowed, the hottest comes up most often - but it does not
@@ -7770,6 +8064,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         m_strobesPooled = fader >= ENGINE_STROBE_ON;
         m_oneLaser = fader < 0.85;
+        m_aniPooled = fader >= ENGINE_ANI_ON;          // runde 344
     }
     QStringList pool;
     foreach (const QString &key, eligible)
@@ -7793,6 +8088,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // mid-bar put them in and out of a drop on beats 2-4 (24 times on
         // 25-26 Sep, the Minis standing in for 3-12 beats). Mid-bar they keep
         // what the last bar line decided (m_strobesPooled, above).
+        // RUNDE 344 (Tobias, 10-03: "animationslaseren skal foerst komme i
+        // spil ved 70%"). On 10-02 it stood on stage 511 beats under 70 % on
+        // the slider - in breaks (its flat fan) and drops alike. Same bar-line
+        // reading as the strobes below, so it never joins or leaves mid-bar.
+        if (m_aniPooled == false && m_groups.value(key).patternDevice)
+            continue;
         if (m_strobesPooled == false && m_groups.value(key).strobes)
             continue;
         pool.append(key);
@@ -7924,6 +8225,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // and the fader (or the closing cap) brought under
             // ENGINE_STROBE_ON, the strobes kept walking (runde 171)
             if (eligible.contains(key)
+                && (m_groups.value(key).patternDevice == false || fader >= ENGINE_ANI_ON)   // runde 344
                 && (m_groups.value(key).strobes == false || fader >= ENGINE_STROBE_ON))
                 castSet.insert(key);
         }
@@ -8303,7 +8605,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (key != base && m_groups.value(key).strobes == false) leads << key;
             }
         }
-        const QString lead = leads.isEmpty() ? QString() : leads.first();
+        // RUNDE 340 (Tobias, 10-03: "ensformigt"): the lead was the first in
+        // the room's order every time - and with the bars' lead put first
+        // (m_barsLead) the laser bars carried the rhythm in 56 % of the drop
+        // beats of 10-02, everything else calm around them. The first in line
+        // still leads more often than not; otherwise another group on stage
+        // takes it for this part of the track. Drawn only here, when the
+        // roles are re-composed - never mid-section.
+        QString lead = leads.isEmpty() ? QString() : leads.first();
+        if (leads.count() >= 2 && rng->bounded(100) >= 55)
+            lead = leads.at(1 + int(rng->bounded(int(leads.count()) - 1)));
         compositionChanged = lead != m_rhythmLead || roleContextChanged;
         if (compositionChanged)
             m_sectionMotion.clear(); // programmes must obey the new roles too
@@ -8360,6 +8671,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // (runde 217: and it ends with FULL AUTO, below 30 % ENERGY - the rule it
     // was drawn by - and is not rolled again on a fake drop's waiting beat,
     // where the build's look holds)
+    // RUNDE 339 (Tobias, 10-03: "jeg synes bare det er ensformigt"): every
+    // build was the same build - the base filling up, the rest a bare blink
+    // handed round faster, the heads straight down in a third to more than half
+    // of them. Measured on 10-02: the base ran the engine's fill 84 % of the
+    // build beats, the strobes 100 %. Each build now draws its SHAPE: the
+    // fill, an odd/even roll that speeds up, a swell (the whole base breathing
+    // deeper and faster), or the halves trading. Drawn on the build's first
+    // beat, held to its end.
+    if (isBuild && m_buildDrawn == false && sectionChanged)
+        m_buildStyle = int(rng->bounded(4));
     if (isBuild == false || isCalm || still || m_fullAuto == false || (m_floorRound && m_dropShown == false))
         m_floorRound = false;
     // (not re-rolled at an inner flag of the same build - it was drawn at
@@ -8372,7 +8693,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     else if (sectionChanged && hold == false && dropWaiting == false && m_floorRound == false
              && (beatsToNext <= 0 || beatsToNext >= 16))
         m_floorRound = m_fullAuto               // FULL AUTO only: it takes the heads' programmes and aims
-                    && fader >= 0.30 && rng->bounded(100) < int(30.0 + 30.0 * qBound(0.0, energy, 1.0));
+                    // (runde 339: 25-50 %, was 30-60 % - the heads down in
+                    // 44 % of the build beats of 10-02 made the builds alike)
+                    && fader >= 0.30 && rng->bounded(100) < int(25.0 + 25.0 * qBound(0.0, energy, 1.0));
     if (redraw)
     {
         m_movesEnergy = energy;
@@ -9387,6 +9710,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && still == false && g.patternDevice == false && darkGroups.contains(key) == false)
         {
             mv.pattern = ENGINE_PAT_CHASE;
+            // runde 338: the bars' impact is a block of two, not one bar alone
+            mv.width = (g.lasers && g.parts.count() >= 4 && fader >= 0.60) ? 2 : 1;
             // runde 313 (review): the strobes' impact keeps the slider's pace
             // too (strobePaceFloor) - two beats a lamp under 50 %, eighths
             // only from 75 %; they are on from 30 % now
@@ -9395,6 +9720,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // the hit 0.55 deep at 30 % and 0.90 at the top (was 0.85 flat)
             mv.subSteps = (g.lasers || fader < (g.strobes ? 0.75 : 0.70)) ? 1 : 2;
             mv.pulse = qMax(mv.pulse, 0.55 + 0.35 * qBound(0.0, (fader - 0.30) / 0.70, 1.0));
+            // runde 346: the bars' hit is a chase with a blink, 0.40 deep, and
+            // the full 0.90 only in the amok (the last 15 % of the slider)
+            if (g.lasers)
+                mv.pulse = 0.40 + 0.50 * qBound(0.0, (fader - 0.85) / 0.15, 1.0);
             mv.pulseOn = 0;
             mv.ownChaser = false;
             impactNow = true;
@@ -9524,7 +9853,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // exactly what "never standing still on a colour" rules out. The
             // walk and its beat stay; sub-beat flicker and the bar flash do
             // not, because those are the lead's job.
-            mv.subSteps = 1;
+            // runde 338: a drop from 75 % on the slider keeps the eighths
+            // drawMove drew - the fast walk Tobias missed
+            if (tier != 2 || fader < 0.75)
+                mv.subSteps = 1;
             mv.flashBar = false;
         }
 
@@ -9970,7 +10302,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     motionDivision = qMax(tier == 2 ? 500 : 1000, motionDivision);
                 // the bare level: run() adds MASTER and the trim (slotScale)
                 const bool mayOwn = canOwnDimmers(mi, key == base);   // see motionOwns (runde 231)
-                run("mot:" + key, mf, mayOwn ? glBase : 1.0, motionDivision, hard || motColourCut);
+                // RUNDE 341 (headless 10-03, the night's log): a laser group's
+                // dark beat (a figure stopping, an aim moving) did not reach a
+                // programme that cannot own the dimmers - it ran at 1.0, its
+                // own dimmer values lit, and at a track change the bars swung
+                // 24 units back to the aim with a Climb's first step on them
+                // (tilt_jump_lit x5). Dark means dark: the programme runs at
+                // nought for that beat, as the colour scene and the parts do.
+                const qreal motLevel = (g.lasers && darkGroups.contains(key)) ? 0.0
+                                     : (mayOwn ? glBase : 1.0);
+                run("mot:" + key, mf, motLevel, motionDivision, hard || motColourCut);
                 m_recentUse.insert(mf, m_clock.elapsed());     // the cooldown starts from its last beat
             }
         }
@@ -10060,7 +10401,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             qreal strength = 1.0;
             if (kick >= 0.0)
             {
-                if (kick < 0.20 && isBuild == false)
+                // (runde 342: not the base's pump in a break from 90 % - a
+                // break has no kick by definition, and the pump is on the
+                // beat the DJ's tempo keeps, as Tobias' own BLACKOUT taps were)
+                const bool breakPump = isBreak && key == base && fader >= 0.90 && isCalm == false;
+                if (kick < 0.20 && isBuild == false && breakPump == false)
                     pulseBeat = false;
                 strength = 0.5 + 0.5 * qBound(0.0, kick, 1.0);
                 // ... but a DEEP pulse reaches full every time. The peak is
@@ -10302,8 +10647,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             {
                 foreach (const QString &fg, m_funcs.value(ff).groups)
                 {
-                    if (m_groups.value(fg).strobes
-                        && (castSet.contains(fg) == false || m_funcs.value(ff).colour != hue))
+                    // runde 338: never on the strobes at all - see genFlash below
+                    if (m_groups.value(fg).strobes)
                     {
                         ff = Function::invalidId();
                         break;
@@ -10345,7 +10690,24 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // through the ranking onto one of those and punched in the wrong
             // colour. genFlash() covers the whole group in the hit's own
             // colour; the operator's scene still runs on top of it.
-            genFlash(true, hue);
+            // RUNDE 338 - NOT ANY MORE. Tobias, 2026-10-03, after the night:
+            // "du skal helt fjerne det der faar strobe-lamperne til at gaa paa
+            // 100% dimmer (puler op et kort oejeblik)". This was it: every
+            // automatic hit (a drop landing, a build's top, the bar flash)
+            // put the WHOLE strobe bank on its dimmer at 70-100 % for a beat,
+            // static, with the pulse switched off - 405 beats on the night of
+            // 10-02. The strobes' own walk and the hardware shutter are their
+            // accent now; the held FLASH button (setFlash) is the operator's
+            // hand and still flashes them.
+            // genFlash(true, hue);
+            //
+            // ... EXCEPT THE DROP ITSELF (runde 344, Tobias the next morning:
+            // "strobe-lamperne maa stadig gerne gaa 100% paa droppet"). The
+            // beat a drop ARRIVES - its first downbeat, not a loop over it,
+            // not a build's top, not the bar flash - the whole bank lands at
+            // full, in the hit's colour (white on a big one, whiteLand).
+            if (isDrop && dropBar == 0 && beatInBar == 0 && dropArrives)
+                genFlash(true, hue);
 
             // The laser bars answer the hit: half a beat later, once, in the
             // colour opposite the room's, for a third of a beat - an echo.
@@ -10557,6 +10919,9 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
     const int drawnPattern = move.pattern;
     const int drawnPulseOn = move.pulseOn;
     const int drawnStepBeats = move.stepBeats;
+    const int drawnPhase = move.phase;            // runde 339: the section's dice for the support's beat
+    const int drawnSubSteps = move.subSteps;      // runde 338: the strobes' eighths
+    const qreal drawnPulse = move.pulse;
     move.phase = 0;  // one rhythmic origin across the room
     if (group == m_rhythmLead)
         return move;
@@ -10595,7 +10960,19 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
     // (runde 288). (The animation laser's gate is capped the same way - review
     // 294: uncapped it opened wider than before at every fader.)
     const qreal sf = qBound(0.0, m_faderNow, 1.0);
-    move.pulseOn = sf >= 0.75 ? 1 : 3;
+    // RUNDE 339 (Tobias, 10-03: "ensformigt"): the support's beat was the same
+    // in every section of the night - beats one and three from 75 %, the
+    // downbeat under it, on every support group at once. Now each section's
+    // draw (drawMove's phase, held for the section) picks where it lands: the
+    // downbeat, one and three, the backbeat (two and four) from 75 %, and
+    // every beat - shallow, the depth below is capped - from 85 %. Still the
+    // calm part of the room; the lead keeps its own.
+    {
+        static const int under[] = { 3, 3, 1, 3 };
+        static const int over[]  = { 1, 2, 1, 3, 2, 1, 0, 0 };
+        const int k = qAbs(drawnPhase);
+        move.pulseOn = sf >= 0.75 ? over[k % (sf >= 0.85 ? 8 : 6)] : under[k % 4];
+    }
     move.bare = g.strobes;
     move.pulse = g.strobes ? 1.0 : qMin(0.25 + 0.25 * qBound(0.0, (sf - 0.40) / 0.60, 1.0), move.pulse);
     if (sf >= 0.80 && g.lasers == false)
@@ -10617,6 +10994,12 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
         // lamp blinks on every one of its beats while it is the lit one.
         move.stepBeats = drawnStepBeats;
         move.pulseOn = drawnPulseOn;
+        // ... and their eighths, crisp, when drawMove drew them (runde 338)
+        if (drawnSubSteps > 1)
+        {
+            move.subSteps = drawnSubSteps;
+            move.pulse = drawnPulse;
+        }
     }
     // A strobe group is never the rhythm lead (chooseLead leaves it out), so
     // this line used to be the second of three places that shut the door on
@@ -10712,6 +11095,21 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.stepBeats = slider ? (pct >= 96 ? 1 : (pct >= 87 ? 2 : (pct >= 61 ? 4 : 8)))
                                   : (sb <= 2 ? sb : (sb <= 5 ? 4 : 8));
             mv.bare = chance(0.35 + 0.45 * busy);
+            // RUNDE 338 (Tobias, after 10-02: "laser-bars i de hoeje energier
+            // brugte for meget 'et-oeje' chases"). The menu above is one bar at
+            // a time three draws in four - CHASE twice and PINGPONG - and from
+            // 80 % on the slider the bars stood on a sixth of their beams 47 %
+            // of the night. From 55 % the fader takes the menu over: odd/even,
+            // halves and a fresh random half (sparkle) join, and a chase or a
+            // ping-pong walks a BLOCK of two or three bars. At 90 % and up a
+            // single bar walking alone is rare.
+            const qreal hot = qBound(0.0, (m_faderNow - 0.55) / 0.35, 1.0);
+            if (tier > 0 && hot > 0.0 && chance(0.35 + 0.60 * hot))
+                mv.pattern = pick({ ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES, ENGINE_PAT_SPARKLE,
+                                    ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
+            if ((mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG)
+                && g.parts.count() >= 4 && tier > 0 && hot > 0.0 && chance(0.30 + 0.70 * hot))
+                mv.width = g.parts.count() >= 6 ? pick({ 2, 3, 3 }) : 2;
         }
         else
         {
@@ -10719,10 +11117,23 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.stepBeats = 8;
         }
         mv.subSteps = 1;                       // never between the beats: too twitchy
-        mv.pulse = busy < 0.15 ? 0.0 : 0.15 + 0.75 * busy;
-        mv.pulseOn = chance(busy * busy) ? 0 : (chance(busy) ? pick({ 1, 2 }) : 3);
+        // RUNDE 346 (Tobias, after 10-02: "laser-bars 'strobede' lidt for
+        // meget, specielt paa de enkeltoejede chases ... hold de vilde strobs
+        // til naar Energien er 100%"). The blink on the beat was 0.15 + 0.75 x
+        // busy - 0.90 deep from about 90 % on the slider, every beat three
+        // draws in four: one eye walking the row and blinking hard on each
+        // beat IS a strobe. Now the depth tops out at 0.60 under 85 % and
+        // only the last 15 % (the amok) takes it to 0.90; the every-beat
+        // blink is the amok's too; a single bare eye walking alone blinks at
+        // most 0.25 until the amok; and the bar hit is the amok's.
+        const qreal amok = qBound(0.0, (m_faderNow - 0.85) / 0.15, 1.0);
+        mv.pulse = busy < 0.15 ? 0.0 : 0.15 + 0.45 * busy + 0.30 * amok;
+        if (mv.bare && mv.width <= 1
+            && (mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG))
+            mv.pulse = qMin(mv.pulse, 0.25 + 0.65 * amok);
+        mv.pulseOn = chance(busy * busy * (0.20 + 0.80 * amok)) ? 0 : (chance(busy) ? pick({ 1, 2 }) : 3);
         mv.colourBars = chance(0.5 * busy) ? pick({ 2, 4, 4 }) : 0;
-        mv.flashBar = tier == 2 && chance(0.5 * busy);
+        mv.flashBar = tier == 2 && chance(0.5 * busy * amok);
         return mv;
     }
 
@@ -10854,8 +11265,43 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.pulseOn = (tier == 1 || chance(wild * wild)) ? 0
                        : (chance(wild) ? pick({ 1, 2 }) : 3);
         }
-        // the bar flash is the top of the ramp, not a switch at 0.75
-        mv.flashBar = tier == 2 && wild > 0.55 && chance(0.20 + 0.50 * wild);
+        // RUNDE 338 (Tobias, after 10-02: "Strobe-lamperne var gode, men jeg
+        // synes slet ikke der var nogle hurtige strob (igen ingen variation)").
+        // Measured that night: the walk was one lamp, chase or ping-pong, a
+        // beat a lamp, 90 % of the strobes' time on stage. Now, once the room
+        // is going (wild from 0.25 in a drop, 0.45 in a groove), the walk can
+        // be odd/even - every other lamp, the halves trading - or a fresh
+        // random half each step (sparkle, never all six), and a chase or a
+        // ping-pong can walk a pair. Never the whole bank: that is the hit
+        // that went (genFlash, above).
+        if (mv.bare && tier > 0 && build == false && g.parts.count() >= 4)
+        {
+            const qreal open = tier == 2 ? qBound(0.0, (wild - 0.25) / 0.55, 1.0)
+                                         : qBound(0.0, (wild - 0.45) / 0.55, 1.0);
+            if (open > 0.0 && chance(0.25 + 0.45 * open))
+                mv.pattern = pick({ ENGINE_PAT_ODDEVEN, ENGINE_PAT_SPARKLE, ENGINE_PAT_CHASE,
+                                    ENGINE_PAT_PINGPONG, ENGINE_PAT_ODDEVEN });
+            if ((mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG)
+                && open > 0.0 && chance(0.35 * open))
+                mv.width = 2;
+            // FAST: in a drop from 75 % on the slider the walk can run on the
+            // eighths - a lamp every half beat across the room. Crisp: the
+            // mask is the blink (no pulse - the pulse only re-triggers on the
+            // beat, so its second half would be dark).
+            if (tier == 2 && fNow >= 0.75
+                && (mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG
+                    || mv.pattern == ENGINE_PAT_ODDEVEN)
+                && chance(0.20 + 0.40 * qBound(0.0, (fNow - 0.75) / 0.25, 1.0)))
+            {
+                mv.stepBeats = 1;
+                mv.subSteps = 2;
+                mv.pulse = 0.0;
+                mv.pulseOn = 0;
+            }
+        }
+        // the bar flash was a hit - and a hit was the whole bank at full
+        // (runde 338): gone from the strobes
+        mv.flashBar = false;
         // (the dimmer pulse cannot go faster than the beat - the sub-beat
         // timer only re-masks a pattern, it never re-triggers the pulse. Above
         // the beat it is driveStrobe's hardware strobe that takes over.)
@@ -10917,6 +11363,19 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             if (mv.breatheBars == 0 && e > 0.2)
                 mv.breatheBars = 4;
         }
+        // RUNDE 342 - THE PUMP AT THE TOP. On 10-02 Tobias pressed BLACKOUT
+        // 970 times, short (under half a second) and a beat apart, most of
+        // them just BEFORE the beat - 452 of them in breaks with the slider at
+        // 100 %. He was making the room hit on the beat where this file keeps
+        // a break calm. From 90 % on the slider the base's heartbeat in a
+        // break is a real pump instead: every beat, 0.45 deep at 90 % and 0.70
+        // at the top - the floor stays at 30 % or more, so the room never goes
+        // out (the rule for breaks), it only breathes with the kick.
+        if (isBase && m_faderNow >= 0.90)
+        {
+            mv.pulse = qMax(mv.pulse, 0.45 + 0.25 * qBound(0.0, (m_faderNow - 0.90) / 0.10, 1.0));
+            mv.pulseOn = 0;
+        }
         if (g.parts.count() < 2)
             mv.pattern = ENGINE_PAT_STATIC;
         return mv;
@@ -10947,6 +11406,18 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             mv.stepBeats = prog > 0.6 ? 1 : 2;
             mv.subSteps = 1;
             mv.pulse = qMin(mv.pulse, 0.45);
+            // runde 339: the build's drawn shape (m_buildStyle). All of them
+            // wide - the base never goes bare, and never below its floor.
+            if (m_buildStyle == 1)
+                mv.pattern = ENGINE_PAT_ODDEVEN;          // the roll: halves of the row trade
+            else if (m_buildStyle == 2)
+            {
+                mv.pattern = ENGINE_PAT_STATIC;           // the swell: the whole base breathes
+                mv.pulse = qMin(0.60, 0.20 + 0.45 * prog);
+                mv.pulseOn = 0;
+            }
+            else if (m_buildStyle == 3)
+                mv.pattern = ENGINE_PAT_HALVES;           // left against right
         }
 
         // The build's own shape: the same bare blink as the break, handed
@@ -10959,7 +11430,12 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         {
             mv.bare = true;              // not the base: see the break branch
             mv.ownChaser = false;        // a chase of theirs would swallow the pattern
-            mv.pattern = ENGINE_PAT_CHASE;
+            // runde 339: the blink's figure follows the build's shape - one
+            // lamp handed round (fill, swell), the halves of the row (roll),
+            // or a pair walking (halves); the acceleration is the same
+            mv.pattern = m_buildStyle == 1 && g.parts.count() >= 4 ? ENGINE_PAT_ODDEVEN : ENGINE_PAT_CHASE;
+            if (m_buildStyle == 3 && g.parts.count() >= 4)
+                mv.width = 2;
             mv.pulse = 1.0;
             mv.breatheBars = 0;
             mv.texture = 0.0;
@@ -11266,20 +11742,28 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
     {
         case ENGINE_PAT_CHASE:
         {
-            int lit = step % n;
-            int tail = (lit + n - 1) % n;
+            // runde 338: a block of `width` neighbours walks the row (wrapping),
+            // so at the top of the fader the bars are a wide comet, not one bar
+            const int w = qBound(1, move.width, qMax(1, n - 1));
+            const int lit = ((step % n) + n) % n;           // the head of the block (a scrub back can make step negative)
             for (int i = 0; i < n; i++)
-                mask[i] = i == lit ? 1.0 : (i == tail && move.bare == false ? 0.3 : dim);
+            {
+                const int behind = (lit - i + n) % n;       // 0 = the head, 1 = just behind it
+                mask[i] = behind < w ? 1.0 : (behind == w && move.bare == false ? 0.3 : dim);
+            }
         }
         break;
         case ENGINE_PAT_PINGPONG:
         {
-            int period = qMax(1, 2 * n - 2);
-            int idx = step % period;
-            if (idx >= n)
+            // the block bounces between the two ends (runde 338: `width` wide)
+            const int w = qBound(1, move.width, qMax(1, n - 1));
+            const int span = n - w + 1;                     // positions the block can stand on
+            int period = qMax(1, 2 * span - 2);
+            int idx = span > 1 ? ((step % period) + period) % period : 0;
+            if (idx >= span)
                 idx = period - idx;
             for (int i = 0; i < n; i++)
-                mask[i] = i == idx ? 1.0 : dim;
+                mask[i] = (i >= idx && i < idx + w) ? 1.0 : dim;
         }
         break;
         case ENGINE_PAT_ODDEVEN:
@@ -11304,6 +11788,18 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
             }
             if (any == false)
                 mask[int(local.bounded(n))] = 1.0;
+            // ... and a BARE one (the strobes, the bars blinking) never more
+            // than half: five of six strobes at once is the bank flash that
+            // went in runde 338
+            if (move.bare)
+            {
+                int on = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    if (mask[i] >= 1.0 && ++on > qMax(1, n / 2))
+                        mask[i] = dim;
+                }
+            }
         }
         break;
         case ENGINE_PAT_FILL:
@@ -11596,6 +12092,8 @@ QString TrackEngine::moveName(const TrackMove &move) const
         s += QString(s.isEmpty() ? "breathe/%1" : " breathe/%1").arg(move.breatheBars);
     if (move.colourBars > 0)
         s += QString(" swap/%1").arg(move.colourBars);
+    if (move.width > 1 && (move.pattern == ENGINE_PAT_CHASE || move.pattern == ENGINE_PAT_PINGPONG))
+        s += QString(" x%1").arg(move.width);
     if (move.bare)
         s += " bare";
     if (move.flashBar)
@@ -13395,6 +13893,7 @@ void TrackEngine::setStartScene(bool on)
     m_startScene = on;
     if (on)
     {
+        m_startWatchCount = 0;               // runde 345: the watchdog is armed again
         // the palette is the table's: SHOW ON before the Track page had built
         // it found no red and opened on the first colour, blue (runde 337)
         ensureTable();
@@ -14764,6 +15263,12 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
         int attr = m_activeAttr.value(slot, -1);
         if (func != nullptr && (func->isRunning() == false || func->stopped()))
         {
+            // runde 343: a stop still pending (as startFunction, runde 337) -
+            // restarted bare, postRun() wiped the level asked for below and
+            // the part stood at FULL for a frame: every strobe at 255 at a
+            // track change in headless, the bars too
+            if (func->isRunning() && func->stopped())
+                func->stop(FunctionParent::master(), true);
             func->start(m_doc->masterTimer(), FunctionParent::track());
             if (attr >= 0)
                 func->releaseAttributeOverride(attr);
@@ -14792,7 +15297,14 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // fade (a SingleShot chase, QLC+'s stop-all) was taken over and never
     // started again - the group stood dark until the slot changed
     if (func->isRunning() == false || func->stopped())
+    {
+        // runde 343: see above - a part stopped and started on the same turn
+        // flashed at full for one frame (the "puls op til 100 % et kort
+        // oejeblik" Tobias saw on the strobes, 10-02)
+        if (func->isRunning() && func->stopped())
+            func->stop(FunctionParent::master(), true);
         func->start(m_doc->masterTimer(), FunctionParent::track());
+    }
 
     m_active.insert(slot, fid);
     m_activeLevel.insert(slot, level);

@@ -1087,6 +1087,7 @@ void EFX::postLoad()
 QSharedPointer<GenericFader> EFX::getFader(QList<Universe *> universes, quint32 universeID)
 {
     // get the universe Fader first. If doesn't exist, create it
+    QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_EFX_FADER
     QSharedPointer<GenericFader> fader = m_fadersMap.value(universeID, QSharedPointer<GenericFader>());
     if (fader.isNull())
     {
@@ -1179,6 +1180,7 @@ int EFX::adjustAttribute(qreal fraction, int attributeId)
     {
         case Intensity:
         {
+            QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_EFX_ADJUST
             foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
             {
                 if (!fader.isNull())
@@ -1208,6 +1210,7 @@ void EFX::setBlendMode(Universe::BlendMode mode)
     if (mode == blendMode())
         return;
 
+    QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_EFX_BLEND
     foreach (QSharedPointer<GenericFader> fader, m_fadersMap)
     {
         if (!fader.isNull())

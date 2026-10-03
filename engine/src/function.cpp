@@ -1080,6 +1080,7 @@ void Function::postRun(MasterTimer *timer, QList<Universe *> universes)
 
 void Function::dismissAllFaders()
 {
+    QMutexLocker fadersLocker(&m_fadersMapMutex);   // R346_DISMISS
     QMapIterator <quint32, QSharedPointer<GenericFader> > it(m_fadersMap);
     while (it.hasNext() == true)
     {
@@ -1310,6 +1311,8 @@ int Function::requestAttributeOverride(int attributeIndex, qreal value)
 
     int attributeID = invalidAttributeId();
 
+    {
+    QMutexLocker attrLocker(&m_attrMutex);   // R346_ATTR_REQUEST (not across adjustAttribute below)
     if (m_attributes.at(attributeIndex).m_flags & Single)
     {
         QMap <int, AttributeOverride>::iterator it = m_overrideMap.begin();
@@ -1342,6 +1345,7 @@ int Function::requestAttributeOverride(int attributeIndex, qreal value)
     {
         qDebug() << name() << "Override requested for existing attribute" << attributeIndex << "value" << value << "single ID" << attributeID;
     }
+    }   // R346_ATTR_REQUEST_END
 
     // actually apply the new override value
     adjustAttribute(value, attributeID);
@@ -1351,6 +1355,7 @@ int Function::requestAttributeOverride(int attributeIndex, qreal value)
 
 void Function::releaseAttributeOverride(int attributeId)
 {
+    QMutexLocker attrLocker(&m_attrMutex);   // R346_ATTR_RELEASE
     if (m_overrideMap.contains(attributeId) == false)
         return;
 
@@ -1391,9 +1396,12 @@ int Function::adjustAttribute(qreal value, int attributeId)
         return -1;
 
     int attrIndex;
+    qreal emitValue = 0.0;
 
     //qDebug() << name() << "Attribute ID:" << attributeId << ", val:" << value;
 
+    {
+    QMutexLocker attrLocker(&m_attrMutex);   // R346_ATTR_ADJUST (not across the emit)
     if (attributeId < OVERRIDE_ATTRIBUTE_START_ID)
     {
         if (attributeId >= m_attributes.count() || m_attributes[attributeId].m_value == value)
@@ -1413,16 +1421,19 @@ int Function::adjustAttribute(qreal value, int attributeId)
         attrIndex = m_overrideMap[attributeId].m_attrIndex;
         calculateOverrideValue(attrIndex);
     }
+    emitValue = m_attributes[attrIndex].m_isOverridden ?
+                m_attributes[attrIndex].m_overrideValue :
+                m_attributes[attrIndex].m_value;
+    }   // R346_ATTR_ADJUST_END
 
-    emit attributeChanged(attrIndex, m_attributes[attrIndex].m_isOverridden ?
-                                     m_attributes[attrIndex].m_overrideValue :
-                                     m_attributes[attrIndex].m_value);
+    emit attributeChanged(attrIndex, emitValue);
 
     return attrIndex;
 }
 
 void Function::resetAttributes()
 {
+    QMutexLocker attrLocker(&m_attrMutex);   // R346_ATTR_RESET (postRun, the MasterTimer thread)
     for (int i = 0; i < m_attributes.count(); i++)
     {
         m_attributes[i].m_isOverridden = false;
@@ -1460,6 +1471,7 @@ QList<Attribute> Function::attributes() const
 
 void Function::calculateOverrideValue(int attributeIndex)
 {
+    QMutexLocker attrLocker(&m_attrMutex);   // R346_ATTR_CALC
     if (attributeIndex >= m_attributes.count())
         return;
 

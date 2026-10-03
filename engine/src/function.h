@@ -746,6 +746,12 @@ protected:
     /** Map used to lookup a GenericFader instance for a Universe ID */
     QMap<quint32, QSharedPointer <GenericFader> > m_fadersMap;
 
+    /** R346_FADERS_MUTEX: m_fadersMap is filled and emptied on the MasterTimer
+     *  thread (write, postRun) and walked on the GUI thread (adjustAttribute,
+     *  setPause, setBlendMode). Recursive: postRun holds it into
+     *  dismissAllFaders(). */
+    QRecursiveMutex m_fadersMapMutex;
+
     /*********************************************************************
      * Elapsed
      *********************************************************************/
@@ -999,6 +1005,11 @@ private:
 
     /** A map of the overridden attributes */
     QMap <int, AttributeOverride> m_overrideMap;
+
+    /** R346_ATTR_MUTEX: the overrides are asked for and moved on the GUI
+     *  thread and cleared by postRun() on the MasterTimer thread. A leaf
+     *  lock: never held across a virtual call or an emit. */
+    QRecursiveMutex m_attrMutex;
 
     /** Last assigned override ID */
     int m_lastOverrideAttributeId;
