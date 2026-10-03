@@ -113,6 +113,7 @@ static quint32 nameScatter(const QString &name)
 // så hurtigere derfra." They come on at 30 %, two beats a step or slower;
 // from 50 % a beat a step; from 75 % in a drop an eighth. strobePaceFloor().
 #define ENGINE_STROBE_ON      0.30
+#define ENGINE_BARS_AMOK      0.995   // runde 348: the laser bars go wild at 100 % only
 #define ENGINE_HWSTROBE_ON    0.55    // the hardware shutter's own line (runde 313)
 // runde 344, Tobias 10-03: "animationslaseren skal foerst komme i spil ved 70%"
 #define ENGINE_ANI_ON         0.70
@@ -3307,11 +3308,14 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // quarter it only arrives in the last eighth, at the top it runs the
         // last third of the build - and there it does climb, because a riser
         // that speeds up is the whole point of a riser.
-        qreal riserFrom = 0.90 - 0.30 * w;
+        // (runde 346: on w2, and the riser's TOP rides on it too - it climbed
+        // to the fastest rate at any fader, 60 % as well as the stop: at 80 %
+        // it now tops out a rate under, at 60 % at the middle of the band)
+        qreal riserFrom = 0.90 - 0.30 * w2;
         if (isBuild && prog > riserFrom && e > 0.18)
         {
             qreal into = qBound(0.0, (prog - riserFrom) / qMax(0.02, 1.0 - riserFrom), 1.0);
-            want = int(qRound(into * qreal(rateCount - 1)));
+            want = int(qRound(into * qreal(rateCount - 1) * (0.45 + 0.55 * w2)));
             beats = 1;
         }
         else if (isDrop && bar == 0 && beatInBar == 0 && m_faderNow >= ENGINE_DROP_SHOW)
@@ -3346,13 +3350,14 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         bool headsOnly = false;
         // THE HEADS' OWN (runde 346, Tobias: "Movingheads kunne godt strobe
         // lidt mere i drops"). Between the drop's bursts, on the first beat of
-        // every second bar, the heads alone take one beat of their shutter -
+        // a bar, the heads alone take one beat of their shutter (a bar in five
+        // at 60 %, two in three at the top) -
         // slow rates at 60 %, the top of the band at the stop, and more often
         // the higher the slider. Outside the strobe budget: it is the heads'
         // accent, not the strobes'.
         const qreal hh = qBound(0.0, (m_faderNow - 0.60) / 0.40, 1.0);
-        if (want < 0 && isDrop && bar >= 0 && (bar % 2) == 1 && beatInBar == 0
-            && m_faderNow >= 0.60 && roll(0.25 + 0.45 * hh))
+        if (want < 0 && isDrop && bar >= 0 && beatInBar == 0
+            && m_faderNow >= 0.60 && roll(0.20 + 0.45 * hh))
         {
             want = qBound(0, int(qRound(hh * qreal(rateCount - 1))) - int(rng->bounded(2)), rateCount - 1);
             beats = 1;
@@ -3393,7 +3398,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         bool joins = cast.contains(key)
                      && (m_strobeHeadsOnly ? g.heads
                          : (g.strobes
-                            || (g.lasers ? (isDrop && amok >= 0.67)
+                            || (g.lasers ? (isDrop && m_faderNow >= ENGINE_BARS_AMOK)   // runde 348
                                : (g.heads ? ((isDrop && m_faderNow >= 0.60) || w2 > 0.30)
                                   : w2 > 0.30))));
         if (on == false || joins == false || ids.isEmpty()
@@ -9723,7 +9728,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // runde 346: the bars' hit is a chase with a blink, 0.40 deep, and
             // the full 0.90 only in the amok (the last 15 % of the slider)
             if (g.lasers)
-                mv.pulse = 0.40 + 0.50 * qBound(0.0, (fader - 0.85) / 0.15, 1.0);
+                mv.pulse = fader >= ENGINE_BARS_AMOK ? 0.90 : 0.40;   // runde 348: only at 100 %
             mv.pulseOn = 0;
             mv.ownChaser = false;
             impactNow = true;
@@ -11126,7 +11131,10 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // only the last 15 % (the amok) takes it to 0.90; the every-beat
         // blink is the amok's too; a single bare eye walking alone blinks at
         // most 0.25 until the amok; and the bar hit is the amok's.
-        const qreal amok = qBound(0.0, (m_faderNow - 0.85) / 0.15, 1.0);
+        // runde 348 (Tobias: "Laserbarene skal kun gaa 'amok' paa 100% energi
+        // ikke fra 15% fra 100"): the bars' amok is the stop itself, not the
+        // last 15 % the strobes have
+        const qreal amok = m_faderNow >= ENGINE_BARS_AMOK ? 1.0 : 0.0;
         mv.pulse = busy < 0.15 ? 0.0 : 0.15 + 0.45 * busy + 0.30 * amok;
         if (mv.bare && mv.width <= 1
             && (mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG))
