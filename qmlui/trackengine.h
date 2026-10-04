@@ -742,6 +742,8 @@ protected:
     void ensureStrobeScenes();
     void ensureOffScenes();
     void applyGroupOff();
+    /** runde 352: the bars' move this section lights more than one eye at a time */
+    bool barsWide(const QString &group) const;
     void driveStrobe(const QSet<QString> &cast, int beat, qreal energy, bool isDrop, bool isBuild,
                      qreal prog, int bar, int beatInBar, bool quiet);
     void learnHome();

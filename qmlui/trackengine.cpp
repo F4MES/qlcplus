@@ -3228,6 +3228,19 @@ void TrackEngine::applyGroupOff()
     }
 }
 
+bool TrackEngine::barsWide(const QString &group) const
+{
+    // Tobias (runde 346): the bars "strobede ... specielt paa de enkeltoejede
+    // chases". The shutter from 90 % (runde 352) is for a look with more than
+    // one eye lit: not a bare chase or ping-pong walking a single eye.
+    if (m_moves.contains(group) == false)
+        return false;
+    const TrackMove &mv = m_moves.value(group);
+    const bool walk = mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG
+                   || mv.pattern == ENGINE_PAT_SPARKLE;
+    return (walk && mv.bare && mv.width <= 1) == false;
+}
+
 void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy, bool isDrop,
                               bool isBuild, qreal prog, int bar, int beatInBar, bool quiet)
 {
@@ -3398,7 +3411,8 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         bool joins = cast.contains(key)
                      && (m_strobeHeadsOnly ? g.heads
                          : (g.strobes
-                            || (g.lasers ? (isDrop && m_faderNow >= ENGINE_BARS_AMOK)   // runde 348
+                            || (g.lasers ? (isDrop && (m_faderNow >= ENGINE_BARS_AMOK                // runde 348
+                                                         || (m_faderNow >= 0.90 && barsWide(key))))    // runde 352
                                : (g.heads ? ((isDrop && m_faderNow >= 0.60) || w2 > 0.30)
                                   : w2 > 0.30))));
         if (on == false || joins == false || ids.isEmpty()
@@ -9932,7 +9946,28 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // up with the room instead of sitting at 70 % of it at every fader)
         qreal support = (m_fullAuto && tier > 0 && key != base && key != m_rhythmLead)
                       ? (g.strobes ? 0.55 : 0.70) + 0.15 * qBound(0.0, (fader - 0.50) / 0.50, 1.0) : 1.0;
+        // RUNDE 352 (Tobias, 10-04: "synes ogsaa drops er lidt doede nu. De var
+        // vildere foer i de hoeje energi niveauer"). The strobes are never the
+        // rhythm lead, so as support they topped out at 0.70 of the level - a
+        // lamp walking the row peaked at 160-180 even at 100 %. What punched
+        // past that before was the bounce bug (a repeated step at FULL, fixed
+        // in runde 351) and the automatic hits on the whole bank (gone in
+        // runde 338, on his word). In a DROP the lit lamp now comes up to the
+        // full level with the slider: 0.70 at 60 % -> 1.0 at 100 %. One lamp
+        // or a few at a time - the walk - never the whole bank; MASTER and the
+        // trim still apply.
+        if (g.strobes && isDrop && support < 1.0)
+            support = qMax(support, 0.70 + 0.30 * qBound(0.0, (fader - 0.60) / 0.40, 1.0));
         qreal groupLevel = qBound(0.0, level * ((isBreak && key == base && still == false) ? 1.4 : 1.0) * duck * support, 1.0);
+        // runde 352: ... and from 75 % the walking strobe lamp punches on its
+        // beat whatever the section's level is - 0.80 at 75 %, full at 100 %
+        // (measured at 90 %: the lit lamp stood at 120-160 of 255 in drops,
+        // Friday's punches had been the bounce bug). Still the walk, still
+        // under MASTER, the trim and a missing kick.
+        // Only a walk that BLINKS (pulse 0.5+, decays before the next beat):
+        // a lamp held lit at that level stood as a glare half the drop.
+        if (g.strobes && isDrop && fader >= 0.75 && mv.pulse >= 0.50 && darkGroups.contains(key) == false)
+            groupLevel = qMax(groupLevel, (0.80 + 0.20 * qBound(0.0, (fader - 0.75) / 0.25, 1.0)) * duck);
         // run() puts MASTER and the trim on for us now, so the colour scene
         // gets the bare level - or the two would multiply. (The level WITH them,
         // `gl`, went with runde 174: its last reader was the chase, which gets
@@ -11136,6 +11171,11 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // last 15 % the strobes have
         const qreal amok = m_faderNow >= ENGINE_BARS_AMOK ? 1.0 : 0.0;
         mv.pulse = busy < 0.15 ? 0.0 : 0.15 + 0.45 * busy + 0.30 * amok;
+        // runde 352: a drop from 75 % blinks harder again - up to 0.80 just
+        // under the stop (0.90 at it) - "drops ... vildere foer i de hoeje
+        // energi niveauer". The single bare eye keeps its cap below.
+        if (tier == 2 && amok < 1.0 && busy >= 0.15)
+            mv.pulse += 0.20 * qBound(0.0, (m_faderNow - 0.75) / 0.25, 1.0);
         if (mv.bare && mv.width <= 1
             && (mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG))
             mv.pulse = qMin(mv.pulse, 0.25 + 0.65 * amok);

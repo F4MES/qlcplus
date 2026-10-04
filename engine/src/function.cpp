@@ -1181,6 +1181,12 @@ void Function::start(MasterTimer* timer, FunctionParent source, quint32 startTim
     m_overrideDuration = overrideDuration;
     m_overrideTempoType = overrideTempoType == Original ? tempoType() : overrideTempoType;
 
+    // R351_RESTART_KEEPS: a start while still running (a stop asked for this
+    // same turn, or none) makes the timer run postRun() and preRun() back to
+    // back - and postRun() must not wipe the overrides the starter has just
+    // asked for (ChaserRunner asks before it starts; runde 351)
+    if (m_running)
+        m_preserveAttributes = true;
     m_stop = false;
     timer->startFunction(this);
 }
