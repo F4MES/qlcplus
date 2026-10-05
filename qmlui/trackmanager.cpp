@@ -376,6 +376,15 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     for (int i = 0; i < kickRawArr.count(); i++) m_kickRaw.append(kickRawArr.at(i).toInt());
     QJsonArray highRawArr = obj.value(QStringLiteral("highRaw")).toArray();
     for (int i = 0; i < highRawArr.count(); i++) m_highRaw.append(highRawArr.at(i).toInt());
+    if (m_engine != nullptr)            // R356_TRACK_AUDIO: the silence, read ahead
+        m_engine->setTrackAudio(m_waveform, m_kickRaw, m_highRaw);
+    if (m_engine != nullptr)            // R357_FILLS: rekordbox' fill-ins
+        m_engine->setTrackFills(obj.value(QStringLiteral("fills")).toArray().toVariantList());
+    if (m_engine != nullptr)            // R358_RHYTHM: the mids and the highs' quarter-beat onsets
+        m_engine->setTrackRhythm(obj.value(QStringLiteral("midRaw")).toArray().toVariantList(),
+                                 obj.value(QStringLiteral("onsetHigh")).toArray().toVariantList());
+    if (m_engine != nullptr)            // R359_PUMP: the fall between the kicks
+        m_engine->setTrackPump(obj.value(QStringLiteral("pumpRaw")).toArray().toVariantList());
     if (m_engine != nullptr)            // R317_PUNCH: how hard, not how full
         m_engine->setTrackPunch(m_title,                // R318_PUNCH_TITLE: one entry per track
                                 obj.value(QStringLiteral("kickRef")).toDouble(-1.0),
@@ -471,6 +480,10 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         m_linkStale = false;
         emit linkChanged();
     }
+    // R358_BRAKE: the deck's effective tempo from every status BLT sends,
+    // before the repeats are dropped below - a brake happens between beats
+    if (m_engine != nullptr && playing)
+        m_engine->setDeckTempo(obj.value(QStringLiteral("bpm")).toDouble());
     // R187_LAGGING_BEAT_GUARD: BLT sends the beat twice - from the beat packet
     // and from the player's status, five times a second - and the status
     // lags: N, then N-1 a few ms later, then N again. Each of those ran a
@@ -489,7 +502,13 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         const bool again = qAbs(beat - m_jumpTo) <= 1 && qAbs(m_currentBeat - m_jumpFrom) <= 1;
         m_jumpTo = beat;
         m_jumpFrom = m_currentBeat;
-        m_loopTop = again ? qMax(m_loopTop, m_currentBeat) : -1;
+        // R358_LOOP_FIRST: the first step back holds the section as well,
+        // when it lands in a section of the kind it left, 16 beats at most.
+        // Only the second jump did (R235): on 10-02 a 16-beat loop over an
+        // inner flag of a drop (Timbaland 273) re-landed the drop with a new
+        // colour on its first pass. A cue back into a build is another kind.
+        const bool firstLoop = m_currentBeat - beat <= 16 && stateAtBeat(beat) == stateAtBeat(m_currentBeat);
+        m_loopTop = (again || firstLoop) ? qMax(m_loopTop, m_currentBeat) : -1;
     }
     else if (m_loopTop > 0 && (beat > m_loopTop || beat < m_currentBeat || playing == false))
         m_loopTop = -1;                   // played past it, jumped away, or stopped

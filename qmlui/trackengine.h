@@ -688,6 +688,25 @@ public:
      *  curves themselves are relative to the track, so a drop reads full in
      *  every track. -1: BLT did not send them. */
     void setTrackPunch(const QString &title, qreal kickRef, qreal lowRef);
+    /** Runde 356 (R356_MUSIC_DARK): the track's own sound, beat by beat, as
+     *  BLT measured it - the waveform's level (0-255, relative to the
+     *  track's own top) and, when BLT sends them, the unsmoothed kick and
+     *  highs. The engine reads silence ahead in it. */
+    void setTrackAudio(const QVariantList &level, const QVariantList &kickRaw, const QVariantList &highRaw);
+    /** Runde 357 (R357_FILLS): rekordbox' fill-ins, [first beat, end beat)
+     *  per phrase that has one - the drum fill into the next phrase. */
+    void setTrackFills(const QVariantList &fills);
+    /** Runde 358 (R358_RHYTHM): per beat the mid band unsmoothed (0-255,
+     *  the track's own 90th percentile = 255) and the highs' onset in each
+     *  quarter of the beat, four nibbles (quarter q in bits 4q..4q+3, 0-15). */
+    void setTrackRhythm(const QVariantList &midRaw, const QVariantList &onsetHigh);
+    /** Runde 359 (R359_PUMP): per beat how far the sound falls between two
+     *  kicks - 1 - (the quietest stretch after the first quarter of the beat
+     *  / the beat's attack), 0-255. */
+    void setTrackPump(const QVariantList &pumpRaw);
+    /** Runde 358 (R358_BRAKE): the deck's effective tempo from every status
+     *  BLT sends - a brake shows as the tempo falling away under the grid's. */
+    void setDeckTempo(qreal bpm);
     /** runde 322: one drop's absolute kick and bass into the history */
     void rememberDropPunch(qreal kick, qreal low);
     /** runde 335: the operator forced a section on the Track page (or let it
@@ -718,6 +737,7 @@ protected slots:
     void slotStartWatch();
     void slotFadeTimer();
     void slotPulseTimer();
+    void slotChopTimer();                // runde 356: the stabs inside a beat
     void slotSelfTestStep();
     void slotEchoOn();
     void slotEchoOff();
@@ -1099,6 +1119,7 @@ private:
     quint32 m_echoFid;        // in this colour scene
     int m_echoBeat;           // the beat of the last echo - at most one every four
     QHash<QString, quint32> m_offScenes;              // group -> the scene that forces it to zero
+    QHash<QString, quint32> m_darkScenes;             // runde 356: group -> its Intensity channels at zero
     QHash<QString, QList<quint32> > m_strobeScenes;   // group -> a scene per rate, slow to fast
     int m_strobeUntil;        // the beat the burst ends on (-1: not strobing)
     int m_strobeSeen;         // the beat driveStrobe last saw, to catch a scrub
@@ -1118,6 +1139,93 @@ private:
     int m_beatIndex;                       // beats since the section started
     QString m_lastMoves;                   // what the report said, for the log
     QTimer m_pulseTimer;                   // 40 ms: the breath between two beats
+    // ---- runde 356: the music's own dark (R356_MUSIC_DARK) ----
+    // BLACKOUT is the operator's; this is the engine's: the beats the music
+    // itself is silent, the last beat before a drop, and the short stabs
+    // (Tobias' own BLACKOUT taps) that chop a build and a break at the top.
+    // Rides every output the BLACKOUT clamp rides (lightsOut()).
+    bool lightsOut() const { return m_blackout || m_autoDark; }
+    void setAutoDark(bool on);
+    void clearMusicDark();
+    bool silentBeat(int beat) const;
+    bool silentish(int beat) const;
+    int silentRunStart(int beat) const;
+    qreal audLevel(int beat) const;
+    QVector<quint8> m_audLevel;
+    QVector<quint8> m_audKick;
+    QVector<quint8> m_audHigh;
+    bool m_autoDark = false;
+    bool m_hardStart = false;            // runde 356: this tick starts out of the dark
+    bool m_silenceDark = false;
+    QTimer m_chopTimer;
+    QVector<QPair<qint64, qint64> > m_chopPlan;
+    QString m_musicDarkEvent;
+    // ---- runde 357 ----
+    QVector<QPair<int, int> > m_fills;   // R357_FILLS
+    bool inFill(int beat) const;
+    int m_curBeat = -1;                  // this tick's beat, set before anything is drawn
+    int m_landBurstUntil = -1;           // R357_STROBE_LAND: the landing burst, the only hardware strobe on the strobe lamps
+    bool landBurstNow() const { return m_landBurstUntil >= 0 && m_curBeat >= 0 && m_curBeat <= m_landBurstUntil; }
+    bool m_bigDrop = false;              // R357_KICK_BACK: this drop arrived big
+    int m_kickBackLast = -100;
+    mutable QHash<QString, qreal> m_colourTaste;   // R357_TASTE: learned from the colour tiles
+    mutable bool m_tasteLoaded = false;
+    qreal colourTaste(const QString &colour) const;
+    void learnColour(const QString &picked, const QString &shown);
+    // ---- runde 358 ----
+    QVector<quint8> m_audMid;            // R358_RHYTHM: the mid band, beat for beat
+    QVector<quint16> m_onsetHigh;        // the highs' onsets per quarter beat
+    int onsetHigh(int beat, int quarter) const;   // 0-15, or -1 without data
+    qreal audMid(int beat) const;        // 0-1, or -1 without data
+    // R358_LOOP: the DJ's loop as the beat numbers show it - a step back to
+    // the same beat from the same top, again and again
+    int m_loopFrom = -1;                 // the loop's top (the last beat before the jump)
+    int m_loopTo = -1;                   // where it jumps back to
+    int m_loopPasses = 0;                // jumps seen (1 = could still be a cue)
+    int m_loopLen = 0;                   // beats, a power of two
+    qint64 m_loopJumpMs = -1;
+    bool djLoopOn() const { return m_loopPasses >= 2 && m_loopLen > 0; }
+    void clearDjLoop();
+    void newTrackMemory(const QString &title);
+    // R358_REPEAT: the first drop and the first build of a track, as they looked
+    struct TrackLookMemory
+    {
+        QString colour;
+        int dropStyle = -1;
+        bool landCoin = false;
+        QHash<QString, quint32> motion;
+        QVector<qreal> sig;              // what it sounded like (level, kick, highs, mids)
+        int beat = -1;
+    };
+    QHash<QString, QVector<TrackLookMemory> > m_lookMemory;   // up to four distinct drops / builds per track
+    QString m_lookPending;               // "drop"/"build": recording its first bars
+    int m_lookPendingIdx = -1;
+    QString m_lookActive;                // a repeat wearing the memory
+    int m_lookRepeat = 0;
+    QString m_reuseColour;
+    int m_reuseStyle = -1;
+    bool m_reuseCoin = false;
+    QHash<QString, quint32> m_reuseMotion;
+    QVector<qreal> soundSig(int from, int beats) const;
+    int m_lookFrom = -1;                 // the beat the recorded section began
+    bool m_halfTime = false;             // R358_HALFTIME: the kick on every other beat at most
+    qreal m_deckSpeed = 1.0;             // R358_BRAKE: deck tempo over its own running tempo
+    qreal m_tempoRef = -1.0;
+    qint64 m_brakeMs = -1;               // when the tempo fell away: a brake ends in a stop inside two seconds
+    qreal brakeDim() const { return m_deckSpeed < 0.85 ? qBound(0.0, (m_deckSpeed - 0.25) / 0.60, 1.0) : 1.0; }
+    int m_vocalRun = 0;                  // R358_VOCAL: of the last three beats, those with mids and no kick or bass
+    int m_vocalBeat = -1;
+    bool m_vocalNow = false;
+    int m_grooveSlots = 0;               // R358_GROOVE: quarters (bits 1-3) the drums hit between the beats
+    bool m_backbeat = false;             // claps/snare on 2 and 4
+    int m_backbeatParity = 1;            // ... on the beats with this (beat - section start) parity
+    QHash<QString, int> m_grooveSeen;    // the quarter each group last re-hit on
+    // ---- runde 359 ----
+    QVector<quint8> m_audPump;           // R359_PUMP: the fall between the kicks, beat for beat
+    qreal m_pumpNow = -1.0;              // its mean over the next eight kicked beats, -1 none
+    int m_density = 0;                   // R359_DENSITY: +1 busy percussion, -1 sparse, 0 between
+    qreal riserAt(int at, int from, int to) const;   // R359_RISER: the build's measured climb, -1 none
+    bool m_landSixteenths = true;        // R359_LAND_16: the strobe lamps' landing blinks on the beat's sixteenths
     QTimer m_testTimer;                    // SELF TEST: one colour scene every 2 s
     QList<quint32> m_testSteps;            // the scenes it walks through
     QStringList m_testGroups;              // ... and the group each belongs to
