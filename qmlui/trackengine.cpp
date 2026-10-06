@@ -5743,6 +5743,14 @@ void TrackEngine::applyMixGlide(bool frame)
     const qreal lvl = m_layerLevel.value(key, 1.0);
     const quint32 fa = colourFunction(key, colourForGroup(key, m_mixGlideFrom));
     const quint32 fb = colourFunction(key, colourForGroup(key, m_mixGlideTo));
+    if (fb == Function::invalidId() || fb == fa)
+    {
+        // R376_GLIDE_SAME: one scene for both (a wheel's stand-in), or none for
+        // the next colour: the cosine took the base dark - it stays at full
+        run(QStringLiteral("col:") + key, fa, m_funcs.value(fa).dimmer ? lvl : 1.0, 0, true);
+        stopSlot(QStringLiteral("colx:") + key, true);
+        return;
+    }
     const qreal wa = std::cos(p * M_PI / 2.0), wb = std::sin(p * M_PI / 2.0);
     run(QStringLiteral("col:") + key, fa, wa * (m_funcs.value(fa).dimmer ? lvl : 1.0), 0, true);
     if (fb != Function::invalidId() && fb != fa)
@@ -8963,9 +8971,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                       && m_override.isEmpty() && m_nextColour != m_colour && m_startScene == false;
     if (glideOn)
     {
-        if (m_mixGlide == false)
+        if (m_mixGlide == false || m_mixGlideFinish)
         {
             m_mixGlide = true;
+            m_mixGlideFinish = false;
             m_mixGlideP = 0.0;
             m_mixGlideRate = 0.0;
             m_mixGlideBeat = beat;
@@ -8983,6 +8992,28 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                        : (incomingFresh && m_incomingState == QStringLiteral("drop")) ? 0.25
                        : 1.0 / (8.0 * mixTurnBars);
         if (m_layerTimer.isActive() == false)
+            m_layerTimer.start();
+    }
+    else if (m_mixGlide && m_mixGlideFinish && m_override.isEmpty() && m_startScene == false)
+    {
+        // R376_GLIDE_FINISH: the handover took the colour part way through the
+        // glide - a mix shorter than the glide's half, most of them. The rest
+        // goes in at most a bar on the new track, not as a cut on its first beat
+        if (beat != m_mixGlideBeat)
+        {
+            if (m_mixGlideBeat >= 0)
+                m_mixGlideP = qMin(1.0, m_mixGlideP + 0.25);
+            m_mixGlideBeat = beat;
+        }
+        m_mixGlideRate = 0.25;
+        m_mixGlideKey = baseGroup();
+        if (m_mixGlideP >= 1.0)
+        {
+            m_mixGlide = false;
+            m_mixGlideFinish = false;
+            m_mixGlideKey.clear();
+        }
+        else if (m_layerTimer.isActive() == false)
             m_layerTimer.start();
     }
     else if (m_mixGlide && (m_mixing == false || mixBarsOut < 0) && m_mixGlideP > 0.0
@@ -9013,6 +9044,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     else if (m_mixGlide)
     {
         m_mixGlide = false;
+        m_mixGlideFinish = false;
         m_mixGlideKey.clear();
         m_mixGlideEnd = -1;
     }
@@ -16969,8 +17001,6 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     const bool glided = m_mixGlide && m_mixGlideTo == m_nextColour && m_mixGlideP > 0.0
                      && (m_hold == false || m_mixGlideP >= 0.5);   // R375_GLIDE_HOLD: the nearer colour
     m_mixGlideEnd = -1;
-    m_mixGlide = false;
-    m_mixGlideKey.clear();
     const bool baseTurned = m_nextColour.isEmpty() == false
         && (glided
             || (baseCol != Function::invalidId() && m_funcs.value(baseCol).colour == turnWant)
@@ -16983,6 +17013,21 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
         adopted = true;
     }
     m_nextColour.clear();
+    // R376_GLIDE_FINISH: adopted part way - the glide finishes on this track
+    m_mixGlideFinish = adopted && glided && m_mixGlideP < 1.0;
+    if (m_mixGlideFinish)
+    {
+        if (m_beatMs > 0.0)              // where the frame had it, then held to the first beat
+            m_mixGlideP = qBound(0.0, m_mixGlideP + m_mixGlideRate
+                                 * qBound(0.0, qreal(m_clock.elapsed() - m_beatStartMs) / m_beatMs, 1.0), 1.0);
+        m_mixGlideBeat = -1;
+        m_mixGlideRate = 0.0;            // held until this track's first beat: no step mid-beat
+    }
+    else
+    {
+        m_mixGlide = false;
+        m_mixGlideKey.clear();
+    }
     m_accentPick.clear();        // drawn for the last track's colour (runde 171)
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();

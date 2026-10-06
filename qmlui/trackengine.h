@@ -1026,6 +1026,7 @@ private:
     qreal m_mixGlideRate = 0.0;            // per beat
     int m_mixGlideBeat = -1;
     int m_mixGlideEnd = -1;                // R375_GLIDE_END: the beat the mix ended on
+    bool m_mixGlideFinish = false;         // R376_GLIDE_FINISH: adopted at the handover, finishing
     QString m_mixGlideFrom, m_mixGlideTo, m_mixGlideKey;
     void applyMixGlide(bool frame);
     QTimer m_layerTimer;
