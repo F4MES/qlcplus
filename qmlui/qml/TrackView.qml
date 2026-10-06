@@ -258,6 +258,16 @@ Rectangle
             else if (kind === "laser") { c.strokeRect(3,18,18,4); line(5,15,2,4); line(10,15,8,2); line(15,15,16,2); line(20,15,23,4) }
             else if (kind === "strobe") { c.strokeRect(3,2,18,20); circle(8,7,2); circle(16,7,2); circle(8,17,2); circle(16,17,2) }
             else if (kind === "eyes") { circle(12,6,5); circle(6,17,5); circle(18,17,5); circle(12,6,1.5); circle(6,17,1.5); circle(18,17,1.5) }
+            // runde 370: FADE - two colours melting into each other; CHASE - lamps
+            // taking turns down the row
+            else if (kind === "fadeColour") {
+                circle(9,12,6.5); circle(15,12,6.5)
+                c.globalAlpha = 0.45; c.beginPath(); c.arc(15,12,6.5,0,Math.PI*2); c.fill(); c.globalAlpha = 1.0
+            }
+            else if (kind === "chaseColour") {
+                c.beginPath(); c.arc(5,9,3,0,Math.PI*2); c.fill(); circle(12,9,3); circle(19,9,3)
+                line(3,18,21,18); line(17,15,21,18); line(17,21,21,18)
+            }
             else if (kind === "animation") {
                 circle(12,12,2)
                 for(var k=0;k<4;k++){c.save();c.translate(12,12);c.rotate(k*Math.PI/2);c.beginPath();c.moveTo(0,-3);c.bezierCurveTo(-7,-13,6,-13,3,-3);c.stroke();c.restore()}
@@ -1592,25 +1602,18 @@ Rectangle
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.preferredWidth: dialsRow.width * 0.40
                 color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 10   // r215: a tap just under AUTO must not land on the fader's top end
-                    // Just the title. The 62-pixel percentage that used to sit
-                    // in the middle of this box is gone (Tobias, 2026-09-22:
-                    // "Energi har alt for meget tomt plads med den store
-                    // procent tegn, det skal fjernes") - it said the same
-                    // number as the fader directly below it, and the Item it
-                    // was centred in was a fillHeight spacer, so the box was
-                    // mostly air to make room for one duplicate figure.
-                    // runde 211 (Tobias): AUTO beside the title gives ENERGY back
-                    // to the clock after a hand has taken it - lit while the
-                    // clock drives it, like the other AUTO tiles
-                    RowLayout { Layout.fillWidth: true; spacing: 8
-                        Text { Layout.fillWidth: true; text: "ENERGY"; color: trackViewRoot.cText
-                               font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
-                        TrackTile
-                        {
-                            objectName: "energyAuto"
-                            Layout.preferredWidth: 84
-                            Layout.preferredHeight: trackViewRoot.compactLayout ? 24 : 28
+                // R363_ENERGY_AUTO: AUTO sits in the box's top corner, outside the
+                // column. In the title row it made the row 28 px high and left the
+                // fader 54 px - under the touch height (56) and under MASTER's 62
+                // (runde 140 drew 66). Its finger area still stops above the
+                // fader's top end (runde 215).
+                TrackTile
+                {
+                    objectName: "energyAuto"
+                    z: 2
+                    anchors.top: parent.top; anchors.right: parent.right
+                    anchors.topMargin: 6; anchors.rightMargin: 10
+                    width: 84; height: trackViewRoot.compactLayout ? 22 : 24
                             ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 14; height: 14; kind: "autoColour"
                                           ink: (trackEngine && trackEngine.roomAuto) ? "#101010" : "#DDDDDD" }
                             label: qsTr("AUTO")
@@ -1629,6 +1632,21 @@ Rectangle
                                 onClicked: if (trackEngine) trackEngine.roomAuto = true
                             }
                         }
+                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6   // as MASTER (R363: AUTO sits outside the column, its foot 6 px above the fader - r215)
+                    // Just the title. The 62-pixel percentage that used to sit
+                    // in the middle of this box is gone (Tobias, 2026-09-22:
+                    // "Energi har alt for meget tomt plads med den store
+                    // procent tegn, det skal fjernes") - it said the same
+                    // number as the fader directly below it, and the Item it
+                    // was centred in was a fillHeight spacer, so the box was
+                    // mostly air to make room for one duplicate figure.
+                    // runde 211 (Tobias): AUTO beside the title gives ENERGY back
+                    // to the clock after a hand has taken it - lit while the
+                    // clock drives it, like the other AUTO tiles
+                    RowLayout { Layout.fillWidth: true; spacing: 8
+                        Text { Layout.fillWidth: true; text: "ENERGY"; color: trackViewRoot.cText
+                               font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
+
                     }
 Rectangle
             {
@@ -1734,7 +1752,7 @@ Row
                 height: 48
                 spacing: 6
 
-                property int cells: 1 + palRep.count      // runde 204: palette() is not a cheap getter
+                property int cells: 3 + palRep.count      // runde 204: palette() is not a cheap getter (370: + FADE, CHASE)
                 property real cellW: Math.max(48, (width - spacing * (cells - 1)) / cells)
 
                 TrackTile
@@ -1745,11 +1763,51 @@ Row
                 ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; kind: "autoColour"
                               // dark on the lit tile, light on the grey one - as SECTION's AUTO does;
                               // it vanished on the grey tile once a colour was locked (runde 178)
-                              ink: (trackEngine && trackEngine.colourOverride !== "") ? "#DDDDDD" : "#101010" }
+                              ink: (trackEngine && (trackEngine.colourMode !== 0
+                                                    || (trackEngine.colourOverride !== "" && trackEngine.colourOverrides.length < 2))) ? "#DDDDDD" : "#101010" }
                     label: qsTr("AUTO")
-                    active: trackEngine ? trackEngine.colourOverride === "" : true
+                    // runde 370: lit while the engine decides - no tile, or two and
+                    // more taking turns its way; FADE or CHASE put it out. A tap
+                    // lets every tile go: the engine runs it all again.
+                    active: trackEngine ? (trackEngine.colourMode === 0
+                                           && (trackEngine.colourOverride === "" || trackEngine.colourOverrides.length > 1)) : true
                     activeColor: "#7ED07E"
                     onTapped: trackEngine.colourOverride = ""
+                }
+
+                // runde 370 (Tobias: "to ny knapper ved farverne der hedder fade og
+                // chase"): how the lit tiles take turns - gliding into each other,
+                // or walking the lamps. With fewer than two tiles lit they light the
+                // colour leading now and its partner. Tapped again: AUTO, same tiles.
+                TrackTile
+                {
+                    width: colourRow.cellW
+                    height: colourRow.height
+                    objectName: "colourModeFade"
+                    ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; kind: "fadeColour"
+                                  ink: (trackEngine && trackEngine.colourMode === 1) ? "#101010" : "#DDDDDD" }
+                    // a mode, not a colour: a blue edge of its own
+                    border.width: 2
+                    border.color: active ? Qt.lighter(activeColor, 1.3) : "#2F6D9C"
+                    label: qsTr("FADE")
+                    active: trackEngine ? trackEngine.colourMode === 1 : false
+                    activeColor: "#4FA3E3"
+                    onTapped: trackEngine.setColourMode(trackEngine.colourMode === 1 ? 0 : 1)
+                }
+                TrackTile
+                {
+                    width: colourRow.cellW
+                    height: colourRow.height
+                    objectName: "colourModeChase"
+                    ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; kind: "chaseColour"
+                                  ink: (trackEngine && trackEngine.colourMode === 2) ? "#101010" : "#DDDDDD" }
+                    // a mode, not a colour: a blue edge of its own
+                    border.width: 2
+                    border.color: active ? Qt.lighter(activeColor, 1.3) : "#2F6D9C"
+                    label: qsTr("CHASE")
+                    active: trackEngine ? trackEngine.colourMode === 2 : false
+                    activeColor: "#4FA3E3"
+                    onTapped: trackEngine.setColourMode(trackEngine.colourMode === 2 ? 0 : 2)
                 }
 
                 Repeater

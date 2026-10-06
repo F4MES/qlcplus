@@ -1984,6 +1984,19 @@ void TrackManager::runEngine(bool sectionChanged)
         nextState.clear();
         beatsToNext = 0;
     }
+    m_engine->setDropForced(m_overrideState == QStringLiteral("drop"));   // R361_DROP_FORCED
+    {   // R363_NEXT_DROP: the next drop flag ahead - a build flagged in parts leads into it all the way
+        int nextDrop = -1;
+        for (int i = 0; i < m_markers.count() && m_overrideState.isEmpty(); i++)
+        {
+            const QVariantMap mk = m_markers.at(i).toMap();
+            const int mb = mk.value(QStringLiteral("beat")).toInt();
+            if (mb > beat && mk.value(QStringLiteral("type")).toString() == QStringLiteral("drop")
+                && (nextDrop < 0 || mb < nextDrop))
+                nextDrop = mb;
+        }
+        m_engine->setNextDropBeat(nextDrop);
+    }
     int tickStart = secStart;                 // R236_LOOP_TICK_START
     if (m_loopTop > 0 && m_jumpTo < secStart && beat <= m_loopTop)
         tickStart = secStart > 32 ? secStart - 32 : 1 + (secStart - 1) % 4;

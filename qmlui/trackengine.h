@@ -404,6 +404,11 @@ class TrackEngine : public QObject
      *  paa blaa og lilla og saa bruger den begge 2 i mix". The chosen colours,
      *  in the order they were tapped; colourOverride is the one leading now. */
     Q_PROPERTY(QStringList colourOverrides READ colourOverrides NOTIFY liveChanged)
+    /** R370_COLOUR_MODE (Tobias 10-06): 0 AUTO, 1 FADE, 2 CHASE - how the tiles
+     *  in colourOverrides take turns. AUTO with two or more: the engine picks. */
+    Q_PROPERTY(int colourMode READ colourMode NOTIFY liveChanged)
+    /** the way the tiles take turns right now: 0 none, 1 fade, 2 chase */
+    Q_PROPERTY(int colourStyle READ colourStyle NOTIFY liveChanged)
     Q_PROPERTY(QString currentColour READ currentColour NOTIFY liveChanged)
     Q_PROPERTY(QStringList cast READ cast NOTIFY liveChanged)
     /** The DJ's fader per group, 0..1, on top of everything the engine does.
@@ -514,6 +519,12 @@ public:
     QStringList colourOverrides() const;
     /** A tile tapped: in the set, it leaves it; not, it joins (runde 304). */
     Q_INVOKABLE void toggleColourOverride(const QString &colour);
+    /** R370_COLOUR_MODE: FADE (1) or CHASE (2) with fewer than two tiles fills
+     *  in the colour leading now and its partner; AUTO (0) keeps the tiles and
+     *  hands fade/chase back to the engine (the AUTO tile clears them). */
+    Q_INVOKABLE void setColourMode(int mode);
+    int colourMode() const { return m_colourMode; }
+    int colourStyle() const { return m_layerStyle; }
     /** the tiles' partner for the lead at leadIdx (review 305) */
     QString setPartnerOf(int leadIdx) const;
     QString currentColour() const;
@@ -707,6 +718,7 @@ public:
     /** Runde 358 (R358_BRAKE): the deck's effective tempo from every status
      *  BLT sends - a brake shows as the tempo falling away under the grid's. */
     void setDeckTempo(qreal bpm);
+    void setDropForced(bool on) { m_dropForced = on; }   // R361_DROP_FORCED
     /** runde 322: one drop's absolute kick and bass into the history */
     void rememberDropPunch(qreal kick, qreal low);
     /** runde 335: the operator forced a section on the Track page (or let it
@@ -736,6 +748,7 @@ protected slots:
     void slotFunctionStopped(quint32 fid);
     void slotStartWatch();
     void slotFadeTimer();
+    void slotLayerTimer();               // R370_COLOUR_LAYER: the fade between two beats
     void slotPulseTimer();
     void slotChopTimer();                // runde 356: the stabs inside a beat
     void slotSelfTestStep();
@@ -983,6 +996,29 @@ private:
     int m_mixBeat;                        // the beat a mix began DURING this track (-1: none) - the base's turn to the next colour counts from it
     bool m_mixTurnLatched = false;        // runde 270: the base has turned to m_nextColour in this mix (tick)
     QMap<QString, quint32> m_splitScenes;  // "group|a|b" -> hidden two-colour scene
+    /* R370_COLOUR_LAYER (runde 370): the tiles fading or chasing */
+    int m_colourMode = 0;                  // 0 AUTO, 1 FADE, 2 CHASE (the tiles)
+    int m_layerStyle = 0;                  // what runs: 0 none, 1 fade, 2 chase
+    int m_layerPattern = 0;                // chase: 0 the whole group, 1 halves, 2 a walk
+    qreal m_layerPos = 0.0;                // colour steps taken (fade: pair + how far into it)
+    qreal m_layerRate = 0.0;               // steps per beat, this beat
+    int m_layerBeat = -1;
+    int m_layerLeadAge = 0;                // beats since the lead (lasers, accent) last turned
+    QString m_layerBaseKey;
+    QSet<QString> m_layerOwned;            // groups the layer painted this beat
+    QHash<QString, qreal> m_layerLevel;    // their colour scenes' level (a scene with a dimmer)
+    QMap<QString, quint32> m_chaseScenes;  // R371_CHASE_PAIR: "group|0" / "group|1" -> the two per-lamp scenes
+    QHash<QString, QString> m_chaseShown;  // ... and what each holds: "group|n" -> "c0,c1,..."
+    QHash<QString, int> m_chaseSide;       // group -> the one showing now
+    QHash<QString, QList<quint32> > m_layerFids;   // R371_LAYER_FIDS: group -> its tiles' colour scenes, this beat
+    void applyColourLayer(const QString &key, bool frame);
+    QTimer m_layerTimer;
+    void updateColourLayer(int beat, const QString &base, bool isBreak, bool isBuild, bool isDrop,
+                           qreal prog, qreal fader, bool frozen, bool jump);
+    bool layerGroup(const QString &key) const;
+    QStringList layerColours(const QString &key) const;
+    void applyColourLayer(const QString &key);
+    quint32 chaseColourFunction(const QString &group, const QStringList &perLamp);
     int m_speed;                          // -1 half, 0 as the music, +1 double
     qreal m_faderNow = 0.0;               // this beat's FADER (the slider, before the section scaled it),
                                           // for the hard thresholds and the paths tick() does not hand it to
@@ -1166,6 +1202,19 @@ private:
     int m_curBeat = -1;                  // this tick's beat, set before anything is drawn
     int m_landBurstUntil = -1;           // R357_STROBE_LAND: the landing burst, the only hardware strobe on the strobe lamps
     bool landBurstNow() const { return m_landBurstUntil >= 0 && m_curBeat >= 0 && m_curBeat <= m_landBurstUntil; }
+    // R362_MINI_LAND: the kick back after a pause inside a drop - the strobe
+    // lamps blink the sixteenths like the landing, but UNDER MASTER and the trim
+    int m_miniLandUntil = -1;
+    int m_miniLandLast = -100;
+    qreal m_miniSize = 0.0;
+    bool miniLandNow() const { return m_miniLandUntil >= 0 && m_curBeat >= 0 && m_curBeat <= m_miniLandUntil; }
+    bool blink16Now() const { return landBurstNow() || miniLandNow(); }
+    qreal m_nextDropSize = 1.0;          // R362_BUILD_SIZE: the size of the drop this build leads into (1 without curves)
+    int m_nextDropBeat = -1;             // R363_NEXT_DROP: the next drop flag ahead (trackmanager), -1 none
+    int m_landBurstFrom = -1;            // R363_LOOP_LAND: the beat the landing burst began
+public:
+    void setNextDropBeat(int beat) { m_nextDropBeat = beat; }
+private:
     bool m_bigDrop = false;              // R357_KICK_BACK: this drop arrived big
     int m_kickBackLast = -100;
     mutable QHash<QString, qreal> m_colourTaste;   // R357_TASTE: learned from the colour tiles
@@ -1226,6 +1275,20 @@ private:
     int m_density = 0;                   // R359_DENSITY: +1 busy percussion, -1 sparse, 0 between
     qreal riserAt(int at, int from, int to) const;   // R359_RISER: the build's measured climb, -1 none
     bool m_landSixteenths = true;        // R359_LAND_16: the strobe lamps' landing blinks on the beat's sixteenths
+    // ---- runde 360 ----
+    bool m_landOwed = false;             // R360_LATE_LAND: a track loaded in a mix may arrive inside its drop
+    bool m_dropArrivedNow = false;       // R365_LAND_ONCE: the drop arrives on this beat (tick -> driveStrobe)
+    bool m_dropLanded = false;           // R369_FORCED_LAND: this drop has had its landing (or its one chance at it)
+    bool m_lateLandNow = false;          // ... and this beat is that drop's landing, a beat or three late
+    bool m_dropForced = false;           // R361_DROP_FORCED: the operator pressed DROP (trackmanager)
+    qreal m_dropGrowHigh = 0.0;          // R361_GROW_BACK: the highs / level the drop grew to
+    qreal m_dropGrowLevel = 0.0;
+    qreal m_dropSize = 1.0;              // R360_DROP_SIZE: how big the arriving drop is, 0-1 (1 without curves)
+    qreal dropSizeAt(int beat) const;
+    bool m_dropGrow = false;             // R360_DROP_GROW: the drop stepped up on an 8-bar line
+    int m_dropGrowAt = -1;
+    int m_dropLine = -1;                 // R367_GROW_TRACK: the TRACK beat the drop arrived on (never moved by a jump)
+    int m_dropGrowLine = -1;             // ... and the track line the growth was last measured on
     QTimer m_testTimer;                    // SELF TEST: one colour scene every 2 s
     QList<quint32> m_testSteps;            // the scenes it walks through
     QStringList m_testGroups;              // ... and the group each belongs to
