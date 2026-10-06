@@ -8977,20 +8977,49 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_mixGlideBeat = beat;
         }
         m_mixGlideTo = m_nextColour;     // NEXT may draw it again
+        m_mixGlideEnd = -1;
+        m_mixGlideKey = baseGroup();     // R375_GLIDE_COLOURPROG: from its first beat
         m_mixGlideRate = (hold || isCalm) ? 0.0
                        : (incomingFresh && m_incomingState == QStringLiteral("drop")) ? 0.25
                        : 1.0 / (8.0 * mixTurnBars);
         if (m_layerTimer.isActive() == false)
             m_layerTimer.start();
     }
+    else if (m_mixGlide && (m_mixing == false || mixBarsOut < 0) && m_mixGlideP > 0.0
+             && m_override.isEmpty() && m_startScene == false && m_nextColour == m_mixGlideTo)
+    {
+        // R375_GLIDE_END: the mix is over (mix false), the handover not yet
+        // here - BLT sends the track ~100 ms after, and a beat falling between
+        // the two snapped the base back and threw the glided colour away. The
+        // glide stands 2 beats for the handover (trackLoaded adopts it), then
+        // goes back over a bar: a mix pulled out again
+        if (m_mixGlideEnd < 0)
+            m_mixGlideEnd = beat;
+        if (beat != m_mixGlideBeat)
+        {
+            m_mixGlideP = qBound(0.0, m_mixGlideP + m_mixGlideRate, 1.0);
+            m_mixGlideBeat = beat;
+        }
+        m_mixGlideRate = (hold || isCalm || beat - m_mixGlideEnd < 2) ? 0.0 : -0.25;
+        if (m_mixGlideP <= 0.0)
+        {
+            m_mixGlide = false;
+            m_mixGlideKey.clear();
+            m_mixGlideEnd = -1;
+        }
+        else if (m_layerTimer.isActive() == false)
+            m_layerTimer.start();
+    }
     else if (m_mixGlide)
     {
         m_mixGlide = false;
         m_mixGlideKey.clear();
+        m_mixGlideEnd = -1;
     }
     const bool mixTurnDue = mixBarsOut >= 0
         && (m_mixTurnLatched || (m_mixGlide ? m_mixGlideP >= 0.5 : mixBarsOut >= mixTurnBars));
-    if ((hold || isCalm) && mixTurnDue == false)
+    if ((hold || isCalm) && mixTurnDue == false
+        && (m_mixGlide == false || m_mixGlideP <= 0.0))   // R375_GLIDE_HOLD: a glide under way freezes
         m_nextColour.clear();
     m_mixTurnLatched = mixTurnDue && m_nextColour.isEmpty() == false;
     // Once the base has turned to the next track's colour, the accent and
@@ -9954,9 +9983,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // ... and its pace with it: the chase's step rate left in made the
             // fade run half a colour in one beat
             if (m_layerRate > 0.0)
-                m_layerRate = dropWay == 1
-                    ? 1.0 / (4.0 * (fader < 0.30 ? 16 : fader < 0.60 ? 8 : fader < 0.85 ? 4 : 2))
-                    : 1.0 / (fader < 0.30 ? 16 : fader < 0.60 ? 4 : fader < 0.75 ? 2 : 1);
+            {
+                qreal sb = dropWay == 1
+                    ? 4.0 * (fader < 0.30 ? 16 : fader < 0.60 ? 8 : fader < 0.85 ? 4 : 2)
+                    : qreal(fader < 0.30 ? 16 : fader < 0.60 ? 4 : fader < 0.75 ? 2 : 1);
+                if (m_speed < 0)             // R375_DROP_SPEED: as updateColourLayer
+                    sb *= 2.0;
+                else if (m_speed > 0)
+                    sb = dropWay == 2 ? qMax(1.0, sb / 2.0) : sb / 2.0;
+                m_layerRate = 1.0 / sb;
+            }
             if (dropWay == 2)
                 m_layerPattern = fader < 0.30 ? 0 : fader < 0.60 ? 1 : 2;
             if (dropWay == 1)
@@ -12010,7 +12046,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         // R370_COLOUR_LAYER: the tiles' fade or chase owns this group's colour
         const bool layerOwns = layerGroup(key);
-        if (layerOwns && mf != Function::invalidId() && m_funcs.value(mf).setsColour)
+        if ((layerOwns || (m_mixGlide && key == base))   // R375_GLIDE_COLOURPROG
+            && mf != Function::invalidId() && m_funcs.value(mf).setsColour)
         {
             mf = Function::invalidId();  // held from before the layer: drawn again without it
             m_sectionMotion.remove(key);
@@ -16929,7 +16966,9 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     const QString turnWant = m_nextColour.isEmpty() ? QString() : colourForGroup(turnBase, m_nextColour);
     // R374_MIX_GLIDE: a glide under way is the room going to the next colour -
     // a quick cut (the old fader down at once) takes the colour with it
-    const bool glided = m_mixGlide && m_mixGlideTo == m_nextColour && m_mixGlideP > 0.0;
+    const bool glided = m_mixGlide && m_mixGlideTo == m_nextColour && m_mixGlideP > 0.0
+                     && (m_hold == false || m_mixGlideP >= 0.5);   // R375_GLIDE_HOLD: the nearer colour
+    m_mixGlideEnd = -1;
     m_mixGlide = false;
     m_mixGlideKey.clear();
     const bool baseTurned = m_nextColour.isEmpty() == false

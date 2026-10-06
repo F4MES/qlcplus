@@ -1025,6 +1025,7 @@ private:
     qreal m_mixGlideP = 0.0;               // 0 the room's colour .. 1 the next track's
     qreal m_mixGlideRate = 0.0;            // per beat
     int m_mixGlideBeat = -1;
+    int m_mixGlideEnd = -1;                // R375_GLIDE_END: the beat the mix ended on
     QString m_mixGlideFrom, m_mixGlideTo, m_mixGlideKey;
     void applyMixGlide(bool frame);
     QTimer m_layerTimer;
