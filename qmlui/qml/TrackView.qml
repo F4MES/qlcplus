@@ -1793,6 +1793,23 @@ Row
                     active: trackEngine ? trackEngine.colourMode === 1 : false
                     activeColor: "#4FA3E3"
                     onTapped: trackEngine.setColourMode(trackEngine.colourMode === 1 ? 0 : 1)
+                    // runde 374: how far the fade is - from the colour it leaves to the
+                    // one it goes to (AUTO's own fades too)
+                    Rectangle
+                    {
+                        objectName: "colourFadeBar"
+                        anchors.left: parent.left; anchors.bottom: parent.bottom
+                        anchors.leftMargin: 4; anchors.bottomMargin: 4
+                        height: 5; radius: 2
+                        visible: trackEngine ? trackEngine.colourStyle === 1 : false
+                        width: Math.max(2, (parent.width - 8) * (trackEngine ? trackEngine.colourFadeT : 0))
+                        gradient: Gradient
+                        {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: liveRow.swatch(trackEngine ? trackEngine.colourFadeFrom : "") }
+                            GradientStop { position: 1.0; color: liveRow.swatch(trackEngine ? trackEngine.colourFadeTo : "") }
+                        }
+                    }
                 }
                 TrackTile
                 {

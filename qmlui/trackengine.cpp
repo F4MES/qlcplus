@@ -5574,7 +5574,7 @@ void TrackEngine::setColourMode(int mode)
 }
 
 void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak, bool isBuild,
-                                    bool isDrop, qreal prog, qreal fader, bool frozen, bool jump)
+                                    bool isDrop, qreal prog, qreal fader, bool frozen, bool jump, qreal kick)
 {
     m_layerOwned.clear();
     m_layerBaseKey = base;
@@ -5614,7 +5614,8 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
     }
     if (style == 0)
     {
-        m_layerTimer.stop();
+        if (m_mixGlide == false)         // runde 374: the mix's glide runs on it too
+            m_layerTimer.stop();
         m_layerBeat = beat;
         m_layerRate = 0.0;
         return;
@@ -5638,11 +5639,23 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
         stepBeats *= 2.0;
     else if (isBuild && prog > 0.5)
         stepBeats = qMax(1.0, stepBeats / 2.0);
+    // R374_LAYER_SPEED (Tobias: "den skal vel bare bruge den speed knap vi
+    // allerede har"): 1/2x a step takes twice as long, 2x half - a chase
+    // never faster than the beat
+    if (m_speed < 0)
+        stepBeats *= 2.0;
+    else if (m_speed > 0)
+        stepBeats = style == 2 ? qMax(1.0, stepBeats / 2.0) : stepBeats / 2.0;
+    // R374_CHASE_KICK: from 60 % a chase steps on the kick - a beat with no
+    // kick (a breakdown, a vocal) holds the colours where they are. Not in a
+    // build: its chase is the climb, kick or no kick.
+    const bool kickHold = style == 2 && fader >= 0.60 && isBuild == false
+                       && kick >= 0.0 && kick < 0.20;
     if (beat != m_layerBeat)
     {
         // the beat that ended, at the pace it had (a slider move changes the
         // pace from here, never the colour already showing)
-        if (m_layerBeat >= 0)
+        if (m_layerBeat >= 0 && kickHold == false)
             m_layerPos += m_layerRate;
         m_layerBeat = beat;
         m_layerLeadAge++;
@@ -5682,8 +5695,60 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
         if (m_layerTimer.isActive() == false)
             m_layerTimer.start();
     }
-    else
+    else if (m_mixGlide == false)        // runde 374
         m_layerTimer.stop();
+    emit colourFadeChanged();
+}
+
+// R374_FADE_SHOWN: the base's fade, as the FADE tile draws it
+qreal TrackEngine::colourFadeT() const
+{
+    if (m_layerStyle != 1)
+        return 0.0;
+    qreal frac = 0.0;
+    if (m_beatMs > 0.0)
+        frac = qBound(0.0, qreal(m_clock.elapsed() - m_beatStartMs) / m_beatMs, 1.0);
+    const qreal pos = m_layerPos + frac * m_layerRate;
+    return qBound(0.0, pos - std::floor(pos), 1.0);
+}
+
+QString TrackEngine::colourFadeFrom() const
+{
+    const QStringList seq = layerColours(m_layerBaseKey);
+    if (m_layerStyle != 1 || seq.count() < 2)
+        return QString();
+    const int n = int(seq.count()), i = int(std::floor(m_layerPos));
+    return seq.at(((i % n) + n) % n);
+}
+
+QString TrackEngine::colourFadeTo() const
+{
+    const QStringList seq = layerColours(m_layerBaseKey);
+    if (m_layerStyle != 1 || seq.count() < 2)
+        return QString();
+    const int n = int(seq.count()), i = int(std::floor(m_layerPos)) + 1;
+    return seq.at(((i % n) + n) % n);
+}
+
+void TrackEngine::applyMixGlide(bool frame)
+{
+    // R374_MIX_GLIDE: the room's colour into the next track's, at equal power
+    const QString key = m_mixGlideKey;
+    if (key.isEmpty())
+        return;
+    qreal p = m_mixGlideP;
+    if (frame && m_beatMs > 0.0)
+        p += qBound(0.0, qreal(m_clock.elapsed() - m_beatStartMs) / m_beatMs, 1.0) * m_mixGlideRate;
+    p = qBound(0.0, p, 1.0);
+    const qreal lvl = m_layerLevel.value(key, 1.0);
+    const quint32 fa = colourFunction(key, colourForGroup(key, m_mixGlideFrom));
+    const quint32 fb = colourFunction(key, colourForGroup(key, m_mixGlideTo));
+    const qreal wa = std::cos(p * M_PI / 2.0), wb = std::sin(p * M_PI / 2.0);
+    run(QStringLiteral("col:") + key, fa, wa * (m_funcs.value(fa).dimmer ? lvl : 1.0), 0, true);
+    if (fb != Function::invalidId() && fb != fa)
+        run(QStringLiteral("colx:") + key, fb, wb * (m_funcs.value(fb).dimmer ? lvl : 1.0), 0, true);
+    else
+        stopSlot(QStringLiteral("colx:") + key, true);
 }
 
 QStringList TrackEngine::layerColours(const QString &key) const
@@ -5877,19 +5942,28 @@ void TrackEngine::slotLayerTimer()
     // starts it again with the next beat
     const bool stale = m_beatMs <= 0.0
                     || qreal(m_clock.elapsed() - m_beatStartMs) > qMax(2000.0, 4.0 * m_beatMs);
-    if (m_layerStyle != 1 || m_docTimer.isActive() || m_building || stale || m_startScene)
+    if ((m_layerStyle != 1 && m_mixGlide == false) || m_docTimer.isActive() || m_building || stale || m_startScene)
     {
         m_layerTimer.stop();
         return;
     }
-    foreach (const QString &key, m_layerOwned)
+    if (m_layerStyle == 1)
     {
-        if (m_active.contains(QStringLiteral("col:") + key) == false)
-            continue;                    // stopped since the beat (a flash, the cast)
-        if (m_flash && m_flashHeld.contains(key))
-            continue;
-        applyColourLayer(key, true);    // R371: the scene ids the beat found
+        foreach (const QString &key, m_layerOwned)
+        {
+            if (m_active.contains(QStringLiteral("col:") + key) == false)
+                continue;                // stopped since the beat (a flash, the cast)
+            if (m_flash && m_flashHeld.contains(key))
+                continue;
+            applyColourLayer(key, true); // R371: the scene ids the beat found
+        }
+        emit colourFadeChanged();        // runde 374: the FADE tile's bar
     }
+    // R374_MIX_GLIDE: the base between two beats
+    if (m_mixGlide && m_mixGlideKey.isEmpty() == false
+        && m_active.contains(QStringLiteral("col:") + m_mixGlideKey)
+        && (m_flash && m_flashHeld.contains(m_mixGlideKey)) == false)
+        applyMixGlide(true);
 }
 
 void TrackEngine::applyOverride(const QString &colour)
@@ -6684,7 +6758,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // calmest patterns - it was exempt, and the top-star doubling below then
     // drew its wildest patterns at 35 % twice as often as at 100 %
     const bool patternGroup = m_groups.value(group).patternDevice;
-    const bool layerG = layerGroup(group);   // R370
+    const bool layerG = layerGroup(group) || (m_mixGlide && group == m_mixGlideKey);   // R370 (R374: the mix's glide)
     int calmest = 3;
     if (patternGroup)
     {
@@ -8877,7 +8951,45 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // HOLD in that bar cleared the next colour: runde 179 by another road.
     // Once turned, it stays turned until the mix ends (mixBarsOut -1) or the
     // next colour is gone.
-    const bool mixTurnDue = mixBarsOut >= 0 && (m_mixTurnLatched || mixBarsOut >= mixTurnBars);
+    // R374_MIX_GLIDE (Tobias 10-06: "med mixerens fader ... et langsomt mix kan
+    // ogsaa ske selvom faderen bliver hakket op hurtigt"): the mixer tells only
+    // ON AIR, never where a fader stands. So the base glides from the fader
+    // coming up (the mix) over 8, 12 or 16 bars - twice the old turn point, by
+    // what is coming in - in a bar once the incoming track's drop is on, and it
+    // is done whenever the old deck goes off air (the handover adopts it). The
+    // turn the rest of the engine reads (the accent sitting out, the handover)
+    // is half way. HOLD and CALM hold it where it is.
+    const bool glideOn = m_mixing && mixBarsOut >= 0 && m_nextColour.isEmpty() == false
+                      && m_override.isEmpty() && m_nextColour != m_colour && m_startScene == false;
+    if (glideOn)
+    {
+        if (m_mixGlide == false)
+        {
+            m_mixGlide = true;
+            m_mixGlideP = 0.0;
+            m_mixGlideRate = 0.0;
+            m_mixGlideBeat = beat;
+            m_mixGlideFrom = m_colour;
+        }
+        if (beat != m_mixGlideBeat)
+        {
+            m_mixGlideP = qMin(1.0, m_mixGlideP + m_mixGlideRate);
+            m_mixGlideBeat = beat;
+        }
+        m_mixGlideTo = m_nextColour;     // NEXT may draw it again
+        m_mixGlideRate = (hold || isCalm) ? 0.0
+                       : (incomingFresh && m_incomingState == QStringLiteral("drop")) ? 0.25
+                       : 1.0 / (8.0 * mixTurnBars);
+        if (m_layerTimer.isActive() == false)
+            m_layerTimer.start();
+    }
+    else if (m_mixGlide)
+    {
+        m_mixGlide = false;
+        m_mixGlideKey.clear();
+    }
+    const bool mixTurnDue = mixBarsOut >= 0
+        && (m_mixTurnLatched || (m_mixGlide ? m_mixGlideP >= 0.5 : mixBarsOut >= mixTurnBars));
     if ((hold || isCalm) && mixTurnDue == false)
         m_nextColour.clear();
     m_mixTurnLatched = mixTurnDue && m_nextColour.isEmpty() == false;
@@ -9007,12 +9119,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // how many effect groups join the base: a ramp of the energy, with the
     // fraction decided by dice once per section - 55 % and 65 % differ
     // isDrive by value, energy by reference: the lambda has no capture-default
-    auto effectsWant = [&energy, isDrive](bool drop) -> qreal {
+    auto effectsWant = [&energy, isDrive, fader](bool drop) -> qreal {
         qreal want = drop ? 3.0 * qBound(0.0, (energy - 0.05) / 0.80, 1.0)
                           : 2.0 * qBound(0.0, (energy - 0.10) / 0.75, 1.0);
         if (drop == false && isDrive)
             want = 2.5 * qBound(0.0, (energy - 0.08) / 0.78, 1.0);
-        want += 1.0 * qBound(0.0, (energy - 0.80) / 0.20, 1.0);
+        // R374_TOP_GROUP: ... or the SLIDER's last tenth - a quiet section at
+        // 100 % kept the energy under 0.80 and the top added nothing there
+        want += 1.0 * qMax(qBound(0.0, (energy - 0.80) / 0.20, 1.0), qBound(0.0, (fader - 0.90) / 0.10, 1.0));
         return want;
     };
     auto effectsFor = [&effectsWant, rng, fader](bool drop, bool brk) {
@@ -9198,7 +9312,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // R370_COLOUR_LAYER: the tiles fading or chasing - the pace, the step and
     // the lead for this beat (the groups are painted in the cast loop below)
     updateColourLayer(beat, base, isBreak, isBuild, isDrop, prog, fader,
-                      hold || still || isCalm, forceNext || m_dropArrivedNow || m_lateLandNow);
+                      hold || still || isCalm, forceNext || m_dropArrivedNow || m_lateLandNow, kick);
     // R360_DROP_SIZE (Tobias 10-05: "landingens stoerrelse foelger droppets
     // stoerrelse - men energi-faderen skal stadig bestemme hvor vildt det er"):
     // measured where the drop arrives. ENERGY is the ceiling as before; the
@@ -9245,7 +9359,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // over the return beat (the harness: a hit and `mini-land` on all five
     // passes, though the 16-beat spacing held the blink back)
     bool miniNow = false;
-    if (isDrop && dropBar > 0 && fader >= 0.60 && hold == false && isCalm == false && still == false
+    if (isDrop && dropBar > 0 && fader >= 0.66 && hold == false && isCalm == false && still == false   // R374_SPREAD
         && m_flash == false && m_blackout == false && (beat - m_miniLandLast >= 16 || beat < m_miniLandLast)
         && beat > 4 && beat <= m_audKick.count() && m_audKick.count() == m_audLevel.count()
         && m_audKick.at(beat - 1) >= 115)
@@ -9847,7 +9961,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_layerPattern = fader < 0.30 ? 0 : fader < 0.60 ? 1 : 2;
             if (dropWay == 1)
                 m_layerTimer.start();
-            else
+            else if (m_mixGlide == false)    // runde 374
                 m_layerTimer.stop();
             emit liveChanged();
         }
@@ -10480,7 +10594,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 darkGroups.insert(key);
         }
     }
-    const bool dropBlack = preDrop && beatsToNext == 1 && fader >= 0.60 && isCalm == false
+    const bool dropBlack = preDrop && beatsToNext == 1 && fader >= 0.62 && isCalm == false   // R374_SPREAD
                         && m_nextDropSize >= 0.40      // R362_BUILD_SIZE: a small drop lands from the blink
                         && hold == false && still == false && m_mixing == false && m_flash == false
                         && djLoopOn() == false;  // runde 358: a looped last bar stabs at its loop point instead
@@ -11007,7 +11121,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         const int drawnFan = candidate.fan;
                         candidate.spread = 0;
                         candidate.mirror = true;
-                        candidate.fan = (key != base && fader >= 0.75) ? qMin(drawnFan, 45) : 0;   // a trail, not a criss-cross (review 294)
+                        candidate.fan = (key != base && fader >= 0.79) ? qMin(drawnFan, 45) : 0;   // R374_SPREAD   // a trail, not a criss-cross (review 294)
                     }
                 }
                 m_sweep.insert(key, candidate);
@@ -11355,7 +11469,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the same look it would then run for thirty-two bars. Pattern devices
         // (animation lasers) and the base sit it out; the bars step on the
         // beat, never between (they never do).
-        int impactBars = (fader >= 0.60 && m_dropSize >= 0.40) ? 2 : 1;    // the slider, as the comment says (runde 288); a small drop one bar (runde 360)
+        int impactBars = (fader >= 0.56 && m_dropSize >= 0.40) ? 2 : 1;    // the slider, as the comment says (runde 288); a small drop one bar (runde 360)
         bool impactNow = false;                  // runde 287: the landing reads it
         if (isDrop && dropBar >= 0 && dropBar < impactBars && key != base
             && (m_fullAuto == false || key == m_rhythmLead || g.strobes)
@@ -11535,7 +11649,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
         QString colour = m_colour;
         // the mix's second half: the base stands in the incoming track's colour
-        if (key == base && mixTurnDue && m_nextColour.isEmpty() == false && m_override.isEmpty())
+        if (key == base && mixTurnDue && m_nextColour.isEmpty() == false && m_override.isEmpty()
+            && m_mixGlide == false)      // runde 374: the glide paints the base itself
             colour = m_nextColour;
         // Runde 306 (Tobias: "Når jeg har valgt fliser, må man vælge så mange
         // som man har lyst til"): EVERY tile on the rig at once. The base wears
@@ -11968,6 +12083,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_layerLevel.insert(key, glBase);
             applyColourLayer(key);
         }
+        else if (m_mixGlide && key == base && cf != Function::invalidId())   // R374_MIX_GLIDE
+        {
+            m_mixGlideKey = key;
+            m_layerLevel.insert(key, glBase);
+            applyMixGlide(false);
+        }
         else if (cf != Function::invalidId())
         {
             run("col:" + key, cf, m_funcs.value(cf).dimmer ? glBase : 1.0, 0, true);
@@ -12310,7 +12431,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (isDrop == false)
         m_bigDrop = false;
     else if (dropArrives)
-        m_bigDrop = fader >= 0.85 || ((m_dropStyle == 1 || m_dropStyle == 4) && fader >= 0.75);
+        m_bigDrop = fader >= 0.85 || ((m_dropStyle == 1 || m_dropStyle == 4) && fader >= 0.78);   // R374_SPREAD
     // ... out of a four-on-the-floor: the two beats before the gap had their
     // kick, so a half-time or broken beat (a kick on one in four - Nelly
     // Furtado's drop fired every bar) is not a return. Fri+Sat: 39 such
@@ -12338,7 +12459,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 || (kickBack && crowded == false)       // runde 357
                 || (miniNow && m_miniSize >= 0.40 && crowded == false));   // R362_MINI_LAND (R366: this beat's)
     // R360_DROP_GROW: the line where the drop grows is a hit, from 60 %
-    if (growNow && fader >= 0.60 && crowded == false && isCalm == false && still == false
+    if (growNow && fader >= 0.58 && crowded == false && isCalm == false && still == false
         && m_blackout == false && hold == false)   // R361: HOLD holds
         hit = true;
     if (hit && kickBack)
@@ -12363,7 +12484,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // the SLIDER, as every hard line in this engine: `energy` is
                 // scaled by the section and could not reach 0.85 before the
                 // clock's 02:00 (review)
-                && (fader >= 0.85 || ((m_dropStyle == 1 || m_dropStyle == 4) && fader >= 0.75))
+                && (fader >= 0.85 || ((m_dropStyle == 1 || m_dropStyle == 4) && fader >= 0.78))   // R374_SPREAD
                 && (m_whiteLandMs < 0 || m_clock.elapsed() - m_whiteLandMs >= 180000)
                 // ... and not under a colour tile: a tile is ONE colour (runde
                 // 205), as the echo, the accent and the partner already hold -
@@ -12581,7 +12702,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     checkConflicts(castSet);
 
     m_autoStageKeys.clear();
-    bool impactActive = isDrop && dropBar >= 0 && dropBar < ((fader >= 0.60 && m_dropSize >= 0.40) ? 2 : 1);   // as impactBars (runde 360)
+    bool impactActive = isDrop && dropBar >= 0 && dropBar < ((fader >= 0.56 && m_dropSize >= 0.40) ? 2 : 1);   // R374_SPREAD   // as impactBars (runde 360)
     if (m_fullAuto && m_blackout == false && m_flash == false && m_mixing == false
         && isCalm == false && still == false && m_override.isEmpty()
         && darkGroups.isEmpty() && hit == false && impactActive == false && turnaround == false)
@@ -12683,7 +12804,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     chopNow16Riser = true;
                 }
             }
-            else if (toDrop < 0 && isBuild && fader >= 0.75 && prog >= 0.75)
+            else if (toDrop < 0 && isBuild && fader >= 0.72 && prog >= 0.75)   // R374_SPREAD
                 chop = 1;
         }
         else if (chopOk && isBreak && fader >= 0.90)
@@ -12695,7 +12816,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // but rekordbox' phrase analysis marks the fill-in at the end of a
         // phrase (264 of 1,425 phrases in the library, 2-4 beats). Inside one,
         // in a build or the bars into a drop: sixteenths.
-        if (chopOk && isDrop == false && fader >= 0.60 && inFill(beat) && toDrop != 1
+        if (chopOk && isDrop == false && fader >= 0.64 && inFill(beat) && toDrop != 1   // R374_SPREAD
             && (isBuild || (toDrop > 0 && toDrop <= 8)))
             chop = 3;
         // R358_LOOP_CHOP: the DJ's loop sets the stab. Eight beats and more:
@@ -12709,7 +12830,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         const bool loopMixOk = mixQuietIn && isCalm == false && hold == false && m_blackout == false
                             && m_flash == false && m_beatMs > 0.0
                             && still == false && dropWaiting == false && m_silenceDark == false;   // R361
-        if ((chopOk || loopMixOk) && loopNow && fader >= 0.60 && toDrop != 1)
+        if ((chopOk || loopMixOk) && loopNow && fader >= 0.68 && toDrop != 1)   // R374_SPREAD
         {
             const int c = m_loopLen <= 1 ? 3 : m_loopLen == 2 ? 2
                         : (isDrop ? 0 : (m_loopLen == 4 ? 1 : (beat == m_loopFrom ? 1 : 0)));
@@ -12757,7 +12878,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     else if (m_lookPending.isEmpty() == false && beat >= m_lookFrom + 8)
         m_lookPending.clear();
-    int impactBarsLog = (fader >= 0.60 && m_dropSize >= 0.40) ? 2 : 1;
+    int impactBarsLog = (fader >= 0.56 && m_dropSize >= 0.40) ? 2 : 1;   // R374_SPREAD
     const bool fakeDrop = isDrop && m_dropLand > 0;
     {
         QStringList ev;
@@ -12765,6 +12886,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (turn) ev << "turn";
         if (turnaround) ev << (haveCurves ? "music-fill" : "clock-fill");
         if (changeColour) ev << (turnUp ? "colour-on-turn" : (holdUp ? "colour-on-clock" : "colour"));
+        if (m_mixGlide) ev << QString("mix-glide%1").arg(int(qRound(100.0 * m_mixGlideP)));   // runde 374
         if (m_layerStyle == 1) ev << "colour-fade";          // runde 370
         else if (m_layerStyle == 2) ev << "colour-chase";
         if (isBuild && state != QStringLiteral("build")) ev << "riser-build";
@@ -16805,8 +16927,14 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     const quint32 baseMot = turnBase.isEmpty() ? Function::invalidId()
                           : m_active.value(QStringLiteral("mot:") + turnBase, Function::invalidId());
     const QString turnWant = m_nextColour.isEmpty() ? QString() : colourForGroup(turnBase, m_nextColour);
+    // R374_MIX_GLIDE: a glide under way is the room going to the next colour -
+    // a quick cut (the old fader down at once) takes the colour with it
+    const bool glided = m_mixGlide && m_mixGlideTo == m_nextColour && m_mixGlideP > 0.0;
+    m_mixGlide = false;
+    m_mixGlideKey.clear();
     const bool baseTurned = m_nextColour.isEmpty() == false
-        && ((baseCol != Function::invalidId() && m_funcs.value(baseCol).colour == turnWant)
+        && (glided
+            || (baseCol != Function::invalidId() && m_funcs.value(baseCol).colour == turnWant)
             || (baseMot != Function::invalidId() && m_funcs.value(baseMot).coversColour
                 && m_funcs.value(baseMot).colour == turnWant));
     if (m_nextColour.isEmpty() == false && m_palette.contains(m_nextColour) && baseTurned)

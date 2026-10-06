@@ -409,6 +409,10 @@ class TrackEngine : public QObject
     Q_PROPERTY(int colourMode READ colourMode NOTIFY liveChanged)
     /** the way the tiles take turns right now: 0 none, 1 fade, 2 chase */
     Q_PROPERTY(int colourStyle READ colourStyle NOTIFY liveChanged)
+    /** R374_FADE_SHOWN: how far the base's fade is (0-1) and its two colours */
+    Q_PROPERTY(qreal colourFadeT READ colourFadeT NOTIFY colourFadeChanged)
+    Q_PROPERTY(QString colourFadeFrom READ colourFadeFrom NOTIFY colourFadeChanged)
+    Q_PROPERTY(QString colourFadeTo READ colourFadeTo NOTIFY colourFadeChanged)
     Q_PROPERTY(QString currentColour READ currentColour NOTIFY liveChanged)
     Q_PROPERTY(QStringList cast READ cast NOTIFY liveChanged)
     /** The DJ's fader per group, 0..1, on top of everything the engine does.
@@ -525,6 +529,9 @@ public:
     Q_INVOKABLE void setColourMode(int mode);
     int colourMode() const { return m_colourMode; }
     int colourStyle() const { return m_layerStyle; }
+    qreal colourFadeT() const;
+    QString colourFadeFrom() const;
+    QString colourFadeTo() const;
     /** the tiles' partner for the lead at leadIdx (review 305) */
     QString setPartnerOf(int leadIdx) const;
     QString currentColour() const;
@@ -737,6 +744,7 @@ signals:
     /** a colour tile was pressed but the colour cannot be used (not in the
      *  palette any more, banned): the tile blinks (runde 313, B27/Tobias) */
     void colourRejected(const QString &colour);
+    void colourFadeChanged();            // runde 374: the FADE tile's progress
     /** ROOM in percent of energy (55 / 80 / 100 / 125): TrackManager puts it
      *  on the ENERGY trim, so ROOM and the ENERGY slider are one dial. */
     void roomChanged(int percent);
@@ -1012,9 +1020,16 @@ private:
     QHash<QString, int> m_chaseSide;       // group -> the one showing now
     QHash<QString, QList<quint32> > m_layerFids;   // R371_LAYER_FIDS: group -> its tiles' colour scenes, this beat
     void applyColourLayer(const QString &key, bool frame);
+    /* R374_MIX_GLIDE: the base gliding into the next track's colour over a mix */
+    bool m_mixGlide = false;
+    qreal m_mixGlideP = 0.0;               // 0 the room's colour .. 1 the next track's
+    qreal m_mixGlideRate = 0.0;            // per beat
+    int m_mixGlideBeat = -1;
+    QString m_mixGlideFrom, m_mixGlideTo, m_mixGlideKey;
+    void applyMixGlide(bool frame);
     QTimer m_layerTimer;
     void updateColourLayer(int beat, const QString &base, bool isBreak, bool isBuild, bool isDrop,
-                           qreal prog, qreal fader, bool frozen, bool jump);
+                           qreal prog, qreal fader, bool frozen, bool jump, qreal kick);
     bool layerGroup(const QString &key) const;
     QStringList layerColours(const QString &key) const;
     void applyColourLayer(const QString &key);
