@@ -8986,6 +8986,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_mixGlideBeat = beat;
         }
         m_mixGlideTo = m_nextColour;     // NEXT may draw it again
+        m_mixGlideFrom = m_colour;       // R377_GLIDE_NEXT: ... and give the room a new colour
         m_mixGlideEnd = -1;
         m_mixGlideKey = baseGroup();     // R375_GLIDE_COLOURPROG: from its first beat
         m_mixGlideRate = (hold || isCalm) ? 0.0
@@ -8994,7 +8995,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_layerTimer.isActive() == false)
             m_layerTimer.start();
     }
-    else if (m_mixGlide && m_mixGlideFinish && m_override.isEmpty() && m_startScene == false)
+    else if (m_mixGlide && m_mixGlideFinish && m_override.isEmpty() && m_startScene == false
+             && m_colour == m_mixGlideTo)   // R377_GLIDE_NEXT: NEXT on the new track ends it
     {
         // R376_GLIDE_FINISH: the handover took the colour part way through the
         // glide - a mix shorter than the glide's half, most of them. The rest
