@@ -9,6 +9,12 @@
       http://www.apache.org/licenses/LICENSE-2.0.txt
 */
 
+// TRACK_LAYOUT_V2 - the layout branch (proposal 8, Tobias 10-07: "byg det og
+// tilfoej ogsaa multitouch"). The generator keeps writing this file into a tree
+// whose TrackView.qml carries this marker; the classic page stays on the main
+// branch. (TRACK_TOUCH_LAYOUT_R137: the generator's legacy normaliser keys on
+// this marker, so the old migration patches run on the classic text, not here.)
+
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
@@ -20,16 +26,47 @@ Rectangle
 {
     id: trackViewRoot
     anchors.fill: parent
-    color: "#1B1B1B"
+    color: "#0E0E10"
 
-    // fixed palette: the stock Controls theme is light and QLC's dark theme
-    // does not reach it, so nothing here relies on UISettings for colour
-    readonly property color cPanel:  "#262626"
-    readonly property color cBtn:    "#3A3A3A"
-    readonly property color cBtnHi:  "#4A4A4A"
-    readonly property color cLine:   "#555555"
-    readonly property color cText:   "#EEEEEE"
-    readonly property color cDim:    "#9A9A9A"
+    // ---------------------------------------------------------------------
+    // ONE GRID (proposal 8). Drawn for the lys-PC - 3072x1920 at 150 % leaves
+    // the page 2048 x 1160 - and scaled from there: ks for heights and type,
+    // kw for the column widths. Every control in the deck is one height (R),
+    // never under the touch height, with one gap (g) between them.
+    // ---------------------------------------------------------------------
+    readonly property real ks: Math.max(0.6, Math.min(width / 2048, height / 1160))
+    readonly property real kw: Math.max(0.6, width / 2048)
+    property real touchH: Math.max(UISettings.iconSizeMedium * 1.4, 50)
+    readonly property bool compactLayout: height < 950
+    readonly property real rowH: Math.max(touchH, Math.round(62 * ks))
+    readonly property real g: Math.max(6, Math.round(12 * ks))
+    readonly property real mx: Math.round(20 * kw)            // page side margin
+    readonly property real gapB: Math.max(8, Math.round(12 * ks))   // between the page's blocks
+    readonly property real cardPad: Math.max(10, Math.round(18 * ks))
+    readonly property real headH: Math.max(20, Math.round(28 * ks))
+    readonly property real topH: Math.max(50, Math.round(64 * ks))
+    readonly property real footH: Math.max(28, Math.round(36 * ks))
+    readonly property real railH: Math.max(56, Math.round(68 * ks))
+    readonly property real deckH: cardPad * 2 + headH + 6 * rowH + 5 * g
+    readonly property real rigW: Math.round(540 * kw)
+    readonly property real liveW: Math.round(340 * kw)
+    function fs(px) { return Math.max(10, Math.round(px * ks)) }
+
+    // colours: a quiet page, colour only where something is ON
+    readonly property color cCard:    "#16161A"
+    readonly property color cEdge:    "#24242A"
+    readonly property color cBtn:     "#1E1E23"
+    readonly property color cBtnEdge: "#2E2E36"
+    readonly property color cText:    "#E9E9EE"
+    readonly property color cMute:    "#8C8C96"
+    readonly property color cDim:     "#5E5E68"
+    readonly property color cGreen:   "#6ECD82"
+    readonly property color cGold:    "#E3B44F"
+    readonly property color cBlue:    "#4FA3E3"
+    // kept for TrackSetup and older bindings
+    readonly property color cPanel:  "#16161A"
+    readonly property color cBtnHi:  "#2A2A30"
+    readonly property color cLine:   "#2E2E36"
 
     property int beatCount: trackManager ? trackManager.beatCount : 0
     property int currentBeat: trackManager ? trackManager.currentBeat : 0
@@ -39,10 +76,9 @@ Rectangle
     property var divValues: [ 0, 4000, 2000, 1000, 500, 250, 125 ]
     property var divLabels: [ "-", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8" ]
 
-    // TRACK_TOUCH_LAYOUT_R137 — original controls, layout-only revision r138.
-    readonly property bool compactLayout: height < 950
     property bool setupOpen: false
-    property real touchH: Math.max(UISettings.iconSizeMedium * 1.4, 50)
+    // the pencil: the flag tools stay out until it is tapped again (Tobias 10-07)
+    property bool markerEdit: false
 
     property int dragIndex: -1
     property real dragX: 0
@@ -50,6 +86,8 @@ Rectangle
     property bool zoomActive: false
     property int zoomCenter: 1
     property int zoomSpan: 64
+
+    onMarkerEditChanged: if (!markerEdit) { wfArea.release(); wfCanvas.selected = -1; wfCanvas.requestPaint() }
 
     function markerColor(type)
     {
@@ -60,6 +98,24 @@ Rectangle
         if (type === "outro") return "#8C6BB1"
         if (type === "drive") return "#C2566E"   // between a groove's grey and a drop's red
         return "#9AA0A6"
+    }
+
+    function swatch(name)
+    {
+        switch (name)
+        {
+        case "red":     return "#E03030"
+        case "green":   return "#30C050"
+        case "blue":    return "#3060E0"
+        case "cyan":    return "#30C0D0"
+        case "magenta": return "#D040C0"
+        case "yellow":  return "#E0D030"
+        case "orange":  return "#E08030"
+        case "amber":   return "#E0A040"
+        case "uv":      return "#7030C0"
+        case "white":   return "#E8E8E8"
+        }
+        return "#4A4A4A"
     }
 
     function fmtTime(ms)
@@ -112,26 +168,32 @@ Rectangle
     Connections
     {
         target: trackManager
-        function onTrackChanged() { wfArea.release(); wfCanvas.requestPaint() }
-        function onMarkersChanged() { wfCanvas.requestPaint() }
-        // positionChanged arrives once per beat and not more (see below),
-        // so this repaints once per beat.
-        //
-        // Runde 143 put a gate here - only repaint when currentBeat changed -
-        // on the reading that TrackManager's 200 ms energy timer emitted
-        // positionChanged unconditionally, five times a second. That reading
-        // was wrong, and runde 144 measured it: slotEnergyTick() emits
-        // positionChanged only in its thirty-second-dead branch, and
-        // handlePosition() returns early unless the beat or the playing flag
-        // changed. Beat Link Trigger sends no `time` field at all, so the
-        // third term of that guard is 0 == 0 for ever. Counted on the log of
-        // 2026-09-20: 11172 rows, 11112 beat changes - 1.01 rows per change.
-        //
-        // The gate was therefore dead code, and two tests were holding it in
-        // place. Both are gone. If the protocol ever gains a `time` field -
-        // the C++ already parses one - this is where the guard goes, and the
-        // paragraph above is why.
+        function onTrackChanged() { wfArea.release(); wfCanvas.selected = -1; wfCanvas.requestPaint() }
+        function onMarkersChanged()
+        {
+            // only drop the selection when the flag is actually gone: RETYPE
+            // must keep the flag it just retyped
+            if (wfCanvas.selected >= trackManager.markers.length)
+                wfCanvas.selected = -1
+            wfCanvas.requestPaint()
+        }
+        // positionChanged arrives once per beat (runde 144), so this repaints once per beat
         function onPositionChanged() { wfCanvas.requestPaint() }
+    }
+    Connections
+    {
+        target: trackEngine
+        // the canvas reads one thing from the engine - the colour of the played
+        // part. liveChanged fires on every frame of a fader drag (runde 204)
+        function onLiveChanged()
+        {
+            var c = trackEngine ? trackEngine.currentColour : ""
+            if (c !== wfCanvas.paintedColour)
+            {
+                wfCanvas.paintedColour = c
+                wfCanvas.requestPaint()
+            }
+        }
     }
 
     Timer
@@ -161,67 +223,58 @@ Rectangle
         }
     }
 
-    // Small vector icons: no font symbols that change between Windows and macOS.
-    // WHAT MAKES A BAR LOOK LIKE A SLIDER (runde 140).
-    //
-    // Tobias: "hvordan gør vi så alle sliders faktisk viser at det er
-    // sliders? for nye djs der aldrig har set det før kan det godt være lidt
-    // svært at se dem." He is right, and it is the same problem on all four
-    // of them: a coloured rectangle that fills part of a box is what every
-    // progress bar in the world looks like, and nobody drags a progress bar.
-    //
-    // Three things turn it into something a hand reaches for, and none of
-    // them is a label:
-    //   the GRIP   a raised handle at the level, with three ridges cut into
-    //              it. This is the one that does the work - a ridged handle
-    //              is the oldest "hold here" signal there is, and it is the
-    //              only part of a fader a DJ has ever touched.
-    //   the TRACK  ticks at a quarter, a half and three quarters, so the bar
-    //              reads as a scale with positions rather than as a bar that
-    //              happens to be part full.
-    //   the REST   the part above the level stays visibly empty, so there is
-    //              somewhere obvious for the level to go.
-    //
-    // One component, used by ENERGY, MASTER DIMMER, the five group trims and
-    // HAZE / FAN SPEED, so the page teaches the gesture once.
-    component SliderGrip: Item {
-        property color ink: "#EEEEEE"
-        property bool pressed: false
-        width: 18
-        Rectangle {
+    // =====================================================================
+    //  BUILDING BLOCKS
+    // =====================================================================
+
+    // MULTITOUCH, the way QLC+ does it in VCButtonItem.qml: a MouseArea for the
+    // mouse and, over it, a MultiPointTouchArea for one finger (mouseEnabled:
+    // false). A finger is then this control's own touch point - not the one
+    // synthesised mouse the whole window shares - so FLASH can be held while
+    // the other hand pulls ENERGY, or two faders move at once.
+    component TouchInput: Item
+    {
+        id: ti
+        anchors.fill: parent
+        property bool down: mouseIn.pressed || touchIn.held
+        property bool holdEnabled: false
+        property int holdMs: 800
+        signal pressedAt(real x, real y)
+        signal movedTo(real x, real y)
+        signal releasedAt(real x, real y, bool inside)
+        signal canceled()
+        signal held()
+
+        function inside(x, y) { return x >= 0 && y >= 0 && x <= width && y <= height }
+
+        MouseArea
+        {
+            id: mouseIn
             anchors.fill: parent
-            anchors.topMargin: 2
-            anchors.bottomMargin: 2
-            radius: 4
-            color: parent.pressed ? "#FFFFFF" : parent.ink
-            border.width: 1
-            border.color: "#0E0E0E"
-            // the ridges
-            Column {
-                anchors.centerIn: parent
-                spacing: 3
-                Repeater {
-                    model: 3
-                    Rectangle { width: 9; height: 2; radius: 1; color: "#1A1A1A"; opacity: 0.75 }
-                }
-            }
+            // a Flickable under this must not steal the press: a stolen grab
+            // fires onCanceled and would leave a held FLASH or BLACKOUT on
+            preventStealing: true
+            onPressed: (m) => { ti.pressedAt(m.x, m.y); if (ti.holdEnabled) holdTimer.restart() }
+            onPositionChanged: (m) => { if (pressed) ti.movedTo(m.x, m.y) }
+            onReleased: (m) => { holdTimer.stop(); ti.releasedAt(m.x, m.y, ti.inside(m.x, m.y)) }
+            onCanceled: { holdTimer.stop(); ti.canceled() }
         }
+        MultiPointTouchArea
+        {
+            id: touchIn
+            anchors.fill: parent
+            mouseEnabled: false
+            maximumTouchPoints: 1
+            property bool held: false
+            onPressed: (pts) => { held = true; ti.pressedAt(pts[0].x, pts[0].y); if (ti.holdEnabled) holdTimer.restart() }
+            onUpdated: (pts) => { if (pts.length > 0) ti.movedTo(pts[0].x, pts[0].y) }
+            onReleased: (pts) => { held = false; holdTimer.stop(); ti.releasedAt(pts[0].x, pts[0].y, ti.inside(pts[0].x, pts[0].y)) }
+            onCanceled: (pts) => { held = false; holdTimer.stop(); ti.canceled() }
+        }
+        Timer { id: holdTimer; interval: ti.holdMs; onTriggered: ti.held() }
     }
 
-    component SliderTicks: Item {
-        // a quarter, a half, three quarters - short marks top and bottom
-        Repeater {
-            model: [ 0.25, 0.5, 0.75 ]
-            Item {
-                x: 3 + (parent.width - 6) * modelData - 1
-                width: 2
-                height: parent.height
-                Rectangle { y: 0; width: 2; height: 6; color: "#4A4A4A" }
-                Rectangle { y: parent.height - 6; width: 2; height: 6; color: "#4A4A4A" }
-            }
-        }
-    }
-
+    // Small vector icons: no font symbols that change between Windows and macOS.
     component ControlIcon: Canvas {
         property string kind: ""
         property color ink: "#DDDDDD"
@@ -230,7 +283,7 @@ Rectangle
         onInkChanged: requestPaint()
         onPaint: {
             var c = getContext("2d"); c.reset(); c.scale(width / 24, height / 24)
-            c.strokeStyle = ink; c.fillStyle = ink; c.lineWidth = 1.7
+            c.strokeStyle = ink; c.fillStyle = ink; c.lineWidth = 1.8
             c.lineCap = "round"; c.lineJoin = "round"
             function line(x,y,x2,y2) { c.beginPath(); c.moveTo(x,y); c.lineTo(x2,y2); c.stroke() }
             function circle(x,y,r) { c.beginPath(); c.arc(x,y,r,0,Math.PI*2); c.stroke() }
@@ -239,10 +292,8 @@ Rectangle
             } else if (kind === "hold") { c.fillRect(6,4,4,16); c.fillRect(14,4,4,16) }
             else if (kind === "nextLook") { c.beginPath(); c.moveTo(4,4); c.lineTo(16,12); c.lineTo(4,20); c.closePath(); c.fill(); line(19,4,19,20) }
             else if (kind === "blackout") { circle(12,12,9); line(6,18,18,6) }
-            // "give it back to the music": an arrow curving anticlockwise
-            // back to where it started. A sun says "automatic"; on the
-            // SECTION row what the button does is HAND THE SECTION BACK, so
-            // it gets the revert arrow instead. (Tobias, 2026-09-22.)
+            // "give it back to the music": an arrow curving back to where it
+            // started (Tobias, 2026-09-22) - SECTION and POSITION
             else if (kind === "revert") {
                 c.beginPath(); c.arc(12, 12.5, 7, Math.PI * 0.78, Math.PI * 2.25); c.stroke()
                 c.beginPath(); c.moveTo(5.2, 8.4); c.lineTo(5.0, 14.2); c.lineTo(10.6, 12.4)
@@ -258,8 +309,6 @@ Rectangle
             else if (kind === "laser") { c.strokeRect(3,18,18,4); line(5,15,2,4); line(10,15,8,2); line(15,15,16,2); line(20,15,23,4) }
             else if (kind === "strobe") { c.strokeRect(3,2,18,20); circle(8,7,2); circle(16,7,2); circle(8,17,2); circle(16,17,2) }
             else if (kind === "eyes") { circle(12,6,5); circle(6,17,5); circle(18,17,5); circle(12,6,1.5); circle(6,17,1.5); circle(18,17,1.5) }
-            // runde 370: FADE - two colours melting into each other; CHASE - lamps
-            // taking turns down the row
             else if (kind === "fadeColour") {
                 circle(9,12,6.5); circle(15,12,6.5)
                 c.globalAlpha = 0.45; c.beginPath(); c.arc(15,12,6.5,0,Math.PI*2); c.fill(); c.globalAlpha = 1.0
@@ -271,82 +320,291 @@ Rectangle
             else if (kind === "animation") {
                 circle(12,12,2)
                 for(var k=0;k<4;k++){c.save();c.translate(12,12);c.rotate(k*Math.PI/2);c.beginPath();c.moveTo(0,-3);c.bezierCurveTo(-7,-13,6,-13,3,-3);c.stroke();c.restore()}
-            } else { circle(12,8,6); c.strokeRect(3,21,18,2); c.beginPath(); c.moveTo(3,8); c.lineTo(3,18); c.lineTo(21,18); c.lineTo(21,8); c.stroke() }
+            }
+            else if (kind === "pencil") { c.beginPath(); c.moveTo(4,20); c.lineTo(5,15); c.lineTo(15.5,4.5); c.lineTo(19.5,8.5); c.lineTo(9,19); c.closePath(); c.stroke(); line(13,7,17,11) }
+            else if (kind === "check") { c.beginPath(); c.moveTo(4,12.5); c.lineTo(9.5,18); c.lineTo(20,6.5); c.stroke() }
+            else if (kind === "lock") { c.strokeRect(5,10.5,14,10); c.beginPath(); c.moveTo(8,10.5); c.lineTo(8,7.5); c.arc(12,7.5,4,Math.PI,0); c.lineTo(16,10.5); c.stroke() }
+            else if (kind === "warn") { c.beginPath(); c.moveTo(12,3); c.lineTo(22,21); c.lineTo(2,21); c.closePath(); c.stroke(); line(12,10,12,15); line(12,18,12,18.5) }
+            else { circle(12,8,6); c.strokeRect(3,21,18,2); c.beginPath(); c.moveTo(3,8); c.lineTo(3,18); c.lineTo(21,18); c.lineTo(21,8); c.stroke() }
         }
     }
 
-    ColumnLayout {
-        anchors.fill: parent; anchors.margins: 6; spacing: 6
-Rectangle
+    // THE ONE BUTTON. active = lit in its tone; tone = the colour of "on".
+    component Btn: Rectangle
+    {
+        id: btn
+        property string text: ""
+        property string icon: ""
+        property bool active: false
+        property color tone: trackViewRoot.cGreen
+        property bool autoKind: false        // an AUTO: its icon is green even when off
+        property bool solid: false            // active as a full fill (a section pinned by hand)
+        property real fontPx: trackViewRoot.fs(14)
+        property color dot: "transparent"     // a colour tile's own colour, before its name
+        property alias input: btnInput
+        signal tapped()
+        radius: Math.round(10 * trackViewRoot.ks)
+        color: btnInput.down ? Qt.lighter(base, 1.35) : base
+        property color base: solid && active ? tone
+                             : (active ? Qt.tint(trackViewRoot.cBtn, Qt.rgba(tone.r, tone.g, tone.b, 0.20)) : trackViewRoot.cBtn)
+        border.width: solid && active ? 3 : 1
+        border.color: solid && active ? "#FFFFFF"
+                      : (active ? Qt.rgba(tone.r, tone.g, tone.b, 0.85) : trackViewRoot.cBtnEdge)
+        opacity: enabled ? 1.0 : 0.3
+        Row
         {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 56
-            Layout.maximumHeight: 56
-            Layout.minimumHeight: 50
-            color: trackViewRoot.cPanel
-            radius: 4
-
-            Row
+            anchors.centerIn: parent
+            spacing: Math.round(9 * trackViewRoot.ks)
+            Rectangle
             {
-                anchors.left: parent.left
-                anchors.right: statusRight.left
-                anchors.rightMargin: 14
-                anchors.leftMargin: 10
+                visible: btn.dot.a > 0
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 14
+                width: Math.round(12 * trackViewRoot.ks); height: width; radius: width / 2
+                color: btn.dot
+            }
+            ControlIcon
+            {
+                visible: btn.icon !== ""
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.round(18 * trackViewRoot.ks); height: width
+                kind: btn.icon
+                ink: btn.solid && btn.active ? "#101010"
+                     : (btn.autoKind ? trackViewRoot.cGreen : label.color)
+            }
+            Text
+            {
+                id: label
+                anchors.verticalCenter: parent.verticalCenter
+                text: btn.text
+                color: btn.solid && btn.active ? "#101010"
+                       : (btn.active ? Qt.lighter(btn.tone, 1.45) : "#D6D6DC")
+                font.bold: true
+                font.pixelSize: btn.fontPx
+                font.letterSpacing: btn.fontPx * 0.08
+            }
+        }
+        TouchInput
+        {
+            id: btnInput
+            onReleasedAt: (x, y, inside) => { if (inside) btn.tapped() }
+        }
+    }
 
-                Rectangle
-                {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 120
-                    height: 48
-                    radius: 5
-                    color: trackViewRoot.markerColor(trackViewRoot.liveState)
-                    border.width: trackManager && trackManager.overrideState !== "" ? 3 : 0
-                    border.color: "#FFFFFF"
-
-                    Text
-                    {
-                        anchors.centerIn: parent
-                        text: trackViewRoot.liveState.toUpperCase()
-                        color: "#000000"
-                        font.bold: true
-                        font.pixelSize: 20
-                    }
+    // WHAT MAKES A BAR LOOK LIKE A SLIDER (runde 140): the ridged GRIP, the
+    // quarter TICKS and the empty REST above the level - one fader type for
+    // ENERGY, MASTER DIMMER, the group trims and HAZE / FAN SPEED.
+    component SliderGrip: Item {
+        property color ink: "#EEEEEE"
+        property bool pressed: false
+        width: Math.max(14, Math.round(18 * trackViewRoot.ks))
+        Rectangle {
+            anchors.fill: parent
+            anchors.topMargin: 2
+            anchors.bottomMargin: 2
+            radius: 5
+            color: parent.pressed ? "#FFFFFF" : parent.ink
+            border.width: 1
+            border.color: "#0E0E0E"
+            Column {
+                anchors.centerIn: parent
+                spacing: 3
+                Repeater {
+                    model: 3
+                    Rectangle { width: 9; height: 2; radius: 1; color: "#1A1A1A"; opacity: 0.75 }
                 }
+            }
+        }
+    }
 
-                Column
+    component SliderTicks: Item {
+        property real level: 0
+        Repeater {
+            model: [ 0.25, 0.5, 0.75 ]
+            Item {
+                x: 3 + (parent.width - 6) * modelData - 1
+                width: 2
+                height: parent.height
+                Rectangle { y: 0; width: 2; height: 7; color: parent.parent.level > modelData ? Qt.rgba(0,0,0,0.38) : "#34343C" }
+                Rectangle { y: parent.height - 7; width: 2; height: 7; color: parent.parent.level > modelData ? Qt.rgba(0,0,0,0.38) : "#34343C" }
+            }
+        }
+    }
+
+    // THE ONE FADER. level 0..1, the value never under the grip: near the top
+    // it moves in front of it, onto the fill.
+    component Fader: Rectangle
+    {
+        id: fd
+        property real level: 0
+        property color fill: trackViewRoot.cBlue
+        property color gripInk: "#EEEEEE"
+        property string name: ""
+        property color nameInk: "#101012"
+        property string valueText: Math.round(level * 100) + "%"
+        property color valueInk: "#ECECF0"          // on the empty track
+        property color valueOnFill: "#0A1622"       // on the fill, near the top
+        property alias input: fdInput
+        property alias inputName: fdInput.objectName
+        signal setLevel(real v)
+        signal pressed()
+        radius: Math.round(10 * trackViewRoot.ks)
+        color: "#0B0B0D"
+        border.width: 1
+        border.color: trackViewRoot.cBtnEdge
+        clip: true
+        function at(x) { return Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
+
+        Rectangle
+        {
+            visible: fd.level > 0
+            x: 3; y: 3
+            height: parent.height - 6
+            width: (parent.width - 6) * fd.level
+            radius: Math.max(3, fd.radius - 3)
+            color: fd.fill
+        }
+        SliderTicks { anchors.fill: parent; level: fd.level }
+        Text
+        {
+            visible: fd.name !== ""
+            x: Math.round(16 * trackViewRoot.ks)
+            anchors.verticalCenter: parent.verticalCenter
+            text: fd.name
+            color: fd.level > 0.30 ? fd.nameInk : "#B8B8C0"
+            font.bold: true
+            font.pixelSize: trackViewRoot.fs(12)
+            font.letterSpacing: (trackViewRoot.fs(12)) * 0.15
+        }
+        SliderGrip
+        {
+            id: fdGrip
+            x: Math.max(1, Math.min(parent.width - width - 1, 3 + (parent.width - 6) * fd.level - width / 2))
+            height: parent.height
+            ink: fd.gripInk
+            pressed: fdInput.down
+        }
+        Text
+        {
+            property bool onFill: fd.level > 0.80
+            anchors.verticalCenter: parent.verticalCenter
+            x: onFill ? fdGrip.x - width - Math.round(12 * trackViewRoot.ks)
+                      : parent.width - width - Math.round(18 * trackViewRoot.ks)
+            text: fd.valueText
+            color: onFill ? fd.valueOnFill : fd.valueInk
+            font.bold: true
+            font.pixelSize: trackViewRoot.fs(17)
+        }
+        TouchInput
+        {
+            id: fdInput
+            onPressedAt: (x, y) => { fd.pressed(); fd.setLevel(fd.at(x)) }
+            onMovedTo: (x, y) => fd.setLevel(fd.at(x))
+        }
+    }
+
+    component Card: Rectangle
+    {
+        property string title: ""
+        color: trackViewRoot.cCard
+        radius: Math.round(14 * trackViewRoot.ks)
+        border.width: 1
+        border.color: trackViewRoot.cEdge
+        Text
+        {
+            x: trackViewRoot.cardPad + 2
+            y: trackViewRoot.cardPad
+            text: parent.title
+            color: trackViewRoot.cMute
+            font.bold: true
+            font.pixelSize: trackViewRoot.fs(12)
+            font.letterSpacing: (trackViewRoot.fs(12)) * 0.2
+        }
+    }
+
+    component RowLabel: Text
+    {
+        color: trackViewRoot.cMute
+        font.bold: true
+        font.pixelSize: trackViewRoot.fs(12)
+        font.letterSpacing: (trackViewRoot.fs(12)) * 0.15
+        lineHeight: 1.15
+        verticalAlignment: Text.AlignVCenter
+        wrapMode: Text.WordWrap
+    }
+
+    // =====================================================================
+    //  THE PAGE
+    // =====================================================================
+    ColumnLayout
+    {
+        anchors.fill: parent
+        anchors.leftMargin: trackViewRoot.mx
+        anchors.rightMargin: trackViewRoot.mx
+        anchors.topMargin: Math.round(14 * trackViewRoot.ks)
+        spacing: trackViewRoot.gapB
+
+        // ============ 1 · STATUS: what plays, what comes, the show switch ============
+        Item
+        {
+            id: topBar
+            Layout.fillWidth: true
+            Layout.preferredHeight: trackViewRoot.topH
+
+            Rectangle
+            {
+                id: sectionPill
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.round(136 * trackViewRoot.ks)
+                height: Math.round(trackViewRoot.topH * 0.72)
+                radius: Math.round(10 * trackViewRoot.ks)
+                color: trackViewRoot.markerColor(trackViewRoot.liveState)
+                // a section pinned by hand: a white ring
+                border.width: trackManager && trackManager.overrideState !== "" ? 3 : 0
+                border.color: "#FFFFFF"
+                Text
                 {
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 3
+                    anchors.centerIn: parent
+                    text: trackViewRoot.liveState.toUpperCase()
+                    color: "#141005"
+                    font.bold: true
+                    font.pixelSize: trackViewRoot.fs(19)
+                    font.letterSpacing: (trackViewRoot.fs(19)) * 0.1
+                }
+            }
 
-                    Text
+            Column
+            {
+                anchors.left: sectionPill.right
+                anchors.leftMargin: Math.round(22 * trackViewRoot.ks)
+                anchors.right: statusRight.left
+                anchors.rightMargin: Math.round(22 * trackViewRoot.ks)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 3
+                Text
+                {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text: trackManager && trackManager.title !== "" ? trackManager.title : qsTr("No track loaded")
+                    color: trackViewRoot.cText
+                    font.pixelSize: trackViewRoot.fs(23)
+                }
+                Text
+                {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    property var nm: trackViewRoot.nextMarker()
+                    text:
                     {
-                        width: Math.max(0, parent.parent.width - 134)
-                        elide: Text.ElideRight
-                        text: trackManager && trackManager.title !== ""
-                              ? trackManager.title : qsTr("No track loaded")
-                        color: trackViewRoot.cText
-                        font.pixelSize: 18
+                        if (nm === null) return qsTr("No further points")
+                        var d = nm.beat - trackViewRoot.currentBeat
+                        // bars rounded UP, like the countdown in the waveform
+                        var bars = Math.ceil(d / 4)
+                        return qsTr("Next") + ": " + nm.type.toUpperCase()
+                               + " " + qsTr("in") + " " + d + " " + (d === 1 ? qsTr("beat") : qsTr("beats"))
+                               + "  ·  " + bars + " " + (bars === 1 ? qsTr("bar") : qsTr("bars"))
                     }
-                    Text
-                    {
-                        property var nm: trackViewRoot.nextMarker()
-                        text:
-                        {
-                            if (nm === null) return qsTr("No further points")
-                            var d = nm.beat - trackViewRoot.currentBeat
-                            // bars rounded UP, like the countdown in the waveform and
-                            // the footer: "in 1 beat (0 bars)" sat next to a "DROP 1"
-                            var bars = Math.ceil(d / 4)
-                            return qsTr("Next") + ": " + nm.type.toUpperCase()
-                                   + " " + qsTr("in") + " " + d + " " + (d === 1 ? qsTr("beat") : qsTr("beats"))
-                                   + "  (" + bars + " " + (bars === 1 ? qsTr("bar") : qsTr("bars")) + ")"
-                        }
-                        color: nm === null ? trackViewRoot.cDim
-                                           : trackViewRoot.markerColor(nm.type)
-                        font.pixelSize: 15
-                    }
+                    color: nm === null ? trackViewRoot.cDim : trackViewRoot.markerColor(nm.type)
+                    font.pixelSize: trackViewRoot.fs(15)
                 }
             }
 
@@ -354,159 +612,130 @@ Rectangle
             {
                 id: statusRight
                 anchors.right: parent.right
-                anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 14
+                spacing: Math.round(18 * trackViewRoot.ks)
 
                 Column
                 {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 3
-
                     Text
                     {
+                        anchors.right: parent.right
                         text: trackViewRoot.fmtTime(trackManager ? trackManager.positionMs : 0)
-                              + " / "
-                              + trackViewRoot.fmtTime(trackManager ? trackManager.durationMs : 0)
+                              + " / " + trackViewRoot.fmtTime(trackManager ? trackManager.durationMs : 0)
                         color: trackViewRoot.cText
-                        font.pixelSize: 17
+                        font.pixelSize: trackViewRoot.fs(21)
                     }
                     Text
                     {
+                        anchors.right: parent.right
                         // runde 308: the tempo the engine times on, and from where.
-                        // Anything but LINK is amber: busking (QLC+'s own clock) and
-                        // the engine may then not run on the same tempo.
-                        text: (trackManager && trackManager.playing
-                               ? qsTr("PLAYING") : qsTr("PAUSED"))
-                              + "   " + (trackManager ? trackManager.engineTempo.toFixed(1) : "0") + " BPM"
-                              + (trackManager ? " · " + trackManager.tempoSource : "")
-                              + "   " + (trackManager && trackManager.connected
-                                         ? qsTr("BLT ok") : qsTr("no BLT"))
+                        // Anything but LINK is amber
+                        text: (trackManager && trackManager.playing ? qsTr("PLAYING") : qsTr("PAUSED"))
+                              + "  ·  " + (trackManager && trackManager.engineTempo !== undefined ? trackManager.engineTempo.toFixed(1) : "0") + " BPM"
+                              + (trackManager && trackManager.tempoSource ? "  ·  " + trackManager.tempoSource : "")
+                              + "  ·  " + (trackManager && trackManager.connected ? qsTr("BLT ok") : qsTr("no BLT"))
                         color: trackManager && trackManager.playing
-                               ? (trackManager.tempoSource === "LINK" ? "#3FBF3F" : "#E3B44F")
+                               ? (trackManager.tempoSource === "LINK" ? "#59C36A" : "#E3B44F")
                                : trackViewRoot.cDim
-                        font.pixelSize: 14
+                        font.pixelSize: trackViewRoot.fs(13)
                     }
                 }
 
-// R379_SHOW_SWITCH: the START SCENE button went (runde 378) - ENERGY at 0 is the
-                // start scene now, and START POSITION is a position
-Button
+                // R379_SHOW_SWITCH: one tap on, SURE? off - its off face reads START SHOW
+                Rectangle
                 {
-                    width: 220
-                    height: 48
-                    focusPolicy: Qt.NoFocus
-                    anchors.verticalCenter: parent.verticalCenter
-                    checked: trackManager ? trackManager.autoRun : false
-                    // R379_SHOW_SWITCH (Tobias 10-06): as before - one tap on, SURE? off -
-                    // its off face reads START SHOW
                     id: showSwitch
                     objectName: "showSwitch"
-                    // runde 296 (Tobias: "Ja, men lav et 'er du sikker' ligesom
-                    // knapperne i Advanced settings"): SHOW OFF asks SURE? and
-                    // waits 4 s for the second tap, as RE-GUESS/FORGET/IMPORT do;
-                    // SHOW ON stays one tap (bane B, B20 U1)
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.round(214 * trackViewRoot.ks)
+                    height: Math.max(48, Math.round(48 * trackViewRoot.ks))
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    property bool checked: trackManager ? trackManager.autoRun : false
+                    // runde 296: SHOW OFF asks SURE? and waits 4 s for the second tap
                     property bool armOff: false
+                    property string text: checked ? (armOff ? qsTr("SURE?") : qsTr("SHOW ON")) : qsTr("START SHOW")
                     Timer { id: showOffArm; interval: 4000; onTriggered: showSwitch.armOff = false }
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "showSwitch" }
-                    text: checked ? (armOff ? qsTr("SURE?") : qsTr("SHOW ON")) : qsTr("START SHOW")
-                    onClicked: {
+                    color: armOff ? "#E3B44F" : (checked ? "#3FBF3F" : "#4A1E1E")
+                    border.width: 2
+                    border.color: armOff ? "#FFE3A0" : (checked ? "#9BE89B" : "#B03030")
+                    function tap()
+                    {
                         if (!checked) { trackManager.autoRun = true; return }
                         if (!armOff) { armOff = true; showOffArm.restart(); return }
                         armOff = false
                         trackManager.autoRun = false
                     }
-
-                    contentItem: Text
+                    Row
                     {
-                        text: parent.text
-                        color: parent.checked ? "#0A2A0A" : "#FFC8C8"
-                        font.bold: true
-                        font.pixelSize: 22
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                        anchors.centerIn: parent
+                        spacing: 10
+                        ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(16 * trackViewRoot.ks); height: width
+                                      kind: "showSwitch"; ink: showSwitch.checked ? "#0A2A0A" : "#FFC8C8" }
+                        Text
+                        {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: showSwitch.text
+                            color: showSwitch.checked ? "#0A2A0A" : "#FFC8C8"
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(18)
+                            font.letterSpacing: (trackViewRoot.fs(18)) * 0.1
+                        }
                     }
-                    background: Rectangle
-                    {
-                        radius: 5
-                        color: parent.armOff ? "#E3B44F" : (parent.checked ? "#3FBF3F" : "#4A1E1E")
-                        border.width: 3
-                        border.color: parent.armOff ? "#FFE3A0" : (parent.checked ? "#9BE89B" : "#B03030")
-                    }
+                    TouchInput { onReleasedAt: (x, y, inside) => { if (inside) showSwitch.tap() } }
                 }
-                Button
-                {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 110
-                    height: 48
-                    focusPolicy: Qt.NoFocus
-                    objectName: "setupSwitch"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "setupSwitch" }
-                    text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
-                    onClicked: trackViewRoot.setupOpen = !trackViewRoot.setupOpen
 
-                    contentItem: Text
-                    {
-                        text: parent.text
-                        color: trackViewRoot.cText
-                        font.bold: true
-                        font.pixelSize: 15
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle
-                    {
-                        radius: 5
-                        color: parent.down ? trackViewRoot.cBtnHi : trackViewRoot.cBtn
-                        border.width: 1
-                        border.color: trackViewRoot.cLine
-                    }
+                Btn
+                {
+                    objectName: "setupSwitch"
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.round(132 * trackViewRoot.ks)
+                    height: Math.max(48, Math.round(48 * trackViewRoot.ks))
+                    icon: "setupSwitch"
+                    text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
+                    onTapped: trackViewRoot.setupOpen = !trackViewRoot.setupOpen
                 }
             }
         }
-Rectangle
+
+        // ============ 2 · THE TRACK ============
+        Rectangle
         {
+            id: waveCard
             Layout.fillWidth: true
             Layout.fillHeight: true
-            // THE ONE ELASTIC ROW (runde 139). Everything else on this page
-            // is now a fixed height, so whatever the window has left over
-            // lands here - which is what Tobias allowed ("Du må gerne udvide
-            // waveformen til at være lidt højere hvis du skal bruge den til
-            // at udfylde pladsen lidt"), and it means there is no slack left
-            // to show up as a gap somewhere else. The cap only stops it from
-            // swallowing the page if a row below ever collapses.
-            Layout.minimumHeight: trackViewRoot.compactLayout ? 130 : 180
-            Layout.preferredHeight: trackViewRoot.compactLayout ? 130 : 180
-            Layout.maximumHeight: Math.max(180, trackViewRoot.height * 0.62)
-            color: "#101010"
-            border.width: 1
-            border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cLine
+            Layout.minimumHeight: 160
+            color: "#101012"
+            radius: Math.round(14 * trackViewRoot.ks)
+            border.width: trackViewRoot.zoomActive ? 2 : 1
+            border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cEdge
+            clip: true
 
-            // ---- what the analysis and the engine see, drawn over the
-            //      waveform: bass as a warm floor, highs as a cool line, kicks
-            //      as ticks, section bands with their energy, the played part
-            //      of this section tinted in the running colour, and a countdown
-            //      to the next section. A finger on a flag selects it (drag to
-            //      move it); the tools at the bottom left add, retype and delete.
-            //      (WF_OVERLAY_V15)
+            // ---- the drawing: section strip with the analysed energy, the
+            //      waveform, bass as a warm floor, highs as a cool line, kicks
+            //      as ticks, the played part of this section in the running
+            //      colour, the flags and the playhead
             Canvas
             {
-                id: wfOverlay
-                anchors.fill: parent
-                anchors.margins: 1
-                anchors.bottomMargin: 56
-                z: 1
+                id: wfCanvas
+                x: Math.round(12 * trackViewRoot.ks)
+                y: 0
+                width: parent.width - 2 * x
+                height: parent.height - trackViewRoot.railH
                 renderStrategy: Canvas.Threaded
 
-                property string paintedColour: ""       // runde 204: see onLiveChanged
-                // the curves once per track (their NOTIFY is trackChanged), not
-                // once per paint: each read of a QVariantList property builds a
-                // fresh JS array of ~1,000 values, and this paints every beat
+                property string paintedColour: ""
+                // the curves once per track, not once per paint
+                property var wfC: trackManager ? trackManager.waveform : []
                 property var lowC: trackManager ? trackManager.lowCurve : []
                 property var highC: trackManager ? trackManager.highCurve : []
                 property var kickC: trackManager ? trackManager.kickCurve : []
-                // the selected flag (an index into trackManager.markers), -1 = none
-                property int selected: -1
+                property int selected: -1          // the selected flag, an index into trackManager.markers
+                property real stripH: Math.max(34, Math.round(44 * trackViewRoot.ks))
+
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
 
                 function sortedMarkers()
                 {
@@ -517,640 +746,216 @@ Rectangle
                     return out
                 }
 
-                function beatX(beat, first, count) { return (beat - first) / count * width }
-
                 onPaint:
                 {
                     var ctx = getContext("2d")
                     var w = width, h = height
-                    ctx.clearRect(0, 0, w, h)
-                    if (!trackManager || trackManager.beatCount <= 0)
-                        return
-
-                    var total = trackManager.beatCount
-                    var first = trackViewRoot.zoomActive ? trackViewRoot.viewFirst() : 1
-                    var count = trackViewRoot.zoomActive ? trackViewRoot.viewCount() : total
-                    if (count <= 0) count = total
-                    var step = Math.max(1, Math.floor(count / w))
-                    var low = lowC, high = highC, kick = kickC
-
-                    // bass: a warm floor, the lower third
-                    if (low && low.length > 0)
-                    {
-                        ctx.beginPath()
-                        ctx.moveTo(0, h)
-                        for (var b = first; b < first + count && b <= low.length; b += step)
-                        {
-                            var v = 0
-                            for (var k = 0; k < step && b - 1 + k < low.length; k++) v = Math.max(v, low[b - 1 + k])
-                            ctx.lineTo(beatX(b, first, count), h - (v / 255) * h * 0.34)
-                        }
-                        ctx.lineTo(w, h)
-                        ctx.closePath()
-                        ctx.fillStyle = "rgba(227, 180, 79, 0.28)"
-                        ctx.fill()
-                    }
-
-                    // highs: a thin cool line in the upper third
-                    if (high && high.length > 0)
-                    {
-                        ctx.beginPath()
-                        var started = false
-                        for (var b2 = first; b2 < first + count && b2 <= high.length; b2 += step)
-                        {
-                            var v2 = 0
-                            for (var k2 = 0; k2 < step && b2 - 1 + k2 < high.length; k2++) v2 = Math.max(v2, high[b2 - 1 + k2])
-                            var y = h * 0.32 - (v2 / 255) * h * 0.24
-                            if (!started) { ctx.moveTo(beatX(b2, first, count), y); started = true }
-                            else ctx.lineTo(beatX(b2, first, count), y)
-                        }
-                        ctx.strokeStyle = "rgba(127, 211, 255, 0.75)"
-                        ctx.lineWidth = 1.5
-                        ctx.stroke()
-                    }
-
-                    // kicks: ticks along the floor, brighter the harder
-                    if (kick && kick.length > 0 && count < w * 2)
-                    {
-                        for (var b3 = first; b3 < first + count && b3 <= kick.length; b3++)
-                        {
-                            var kv = kick[b3 - 1] / 255
-                            if (kv < 0.45) continue
-                            ctx.fillStyle = "rgba(255, 106, 106, " + (0.25 + 0.75 * kv).toFixed(2) + ")"
-                            ctx.fillRect(beatX(b3, first, count), h - 4, Math.max(1, w / count * 0.6), 4)
-                        }
-                    }
-
-                    // section bands at the top, with the analysed energy
-                    var sorted = sortedMarkers()
-                    ctx.font = "bold 11px sans-serif"
-                    ctx.textBaseline = "top"
-                    for (var j = 0; j < sorted.length; j++)
-                    {
-                        var m = sorted[j]
-                        var endBeat = j + 1 < sorted.length ? sorted[j + 1].beat : total + 1
-                        if (endBeat < first || m.beat > first + count) continue
-                        var x0 = Math.max(0, beatX(m.beat, first, count))
-                        var x1 = Math.min(w, beatX(endBeat, first, count))
-                        var e = m.energy >= 0 ? m.energy : 0.5
-                        var col = Qt.color(trackViewRoot.markerColor(m.type))
-                        ctx.fillStyle = Qt.rgba(col.r, col.g, col.b, 0.18 + 0.5 * e)
-                        ctx.fillRect(x0, 0, x1 - x0, 7)
-                        if (m.index === selected)
-                        {
-                            // the selected flag: a white frame on its band and a line down
-                            ctx.strokeStyle = "rgba(255,255,255,0.9)"
-                            ctx.lineWidth = 2
-                            ctx.strokeRect(x0 + 1, 1, Math.max(4, x1 - x0 - 2), 22)
-                            ctx.fillStyle = "rgba(255,255,255,0.35)"
-                            ctx.fillRect(x0, 0, 2, h)
-                        }
-                    }
-
-                    // the played part of this section, tinted in the running
-                    // colour - and the countdown, which is shown colour or not
-                    var cur = trackManager.currentBeat
-                    if (cur > 0)
-                    {
-                        var secStart = 1
-                        var secEnd = total + 1
-                        var next = null
-                        for (var s = 0; s < sorted.length; s++)
-                        {
-                            if (sorted[s].beat <= cur) secStart = sorted[s].beat
-                            else { secEnd = sorted[s].beat; next = sorted[s]; break }
-                        }
-                        if (trackEngine && trackEngine.currentColour !== "")
-                        {
-                            var c = Qt.color(liveRow.swatch(trackEngine.currentColour))
-                            ctx.fillStyle = Qt.rgba(c.r, c.g, c.b, 0.10)
-                            ctx.fillRect(beatX(secStart, first, count), 7, beatX(cur, first, count) - beatX(secStart, first, count), h - 7)
-                        }
-
-                        // the countdown to the next section, in bars
-                        if (next && trackManager.playing)
-                        {
-                            var bars = Math.ceil((next.beat - cur) / 4)
-                            if (bars <= 32)
-                            {
-                                var ncol = Qt.color(trackViewRoot.markerColor(next.type))
-                                ctx.font = "bold 26px sans-serif"
-                                ctx.textBaseline = "alphabetic"
-                                var label = next.type.toUpperCase() + "  " + bars
-                                var tw = ctx.measureText(label).width
-                                ctx.fillStyle = "rgba(0,0,0,0.55)"
-                                ctx.fillRect(w - tw - 24, 14, tw + 16, 36)
-                                ctx.fillStyle = Qt.rgba(ncol.r, ncol.g, ncol.b, 1)
-                                ctx.fillText(label, w - tw - 16, 42)
-                            }
-                        }
-                    }
-                }
-
-                Connections
-                {
-                    target: trackManager
-                    function onTrackChanged() { wfOverlay.selected = -1; wfOverlay.requestPaint() }
-                    function onMarkersChanged()
-                    {
-                        // only drop the selection when the flag is actually
-                        // gone. Dropping it on every change meant RETYPE
-                        // deselected the flag it had just retyped, so the
-                        // four-way cycle could never get past one step.
-                        if (wfOverlay.selected >= trackManager.markers.length)
-                            wfOverlay.selected = -1
-                        wfOverlay.requestPaint()
-                    }
-                    function onPositionChanged() { wfOverlay.requestPaint() }
-                }
-                Connections
-                {
-                    target: trackEngine
-                    // the overlay reads one thing from the engine - the colour
-                    // of the playhead. liveChanged fires on every frame of a
-                    // fader drag, and each fired a full repaint of the curves
-                    // and flags (runde 204)
-                    function onLiveChanged()
-                    {
-                        var c = trackEngine ? trackEngine.currentColour : ""
-                        if (c !== wfOverlay.paintedColour)
-                        {
-                            wfOverlay.paintedColour = c
-                            wfOverlay.requestPaint()
-                        }
-                    }
-                }
-                Connections
-                {
-                    target: trackViewRoot
-                    function onZoomActiveChanged() { wfOverlay.requestPaint() }
-                    function onZoomCenterChanged() { wfOverlay.requestPaint() }
-                }
-            }
-
-            // ---- flag tools: a flag on the bar the track is at, the selected
-            //      flag retyped or deleted. What the operator sets is the truth -
-            //      it goes to BLT's cache as manual and teaches the second pass.
-            Item
-            {
-                anchors.left: parent.left
-                anchors.bottom: parent.bottom
-                anchors.margins: 8
-                width: flagTools.width
-                height: flagTools.height
-                z: 3
-                // ... and out of the way while a verdict is being aimed. The
-                // flag tools are ~784 px wide, the blame row with six groups
-                // ~788, and they sit in opposite bottom corners of the same
-                // 1280 px waveform: both visible at once and they overlap by
-                // nearly 300 px. Nobody is putting down a section flag and
-                // blaming a look in the same second anyway.
-                visible: trackManager && trackManager.beatCount > 0 && trackManager.roleMode
-                         && verdictTools.blaming === 0
-
-                // a press that misses a tile must not reach the waveform
-                // underneath and clear the selection the tiles depend on
-                MouseArea { anchors.fill: parent }
-
-                Row
-                {
-                    id: flagTools
-                    spacing: 6
-
-                    Repeater
-                    {
-                        // every type the engine understands, so a flag of any
-                        // kind can be put down and taken away again by hand.
-                        // NORMAL was missing, and rekordbox' phrase analysis
-                        // adds INTRO and OUTRO on top of our own four. DRIVE
-                        // (runde 169) is the analysis' high groove, which the
-                        // engine plays hotter than NORMAL.
-                        model: [ "normal", "drive", "break", "build", "drop", "intro", "outro" ]
-                        TrackTile
-                        {
-                            objectName: "addFlag:"+modelData
-                            // room for "+ NORMAL", which was cut to "+ NORMA" - but
-                            // never so wide the row runs under the thumbs on a
-                            // narrow screen, where a tap on UNDO was a vote (runde 204)
-                            width: Math.max(40, Math.min(82, (trackViewRoot.width - 500) / 7))   // 346 fixed + margins + thumbs (runde 205)
-                            height: 44
-                            label: "+ " + modelData.toUpperCase()
-                            activeColor: trackViewRoot.markerColor(modelData)
-                            active: true                  // in its section colour, like the SECTION row
-                            opacity: 0.85
-                            onTapped: trackManager.addMarker(trackManager.currentBeat > 0 ? trackManager.currentBeat : 1, modelData)
-                        }
-                    }
-
-                    Item { width: 12; height: 1 }
-
-                    TrackTile
-                    {
-                        width: 84
-                        height: 44
-                        objectName: "retypeFlag"
-                        label: qsTr("RETYPE")
-                        // greyed rather than hidden: hiding these re-flowed the
-                        // row and slid UNDO in under the finger that had just
-                        // tapped RETYPE
-                        enabled: wfOverlay.selected >= 0
-                        opacity: enabled ? 0.9 : 0.25
-                        onTapped:
-                        {
-                            var mk = trackManager.markers[wfOverlay.selected]
-                            if (mk === undefined) { wfOverlay.selected = -1; return }
-                            var order = [ "normal", "drive", "break", "build", "drop", "intro", "outro" ]
-                            var next = order[(order.indexOf(mk.type) + 1) % order.length]
-                            trackManager.setMarkerType(wfOverlay.selected, next)
-                        }
-                    }
-
-                    TrackTile
-                    {
-                        width: 84
-                        height: 44
-                        objectName: "deleteFlag"
-                        label: qsTr("DELETE")
-                        // greyed rather than hidden: hiding these re-flowed the
-                        // row and slid UNDO in under the finger that had just
-                        // tapped RETYPE
-                        enabled: wfOverlay.selected >= 0
-                        opacity: enabled ? 0.9 : 0.25
-                        activeColor: "#E36B6B"
-                        active: wfOverlay.selected >= 0
-                        onTapped: { var i = wfOverlay.selected; wfOverlay.selected = -1; trackManager.removeMarker(i) }
-                    }
-
-                    Item { width: 12; height: 1 }
-
-                    // one step back - the flag and the lesson it taught
-                    TrackTile
-                    {
-                        width: 88
-                        height: 44
-                        objectName: "undoFlag"
-                        label: qsTr("UNDO")
-                        visible: trackManager ? trackManager.canUndoMarkers : false
-                        opacity: 0.9
-                        onTapped: { wfOverlay.selected = -1; trackManager.undoMarkers() }
-                    }
-                }
-            }
-
-            // ---- the verdict: two thumbs, bottom right, opposite the flag
-            //      tools. Deliberately NOT in the live row - that row is full
-            //      to the pixel on a 1280 screen - and deliberately in a
-            //      corner that never moves, so they can be hit without
-            //      looking away from the floor.
-            //
-            //      A thumb is counted against every program on stage (a long
-            //      press aims it at one group), written to the tracklog when
-            //      the log is on, and - with RATINGS on in SETUP - it steers
-            //      the rotation. The count does not need the log, so the
-            //      buttons no longer hide when the log is off: they used to,
-            //      from the days when the log was all a thumb did.
-            Item
-            {
-                id: verdictTools
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: 8
-                z: 3
-                visible: trackManager && trackEngine && trackManager.beatCount > 0
-                         && !trackViewRoot.setupOpen
-
-                // 0 = the thumbs; +1 / -1 = a thumb is waiting for a target.
-                // A long press opens the list of what is on stage; the tap
-                // that follows puts the whole verdict on that one group
-                // instead of spreading it over everything.
-                property int blaming: 0
-                property var stageRows: []
-
-                width: blaming === 0 ? thumbRow.width : blameRow.width
-                height: blaming === 0 ? thumbRow.height : blameRow.height
-
-                MouseArea { anchors.fill: parent }
-
-                Row
-                {
-                    id: thumbRow
-                    spacing: 8
-                    visible: verdictTools.blaming === 0
-
-                    Repeater
-                    {
-                        model: [ 1, -1 ]
-
-                        Rectangle
-                        {
-                            id: thumb
-                            objectName: "rating:"+modelData
-                            width: 62
-                            height: 44
-                            radius: 6
-                            // a press flashes the tile for a moment: the only
-                            // receipt there is, since nothing else changes
-                            property bool lit: false
-                            color: lit ? (modelData > 0 ? "#3E7E4E" : "#8E3A3A") : "#1E1E1E"
-                            border.width: 1
-                            border.color: modelData > 0 ? "#4FA36B" : "#B05050"
-                            opacity: 0.9
-
-                            Canvas
-                            {
-                                anchors.centerIn: parent
-                                width: 26
-                                height: 26
-                                rotation: modelData > 0 ? 0 : 180
-                                onPaint:
-                                {
-                                    // a thumb, drawn rather than shipped: no
-                                    // icon file, no qrc entry, and it scales
-                                    var c = getContext("2d")
-                                    c.reset()
-                                    c.fillStyle = modelData > 0 ? "#9FD8AF" : "#E8A0A0"
-                                    // the fist
-                                    c.fillRect(3, 12, 8, 12)
-                                    // the palm and the thumb over it
-                                    c.beginPath()
-                                    c.moveTo(12, 24)
-                                    c.lineTo(12, 13)
-                                    c.lineTo(16, 3)
-                                    c.quadraticCurveTo(19, 1, 19, 5)
-                                    c.lineTo(17, 11)
-                                    c.lineTo(23, 11)
-                                    c.quadraticCurveTo(25, 11, 24, 14)
-                                    c.lineTo(22, 22)
-                                    c.quadraticCurveTo(21, 24, 19, 24)
-                                    c.closePath()
-                                    c.fill()
-                                }
-                            }
-
-                            MouseArea
-                            {
-                                anchors.fill: parent
-                                // Qt does not agree with itself across versions
-                                // about whether clicked follows pressAndHold.
-                                // A flag costs nothing and settles it.
-                                property bool held: false
-                                onPressed:
-                                {
-                                    held = false
-                                    // The instant the finger lands. Everything
-                                    // after this - the 800 ms until a long
-                                    // press registers, the seconds spent
-                                    // choosing a group, the look changing
-                                    // because a thumb down was given - reads
-                                    // from this moment, not from whatever is
-                                    // on stage when he lets go.
-                                    if (trackEngine) trackEngine.markVerdictPoint()
-                                }
-                                // Qt 6: a handled press-and-hold eats the click
-                                // that follows. With nothing on stage to blame
-                                // it hands the click back, so the thumb still
-                                // counts as a plain vote (runde 187)
-                                onPressAndHold: function(mouse)
-                                {
-                                    if (trackEngine === null) { mouse.accepted = false; return }
-                                    var rows = trackEngine.onStage()
-                                    if (rows.length === 0) { mouse.accepted = false; return }
-                                    held = true
-                                    verdictTools.stageRows = rows
-                                    verdictTools.blaming = modelData
-                                    blameTimeout.restart()
-                                }
-                                onClicked:
-                                {
-                                    if (held) { held = false; return }
-                                    if (trackEngine) trackEngine.rate(modelData)
-                                    thumb.lit = true
-                                    flash.restart()
-                                }
-                            }
-
-                            Timer
-                            {
-                                id: flash
-                                interval: 220
-                                onTriggered: thumb.lit = false
-                            }
-                        }
-                    }
-                }
-
-                // The list a long press opens. One tile per group that has a
-                // look, named by the group because that is what he is looking
-                // at - not by a function he would have to recognise. Tap one
-                // and the verdict goes there alone; tap the cross, or wait,
-                // and nothing happened.
-                Row
-                {
-                    id: blameRow
-                    spacing: 6
-                    visible: verdictTools.blaming !== 0
-
-                    // Six groups at 118 px is 788, which fits a 1280 waveform
-                    // with room to spare. A rig with ten would not, and the
-                    // row is anchored right - so it would run off the left
-                    // edge rather than wrap, and the first groups would be
-                    // unreachable. Same lesson as the colour row: give it the
-                    // space there is and let the tiles shrink into it.
-                    property int cells: Math.max(1, verdictTools.stageRows.length)
-                    property real cellW: Math.max(64,
-                                            Math.min(118,
-                                                (verdictTools.parent.width - 70 - cells * spacing)
-                                                / cells))
-
-                    Repeater
-                    {
-                        model: verdictTools.stageRows
-
-                        TrackTile
-                        {
-                            width: blameRow.cellW
-                            height: 44
-                            label: modelData ? modelData.group : ""
-                            active: true
-                            activeColor: verdictTools.blaming > 0 ? "#3E7E4E" : "#8E3A3A"
-                            opacity: 0.92
-                            onTapped:
-                            {
-                                if (trackEngine)
-                                    trackEngine.rateGroup(verdictTools.blaming, modelData.group)
-                                verdictTools.blaming = 0
-                                blameTimeout.stop()
-                            }
-                        }
-                    }
-
-                    TrackTile
-                    {
-                        width: 44
-                        height: 44
-                        label: "\u00d7"
-                        opacity: 0.7
-                        onTapped: { verdictTools.blaming = 0; blameTimeout.stop() }
-                    }
-                }
-
-                // A list left open in the dark is a trap for the next finger
-                Timer
-                {
-                    id: blameTimeout
-                    interval: 6000
-                    onTriggered: verdictTools.blaming = 0
-                }
-            }
-
-            Canvas
-            {
-                id: wfCanvas
-                // once per track, not per paint (see wfOverlay.lowC)
-                property var wfC: trackManager ? trackManager.waveform : []
-                anchors.fill: parent
-                anchors.margins: 1
-                anchors.bottomMargin: 56
-                renderStrategy: Canvas.Threaded
-
-                onPaint:
-                {
-                    var ctx = getContext("2d")
-                    var w = width, h = height
-
                     ctx.reset()
-                    ctx.fillStyle = "#101010"
-                    ctx.fillRect(0, 0, w, h)
-
+                    ctx.clearRect(0, 0, w, h)
                     var n = trackViewRoot.beatCount
                     if (n <= 0) return
 
                     var vf = trackViewRoot.viewFirst()
                     var vc = trackViewRoot.viewCount()
                     var px = w / vc
-                    var wf = wfC
-                    // a floor (fejljagt 2): at the compact minimum (h 73) the lane was
-                    // 23 px, the label rows 9 px, and bold 11 px text was clipped at
-                    // the top and ran into the row above
-                    var lane = Math.min(48, Math.max(32, Math.round(h * 0.32)))
-                    var base = h - 4
-
                     function xOf(beat) { return (beat - vf) * px }
+                    var strip = stripH
+                    var base = h - 8
+                    var barTop = strip + 30
+                    var ks = trackViewRoot.ks
+                    var sorted = sortedMarkers()
+                    var cur = trackManager.currentBeat
 
-                    ctx.fillStyle = "#2E6DA4"
+                    // section strip: bands (energy as strength) and the labels, in
+                    // two rows so close flags stay readable (runde 178)
+                    ctx.font = "bold " + Math.max(10, Math.round(11 * ks)) + "px sans-serif"
+                    ctx.textBaseline = "middle"
+                    var rowH = Math.floor((strip - 8) / 2)
+                    var rowRight = [ -1e9, -1e9 ]
+                    for (var j = 0; j < sorted.length; j++)
+                    {
+                        var m = sorted[j]
+                        var endBeat = j + 1 < sorted.length ? sorted[j + 1].beat : n + 1
+                        if (endBeat < vf || m.beat > vf + vc) continue
+                        var col = Qt.color(trackViewRoot.markerColor(m.type))
+                        var e = m.energy >= 0 ? m.energy : 0.5
+                        var x0 = Math.max(0, xOf(m.beat)), x1 = Math.min(w, xOf(endBeat))
+                        ctx.fillStyle = Qt.rgba(col.r, col.g, col.b, 0.22 + 0.55 * e)
+                        ctx.fillRect(x0, 0, x1 - x0, 5)
+
+                        var label = m.type.toUpperCase() + (m.energy >= 0 ? "  " + Math.round(m.energy * 100) + "%" : "")
+                        var tw = ctx.measureText(label).width + 18
+                        var mxp = xOf(m.beat)
+                        var bx = Math.min(Math.max(mxp, 0), w - tw)
+                        var lr = (bx < rowRight[0] + 3) ? 1 : 0
+                        if (lr === 1 && bx < rowRight[1] + 3) lr = 0
+                        rowRight[lr] = bx + tw
+                        var ly = 6 + lr * rowH
+                        if (m.index === selected)
+                        {
+                            ctx.fillStyle = "rgba(255,255,255,0.14)"
+                            ctx.fillRect(bx, ly, tw, rowH)
+                            ctx.strokeStyle = "rgba(255,255,255,0.9)"
+                            ctx.lineWidth = 2
+                            ctx.strokeRect(bx + 1, ly + 1, tw - 2, rowH - 2)
+                        }
+                        ctx.fillStyle = Qt.rgba(col.r, col.g, col.b, 1)
+                        ctx.fillRect(bx, ly, 2, rowH)
+                        ctx.fillText(label, bx + 10, ly + rowH / 2)
+                    }
+                    ctx.fillStyle = "#24242A"
+                    ctx.fillRect(0, strip, w, 1)
+
+                    // the played part of this section, in the running colour
+                    if (cur > 0)
+                    {
+                        var secStart = 1
+                        for (var s = 0; s < sorted.length; s++)
+                            if (sorted[s].beat <= cur) secStart = sorted[s].beat
+                        if (trackEngine && trackEngine.currentColour !== "")
+                        {
+                            var rc = Qt.color(trackViewRoot.swatch(trackEngine.currentColour))
+                            ctx.fillStyle = Qt.rgba(rc.r, rc.g, rc.b, 0.13)
+                            ctx.fillRect(xOf(secStart), strip + 1, xOf(cur) - xOf(secStart), base - strip - 1)
+                        }
+                    }
+
+                    // the bar grid flags snap to - the track's own (BACKLOG 104)
+                    var gridStep = trackViewRoot.zoomActive ? 4 : 32
+                    var firstBar = (trackManager.downbeat || 0) + 1
+                    ctx.strokeStyle = "rgba(255,255,255,0.07)"
+                    ctx.lineWidth = 1
+                    for (var gb = Math.ceil((vf - firstBar) / gridStep) * gridStep + firstBar; gb < vf + vc; gb += gridStep)
+                    {
+                        ctx.beginPath(); ctx.moveTo(Math.round(xOf(gb)) + 0.5, strip + 1); ctx.lineTo(Math.round(xOf(gb)) + 0.5, base); ctx.stroke()
+                    }
+
+                    // the waveform: the played part brighter
+                    var wf = wfC
+                    var bw = Math.max(1, px - (px > 4 ? 1.6 : 0.4))
                     for (var i = 0; i < vc; i++)
                     {
                         var b = vf + i
                         if (b < 1 || b > n) continue
                         var v = ((b - 1) < wf.length ? wf[b - 1] : 0) / 255.0
-                        var bh = Math.max(1, v * (base - lane))
-                        ctx.fillRect(i * px, base - bh, Math.max(1, px), bh)
+                        var bh = Math.max(1, v * (base - barTop))
+                        ctx.fillStyle = (cur > 0 && b <= cur) ? "#3C7FC2" : "#26527F"
+                        ctx.fillRect(xOf(b) + (px - bw) / 2, base - bh, bw, bh)
                     }
 
-                    var gridStep = trackViewRoot.zoomActive ? 4 : 32
-                    ctx.strokeStyle = "rgba(255,255,255,0.12)"
-                    ctx.lineWidth = 1
-                    // on the bar lines flags snap to - the track's own: its first
-                    // bar starts on beat downbeat + 1 (snapBar, BACKLOG 104); the
-                    // grid was at 4, 8, 12, one beat early (fejljagt 2)
-                    var firstBar = (trackManager.downbeat || 0) + 1
-                    for (var g = Math.ceil((vf - firstBar) / gridStep) * gridStep + firstBar; g < vf + vc; g += gridStep)
+                    var step = Math.max(1, Math.floor(vc / w))
+                    // bass: a warm floor over the bars, with a line on top
+                    var low = lowC
+                    if (low && low.length > 0)
                     {
                         ctx.beginPath()
-                        ctx.moveTo(xOf(g), lane)
-                        ctx.lineTo(xOf(g), base)
-                        ctx.stroke()
-                    }
-
-                    // Two label rows: a label drops to the second row when it
-                    // would collide with the previous one, so close markers stay
-                    // readable instead of printing on top of each other.
-                    var mk = trackManager.markers
-                    var rowH = Math.floor((lane - 4) / 2)
-                    var rowRight = [ -1e9, -1e9 ]
-                    // left to right: the collision test compares each label with
-                    // the one BEFORE it, and after an add or a drag the list is
-                    // not in beat order - labels printed over each other (runde 178)
-                    var order = []
-                    for (var oi = 0; oi < mk.length; oi++) order.push(oi)
-                    order.sort(function(a, b) { return mk[a].beat - mk[b].beat })
-
-                    for (var o = 0; o < order.length; o++)
-                    {
-                        var m = order[o]
-                        var mb = mk[m].beat
-                        if (mb < vf - 2 || mb > vf + vc + 2) continue
-
-                        var mx = xOf(mb)
-                        var col = trackViewRoot.markerColor(mk[m].type)
-                        var label = mk[m].type.toUpperCase() + (mk[m].energy >= 0 ? " " + Math.round(mk[m].energy * 100) + "%" : "")
-                        var held = (m === trackViewRoot.dragIndex)
-
-                        ctx.strokeStyle = col
-                        ctx.lineWidth = held ? 4 : 2
-                        ctx.beginPath()
-                        ctx.moveTo(mx, 0)
-                        ctx.lineTo(mx, base)
-                        ctx.stroke()
-
-                        ctx.font = "bold 11px sans-serif"
-                        var tw = ctx.measureText(label).width + 10
-                        var bx = Math.min(Math.max(mx, 0), w - tw)
-
-                        var labelRow = (bx < rowRight[0] + 3) ? 1 : 0
-                        if (labelRow === 1 && bx < rowRight[1] + 3)
-                            labelRow = 0          // both taken: overlap the older one
-                        rowRight[labelRow] = bx + tw
-
-                        var ly = labelRow * rowH
-
-                        ctx.fillStyle = col
-                        ctx.fillRect(bx, ly, tw, rowH - 2)
-                        ctx.fillStyle = "#000000"
-                        ctx.fillText(label, bx + 5, ly + rowH - 6)
-
-                        if (held)
+                        ctx.moveTo(0, base)
+                        var pts = []
+                        for (var b1 = vf; b1 < vf + vc && b1 <= low.length; b1 += step)
                         {
-                            ctx.fillStyle = col
-                            ctx.font = "bold 10px sans-serif"
-                            ctx.fillText("beat " + mb, bx + 5, lane + 12)
+                            var lv = 0
+                            for (var k1 = 0; k1 < step && b1 - 1 + k1 < low.length; k1++) lv = Math.max(lv, low[b1 - 1 + k1])
+                            var py = base - (lv / 255) * (base - strip) * 0.32
+                            pts.push([xOf(b1) + px / 2, py])
+                            ctx.lineTo(xOf(b1) + px / 2, py)
+                        }
+                        ctx.lineTo(w, base)
+                        ctx.closePath()
+                        ctx.fillStyle = "rgba(227, 180, 79, 0.13)"
+                        ctx.fill()
+                        ctx.beginPath()
+                        for (var p = 0; p < pts.length; p++) { if (p === 0) ctx.moveTo(pts[p][0], pts[p][1]); else ctx.lineTo(pts[p][0], pts[p][1]) }
+                        ctx.strokeStyle = "rgba(227, 180, 79, 0.55)"
+                        ctx.lineWidth = 1.4
+                        ctx.stroke()
+                    }
+                    // highs: a cool line in the upper third
+                    var high = highC
+                    if (high && high.length > 0)
+                    {
+                        ctx.beginPath()
+                        var started = false
+                        for (var b2 = vf; b2 < vf + vc && b2 <= high.length; b2 += step)
+                        {
+                            var hv = 0
+                            for (var k2 = 0; k2 < step && b2 - 1 + k2 < high.length; k2++) hv = Math.max(hv, high[b2 - 1 + k2])
+                            var hy = strip + (base - strip) * 0.30 - (hv / 255) * (base - strip) * 0.20
+                            if (!started) { ctx.moveTo(xOf(b2) + px / 2, hy); started = true }
+                            else ctx.lineTo(xOf(b2) + px / 2, hy)
+                        }
+                        ctx.strokeStyle = "rgba(127, 211, 255, 0.62)"
+                        ctx.lineWidth = 1.4
+                        ctx.stroke()
+                    }
+                    // kicks: ticks along the floor, brighter the harder
+                    var kick = kickC
+                    if (kick && kick.length > 0 && vc < w * 2)
+                    {
+                        for (var b3 = vf; b3 < vf + vc && b3 <= kick.length; b3++)
+                        {
+                            var kv = kick[b3 - 1] / 255
+                            if (kv < 0.45) continue
+                            ctx.fillStyle = "rgba(255, 106, 106, " + (0.2 + 0.55 * kv).toFixed(2) + ")"
+                            ctx.fillRect(xOf(b3) + px * 0.25, base + 1, Math.max(1, px * 0.5), 3)
                         }
                     }
 
-                    var cb = trackViewRoot.currentBeat
-                    if (cb > 0 && cb >= vf && cb < vf + vc)     // the view ends one beat before
+                    // the flags: a line down; the one held by the finger thicker,
+                    // with the beat it would land on
+                    var mk = trackManager.markers
+                    for (var o = 0; o < mk.length; o++)
                     {
-                        var ph = xOf(cb)
+                        var mb = mk[o].beat
+                        if (mb < vf - 2 || mb > vf + vc + 2) continue
+                        var fx = xOf(mb)
+                        var held = (o === trackViewRoot.dragIndex)
+                        var fc = Qt.color(trackViewRoot.markerColor(mk[o].type))
+                        ctx.strokeStyle = Qt.rgba(fc.r, fc.g, fc.b, (held || o === selected) ? 1 : 0.75)
+                        ctx.lineWidth = held ? 4 : (o === selected ? 3 : 1.5)
+                        ctx.beginPath(); ctx.moveTo(fx, strip + 1); ctx.lineTo(fx, base); ctx.stroke()
+                        if (held)
+                        {
+                            ctx.fillStyle = Qt.rgba(fc.r, fc.g, fc.b, 1)
+                            ctx.font = "bold " + Math.max(10, Math.round(11 * ks)) + "px sans-serif"
+                            ctx.fillText("beat " + mb, fx + 6, strip + 14)
+                        }
+                    }
+
+                    // the playhead
+                    if (cur > 0 && cur >= vf && cur < vf + vc)
+                    {
+                        var ph = xOf(cur)
                         ctx.strokeStyle = "#FFFFFF"
                         ctx.lineWidth = 2
-                        ctx.beginPath()
-                        ctx.moveTo(ph, 0)
-                        ctx.lineTo(ph, h)
-                        ctx.stroke()
-
+                        ctx.beginPath(); ctx.moveTo(ph, strip + 1); ctx.lineTo(ph, h); ctx.stroke()
                         ctx.fillStyle = "#FFFFFF"
-                        ctx.beginPath()
-                        ctx.moveTo(ph - 7, h)
-                        ctx.lineTo(ph + 7, h)
-                        ctx.lineTo(ph, h - 10)
-                        ctx.closePath()
-                        ctx.fill()
+                        ctx.beginPath(); ctx.moveTo(ph - 7, h); ctx.lineTo(ph + 7, h); ctx.lineTo(ph, h - 10); ctx.closePath(); ctx.fill()
                     }
+                }
+
+                Connections
+                {
+                    target: trackViewRoot
+                    function onZoomActiveChanged() { wfCanvas.requestPaint() }
+                    function onZoomCenterChanged() { wfCanvas.requestPaint() }
+                    function onDragIndexChanged() { wfCanvas.requestPaint() }
                 }
             }
 
+            // A finger on a flag - while the pencil is on: press = select it
+            // (RETYPE / DELETE wake up), move = drag it. The flag keeps its
+            // distance to the finger and the zoom opens around it.
             MouseArea
             {
                 id: wfArea
                 objectName: "waveformInput"
-                anchors.fill: parent
-                anchors.margins: 1
-                anchors.bottomMargin: 56          // the canvases are inset by one: pick where we draw
+                x: wfCanvas.x
+                y: wfCanvas.y
+                width: wfCanvas.width
+                height: wfCanvas.height
                 enabled: trackViewRoot.beatCount > 0
+                preventStealing: true
 
-                // A finger on a flag: press = select it (RETYPE / DELETE appear),
-                // move = drag it. The flag keeps its distance to the finger and
-                // the zoom opens around the finger, so nothing jumps.
                 property int pressIndex: -1
                 property real pressX: 0
 
@@ -1160,9 +965,10 @@ Rectangle
                            + trackViewRoot.viewFirst()
                 }
 
-                onPressed: function (mouse)
+                function press(px)
                 {
-                    var b = beatAt(mouse.x)
+                    if (!trackViewRoot.markerEdit) return
+                    var b = beatAt(px)
                     var mk = trackManager.markers
                     var best = -1, bestDist = 1e9
                     for (var i = 0; i < mk.length; i++)
@@ -1171,31 +977,20 @@ Rectangle
                         if (d < bestDist) { bestDist = d; best = i }
                     }
                     pressIndex = (best >= 0 && bestDist <= Math.max(3, trackViewRoot.viewCount() * 0.03)) ? best : -1
-                    pressX = mouse.x
+                    pressX = px
                     trackViewRoot.dragIndex = -1
-                    if (typeof wfOverlay !== "undefined")
-                    {
-                        wfOverlay.selected = pressIndex
-                        wfOverlay.requestPaint()
-                    }
+                    wfCanvas.selected = pressIndex
+                    wfCanvas.requestPaint()
                 }
 
-                // moveMarker may drop the flag we land on: everyone's index
-                // shifts, so find the dragged flag again by the beat we asked for
-                // moveMarker() drops any flag already on the target bar: a flag
-                // dragged across its neighbour deleted it (runde 176). The drag
-                // stops at the neighbour instead.
+                // moveMarker() drops any flag already on the target bar: the drag
+                // stops at the neighbour instead (runde 176, 179, 198)
                 function barTaken(wantBeat)
                 {
                     var snapped = trackViewRoot.snapBeat(wantBeat)
-                    // clamped as moveMarker() clamps it, or a flag on the last
-                    // beat could still be dragged onto and deleted (runde 179)
                     if (trackViewRoot.beatCount > 0)
                         snapped = Math.min(snapped, trackViewRoot.beatCount)
                     var mk = trackManager.markers
-                    // ... and never OVER a neighbour: a quick swipe moved more
-                    // than a bar between two touch events and the flag jumped
-                    // past the next one, BUILD after DROP (runde 198)
                     var from = (trackViewRoot.dragIndex >= 0 && trackViewRoot.dragIndex < mk.length)
                                ? mk[trackViewRoot.dragIndex].beat : snapped
                     var lo = Math.min(from, snapped), hi = Math.max(from, snapped)
@@ -1208,9 +1003,6 @@ Rectangle
 
                 function reindex(wantBeat)
                 {
-                    // moveMarker snapped the flag to a bar line: look for it
-                    // there, or a neighbour on the next bar can be nearer to
-                    // the raw beat and the drag jumps to the wrong flag
                     var snapped = trackViewRoot.snapBeat(wantBeat)
                     var mk = trackManager.markers
                     var best = -1, bd = 1e9
@@ -1221,29 +1013,25 @@ Rectangle
                     }
                     pressIndex = best
                     trackViewRoot.dragIndex = best
-                    if (typeof wfOverlay !== "undefined")
-                        wfOverlay.selected = best
+                    wfCanvas.selected = best
                 }
 
-                onPositionChanged: function (mouse)
+                function move(px)
                 {
                     if (pressIndex < 0) return
                     if (trackViewRoot.dragIndex < 0)
                     {
-                        if (Math.abs(mouse.x - pressX) < 6) return
-                        // the drag begins: zoom in with the flag staying under the finger
+                        if (Math.abs(px - pressX) < 6) return
                         var mk = trackManager.markers[pressIndex]
-                        // the flags shrank since the press (an UNDO with a
-                        // second finger): nothing to drag (runde 198)
                         if (!mk) { pressIndex = -1; return }
                         trackViewRoot.dragIndex = pressIndex
                         trackViewRoot.zoomActive = true
                         var vc = trackViewRoot.viewCount()
-                        trackViewRoot.zoomCenter = Math.round(mk.beat - mouse.x / width * vc + vc / 2)
-                        trackViewRoot.dragOffset = mk.beat - beatAt(mouse.x)
+                        trackViewRoot.zoomCenter = Math.round(mk.beat - px / width * vc + vc / 2)
+                        trackViewRoot.dragOffset = mk.beat - beatAt(px)
                     }
-                    trackViewRoot.dragX = mouse.x
-                    var want = beatAt(mouse.x) + trackViewRoot.dragOffset
+                    trackViewRoot.dragX = px
+                    var want = beatAt(px) + trackViewRoot.dragOffset
                     if (barTaken(want) === false)
                     {
                         var before = trackManager.markers.length
@@ -1251,9 +1039,8 @@ Rectangle
                         if (trackManager.markers.length !== before)
                             reindex(want)
                     }
-
                     var edge = width * 0.08
-                    panTimer.dir = mouse.x < edge ? -1 : (mouse.x > width - edge ? 1 : 0)
+                    panTimer.dir = px < edge ? -1 : (px > width - edge ? 1 : 0)
                     panTimer.running = (panTimer.dir !== 0)
                     wfCanvas.requestPaint()
                 }
@@ -1268,638 +1055,761 @@ Rectangle
                     wfCanvas.requestPaint()
                 }
 
+                onPressed: (mouse) => press(mouse.x)
+                onPositionChanged: (mouse) => move(mouse.x)
                 onReleased: release()
                 onCanceled: release()
+
+                // the same, for one finger of its own (multitouch)
+                MultiPointTouchArea
+                {
+                    anchors.fill: parent
+                    mouseEnabled: false
+                    maximumTouchPoints: 1
+                    onPressed: (pts) => wfArea.press(pts[0].x)
+                    onUpdated: (pts) => { if (pts.length > 0) wfArea.move(pts[0].x) }
+                    onReleased: (pts) => wfArea.release()
+                    onCanceled: (pts) => wfArea.release()
+                }
             }
+
             Text
             {
-                anchors.centerIn: parent
+                anchors.centerIn: wfCanvas
                 visible: trackViewRoot.beatCount === 0
                 text: qsTr("Waiting for track data from Beat Link Trigger...")
-                color: trackViewRoot.cDim
-                font.pixelSize: 15
+                color: trackViewRoot.cMute
+                font.pixelSize: trackViewRoot.fs(15)
             }
+
+            // the countdown to the next section, in bars - the last 32 bars
             Rectangle
             {
-                // OVER THE WAVEFORM, not a row of the page (runde 177). As a row it
-                // came and went with every warning - "BLT link stale", "moved from
-                // elsewhere" flip during a set - and each time SECTION, ENERGY,
-                // the colours and everything below jumped 36 px under a finger
-                // already on its way (Tobias, 2026-09-23: "laeg advarslen ovenpaa
-                // boelgeformen"). It sits across the top of the waveform, takes
-                // no touch (a Rectangle lets it through to the flags below) and
-                // moves nothing.
-                // At the BOTTOM, just above the flag tools (runde 179): across the
-                // top it covered the section bands, the first row of flag labels
-                // and the countdown to the next section - and some warnings
-                // ("X has no scene for green") stand all night.
+                id: countdown
+                property var nm: trackViewRoot.nextMarker()
+                property int bars: nm ? Math.ceil((nm.beat - trackViewRoot.currentBeat) / 4) : 0
+                visible: nm !== null && trackManager && trackManager.playing && bars <= 32 && trackViewRoot.currentBeat > 0
+                anchors.right: parent.right
+                anchors.rightMargin: Math.round(16 * trackViewRoot.ks)
+                y: wfCanvas.stripH + Math.round(10 * trackViewRoot.ks)
+                width: cdCol.width + Math.round(28 * trackViewRoot.ks)
+                height: cdCol.height + Math.round(16 * trackViewRoot.ks)
+                radius: Math.round(10 * trackViewRoot.ks)
+                color: Qt.rgba(0.03, 0.03, 0.04, 0.78)
+                Column
+                {
+                    id: cdCol
+                    anchors.centerIn: parent
+                    Text
+                    {
+                        anchors.right: parent.right
+                        text: countdown.nm ? countdown.nm.type.toUpperCase() + " " + qsTr("IN") : ""
+                        color: Qt.lighter(trackViewRoot.markerColor(countdown.nm ? countdown.nm.type : ""), 1.25)
+                        font.bold: true
+                        font.pixelSize: trackViewRoot.fs(11)
+                        font.letterSpacing: (trackViewRoot.fs(11)) * 0.2
+                    }
+                    Row
+                    {
+                        anchors.right: parent.right
+                        spacing: 6
+                        Text
+                        {
+                            id: cdBars
+                            text: countdown.bars
+                            color: trackViewRoot.markerColor(countdown.nm ? countdown.nm.type : "")
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(44)
+                        }
+                        Text
+                        {
+                            y: cdBars.baselineOffset - baselineOffset
+                            text: countdown.bars === 1 ? qsTr("BAR") : qsTr("BARS")
+                            color: Qt.lighter(trackViewRoot.markerColor(countdown.nm ? countdown.nm.type : ""), 1.25)
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(14)
+                            font.letterSpacing: (trackViewRoot.fs(14)) * 0.12
+                        }
+                    }
+                }
+            }
+
+            // ---- the rail: the pencil, a warning, the verdict
+            Rectangle
+            {
+                id: rail
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                anchors.leftMargin: 4
-                anchors.rightMargin: 4
-                anchors.bottomMargin: 60
-                height: 30
-                z: 50
-                opacity: 0.94
-                radius: 3
-                color: "#3A2A1A"
-                border.width: 1
-                border.color: "#E3B44F"
-                visible: trackManager && trackManager.roleMode && !trackViewRoot.setupOpen
-                         && warnText.text.length > 0
+                anchors.margins: 1
+                height: trackViewRoot.railH
+                color: "#141417"
+                radius: waveCard.radius
+                Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 1; color: trackViewRoot.cEdge }
+                // a press that misses a tile must not reach anything underneath
+                MouseArea { anchors.fill: parent }
 
-                Text
+                readonly property real bh: Math.max(48, Math.round(52 * trackViewRoot.ks))
+                readonly property bool tools: trackManager && trackManager.beatCount > 0 && trackManager.roleMode
+
+                Row
                 {
-                    id: warnText
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    color: "#FFD27F"
-                    font.pixelSize: 13
-                    text:
+                    id: railLeft
+                    anchors.left: parent.left
+                    anchors.leftMargin: Math.round(10 * trackViewRoot.ks)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Math.round(8 * trackViewRoot.ks)
+                    visible: rail.tools && verdictTools.blaming === 0
+
+                    Btn
                     {
-                        var parts = []
-                        if (trackManager && trackManager.linkStale)
-                            parts.push(qsTr("BLT link stale - holding the last look"))
-                        if (trackEngine)
-                            for (var i = 0; i < trackEngine.warnings.length; i++)
-                                parts.push(trackEngine.warnings[i])
-                        return parts.join("   ·   ")
+                        objectName: "markerEdit"
+                        width: Math.round((trackViewRoot.markerEdit ? 150 : 184) * trackViewRoot.ks)
+                        height: rail.bh
+                        icon: trackViewRoot.markerEdit ? "check" : "pencil"
+                        text: trackViewRoot.markerEdit ? qsTr("DONE") : qsTr("MARKERS")
+                        active: trackViewRoot.markerEdit
+                        tone: trackViewRoot.cGold
+                        onTapped: trackViewRoot.markerEdit = !trackViewRoot.markerEdit
                     }
+
+                    // ---- the flag tools: a flag on the bar the track is at, the
+                    //      selected flag retyped or deleted. What the operator sets
+                    //      is the truth - it goes to BLT's cache as manual.
+                    Row
+                    {
+                        id: flagTools
+                        visible: trackViewRoot.markerEdit
+                        spacing: Math.round(8 * trackViewRoot.ks)
+                        property real tw: Math.max(56, (rail.width - verdictTools.width - Math.round(210 * trackViewRoot.ks)
+                                                        - 9 * spacing - Math.round(30 * trackViewRoot.ks)) / 10)
+                        Repeater
+                        {
+                            // every type the engine understands (NORMAL, DRIVE, rekordbox' INTRO/OUTRO)
+                            model: [ "normal", "drive", "break", "build", "drop", "intro", "outro" ]
+                            Rectangle
+                            {
+                                objectName: "addFlag:" + modelData
+                                width: flagTools.tw
+                                height: rail.bh
+                                radius: Math.round(10 * trackViewRoot.ks)
+                                color: addIn.down ? "#2C2C33" : trackViewRoot.cBtn
+                                border.width: 1
+                                border.color: trackViewRoot.cBtnEdge
+                                Row
+                                {
+                                    anchors.centerIn: parent
+                                    spacing: 7
+                                    Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 10; height: 10; radius: 5; color: trackViewRoot.markerColor(modelData) }
+                                    Text
+                                    {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "+ " + modelData.toUpperCase()
+                                        color: "#D6D6DC"
+                                        font.bold: true
+                                        font.pixelSize: trackViewRoot.fs(13)
+                                        font.letterSpacing: (trackViewRoot.fs(13)) * 0.06
+                                    }
+                                }
+                                TouchInput
+                                {
+                                    id: addIn
+                                    onReleasedAt: (x, y, inside) => { if (inside) trackManager.addMarker(trackManager.currentBeat > 0 ? trackManager.currentBeat : 1, modelData) }
+                                }
+                            }
+                        }
+                        Item { width: Math.round(14 * trackViewRoot.ks); height: 1 }
+                        Btn
+                        {
+                            objectName: "retypeFlag"
+                            width: flagTools.tw; height: rail.bh
+                            fontPx: trackViewRoot.fs(13)
+                            text: qsTr("RETYPE")
+                            // greyed rather than hidden: hiding re-flowed the row (r204)
+                            enabled: wfCanvas.selected >= 0
+                            onTapped:
+                            {
+                                var mk = trackManager.markers[wfCanvas.selected]
+                                if (mk === undefined) { wfCanvas.selected = -1; return }
+                                var order = [ "normal", "drive", "break", "build", "drop", "intro", "outro" ]
+                                var next = order[(order.indexOf(mk.type) + 1) % order.length]
+                                trackManager.setMarkerType(wfCanvas.selected, next)
+                            }
+                        }
+                        Btn
+                        {
+                            objectName: "deleteFlag"
+                            width: flagTools.tw; height: rail.bh
+                            fontPx: trackViewRoot.fs(13)
+                            text: qsTr("DELETE")
+                            enabled: wfCanvas.selected >= 0
+                            active: wfCanvas.selected >= 0
+                            tone: "#E36B6B"
+                            onTapped: { var i = wfCanvas.selected; wfCanvas.selected = -1; trackManager.removeMarker(i) }
+                        }
+                        // one step back - the flag and the lesson it taught
+                        Btn
+                        {
+                            objectName: "undoFlag"
+                            width: flagTools.tw; height: rail.bh
+                            fontPx: trackViewRoot.fs(13)
+                            text: qsTr("UNDO")
+                            enabled: trackManager ? trackManager.canUndoMarkers : false
+                            onTapped: { wfCanvas.selected = -1; trackManager.undoMarkers() }
+                        }
+                    }
+                }
+
+                // a warning that stands all night sits here, where it covers nothing
+                Row
+                {
+                    anchors.centerIn: parent
+                    spacing: 10
+                    visible: trackManager && trackManager.roleMode && !trackViewRoot.setupOpen
+                             && !trackViewRoot.markerEdit && verdictTools.blaming === 0 && warnText.text.length > 0
+                    width: Math.min(implicitWidth, rail.width - Math.round(520 * trackViewRoot.ks))
+                    ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: 18; height: 18; kind: "warn"; ink: "#E3B44F" }
+                    Text
+                    {
+                        id: warnText
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.min(implicitWidth, rail.width - Math.round(560 * trackViewRoot.ks))
+                        elide: Text.ElideRight
+                        color: "#E3B44F"
+                        font.pixelSize: trackViewRoot.fs(13)
+                        text:
+                        {
+                            var parts = []
+                            if (trackManager && trackManager.linkStale)
+                                parts.push(qsTr("BLT link stale - holding the last look"))
+                            if (trackEngine)
+                                for (var i = 0; i < trackEngine.warnings.length; i++)
+                                    parts.push(trackEngine.warnings[i])
+                            return parts.join("   ·   ")
+                        }
+                    }
+                }
+
+                // ---- the verdict: two thumbs in a corner that never moves. A
+                //      long press aims the thumb at one group on stage.
+                Item
+                {
+                    id: verdictTools
+                    anchors.right: parent.right
+                    anchors.rightMargin: Math.round(10 * trackViewRoot.ks)
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: trackManager && trackEngine && trackManager.beatCount > 0 && !trackViewRoot.setupOpen
+                    property int blaming: 0
+                    property var stageRows: []
+                    width: blaming === 0 ? thumbRow.width : blameRow.width
+                    height: rail.bh
+
+                    Row
+                    {
+                        id: thumbRow
+                        spacing: Math.round(8 * trackViewRoot.ks)
+                        visible: verdictTools.blaming === 0
+                        Repeater
+                        {
+                            model: [ 1, -1 ]
+                            Rectangle
+                            {
+                                id: thumb
+                                objectName: "rating:" + modelData
+                                width: Math.round(72 * trackViewRoot.ks)
+                                height: rail.bh
+                                radius: Math.round(10 * trackViewRoot.ks)
+                                property bool lit: false
+                                color: lit ? (modelData > 0 ? "#3E7E4E" : "#8E3A3A") : (modelData > 0 ? "#18241B" : "#271818")
+                                border.width: 1
+                                border.color: modelData > 0 ? "#4FA36B" : "#B05050"
+                                Canvas
+                                {
+                                    anchors.centerIn: parent
+                                    width: 26; height: 26
+                                    rotation: modelData > 0 ? 0 : 180
+                                    onPaint:
+                                    {
+                                        var c = getContext("2d"); c.reset()
+                                        c.fillStyle = modelData > 0 ? "#9FD8AF" : "#E8A0A0"
+                                        c.fillRect(3, 12, 8, 12)
+                                        c.beginPath(); c.moveTo(12, 24); c.lineTo(12, 13); c.lineTo(16, 3)
+                                        c.quadraticCurveTo(19, 1, 19, 5); c.lineTo(17, 11); c.lineTo(23, 11)
+                                        c.quadraticCurveTo(25, 11, 24, 14); c.lineTo(22, 22)
+                                        c.quadraticCurveTo(21, 24, 19, 24); c.closePath(); c.fill()
+                                    }
+                                }
+                                TouchInput
+                                {
+                                    property bool wasHeld: false
+                                    holdEnabled: true
+                                    // the instant the finger lands is the moment judged
+                                    onPressedAt: (x, y) => { wasHeld = false; if (trackEngine) trackEngine.markVerdictPoint() }
+                                    onHeld:
+                                    {
+                                        if (trackEngine === null) return
+                                        var rows = trackEngine.onStage()
+                                        if (rows.length === 0) return       // nothing to aim at: a plain vote on release
+                                        wasHeld = true
+                                        verdictTools.stageRows = rows
+                                        verdictTools.blaming = modelData
+                                        blameTimeout.restart()
+                                    }
+                                    onReleasedAt: (x, y, inside) =>
+                                    {
+                                        if (wasHeld) { wasHeld = false; return }
+                                        if (!inside) return
+                                        if (trackEngine) trackEngine.rate(modelData)
+                                        thumb.lit = true
+                                        thumbFlash.restart()
+                                    }
+                                }
+                                Timer { id: thumbFlash; interval: 220; onTriggered: thumb.lit = false }
+                            }
+                        }
+                    }
+
+                    // the list a long press opens: one tile per group on stage
+                    Row
+                    {
+                        id: blameRow
+                        anchors.right: parent.right
+                        spacing: Math.round(6 * trackViewRoot.ks)
+                        visible: verdictTools.blaming !== 0
+                        property int cells: Math.max(1, verdictTools.stageRows.length)
+                        property real cellW: Math.max(64, Math.min(150, (rail.width - 90 - cells * spacing) / cells))
+                        Repeater
+                        {
+                            model: verdictTools.stageRows
+                            Btn
+                            {
+                                width: blameRow.cellW
+                                height: rail.bh
+                                fontPx: trackViewRoot.fs(12)
+                                text: modelData ? modelData.group : ""
+                                active: true
+                                tone: verdictTools.blaming > 0 ? "#4FA36B" : "#B05050"
+                                onTapped:
+                                {
+                                    if (trackEngine) trackEngine.rateGroup(verdictTools.blaming, modelData.group)
+                                    verdictTools.blaming = 0
+                                    blameTimeout.stop()
+                                }
+                            }
+                        }
+                        Btn
+                        {
+                            width: rail.bh; height: rail.bh
+                            text: "×"
+                            fontPx: trackViewRoot.fs(18)
+                            onTapped: { verdictTools.blaming = 0; blameTimeout.stop() }
+                        }
+                    }
+                    // a list left open in the dark is a trap for the next finger
+                    Timer { id: blameTimeout; interval: 6000; onTriggered: verdictTools.blaming = 0 }
                 }
             }
         }
-RowLayout {
-            // R378_POSITIONS (Tobias 10-06: "Ryk start position knappen til et nyt sted
-            // kaldet 'Positions' med en 'AUTO' knap som de andre"): SECTION shares its
-            // row with POSITIONS, split as COLOUR and INTERVENTION are below it
-            id: sectionRow
-            Layout.fillWidth: true
-            spacing: 10
-Rectangle
+
+        // ============ 3 · THE DECK: rig · look · live - six rows, one grid ============
+        Item
         {
-            Layout.preferredWidth: positionsPanel.visible ? sectionRow.width * 0.65 : sectionRow.width
-            // SECTION is built like COLOUR now (runde 141): the heading on
-            // its own line at the top left, the buttons in a row underneath,
-            // 48 tall - the same shape, the same height, the same margins.
-            // Two rows of the same kind of choice should not be laid out two
-            // different ways, and until now SECTION had its title inline on
-            // the left, which pushed its AUTO one label's width to the right
-            // of the AUTO in COLOUR directly below it. Now they line up
-            // because they are the same thing built the same way.
+            id: deck
             Layout.fillWidth: true
-            Layout.preferredHeight: trackViewRoot.compactLayout ? 88 : 112
-            Layout.minimumHeight: trackViewRoot.compactLayout ? 88 : 112
-            Layout.maximumHeight: trackViewRoot.compactLayout ? 88 : 112
-            color: trackViewRoot.cPanel
-            radius: 4
+            Layout.preferredHeight: trackViewRoot.deckH
+            visible: trackManager && trackEngine && trackManager.roleMode
+            readonly property real rowsY: trackViewRoot.cardPad + trackViewRoot.headH
+            function rowY(i) { return rowsY + i * (trackViewRoot.rowH + trackViewRoot.g) }
 
-            Text { x: 12; y: 8; text: "SECTION"; color: trackViewRoot.cText
-                   font.pixelSize: trackViewRoot.compactLayout ? 16 : 20 }
-
-            RowLayout
+            // ---- RIG: what is in play - set at the start of the night ----
+            Card
             {
-                anchors.left: parent.left; anchors.right: parent.right
-                anchors.bottom: parent.bottom; anchors.margins: 10
-                height: 48
-                spacing: 6
+                id: rigCard
+                title: "RIG"
+                x: 0; y: 0
+                width: trackViewRoot.rigW
+                height: parent.height
+                // SETUP covers this card: nothing under it may take a finger
+                enabled: !trackViewRoot.setupOpen
+                opacity: trackViewRoot.setupOpen ? 0 : 1
 
-                // AUTO, not FOLLOW, and on the LEFT (runde 140, Tobias:
-                // "maaske hedde AUTO ligesom paa farverne, og saa rykke den
-                // over paa den anden side af sektionerne saa den passer med
-                // AUTO paa farverne"). Same word, same sun, same green, same
-                // corner as the colour row directly below it - so the page
-                // has one idea of "let the engine decide" instead of two
-                // words for it in two places.
-                TrackTile
+                readonly property real inX: trackViewRoot.cardPad + 2
+                readonly property real inW: width - 2 * inX
+                // once here, not per row: groups() rebuilds the table, trims()
+                // and cast() are not cheap either (runde 142, 204)
+                property var allTrims: trackEngine ? trackEngine.trims : ({})
+                property var litNow: trackEngine ? trackEngine.cast : []
+                // MASTER DIMMER has the top row; five groups fill the other five,
+                // a bigger rig shares them
+                readonly property int rows: castRep.count
+                readonly property real rowH: rows > 5 ? Math.max(40, (5 * trackViewRoot.rowH + 4 * trackViewRoot.g - (rows - 1) * trackViewRoot.g) / rows)
+                                                      : trackViewRoot.rowH
+
+                // runde 389 (Tobias 10-07: "rykke Master-dimmeren oeverst i RIG i hele
+                // laengden"): the ceiling of the whole rig, over the groups it scales
+                Fader
                 {
-                    // exactly as wide as AUTO in the COLOUR row below, by
-                    // asking that row rather than guessing a number: both
-                    // panels start at the same x, so binding the width makes
-                    // the two buttons line up to the pixel and keeps them
-                    // lined up if the palette ever gains or loses a colour
-                    Layout.preferredWidth: colourRow.cellW
-                    Layout.fillHeight: true
-                    objectName: "followMusic"
-                    label: qsTr("AUTO")
-                    active: trackManager ? trackManager.overrideState === "" : true
-                    activeColor: "#7ED07E"
-                    onTapped: trackManager.overrideState = ""
-
-                    ControlIcon
-                    {
-                        x: 8
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 16; height: 16
-                        ink: (trackManager && trackManager.overrideState === "") ? "#101010" : "#DDDDDD"
-                        kind: "revert"
-                    }
+                    objectName: "master"
+                    inputName: "masterDrag"
+                    x: rigCard.inX; y: deck.rowY(0); width: rigCard.inW; height: trackViewRoot.rowH
+                    name: qsTr("MASTER DIMMER")
+                    nameInk: "#06182B"
+                    level: trackEngine ? trackEngine.master : 1
+                    fill: "#4FA3E3"
+                    gripInk: "#BFE2FF"
+                    valueOnFill: "#06182B"
+                    // a tap sets MASTER where the finger lands, a drag follows it (r254)
+                    onSetLevel: (v) => { if (trackEngine) trackEngine.master = v }
+                }
+                Rectangle
+                {
+                    x: rigCard.inX; width: rigCard.inW; height: 1
+                    y: deck.rowY(1) - Math.round(trackViewRoot.g / 2) - 1
+                    color: trackViewRoot.cEdge
                 }
 
+                Repeater
+                {
+                    id: castRep
+                    model: trackEngine ? trackEngine.groups : []
+
+                    Item
+                    {
+                        id: grp
+                        // the same fallback as before: a groups rebuild re-evaluates
+                        // every binding with modelData gone
+                        property var md: modelData ? modelData : ({ key: "", enabled: true, switchOnly: false, base: false })
+                        property bool lit: rigCard.litNow.indexOf(md.key) >= 0
+                        property bool off: !md.enabled
+                        property bool switchOnly: md.switchOnly === true
+                        property real trim: rigCard.allTrims[md.key] !== undefined ? rigCard.allTrims[md.key] : 1.0
+                        x: rigCard.inX
+                        y: deck.rowY(1) + index * (rigCard.rowH + trackViewRoot.g)
+                        width: rigCard.inW
+                        height: rigCard.rowH
+                        readonly property real faderW: Math.round(228 * trackViewRoot.kw)
+                        readonly property real swW: Math.round(58 * trackViewRoot.ks)
+                        readonly property color ink: off ? "#4E4E56" : (lit ? "#E6E6EC" : "#8C8C96")
+
+                        ControlIcon
+                        {
+                            id: grpIcon
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.round(26 * trackViewRoot.ks); height: width
+                            ink: grp.ink
+                            kind: grp.md.switchOnly ? "animation" : grp.md.strobes ? "strobe" : grp.md.lasers ? "laser"
+                                  : grp.md.key.toLowerCase().indexOf("eyes") >= 0 ? "eyes" : "head"
+                        }
+                        Column
+                        {
+                            anchors.left: grpIcon.right
+                            anchors.leftMargin: Math.round(12 * trackViewRoot.ks)
+                            anchors.right: grpSwitchCell.left
+                            anchors.rightMargin: Math.round(4 * trackViewRoot.ks)
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 3
+                            Text
+                            {
+                                width: parent.width
+                                elide: Text.ElideRight
+                                text: grp.md.key
+                                color: grp.ink
+                                font.bold: true
+                                font.pixelSize: trackViewRoot.fs(15)
+                            }
+                            Text
+                            {
+                                width: parent.width
+                                elide: Text.ElideRight
+                                textFormat: Text.StyledText
+                                font.pixelSize: trackViewRoot.fs(12)
+                                color: grp.off ? "#5E5E68" : (grp.lit ? trackViewRoot.cGreen : "#6E6E78")
+                                text: (grp.md.base ? "<font color='#4FA3E3'><b>BASE</b></font> · " : "")
+                                      + (grp.off ? qsTr("off") : (grp.lit ? "● " + qsTr("on stage") : "○ " + qsTr("waiting")))
+                            }
+                        }
+
+                        Item
+                        {
+                            id: grpSwitchCell
+                            anchors.right: parent.right
+                            anchors.rightMargin: grp.faderW + Math.round(10 * trackViewRoot.ks)
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: grp.swW
+                            height: parent.height
+
+                            // the base is always in the show: a lock, not a switch
+                            ControlIcon
+                            {
+                                visible: grp.md.base === true
+                                anchors.centerIn: parent
+                                width: Math.round(20 * trackViewRoot.ks); height: width
+                                kind: "lock"; ink: trackViewRoot.cBlue
+                            }
+                            // A TOGGLE (runde 139): in or out of tonight's show
+                            Rectangle
+                            {
+                                id: grpSwitch
+                                objectName: "groupSwitch:" + grp.md.key
+                                visible: !grp.md.base
+                                anchors.centerIn: parent
+                                width: Math.round(52 * trackViewRoot.ks)
+                                height: Math.round(28 * trackViewRoot.ks)
+                                radius: height / 2
+                                color: grp.off ? "#2C2C33" : trackViewRoot.cGreen
+                                border.width: 1
+                                border.color: grp.off ? "#44444C" : "#9FE3AE"
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                                Rectangle
+                                {
+                                    width: parent.height - 6; height: width; radius: width / 2
+                                    y: 3
+                                    x: grp.off ? 3 : parent.width - width - 3
+                                    color: grp.off ? "#7E7E86" : "#123012"
+                                    Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                                }
+                                // a finger target bigger than the pill it draws
+                                Item
+                                {
+                                    anchors.centerIn: parent
+                                    width: parent.width + 16
+                                    height: parent.height + 16
+                                    TouchInput { onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.setGroupEnabled(grp.md.key, grp.off) } }
+                                }
+                            }
+                        }
+
+                        // the trim - or, for a group whose dimmer is a switch, the
+                        // switch itself: a fader with two positions is a lie
+                        Fader
+                        {
+                            id: grpTrimCell
+                            // a switch-only group: the names belong to its ON/OFF box
+                            objectName: grp.switchOnly ? "" : "groupTrim:" + grp.md.key
+                            inputName: grp.switchOnly ? "" : "groupTrim:" + grp.md.key + "Drag"
+                            visible: !grp.switchOnly
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: grp.faderW
+                            height: Math.max(trackViewRoot.touchH - 8, grp.height)
+                            level: grp.off ? 0 : grp.trim
+                            valueText: Math.round(grp.trim * 100) + "%"
+                            fill: grp.lit ? (grp.md.base ? "#2E6FA8" : "#3D86C4") : (input.down ? "#45454E" : "#3A3A42")
+                            gripInk: grp.lit ? "#BFE3FF" : "#B0B0B8"
+                            valueOnFill: "#F2F6FA"
+                            enabled: !grp.off
+                            opacity: grp.off ? 0.55 : 1
+                            onSetLevel: (v) =>
+                            {
+                                if (v > 0.97) v = 1
+                                if (v < 0.03) v = 0
+                                // whole percent (runde 221)
+                                v = Math.round(v * 100) / 100
+                                if (trackEngine) trackEngine.setGroupTrim(grp.md.key, v)
+                            }
+                        }
+                        Rectangle
+                        {
+                            objectName: grp.switchOnly ? "groupTrim:" + grp.md.key : ""
+                            visible: grp.switchOnly
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: grp.faderW
+                            height: grp.height
+                            radius: Math.round(10 * trackViewRoot.ks)
+                            color: grp.off ? "transparent" : (grp.lit ? "#3D86C4" : "#3A3A42")
+                            border.width: 1
+                            border.color: grp.off ? "#3A3A42" : "transparent"
+                            Text
+                            {
+                                anchors.centerIn: parent
+                                text: grp.off ? qsTr("ON / OFF ONLY") : qsTr("ON")
+                                color: grp.off ? "#5E5E68" : "#F2F6FA"
+                                font.bold: true
+                                font.pixelSize: trackViewRoot.fs(12)
+                                font.letterSpacing: (trackViewRoot.fs(12)) * 0.12
+                            }
+                            // the base is always in the show, switch-only or not
+                            TouchInput
+                            {
+                                enabled: grp.switchOnly && !grp.md.base
+                                onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.setGroupEnabled(grp.md.key, grp.off) }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---- LOOK: how hard on top, then how the room looks; the haze
+            //      machine as a group of its own at the bottom (runde 389) ----
+            Card
+            {
+                id: lookCard
+                title: "LOOK"
+                x: trackViewRoot.rigW + trackViewRoot.gapB
+                y: 0
+                width: parent.width - trackViewRoot.rigW - trackViewRoot.liveW - 2 * trackViewRoot.gapB
+                height: parent.height
+                enabled: !trackViewRoot.setupOpen
+                opacity: trackViewRoot.setupOpen ? 0 : 1
+
+                readonly property real inX: trackViewRoot.cardPad + 2
+                readonly property real inW: width - 2 * inX
+                readonly property real labW: Math.round(100 * trackViewRoot.ks)
+                readonly property real autoW: Math.round(120 * trackViewRoot.ks)
+                readonly property real colGap: Math.round(10 * trackViewRoot.ks)
+                readonly property real cX: inX + labW + colGap + autoW + colGap      // the content column
+                readonly property real cW: width - inX - cX
+                readonly property real autoX: inX + labW + colGap
+                readonly property real cg: Math.round(8 * trackViewRoot.ks)          // between the tiles of a row
+                function cell(n) { return (cW - (n - 1) * cg) / n }
+
+                // row 0: ENERGY - by the hand. AUTO gives it back to the clock. On top
+                // (runde 389, Tobias 10-07: "saa alle Auto-knapperne er over hinanden")
+                RowLabel { x: lookCard.inX; y: deck.rowY(0); width: lookCard.labW; height: trackViewRoot.rowH; text: "ENERGY"; color: trackViewRoot.cGold }
+                Btn
+                {
+                    objectName: "energyAuto"
+                    x: lookCard.autoX; y: deck.rowY(0); width: lookCard.autoW; height: trackViewRoot.rowH
+                    text: qsTr("AUTO"); icon: "autoColour"; autoKind: true
+                    active: trackEngine ? trackEngine.roomAuto : false
+                    onTapped: if (trackEngine) trackEngine.roomAuto = true
+                }
+                Fader
+                {
+                    id: energyFader
+                    objectName: "energy"
+                    inputName: "energyDrag"
+                    property real trim: trackManager ? Math.min(1, trackManager.energyTrim / 100) : 0.5
+                    x: lookCard.cX; y: deck.rowY(0); width: lookCard.cW; height: trackViewRoot.rowH
+                    level: trim
+                    valueText: (trackManager ? Math.round(Math.min(100, trackManager.energyTrim)) : 50) + "%"
+                    fill: "#E3B44F"
+                    gripInk: "#F6D98A"
+                    valueInk: "#F2D58E"
+                    valueOnFill: "#2A1D05"
+                    border.color: Qt.rgba(0.89, 0.71, 0.31, 0.45)
+                    // a hand on the bar takes over from the clock - also when it
+                    // lands where the clock already put it
+                    onPressed: if (trackEngine && trackEngine.roomAuto) trackEngine.roomAuto = false
+                    onSetLevel: (v) => { if (trackManager) trackManager.energyTrim = Math.round(v * 100) }
+                }
+
+                // row 1: SECTION
+                RowLabel { x: lookCard.inX; y: deck.rowY(1); width: lookCard.labW; height: trackViewRoot.rowH; text: "SECTION" }
+                // AUTO, not FOLLOW, and on the LEFT (runde 140): one idea of "let the engine decide"
+                Btn
+                {
+                    objectName: "followMusic"
+                    x: lookCard.autoX; y: deck.rowY(1); width: lookCard.autoW; height: trackViewRoot.rowH
+                    text: qsTr("AUTO"); icon: "revert"; autoKind: true
+                    active: trackManager ? trackManager.overrideState === "" : true
+                    onTapped: trackManager.overrideState = ""
+                }
                 Repeater
                 {
                     model: trackViewRoot.states
-
-                    Button
+                    Btn
                     {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        focusPolicy: Qt.NoFocus
-                        objectName: "section:"+modelData
-                        // not checkable: a click would write 'checked' and
-                        // break the binding, leaving two sections lit
-                        checked: trackManager ? trackManager.overrideState === modelData : false
-                        onClicked: trackManager.overrideState =
-                                   (trackManager.overrideState === modelData) ? "" : modelData
-
-                        contentItem: Text
-                        {
-                            text: modelData.toUpperCase()
-                            color: (parent.checked || trackViewRoot.liveState === modelData)
-                                   ? "#000000" : trackViewRoot.cText
-                            font.bold: true
-                            font.pixelSize: 19
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle
-                        {
-                            radius: 5
-                            color: parent.checked
-                                   ? trackViewRoot.markerColor(modelData)
-                                   : (trackViewRoot.liveState === modelData
-                                      ? Qt.darker(trackViewRoot.markerColor(modelData), 1.15)
-                                      : trackViewRoot.cBtn)
-                            border.width: parent.checked ? 3 : 1
-                            border.color: parent.checked ? "#FFFFFF" : trackViewRoot.cLine
-                        }
+                        objectName: "section:" + modelData
+                        x: lookCard.cX + index * (lookCard.cell(4) + lookCard.cg)
+                        y: deck.rowY(1); width: lookCard.cell(4); height: trackViewRoot.rowH
+                        text: modelData.toUpperCase()
+                        tone: trackViewRoot.markerColor(modelData)
+                        // pinned by hand: the full colour and a white ring; playing
+                        // now: its colour as a tint
+                        active: trackManager ? (trackManager.overrideState === modelData || trackViewRoot.liveState === modelData) : false
+                        solid: trackManager ? trackManager.overrideState === modelData : false
+                        onTapped: trackManager.overrideState = (trackManager.overrideState === modelData) ? "" : modelData
                     }
                 }
 
-
-                // the evening's opening picture: the START scene on its
-                // own, engine standing still. Switching the show on
-                // takes it off again
-
-
-                // the show switch: the biggest thing in the row, red
-                // when the engine is not running, green when it is
-
-            }
-        }
-Rectangle
-        {
-            id: positionsPanel
-            objectName: "positionsPanel"
-            visible: trackManager && trackEngine && trackManager.roleMode
-            Layout.fillWidth: true
-            Layout.preferredWidth: sectionRow.width * 0.35
-            Layout.preferredHeight: trackViewRoot.compactLayout ? 88 : 112
-            Layout.minimumHeight: trackViewRoot.compactLayout ? 88 : 112
-            Layout.maximumHeight: trackViewRoot.compactLayout ? 88 : 112
-            color: trackViewRoot.cPanel
-            radius: 4
-
-            Text { x: 12; y: 8; text: "POSITIONS"; color: trackViewRoot.cText
-                   font.pixelSize: trackViewRoot.compactLayout ? 16 : 20 }
-
-            RowLayout
-            {
-                anchors.left: parent.left; anchors.right: parent.right
-                anchors.bottom: parent.bottom; anchors.margins: 10
-                height: 48
-                spacing: 6
-                // AUTO: the engine aims the heads, as before. The others hold the
-                // moving heads until AUTO - in the show, the pauses and the opening
-                // picture; the laser bars keep the engine's aims and their safety
-                TrackTile
+                // row 2: POSITION (runde 378) - AUTO and three held positions
+                Item
                 {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    objectName: "positionAuto"
-                    label: qsTr("AUTO")
-                    active: trackEngine ? trackEngine.positionMode === "" : true
-                    activeColor: "#7ED07E"
-                    onTapped: trackEngine.positionMode = ""
-                    ControlIcon
-                    {
-                        x: 8
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 16; height: 16
-                        ink: (trackEngine && trackEngine.positionMode === "") ? "#101010" : "#DDDDDD"
-                        kind: "revert"
-                    }
-                }
-                Repeater
-                {
-                    model: [ { key: "start", label: qsTr("START POSITION") },
-                             { key: "column", label: qsTr("S\u00d8JLE MIDT") },
-                             { key: "down", label: qsTr("LIGE NED") } ]
-                    TrackTile
-                    {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        objectName: "position:" + modelData.key
-                        label: modelData.label
-                        active: trackEngine ? trackEngine.positionMode === modelData.key : false
-                        activeColor: "#E3B44F"
-                        // tapped again: AUTO
-                        onTapped: trackEngine.positionMode =
-                                  (trackEngine.positionMode === modelData.key) ? "" : modelData.key
-                    }
-                }
-            }
-        }
-        }
-RowLayout {
-            id: dialsRow
-            Layout.fillWidth: true; Layout.fillHeight: false
-            // THREE BOXES, each saying what it is (runde 140). It was two:
-            // ENERGY, and one called MASTER DIMMER that also held SPEED -
-            // two unrelated controls under one name, which is what Tobias
-            // caught ("den skal ikke hedde masterdimmer og saa ogsaa have
-            // speed i den"). Splitting them is the whole fix: nothing needs
-            // a name that covers both, because nothing shares a box.
-            //
-            // And ENERGY is no longer the big one. It is set once and left
-            // ("Den kommer nok ikke til at blive rykket saa ofte"), so it is
-            // the same size as the others now. A fixed height again: title
-            // 20 + 6 + fader 66 + margins 20 = 112, and nothing grows.
-            Layout.preferredHeight: trackViewRoot.compactLayout ? 104 : 112
-            Layout.minimumHeight: trackViewRoot.compactLayout ? 104 : 112
-            Layout.maximumHeight: trackViewRoot.compactLayout ? 104 : 112
-            spacing: 10
-            visible: trackManager && trackEngine && trackManager.roleMode && !trackViewRoot.setupOpen
-Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                Layout.preferredWidth: dialsRow.width * 0.34
-                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
-                    // "MASTER DIMMER", not "MASTER" - it is the room's
-                    // brightness, and the word alone read like a master
-                    // section. (Tobias, 2026-09-22.) The fillHeight spacer
-                    // that sat under it is gone with it: it was there to push
-                    // the fader down into a box that had no reason to be tall.
-                    Text { text: "MASTER DIMMER"; color: trackViewRoot.cText
-                           font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
-Rectangle
-            {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: 4
-                color: "#141414"
-                border.width: 1
-                border.color: "#555555"
-
-                Rectangle
-                {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    anchors.margins: 3
-                    width: (parent.width - 6) * (trackEngine ? trackEngine.master : 1)
-                    radius: 3
-                    color: "#4FA3E3"
-                }
-
-                SliderTicks { anchors.fill: parent }
-                SliderGrip
-                {
-                    property real lvl: trackEngine ? trackEngine.master : 1
-                    x: Math.max(1, Math.min(parent.width - width - 1,
-                                            3 + (parent.width - 6) * lvl - width / 2))
-                    height: parent.height
-                    ink: "#9FD3FF"
-                    pressed: masterArea.pressed
-                }
-
-                Text
-                {
-                    anchors.centerIn: parent
-                    text: qsTr("MASTER DIMMER") + "  " + Math.round((trackEngine ? trackEngine.master : 1) * 100) + "%"
-                    color: "#EEEEEE"
-                    font.bold: true
-                    font.pixelSize: 15
-                }
-
-                MouseArea
-                {
-                    id: masterArea
-                    objectName: "masterDrag"
+                    objectName: "positionsPanel"
                     anchors.fill: parent
-                    function apply(x) { if (trackEngine) trackEngine.master = Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
-                    // a tap sets MASTER where the finger lands, a drag follows it
-                    // (runde 253 made it drag-only; Tobias wanted the tap back:
-                    // "så man kan trykke faderen op og ned" - runde 254)
-                    onPressed: (mouse) => apply(mouse.x)
-                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
-                }
-            }
-
-
-                }
-            }
-            Rectangle {
-                // SPEED is its own box now. It is not a dimmer and it is not
-                // a master of anything - it is how fast the engine runs the
-                // figures - so it gets its own name and its own frame.
-                Layout.fillWidth: true; Layout.fillHeight: true
-                Layout.preferredWidth: dialsRow.width * 0.26
-                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6
-                    Text { text: "SPEED"; color: trackViewRoot.cText
-                           font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        spacing: 6
-                        Repeater
-                        {
-                            model: [ "\u00bd\u00d7", "1\u00d7", "2\u00d7" ]
-
-                            TrackTile
-                            {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                objectName: "speed"+index
-                                label: modelData
-                                active: trackEngine ? trackEngine.speed === index - 1 : index === 1
-                                activeColor: [ "#5A7A9A", "#4FA3E3", "#E3B44F" ][index]
-                                onTapped: trackEngine.speed = index - 1
-                            }
-                        }
-                    }
-                }
-            }
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                Layout.preferredWidth: dialsRow.width * 0.40
-                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                // R363_ENERGY_AUTO: AUTO sits in the box's top corner, outside the
-                // column. In the title row it made the row 28 px high and left the
-                // fader 54 px - under the touch height (56) and under MASTER's 62
-                // (runde 140 drew 66). Its finger area still stops above the
-                // fader's top end (runde 215).
-                TrackTile
-                {
-                    objectName: "energyAuto"
-                    z: 2
-                    anchors.top: parent.top; anchors.right: parent.right
-                    anchors.topMargin: 6; anchors.rightMargin: 10
-                    width: 84; height: trackViewRoot.compactLayout ? 22 : 24
-                            ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 14; height: 14; kind: "autoColour"
-                                          ink: (trackEngine && trackEngine.roomAuto) ? "#101010" : "#DDDDDD" }
-                            label: qsTr("AUTO")
-                            active: trackEngine ? trackEngine.roomAuto : false
-                            activeColor: "#7ED07E"
-                            onTapped: if (trackEngine) trackEngine.roomAuto = true
-                            // runde 253 (BACKLOG 101): the tile is 24-28 px high;
-                            // the finger gets 8 px more on three sides - not
-                            // below, where the fader's top end is (r215)
-                            MouseArea
-                            {
-                                anchors.fill: parent
-                                anchors.leftMargin: -8
-                                anchors.rightMargin: -8
-                                anchors.topMargin: -8
-                                onClicked: if (trackEngine) trackEngine.roomAuto = true
-                            }
-                        }
-                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 6   // as MASTER (R363: AUTO sits outside the column, its foot 6 px above the fader - r215)
-                    // Just the title. The 62-pixel percentage that used to sit
-                    // in the middle of this box is gone (Tobias, 2026-09-22:
-                    // "Energi har alt for meget tomt plads med den store
-                    // procent tegn, det skal fjernes") - it said the same
-                    // number as the fader directly below it, and the Item it
-                    // was centred in was a fillHeight spacer, so the box was
-                    // mostly air to make room for one duplicate figure.
-                    // runde 211 (Tobias): AUTO beside the title gives ENERGY back
-                    // to the clock after a hand has taken it - lit while the
-                    // clock drives it, like the other AUTO tiles
-                    RowLayout { Layout.fillWidth: true; spacing: 8
-                        Text { Layout.fillWidth: true; text: "ENERGY"; color: trackViewRoot.cText
-                               font.pixelSize: trackViewRoot.compactLayout ? 15 : 17; font.bold: true }
-
-                    }
-Rectangle
-            {
-                Layout.fillWidth: true
-                // The fader FILLS the box (runde 139). Taking the big
-                // percentage out left the box with a title and a 62-pixel
-                // bar in 148 pixels of space - the air moved rather than
-                // went away. The fader takes it instead, which also makes
-                // the one control Tobias calls "rimelig essentiel" the
-                // easiest thing on the page to hit.
-                Layout.fillHeight: true
-                radius: 4
-                color: "#141414"
-                border.width: 1
-                border.color: "#555555"
-
-                objectName: "energy"
-                property real trim: trackManager ? Math.min(1, trackManager.energyTrim / 100) : 0.5
-
-                Rectangle
-                {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    anchors.margins: 3
-                    width: (parent.width - 6) * parent.trim
-                    radius: 3
-                    color: "#E3B44F"
-                }
-
-                SliderTicks { anchors.fill: parent }
-                SliderGrip
-                {
-                    x: Math.max(1, Math.min(parent.width - width - 1,
-                                            3 + (parent.width - 6) * parent.trim - width / 2))
-                    height: parent.height
-                    ink: "#F6D98A"; pressed: energyArea.pressed
-                }
-
-                Text
-                {
-                    anchors.centerIn: parent
-                    text: qsTr("ENERGY") + "  " + (trackManager ? Math.round(Math.min(100, trackManager.energyTrim)) : 50) + "%"
-                    color: "#EEEEEE"
-                    font.bold: true
-                    font.pixelSize: 15
-                }
-
-                MouseArea
-                {
-                    id: energyArea
-                    objectName: "energyDrag"
-                    anchors.fill: parent
-                    function apply(x)
+                    visible: trackManager && trackEngine && trackManager.roleMode
+                    RowLabel { x: lookCard.inX; y: deck.rowY(2); width: lookCard.labW; height: trackViewRoot.rowH; text: "POSITION" }
+                    Btn
                     {
-                        // the fill is inset three pixels: read the finger the same
-                        // way, or full is unreachable at the right edge
-                        var v = Math.round(Math.max(0, Math.min(1, (x - 3) / (width - 6))) * 100)
-                        if (trackManager) trackManager.energyTrim = v
+                        objectName: "positionAuto"
+                        x: lookCard.autoX; y: deck.rowY(2); width: lookCard.autoW; height: trackViewRoot.rowH
+                        text: qsTr("AUTO"); icon: "revert"; autoKind: true
+                        active: trackEngine ? trackEngine.positionMode === "" : true
+                        onTapped: trackEngine.positionMode = ""
                     }
-                    // a hand on the bar takes over from the clock - also when it
-                    // lands exactly where the clock already put it (the setter
-                    // only infers a touch from a CHANGE of value)
-                    onPressed: (mouse) => { if (trackEngine && trackEngine.roomAuto) trackEngine.roomAuto = false; apply(mouse.x) }
-                    onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                    Repeater
+                    {
+                        model: [ { key: "start", label: qsTr("START POSITION") },
+                                 { key: "column", label: qsTr("SØJLE MIDT") },
+                                 { key: "down", label: qsTr("LIGE NED") } ]
+                        Btn
+                        {
+                            objectName: "position:" + modelData.key
+                            x: lookCard.cX + index * (lookCard.cell(3) + lookCard.cg)
+                            y: deck.rowY(2); width: lookCard.cell(3); height: trackViewRoot.rowH
+                            text: modelData.label
+                            tone: trackViewRoot.cGold
+                            active: trackEngine ? trackEngine.positionMode === modelData.key : false
+                            // tapped again: AUTO
+                            onTapped: trackEngine.positionMode = (trackEngine.positionMode === modelData.key) ? "" : modelData.key
+                        }
+                    }
                 }
-            }
-                }
-            }
 
-        }
-RowLayout {
-            id: liveRow
-            Layout.fillWidth: true; Layout.minimumHeight: trackViewRoot.compactLayout ? 88 : 112; Layout.preferredHeight: trackViewRoot.compactLayout ? 88 : 112
-            Layout.maximumHeight: trackViewRoot.compactLayout ? 88 : 112
-            spacing: 10
-            visible: trackManager && trackEngine && trackManager.roleMode && !trackViewRoot.setupOpen
-            function swatch(name)
-            {
-                switch (name)
+                // row 3: COLOUR - lit = in the mix (runde 304), ring = leading now
+                RowLabel { x: lookCard.inX; y: deck.rowY(3); width: lookCard.labW; height: trackViewRoot.rowH; text: "COLOUR" }
+                Btn
                 {
-                case "red":     return "#E03030"
-                case "green":   return "#30C050"
-                case "blue":    return "#3060E0"
-                case "cyan":    return "#30C0D0"
-                case "magenta": return "#D040C0"
-                case "yellow":  return "#E0D030"
-                case "orange":  return "#E08030"
-                case "amber":   return "#E0A040"
-                case "uv":      return "#7030C0"
-                case "white":   return "#E8E8E8"
-                }
-                return "#4A4A4A"
-            }
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: liveRow.width * 0.65
-                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                Text { x: 12; y: 8; text: "COLOUR"; color: trackViewRoot.cText; font.pixelSize: trackViewRoot.compactLayout ? 16 : 20 }
-Row
-            {
-                id: colourRow
-                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 10
-                height: 48
-                spacing: 6
-
-                property int cells: 3 + palRep.count      // runde 204: palette() is not a cheap getter (370: + FADE, CHASE)
-                property real cellW: Math.max(48, (width - spacing * (cells - 1)) / cells)
-
-                TrackTile
-                {
-                    width: colourRow.cellW
-                    height: colourRow.height
                     objectName: "autoColour"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; kind: "autoColour"
-                              // dark on the lit tile, light on the grey one - as SECTION's AUTO does;
-                              // it vanished on the grey tile once a colour was locked (runde 178)
-                              ink: (trackEngine && (trackEngine.colourMode !== 0
-                                                    || (trackEngine.colourOverride !== "" && trackEngine.colourOverrides.length < 2))) ? "#DDDDDD" : "#101010" }
-                    label: qsTr("AUTO")
+                    x: lookCard.autoX; y: deck.rowY(3); width: lookCard.autoW; height: trackViewRoot.rowH
+                    text: qsTr("AUTO"); icon: "autoColour"; autoKind: true
                     // runde 370: lit while the engine decides - no tile, or two and
-                    // more taking turns its way; FADE or CHASE put it out. A tap
-                    // lets every tile go: the engine runs it all again.
+                    // more taking turns its way; FADE or CHASE put it out
                     active: trackEngine ? (trackEngine.colourMode === 0
                                            && (trackEngine.colourOverride === "" || trackEngine.colourOverrides.length > 1)) : true
-                    activeColor: "#7ED07E"
                     onTapped: trackEngine.colourOverride = ""
                 }
-
-                // runde 370 (Tobias: "to ny knapper ved farverne der hedder fade og
-                // chase"): how the lit tiles take turns - gliding into each other,
-                // or walking the lamps. With fewer than two tiles lit they light the
-                // colour leading now and its partner. Tapped again: AUTO, same tiles.
-                TrackTile
-                {
-                    width: colourRow.cellW
-                    height: colourRow.height
-                    objectName: "colourModeFade"
-                    ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; kind: "fadeColour"
-                                  ink: (trackEngine && trackEngine.colourMode === 1) ? "#101010" : "#DDDDDD" }
-                    // a mode, not a colour: a blue edge of its own
-                    border.width: 2
-                    border.color: active ? Qt.lighter(activeColor, 1.3) : "#2F6D9C"
-                    label: qsTr("FADE")
-                    active: trackEngine ? trackEngine.colourMode === 1 : false
-                    activeColor: "#4FA3E3"
-                    onTapped: trackEngine.setColourMode(trackEngine.colourMode === 1 ? 0 : 1)
-                    // runde 374: how far the fade is - from the colour it leaves to the
-                    // one it goes to (AUTO's own fades too)
-                    Rectangle
-                    {
-                        objectName: "colourFadeBar"
-                        anchors.left: parent.left; anchors.bottom: parent.bottom
-                        anchors.leftMargin: 4; anchors.bottomMargin: 4
-                        height: 5; radius: 2
-                        visible: trackEngine ? trackEngine.colourStyle === 1 : false
-                        width: Math.max(2, (parent.width - 8) * (trackEngine ? trackEngine.colourFadeT : 0))
-                        gradient: Gradient
-                        {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: liveRow.swatch(trackEngine ? trackEngine.colourFadeFrom : "") }
-                            GradientStop { position: 1.0; color: liveRow.swatch(trackEngine ? trackEngine.colourFadeTo : "") }
-                        }
-                    }
-                }
-                TrackTile
-                {
-                    width: colourRow.cellW
-                    height: colourRow.height
-                    objectName: "colourModeChase"
-                    ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; kind: "chaseColour"
-                                  ink: (trackEngine && trackEngine.colourMode === 2) ? "#101010" : "#DDDDDD" }
-                    // a mode, not a colour: a blue edge of its own
-                    border.width: 2
-                    border.color: active ? Qt.lighter(activeColor, 1.3) : "#2F6D9C"
-                    label: qsTr("CHASE")
-                    active: trackEngine ? trackEngine.colourMode === 2 : false
-                    activeColor: "#4FA3E3"
-                    onTapped: trackEngine.setColourMode(trackEngine.colourMode === 2 ? 0 : 2)
-                }
-
                 Repeater
                 {
                     id: palRep
                     model: trackEngine ? trackEngine.palette : []
-
-                    // lit = locked to this colour. A ring only = this is what
-                    // AUTO happens to be running right now.
-                    TrackTile
+                    Btn
                     {
-                        width: colourRow.cellW
-                        height: colourRow.height
-                        objectName: "colour:"+(modelData || "")
-                        label: (modelData || "").toUpperCase()
-                        activeColor: liveRow.swatch(modelData || "")
-                        // runde 304 (Tobias: "man kan aktivere mere end én ... trykker
-                        // man paa blaa og lilla og saa bruger den begge 2 i mix"):
-                        // every tile lit is in the mix; a tap adds or takes it out.
-                        // The ring marks the colour that leads right now.
+                        id: chip
+                        objectName: "colour:" + (modelData || "")
+                        property int cells: Math.max(1, palRep.count)
+                        property bool leading: trackEngine && trackEngine.currentColour === modelData
+                                               && (trackEngine.colourOverride === "" || trackEngine.colourOverrides.length > 1)
+                        x: lookCard.cX + index * (lookCard.cell(cells) + lookCard.cg)
+                        y: deck.rowY(3); width: lookCard.cell(cells); height: trackViewRoot.rowH
+                        text: (modelData || "").toUpperCase()
+                        tone: trackViewRoot.swatch(modelData || "")
                         active: trackEngine ? trackEngine.colourOverrides.indexOf(modelData) >= 0 : false
-                        border.width: (trackEngine && trackEngine.currentColour === modelData
-                                       && (trackEngine.colourOverride === ""
-                                           || trackEngine.colourOverrides.length > 1)) ? 3 : 1
-                        // (runde 328, review: a tile in the mix but not leading kept
-                        // TrackTile's own lit edge, not the grey of an unlit one)
-                        border.color: (trackEngine && trackEngine.currentColour === modelData)
-                                      ? (trackEngine.colourOverrides.length > 1 ? "#FFFFFF" : liveRow.swatch(modelData))
-                                      : (active ? Qt.lighter(activeColor, 1.3) : "#555555")
+                        fontPx: trackViewRoot.fs(cells > 7 ? 12 : 14)
+                        // the colour itself, as a dot - where the tile has room for it
+                        dot: chip.width > 96 * trackViewRoot.ks ? chip.tone : "transparent"
                         onTapped: trackEngine.toggleColourOverride(modelData)
-                        // runde 313 (B27, Tobias): a colour the engine cannot use
-                        // (gone from the palette, banned) blinks - the press
+                        // the ring: the colour leading right now
+                        Rectangle
+                        {
+                            visible: chip.leading
+                            anchors.fill: parent
+                            anchors.margins: -5
+                            radius: chip.radius + 3
+                            color: "transparent"
+                            border.width: 2
+                            border.color: "#FFFFFF"
+                        }
+                        // runde 313: a colour the engine cannot use blinks - the press
                         // arrived, it was refused
                         Rectangle
                         {
                             anchors.fill: parent
-                            radius: 4
+                            radius: chip.radius
                             color: "#FFFFFF"
                             opacity: 0.0
-                            z: 5
                             SequentialAnimation on opacity
                             {
                                 id: rejectBlink
@@ -1916,884 +1826,492 @@ Row
                         }
                     }
                 }
+
+                // row 4: COLOUR MODE (runde 370) and SPEED, on the colour grid
+                RowLabel { x: lookCard.inX; y: deck.rowY(4); width: lookCard.labW; height: trackViewRoot.rowH; text: "COLOUR MODE" }
+                Btn
+                {
+                    objectName: "colourModeFade"
+                    x: lookCard.cX; y: deck.rowY(4); width: lookCard.cell(7); height: trackViewRoot.rowH
+                    text: qsTr("FADE"); icon: "fadeColour"
+                    tone: trackViewRoot.cBlue
+                    active: trackEngine ? trackEngine.colourMode === 1 : false
+                    onTapped: trackEngine.setColourMode(trackEngine.colourMode === 1 ? 0 : 1)
+                    // runde 374: how far the fade is - from the colour it leaves to the one it goes to
+                    Rectangle
+                    {
+                        objectName: "colourFadeBar"
+                        anchors.left: parent.left; anchors.bottom: parent.bottom
+                        anchors.leftMargin: 5; anchors.bottomMargin: 5
+                        height: 4; radius: 2
+                        visible: trackEngine ? trackEngine.colourStyle === 1 : false
+                        width: Math.max(2, (parent.width - 10) * (trackEngine ? trackEngine.colourFadeT : 0))
+                        gradient: Gradient
+                        {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: trackViewRoot.swatch(trackEngine ? trackEngine.colourFadeFrom : "") }
+                            GradientStop { position: 1.0; color: trackViewRoot.swatch(trackEngine ? trackEngine.colourFadeTo : "") }
+                        }
+                    }
+                }
+                Btn
+                {
+                    objectName: "colourModeChase"
+                    x: lookCard.cX + lookCard.cell(7) + lookCard.cg; y: deck.rowY(4); width: lookCard.cell(7); height: trackViewRoot.rowH
+                    text: qsTr("CHASE"); icon: "chaseColour"
+                    tone: trackViewRoot.cBlue
+                    active: trackEngine ? trackEngine.colourMode === 2 : false
+                    onTapped: trackEngine.setColourMode(trackEngine.colourMode === 2 ? 0 : 2)
+                }
+                RowLabel
+                {
+                    x: lookCard.cX + 3 * (lookCard.cell(7) + lookCard.cg)
+                    y: deck.rowY(4); width: lookCard.cell(7) - Math.round(8 * trackViewRoot.ks); height: trackViewRoot.rowH
+                    horizontalAlignment: Text.AlignRight
+                    text: "SPEED"
+                }
+                // how fast the engine runs the figures
+                Repeater
+                {
+                    model: [ "½×", "1×", "2×" ]
+                    Btn
+                    {
+                        objectName: "speed" + index
+                        x: lookCard.cX + (4 + index) * (lookCard.cell(7) + lookCard.cg)
+                        y: deck.rowY(4); width: lookCard.cell(7); height: trackViewRoot.rowH
+                        text: modelData
+                        tone: [ "#7A9ABA", "#4FA3E3", "#E3B44F" ][index]
+                        active: trackEngine ? trackEngine.speed === index - 1 : index === 1
+                        onTapped: trackEngine.speed = index - 1
+                    }
+                }
+
+                // row 5: the haze machine, a group of its own - always by hand (runde 389)
+                Item
+                {
+                    anchors.fill: parent
+                    visible: trackEngine ? trackEngine.hazeAvailable : false
+                    Rectangle
+                    {
+                        x: lookCard.inX; width: lookCard.inW; height: 1
+                        y: deck.rowY(5) - Math.round(trackViewRoot.g / 2) - 1
+                        color: trackViewRoot.cEdge
+                    }
+                    RowLabel { x: lookCard.inX; y: deck.rowY(5); width: lookCard.labW; height: trackViewRoot.rowH; text: "HAZE MACHINE" }
+                    Fader
+                    {
+                        objectName: "haze"
+                        inputName: "hazeDrag"
+                        x: lookCard.cX; y: deck.rowY(5)
+                        width: (lookCard.cW - trackViewRoot.g) / 2; height: trackViewRoot.rowH
+                        name: qsTr("HAZE")
+                        nameInk: "#121214"
+                        level: trackEngine ? trackEngine.haze : 0
+                        fill: "#8A8A8A"
+                        gripInk: "#C8C8C8"
+                        onSetLevel: (v) => { if (v < 0.03) v = 0; if (trackEngine) trackEngine.haze = v }
+                    }
+                    Fader
+                    {
+                        objectName: "fan"
+                        inputName: "fanDrag"
+                        x: lookCard.cX + (lookCard.cW + trackViewRoot.g) / 2; y: deck.rowY(5)
+                        width: (lookCard.cW - trackViewRoot.g) / 2; height: trackViewRoot.rowH
+                        name: qsTr("FAN SPEED")
+                        nameInk: "#0C141B"
+                        level: trackEngine ? trackEngine.fan : 0
+                        fill: "#6A8AA0"
+                        gripInk: "#A8C4D8"
+                        onSetLevel: (v) => { if (v < 0.03) v = 0; if (trackEngine) trackEngine.fan = v }
+                    }
+                }
             }
-            }
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: liveRow.width * 0.35
-                color: trackViewRoot.cPanel; radius: 4; border.color: trackViewRoot.cLine
-                Text { x: 12; y: 8; text: "INTERVENTION"; color: trackViewRoot.cText; font.pixelSize: trackViewRoot.compactLayout ? 16 : 20 }
-                RowLayout { anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 10; height: 48; spacing: 8
-TrackTile
+
+            // ---- LIVE: one press, right now - the urgent ones lowest ----
+            Card
             {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                objectName: "calm"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "calm" }
-                label: (trackEngine && trackEngine.calmBarsLeft > 0)
-                       ? qsTr("CALM") + " " + trackEngine.calmBarsLeft : qsTr("CALM")
-                active: trackEngine ? trackEngine.calmBarsLeft > 0 : false
-                activeColor: "#4FA3E3"
-                onTapped: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
-            }
-TrackTile
-            {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                objectName: "hold"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "hold" }
-                label: qsTr("HOLD")
-                active: trackEngine ? trackEngine.hold : false
-                activeColor: "#E3B44F"
-                onTapped: trackEngine.hold = !trackEngine.hold
-            }
-TrackTile
-            {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                objectName: "nextLook"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "nextLook" }
-                label: qsTr("NEXT LOOK")
-                active: false
-                onTapped: trackEngine.next()
-            }
+                id: liveCard
+                title: "LIVE"
+                x: parent.width - trackViewRoot.liveW
+                y: 0
+                width: trackViewRoot.liveW
+                height: parent.height
+                readonly property real inX: trackViewRoot.cardPad + 2
+                readonly property real inW: width - 2 * inX
+                // BLACKOUT and FLASH WHITE share the last three rows: one and a half
+                // each - FLASH "lidt mindre" (runde 389), BLACKOUT a bigger target
+                readonly property real bigH: (3 * trackViewRoot.rowH + trackViewRoot.g) / 2
+
+                Btn
+                {
+                    objectName: "calm"
+                    x: liveCard.inX; y: deck.rowY(0); width: liveCard.inW; height: trackViewRoot.rowH
+                    icon: "calm"
+                    text: (trackEngine && trackEngine.calmBarsLeft > 0) ? qsTr("CALM") + " " + trackEngine.calmBarsLeft : qsTr("CALM")
+                    tone: trackViewRoot.cBlue
+                    active: trackEngine ? trackEngine.calmBarsLeft > 0 : false
+                    onTapped: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
+                }
+                Btn
+                {
+                    objectName: "nextLook"
+                    x: liveCard.inX; y: deck.rowY(1); width: liveCard.inW; height: trackViewRoot.rowH
+                    icon: "nextLook"
+                    text: qsTr("NEXT LOOK")
+                    onTapped: trackEngine.next()
+                }
+                Btn
+                {
+                    objectName: "hold"
+                    x: liveCard.inX; y: deck.rowY(2); width: liveCard.inW; height: trackViewRoot.rowH
+                    icon: "hold"
+                    text: qsTr("HOLD")
+                    tone: trackViewRoot.cGold
+                    active: trackEngine ? trackEngine.hold : false
+                    onTapped: trackEngine.hold = !trackEngine.hold
+                }
+
+                // BLACKOUT: held = dark while held; slid off = latched; a tap on a
+                // latched one lets it go (runde 296: a grab taken away lets go)
+                Rectangle
+                {
+                    id: blackoutTile
+                    objectName: "blackout"
+                    property bool armed: false          // this press is the one holding it
+                    property bool on: trackEngine ? trackEngine.blackout : false
+                    x: liveCard.inX; y: deck.rowY(3); width: liveCard.inW; height: liveCard.bigH
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: on ? "#B03030" : (boIn.down ? "#1A1A1F" : "#0A0A0C")
+                    border.width: 1
+                    border.color: on ? Qt.lighter("#B03030", 1.3) : "#3A3A42"
+                    Row
+                    {
+                        anchors.centerIn: parent
+                        spacing: Math.round(9 * trackViewRoot.ks)
+                        ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(18 * trackViewRoot.ks); height: width
+                                      kind: "blackout"; ink: blackoutTile.on ? "#101010" : "#D6D6DC" }
+                        Text
+                        {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("BLACKOUT")
+                            color: blackoutTile.on ? "#101010" : "#D6D6DC"
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(14)
+                            font.letterSpacing: (trackViewRoot.fs(14)) * 0.1
+                        }
+                    }
+                    TouchInput
+                    {
+                        id: boIn
+                        onPressedAt: (x, y) =>
+                        {
+                            if (!trackEngine) return
+                            if (trackEngine.blackout) { trackEngine.blackout = false; blackoutTile.armed = false }
+                            else { trackEngine.blackout = true; blackoutTile.armed = true }
+                        }
+                        onReleasedAt: (x, y, inside) =>
+                        {
+                            if (!trackEngine || !blackoutTile.armed) return
+                            blackoutTile.armed = false
+                            // released ON the button: a momentary hold, let go; off it: latched
+                            if (inside) trackEngine.blackout = false
+                        }
+                        onCanceled:
+                        {
+                            if (blackoutTile.armed && trackEngine) trackEngine.blackout = false
+                            blackoutTile.armed = false
+                        }
+                    }
+                }
+
+                // FLASH WHITE: on while held. Dark with a white edge at rest - a big
+                // light tile glares in a dark booth - and white while it flashes
+                Rectangle
+                {
+                    id: flashTile
+                    objectName: "flash"
+                    property bool on: trackEngine ? trackEngine.flashing : false
+                    x: liveCard.inX; y: deck.rowY(3) + liveCard.bigH + trackViewRoot.g; width: liveCard.inW
+                    height: liveCard.bigH
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: on ? "#FFFFFF" : (flashIn.down ? "#34343C" : "#24242A")
+                    border.width: 2
+                    border.color: "#F2F2F5"
+                    Row
+                    {
+                        anchors.centerIn: parent
+                        spacing: Math.round(12 * trackViewRoot.ks)
+                        ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(24 * trackViewRoot.ks); height: width
+                                      kind: "flash"; ink: flashTile.on ? "#101010" : "#FFFFFF" }
+                        Text
+                        {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("FLASH WHITE")
+                            color: flashTile.on ? "#101010" : "#FFFFFF"
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(18)
+                            font.letterSpacing: (trackViewRoot.fs(18)) * 0.14
+                        }
+                    }
+                    TouchInput
+                    {
+                        id: flashIn
+                        onPressedAt: (x, y) => { if (trackEngine) trackEngine.setFlash(true) }
+                        onReleasedAt: (x, y, inside) => { if (trackEngine) trackEngine.setFlash(false) }
+                        onCanceled: { if (trackEngine) trackEngine.setFlash(false) }
+                        // the page destroyed with the finger still down: no release
+                        // ever comes, and FLASH stood at full all night (r199)
+                        Component.onDestruction: if (down && trackEngine) trackEngine.setFlash(false)
+                    }
                 }
             }
         }
 
-Rectangle
+        // ============ 4 · THE ENGINE'S LINE - and the air above the taskbar (r141) ============
+        Item
         {
             Layout.fillWidth: true
-            // no fillHeight: the waveform is the one row that grows
-            Layout.fillHeight: false
-            // Lower cards (runde 139, Tobias: "Grupperne må også gerne være
-            // lidt lavere"). 24 for the title, then one card: header row 46,
-            // gap, fader 40, margins - 124. The old 210 was carrying a
-            // separate status line and a 40-pixel ON/OFF button stacked
-            // under the name, with dead space between them.
-            Layout.preferredHeight: trackViewRoot.compactLayout ? 132 : 144
-            Layout.minimumHeight: trackViewRoot.compactLayout ? 132 : 144
-            Layout.maximumHeight: trackViewRoot.compactLayout ? 132 : 144
-            color: trackViewRoot.cPanel
-            radius: 4
+            Layout.preferredHeight: trackViewRoot.footH
+            Row
+            {
+                anchors.left: parent.left
+                anchors.leftMargin: 4
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.verticalCenterOffset: -2
+                width: parent.width / 2
+                spacing: 12
+                Text { text: qsTr("ON STAGE"); color: trackViewRoot.cMute; font.bold: true; font.pixelSize: trackViewRoot.fs(11); font.letterSpacing: (trackViewRoot.fs(11)) * 0.15
+                       anchors.verticalCenter: parent.verticalCenter }
+                Text
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 120
+                    elide: Text.ElideRight
+                    textFormat: Text.StyledText
+                    font.pixelSize: trackViewRoot.fs(13)
+                    color: trackViewRoot.cMute
+                    text:
+                    {
+                        if (!trackEngine) return ""
+                        var parts = trackEngine.report.split("  |  ")
+                        var cast = parts.length > 0 ? parts[0] : ""
+                        var colour = parts.length > 1 ? parts[1] : ""
+                        var state = parts.length > 2 ? parts[2] : ""
+                        return "<font color='#CFCFD6'>" + cast + "</font>" + (colour !== "" ? "  ·  " + colour : "") + (state !== "" ? "  ·  " + state : "")
+                    }
+                }
+            }
+            Row
+            {
+                anchors.right: parent.right
+                anchors.rightMargin: 4
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.verticalCenterOffset: -2
+                spacing: 12
+                visible: trackManager && trackManager.nextTitle !== undefined && trackManager.nextTitle !== ""
+                Text { text: qsTr("NEXT TRACK"); color: trackViewRoot.cMute; font.bold: true; font.pixelSize: trackViewRoot.fs(11); font.letterSpacing: (trackViewRoot.fs(11)) * 0.15
+                       anchors.verticalCenter: parent.verticalCenter }
+                Text
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.StyledText
+                    font.pixelSize: trackViewRoot.fs(13)
+                    color: trackViewRoot.cMute
+                    text: trackManager ? "<font color='#CFCFD6'>" + trackManager.nextTitle + "</font>"
+                                         + (trackManager.nextFirstDrop > 0 ? "  ·  " + qsTr("first drop bar") + " " + trackManager.nextFirstDrop : "") : ""
+                }
+            }
+        }
+    }
 
-            Text { x: 12; y: 6; text: "LIGHT GROUPS"; color: trackViewRoot.cText; font.pixelSize: 18 }
-            // The cast: the groups side by side across the panel, exactly
-            // where they have always been - but each one's fader now fills
-            // from the LEFT (0 %) to the RIGHT (100 %), the way MASTER and
-            // ENERGY do, instead of from the bottom up. The DJ's trim sits on
-            // top of everything the engine does, and the switch in the top
-            // right corner leaves a group out for the night.
-            // A group whose dimmer is a switch (an animation laser) gets no
-            // fader at all: the whole row is its on/off button, because a
-            // fader that only has two positions is a lie.
-            // (CAST_V10_MD_GUARD)
+    // =====================================================================
+    //  SETUP: over the track, the rig and the look - never over the top bar
+    //  or LIVE: SETUP opened mid-set must leave FLASH, BLACKOUT and SHOW OFF
+    //  where they were (runde 253, BACKLOG 100)
+    // =====================================================================
+    Loader
+    {
+        id: setupLoader
+        z: 100
+        onLoaded: if (item) item.host = trackViewRoot
+        x: trackViewRoot.mx
+        y: Math.round(14 * trackViewRoot.ks) + trackViewRoot.topH + trackViewRoot.gapB
+        width: trackViewRoot.width - 2 * trackViewRoot.mx - trackViewRoot.liveW - trackViewRoot.gapB
+        height: trackViewRoot.height - y - trackViewRoot.footH - trackViewRoot.gapB
+        visible: trackViewRoot.setupOpen && trackManager && trackManager.roleMode
+        active: visible
+        source: "qrc:/TrackSetup.qml"
+    }
+
+    Rectangle
+    {
+        anchors.fill: setupLoader
+        visible: setupLoader.visible && setupLoader.status === Loader.Error
+        color: "#3A1A1A"
+        radius: 4
+        z: 101
+        Text
+        {
+            anchors.fill: parent
+            anchors.margins: 12
+            wrapMode: Text.Wrap
+            color: "#FFB0B0"
+            font.pixelSize: 13
+            text:
+            {
+                if (setupLoader.status !== Loader.Error)
+                    return ""
+                var c = Qt.createComponent("qrc:/TrackSetup.qml")
+                return "TrackSetup.qml failed to load:\n\n" + (c.status === Component.Error ? c.errorString() : "(no detail)")
+            }
+        }
+    }
+
+    // the classic slot setup, for a show without roles
+    Rectangle
+    {
+        anchors.fill: setupLoader
+        z: 100
+        visible: trackViewRoot.setupOpen && trackManager && !trackManager.roleMode
+        color: trackViewRoot.cCard
+        radius: 8
+        Flickable
+        {
+            anchors.fill: parent
+            anchors.margins: 8
+            contentHeight: setupCol.height
+            clip: true
+
             Column
             {
-                id: castPanel
-                anchors.fill: parent
-                anchors.margins: 6
-                anchors.topMargin: 30
-                spacing: 4
-                visible: !trackViewRoot.setupOpen
+                id: setupCol
+                width: parent.width
+                spacing: 5
 
                 Row
                 {
-                    id: castRow
-                    // once, here - not once per tile. trackEngine.groups is a
-                    // full rebuild of the function table, not a cheap getter.
-                    property int n: Math.max(1, castRep.count)     // runde 204: the Repeater's count, not a second groups()
-                    // ... and the same for the other two getters that are not
-                    // cheap either (runde 142). trims() builds a QVariantMap
-                    // over every group on each call and cast() copies a list
-                    // and SORTS it; the delegate below asked for trims twice
-                    // and cast once, so five tiles came to ten map rebuilds
-                    // and five sorts every time a trim moved or the cast
-                    // changed - and a finger dragging a fader changes the
-                    // trim continuously. Read once here, per change, and the
-                    // tiles read these.
-                    property var allTrims: trackEngine ? trackEngine.trims : ({})
-                    property var litNow: trackEngine ? trackEngine.cast : []
-                    width: parent.width
-                    height: parent.height
-                    spacing: 6
-
+                    spacing: 8
+                    Item { width: 130; height: 26 }
                     Repeater
                     {
-                        id: castRep
-                        model: trackEngine ? trackEngine.groups : []
-
-                        Rectangle
-                        {
-                            id: castTile
-                            objectName: "groupTrim:"+md.key
-                            ControlIcon {
-                                x: 10; y: 10; width: trackViewRoot.compactLayout ? 28 : 34; height: width; z: 2
-                                ink: castTile.off ? "#666666" : "#CCCCCC"
-                                kind: md.switchOnly ? "animation" : md.strobes ? "strobe" : md.lasers ? "laser" : md.key.toLowerCase().indexOf("eyes") >= 0 ? "eyes" : "head"
-                            }
-                            // same fallback as the track list: a groups rebuild
-                            // re-evaluates every tile binding with modelData gone
-                            property var md: modelData ? modelData
-                                                       : ({ key: "", enabled: true,
-                                                            switchOnly: false, base: false })
-                            property bool lit: castRow.litNow.indexOf(md.key) >= 0
-                            property bool off: !md.enabled
-                            property bool switchOnly: md.switchOnly === true
-                            property real trim: castRow.allTrims[md.key] !== undefined
-                                                ? castRow.allTrims[md.key] : 1.0
-                            width: (castRow.width - (castRow.n - 1) * castRow.spacing) / castRow.n
-                            height: castRow.height
-                            radius: 6
-                            color: off ? "#161616" : "#1E1E1E"
-                            border.width: md.base ? 2 : 1
-                            border.color: lit ? "#9FD3FF" : (md.base ? "#4FA3E3" : "#3A3A3A")
-                            clip: true
-
-                            // the scale: 25, 50, 75 % as ticks along the top and
-                            // bottom edges, the way a horizontal fader is read
-                            Repeater
-                            {
-                                model: castTile.switchOnly ? [] : [ 0.25, 0.5, 0.75 ]
-                                Item
-                                {
-                                    x: 3 + (castTile.width - 6) * modelData - 1
-                                    y: 0
-                                    width: 2
-                                    height: 52
-                                    anchors.bottom: parent.bottom
-                                    Rectangle { y: 0; width: 2; height: 8; color: "#4A4A4A" }
-                                    Rectangle { y: parent.height - 8; width: 2; height: 8; color: "#4A4A4A" }
-                                }
-                            }
-
-                            // the fader: the trim fills from the LEFT, with a
-                            // bright edge where the level stands
-                            Rectangle
-                            {
-                                id: castFill
-                                visible: !castTile.switchOnly
-                                anchors.left: parent.left
-                                                                anchors.bottom: parent.bottom
-                                anchors.margins: 3
-                                height: 46
-                                width: (parent.width - 6) * (castTile.off ? 0 : castTile.trim)
-                                radius: 4
-                                color: castTile.lit ? (md.base ? "#2E6FA8" : "#3D86C4")
-                                                    : (castArea.pressed ? "#3A3A3A" : "#303030")
-                                Behavior on color { ColorAnimation { duration: 150 } }
-
-                                // the grip, at the level - the same handle
-                                // the big faders have, so the gesture is the
-                                // same one everywhere on the page
-                                SliderGrip
-                                {
-                                    anchors.right: parent.right
-                                    anchors.rightMargin: -width / 2
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    height: parent.height + 4
-                                    visible: !castTile.off
-                                    ink: castTile.lit ? "#BFE3FF" : "#B0B0B0"
-                                    pressed: castArea.pressed
-                                    z: 3
-                                }
-                            }
-
-                            Text {
-                                anchors.bottom: parent.bottom; anchors.bottomMargin: 17
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                text: Math.round(castTile.trim * 100) + "%"
-                                visible: !castTile.switchOnly
-                                color: "#EEEEEE"; font.pixelSize: 13; z: 2
-                            }
-                            // an on/off group fills its whole row when it is on -
-                            // there is nothing in between to show
-                            Rectangle
-                            {
-                                visible: castTile.switchOnly && !castTile.off
-                                anchors.fill: parent
-                                anchors.margins: 3
-                                radius: 4
-                                color: castTile.lit ? (md.base ? "#2E6FA8" : "#3D86C4") : "#303030"
-                                Behavior on color { ColorAnimation { duration: 150 } }
-                            }
-
-                            // drag anywhere: the trim. A switch-only group toggles
-                            // instead - one tap, on or off.
-                            MouseArea
-                            {
-                                id: castArea
-                                objectName: "groupTrim:"+md.key+"Drag"
-                                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                                height: castTile.switchOnly ? parent.height : 52
-                                // the base group is always in the show, switch-only
-                                // or not - the comment on the switch below says so
-                                // and this is the path that could have broken it
-                                enabled: (castTile.switchOnly && !md.base) || !castTile.off
-                                // The switch is in the header; this MouseArea covers only the trim.
-                                property bool hasSwitch: false
-                                function onSwitch(x, y)
-                                {
-                                    return hasSwitch && width > 96 && x > width - 69 && y < 41
-                                }
-                                function apply(x)
-                                {
-                                    var v = (x - 3) / (width - 6)
-                                    v = Math.max(0, Math.min(1, v))
-                                    if (v > 0.97) v = 1
-                                    if (v < 0.03) v = 0
-                                    // whole percent (runde 221): every mouse move
-                                    // wrote the registry three times - repeats now
-                                    // stop at setGroupTrim's own equality test
-                                    v = Math.round(v * 100) / 100
-                                    if (trackEngine) trackEngine.setGroupTrim(md.key, v)
-                                }
-                                // decided on the press alone: a drag that began on
-                                // the fader keeps working when the finger wanders
-                                // into the halo - testing every move froze the
-                                // fader at about half on the right-hand side
-                                property bool dragging: false
-                                onPressed: (mouse) =>
-                                {
-                                    dragging = false
-                                    if (castTile.switchOnly)
-                                        return
-                                    if (!onSwitch(mouse.x, mouse.y))
-                                    {
-                                        dragging = true
-                                        apply(mouse.x)
-                                    }
-                                }
-                                onPositionChanged: (mouse) =>
-                                {
-                                    if (pressed && dragging)
-                                        apply(mouse.x)
-                                }
-                                onReleased: dragging = false
-                                onClicked: (mouse) =>
-                                {
-                                    if (castTile.switchOnly && !md.base && trackEngine)
-                                        trackEngine.setGroupEnabled(md.key, castTile.off)
-                                }
-                            }
-
-                            Column
-                            {
-                                // room kept free on the right for the toggle
-                                x: trackViewRoot.compactLayout ? 44 : 52; y: 9
-                                width: Math.max(24, parent.width - x - (md.base ? 10 : 68))
-                                spacing: 2
-
-                                Text
-                                {
-                                    width: parent.width
-                                    elide: Text.ElideRight
-                                    text: md.key.toUpperCase()
-                                    color: castTile.lit ? "#FFFFFF" : (castTile.off ? "#444444" : "#8A8A8A")
-                                    font.bold: true
-                                    font.pixelSize: 14
-                                }
-                                Text
-                                {
-                                    width: parent.width
-                                    elide: Text.ElideRight
-                                    text: castTile.off ? qsTr("OFF")
-                                        : castTile.switchOnly ? qsTr("ON")
-                                        : (md.base ? qsTr("BASE") + "  " : "")
-                                          + Math.round(castTile.trim * 100) + "%"
-                                    color: castTile.lit ? "#E0F0FF" : "#6A6A6A"
-                                    font.bold: castTile.switchOnly
-                                    font.pixelSize: 12
-                                }
-                            }
-
-                            // The second status line is gone (runde 139). It
-                            // read "BASE · READY" against the line under the
-                            // name that already says BASE and the level, and
-                            // holding it took a 64-pixel gap above the fader.
-                            // What it alone carried - that a group is lit
-                            // RIGHT NOW - is now the name's colour and the
-                            // card's border, which it always was as well.
-                            // the switch: in or out of tonight's show. The base
-                            // (the heads) is always in; SETUP decides which one it
-                            // is. A switch-only group is its own switch.
-                            // A TOGGLE, not a button (runde 139, Tobias:
-                            // "tilføj toggle i stedet for en on/off knap").
-                            // A switch shows its state by where the knob is,
-                            // so it needs no word in it and no second line
-                            // under the name to explain it - which is half of
-                            // why the card can now be 124 tall instead of 210.
-                            // Top right, clear of the fader at the bottom.
-                            Rectangle
-                            {
-                                id: groupSwitch
-                                objectName: "groupSwitch:"+md.key
-                                x: parent.width - width - 10
-                                y: 11
-                                width: 52
-                                height: 26
-                                radius: height / 2
-                                visible: !md.base
-                                color: castTile.off ? "#2E2E2E" : "#7ED07E"
-                                border.width: 1
-                                border.color: castTile.off ? "#4A4A4A" : "#9FE39F"
-                                Behavior on color { ColorAnimation { duration: 120 } }
-
-                                Rectangle
-                                {
-                                    id: groupKnob
-                                    width: parent.height - 6
-                                    height: width
-                                    radius: width / 2
-                                    y: 3
-                                    x: castTile.off ? 3 : parent.width - width - 3
-                                    color: castTile.off ? "#8A8A8A" : "#123012"
-                                    Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
-                                }
-
-                                MouseArea
-                                {
-                                    // a touch target bigger than the switch it
-                                    // draws: the pill is 52x26, the finger is not
-                                    anchors.centerIn: parent
-                                    width: parent.width + 16
-                                    height: parent.height + 16
-                                    onClicked: trackEngine.setGroupEnabled(md.key, castTile.off)
-                                }
-                            }
-                        }
+                        model: trackViewRoot.states
+                        Text { width: 190; text: modelData.toUpperCase(); color: trackViewRoot.markerColor(modelData); font.bold: true; font.pixelSize: 14 }
                     }
+                    Text { width: 150; text: qsTr("Folder"); color: trackViewRoot.cMute; font.pixelSize: 14 }
+                    Text { width: 40; text: qsTr("spd"); color: trackViewRoot.cMute; font.pixelSize: 14 }
                 }
-            }
-            // The role picker owns setup now: one tap per function decides
-            // what it does, and the engine handles the rest.
-            // Loaded indirectly so a fault in TrackSetup cannot take the whole
-            // page down with it - and so the fault is shown instead of hidden.
-            Loader
-            {
-                id: setupLoader
-                parent: trackViewRoot        // overlay the page ...
-                z: 100
-                onLoaded: if (item) item.host = trackViewRoot
-                // ... down to the footer, not over it (runde 253, BACKLOG 100):
-                // SETUP opened mid-set covered FLASH, BLACKOUT and SHOW OFF
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                // (footerRow.y read in the binding so it re-runs when the layout moves)
-                height: footerRow.y >= 0 ? Math.max(200, footerRow.mapToItem(trackViewRoot, 0, 0).y - 6)
-                                         : parent.height
-                visible: trackViewRoot.setupOpen && trackManager
-                         && trackManager.roleMode
-                active: visible
-                source: "qrc:/TrackSetup.qml"
-            }
 
-            Rectangle
-            {
-                anchors.fill: parent
-                anchors.margins: 8
-                visible: setupLoader.visible && setupLoader.status === Loader.Error
-                color: "#3A1A1A"
-                radius: 4
-
-                Text
+                Repeater
                 {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    wrapMode: Text.Wrap
-                    color: "#FFB0B0"
-                    font.pixelSize: 13
-                    text:
-                    {
-                        // only when the Loader really failed: this used to
-                        // compile TrackSetup on every page load
-                        if (setupLoader.status !== Loader.Error)
-                            return ""
-                        var c = Qt.createComponent("qrc:/TrackSetup.qml")
-                        return "TrackSetup.qml failed to load:\n\n"
-                               + (c.status === Component.Error
-                                  ? c.errorString() : "(no detail)")
-                    }
-                }
-            }
-
-            Flickable
-            {
-                visible: trackViewRoot.setupOpen && trackManager
-                         && !trackManager.roleMode
-                anchors.fill: parent
-                anchors.margins: 8
-                contentHeight: setupCol.height
-                clip: true
-
-                Column
-                {
-                    id: setupCol
-                    width: parent.width
-                    spacing: 5
-
+                    model: trackManager ? trackManager.slotCount : 0
                     Row
                     {
+                        property int slotIndex: index
                         spacing: 8
-
-                        Item { width: 130; height: 26 }
-
+                        Text
+                        {
+                            width: 130; height: 34
+                            verticalAlignment: Text.AlignVCenter
+                            text: trackManager ? trackManager.slotName(slotIndex) : ""
+                            color: trackViewRoot.cText
+                            font.pixelSize: 15
+                        }
                         Repeater
                         {
                             model: trackViewRoot.states
-                            Text
+                            Row
                             {
+                                property string stateName: modelData
                                 width: 190
-                                text: modelData.toUpperCase()
-                                color: trackViewRoot.markerColor(modelData)
-                                font.bold: true
-                                font.pixelSize: 14
-                            }
-                        }
-
-                        Text
-                        {
-                            width: 150
-                            text: qsTr("Folder")
-                            color: trackViewRoot.cDim
-                            font.pixelSize: 14
-                        }
-                        Text
-                        {
-                            width: 40
-                            text: qsTr("spd")
-                            color: trackViewRoot.cDim
-                            font.pixelSize: 14
-                        }
-                    }
-
-                    Repeater
-                    {
-                        model: trackManager ? trackManager.slotCount : 0
-
-                        Row
-                        {
-                            property int slotIndex: index
-                            spacing: 8
-
-                            Text
-                            {
-                                width: 130
-                                height: 34
-                                verticalAlignment: Text.AlignVCenter
-                                text: trackManager ? trackManager.slotName(slotIndex) : ""
-                                color: trackViewRoot.cText
-                                font.pixelSize: 15
-                            }
-
-                            Repeater
-                            {
-                                model: trackViewRoot.states
-
-                                Row
+                                spacing: 4
+                                CheckBox
                                 {
-                                    property string stateName: modelData
-                                    width: 190
-                                    spacing: 4
-
-                                    CheckBox
+                                    id: rndBox
+                                    width: 32; height: 34
+                                    checked: trackManager ? trackManager.lookRandom(stateName, parent.parent.slotIndex) : false
+                                    onToggled: trackManager.setLookRandom(stateName, parent.parent.slotIndex, checked)
+                                }
+                                ComboBox
+                                {
+                                    width: 150; height: 34
+                                    enabled: !rndBox.checked
+                                    model: trackManager ? trackManager.slotFunctions(parent.parent.slotIndex) : []
+                                    textRole: "name"
+                                    Component.onCompleted:
                                     {
-                                        id: rndBox
-                                        width: 32
-                                        height: 34
-                                        checked: trackManager
-                                                 ? trackManager.lookRandom(stateName,
-                                                       parent.parent.slotIndex) : false
-                                        onToggled: trackManager.setLookRandom(
-                                                       stateName, parent.parent.slotIndex, checked)
+                                        if (!trackManager) return
+                                        var fid = trackManager.lookFunction(parent.stateName, parent.parent.slotIndex)
+                                        for (var i = 0; i < model.length; i++)
+                                            if (model[i].id === fid) { currentIndex = i; return }
+                                        currentIndex = -1
                                     }
-
-                                    ComboBox
+                                    onActivated:
                                     {
-                                        width: 150
-                                        height: 34
-                                        enabled: !rndBox.checked
-                                        model: trackManager
-                                               ? trackManager.slotFunctions(parent.parent.slotIndex)
-                                               : []
-                                        textRole: "name"
-
-                                        Component.onCompleted:
-                                        {
-                                            if (!trackManager) return
-                                            var fid = trackManager.lookFunction(
-                                                          parent.stateName, parent.parent.slotIndex)
-                                            for (var i = 0; i < model.length; i++)
-                                                if (model[i].id === fid) { currentIndex = i; return }
-                                            currentIndex = -1
-                                        }
-
-                                        onActivated:
-                                        {
-                                            var e = model[currentIndex]
-                                            if (e !== undefined)
-                                                trackManager.setLookFunction(
-                                                    parent.stateName, parent.parent.slotIndex, e.id)
-                                        }
+                                        var e = model[currentIndex]
+                                        if (e !== undefined)
+                                            trackManager.setLookFunction(parent.stateName, parent.parent.slotIndex, e.id)
                                     }
                                 }
                             }
-
-                            ComboBox
-                            {
-                                width: 150
-                                height: 34
-                                model: trackManager ? trackManager.folderList() : []
-                                textRole: "name"
-
-                                Component.onCompleted:
-                                {
-                                    if (!trackManager) return
-                                    var f = trackManager.slotFolder(parent.slotIndex)
-                                    for (var i = 0; i < model.length; i++)
-                                        if (model[i].path === f) { currentIndex = i; return }
-                                    currentIndex = 0
-                                }
-
-                                onActivated:
-                                {
-                                    var e = model[currentIndex]
-                                    if (e !== undefined)
-                                        trackManager.setSlotFolder(parent.slotIndex, e.path)
-                                }
-                            }
-
-                            CheckBox
-                            {
-                                width: 40
-                                height: 34
-                                checked: trackManager
-                                         ? trackManager.slotFollowsSpeed(parent.slotIndex) : false
-                                onToggled: trackManager.setSlotFollowsSpeed(parent.slotIndex,
-                                                                            checked)
-                            }
-                        }
-                    }
-
-                    Row
-                    {
-                        spacing: 8
-
-                        Text
-                        {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: qsTr("BPM range") + ":"
-                            color: trackViewRoot.cDim
-                            font.pixelSize: 14
-                        }
-                        SpinBox
-                        {
-                            height: 34
-                            from: 40
-                            to: 300
-                            value: trackManager ? trackManager.bpmLow : 80
-                            onValueModified: trackManager.bpmLow = value
-                        }
-                        SpinBox
-                        {
-                            height: 34
-                            from: 40
-                            to: 300
-                            value: trackManager ? trackManager.bpmHigh : 140
-                            onValueModified: trackManager.bpmHigh = value
-                        }
-
-                        Text
-                        {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: "    " + qsTr("Quantize") + ":"
-                            color: trackViewRoot.cDim
-                            font.pixelSize: 14
                         }
                         ComboBox
                         {
-                            width: 90
-                            height: 34
-                            model: [ 1, 2, 4, 8, 16, 32 ]
-                            currentIndex:
+                            width: 150; height: 34
+                            model: trackManager ? trackManager.folderList() : []
+                            textRole: "name"
+                            Component.onCompleted:
                             {
-                                var q = trackManager ? trackManager.quantize : 1
-                                var opts = [ 1, 2, 4, 8, 16, 32 ]
-                                var idx = opts.indexOf(q)
-                                return idx < 0 ? 0 : idx
+                                if (!trackManager) return
+                                var f = trackManager.slotFolder(parent.slotIndex)
+                                for (var i = 0; i < model.length; i++)
+                                    if (model[i].path === f) { currentIndex = i; return }
+                                currentIndex = 0
                             }
-                            onActivated: trackManager.quantize = model[currentIndex]
+                            onActivated:
+                            {
+                                var e = model[currentIndex]
+                                if (e !== undefined)
+                                    trackManager.setSlotFolder(parent.slotIndex, e.path)
+                            }
+                        }
+                        CheckBox
+                        {
+                            width: 40; height: 34
+                            checked: trackManager ? trackManager.slotFollowsSpeed(parent.slotIndex) : false
+                            onToggled: trackManager.setSlotFollowsSpeed(parent.slotIndex, checked)
                         }
                     }
+                }
 
-                    Text
+                Row
+                {
+                    spacing: 8
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: qsTr("BPM range") + ":"; color: trackViewRoot.cMute; font.pixelSize: 14 }
+                    SpinBox { height: 34; from: 40; to: 300; value: trackManager ? trackManager.bpmLow : 80; onValueModified: trackManager.bpmLow = value }
+                    SpinBox { height: 34; from: 40; to: 300; value: trackManager ? trackManager.bpmHigh : 140; onValueModified: trackManager.bpmHigh = value }
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: "    " + qsTr("Quantize") + ":"; color: trackViewRoot.cMute; font.pixelSize: 14 }
+                    ComboBox
                     {
-                        text: qsTr("Running") + ": "
-                              + (trackManager ? trackManager.runningLook : "")
-                        color: trackViewRoot.cDim
-                        font.pixelSize: 14
+                        width: 90; height: 34
+                        model: [ 1, 2, 4, 8, 16, 32 ]
+                        currentIndex:
+                        {
+                            var q = trackManager ? trackManager.quantize : 1
+                            var opts = [ 1, 2, 4, 8, 16, 32 ]
+                            var idx = opts.indexOf(q)
+                            return idx < 0 ? 0 : idx
+                        }
+                        onActivated: trackManager.quantize = model[currentIndex]
                     }
                 }
-            }
-        }
-RowLayout {
-            id: footerRow
-            Layout.fillWidth: true; Layout.preferredHeight: 56; Layout.maximumHeight: 56; Layout.minimumHeight: 48
-            spacing: 10
-
-Rectangle
-            {
-                Layout.preferredWidth: 190
-                Layout.fillHeight: true
-                radius: 4
-                objectName: "flash"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter; ink: "#101010"; kind: "flash" }
-                color: (trackEngine && trackEngine.flashing) ? "#FFFFFF" : "#E36B6B"
 
                 Text
                 {
-                    anchors.centerIn: parent
-                    text: qsTr("FLASH WHITE")
-                    color: "#101010"
-                    font.bold: true
-                    font.pixelSize: 18
-                }
-
-                MouseArea
-                {
-                    anchors.fill: parent
-                    onPressed: if (trackEngine) trackEngine.setFlash(true)
-                    onReleased: if (trackEngine) trackEngine.setFlash(false)
-                    onCanceled: if (trackEngine) trackEngine.setFlash(false)
-                    // the page is destroyed with the finger still down (another
-                    // page tapped with a second finger): no release ever comes,
-                    // and FLASH stood at full for the rest of the night (r199)
-                    Component.onDestruction: if (pressed && trackEngine) trackEngine.setFlash(false)
-                }
-            }
-Rectangle
-            {
-                id: blackoutTile
-                objectName: "blackout"
-                ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "blackout" }
-                property bool armed: false          // this press is the one holding it
-
-                // TrackTile's own look, value for value (radius 3, #3A3A3A,
-                // border #555555, 13 px, bold and dark text when active), so
-                // the row is unchanged to the eye and only the BEHAVIOUR is
-                // different. It cannot BE a TrackTile: that one has a
-                // TapHandler and no press/release of its own.
-                Layout.preferredWidth: 150
-                Layout.fillHeight: true
-                radius: 3
-                color: (trackEngine && trackEngine.blackout) ? "#B03030" : "#3A3A3A"
-                border.width: 1
-                border.color: (trackEngine && trackEngine.blackout)
-                              ? Qt.lighter("#B03030", 1.3) : "#555555"
-
-                Text
-                {
-                    anchors.centerIn: parent
-                    text: qsTr("BLACKOUT")
-                    color: (trackEngine && trackEngine.blackout) ? "#101010" : "#EEEEEE"
-                    font.bold: trackEngine ? trackEngine.blackout : false
-                    font.pixelSize: 13
-                }
-
-                MouseArea
-                {
-                    anchors.fill: parent
-                    // do not let a Flickable under this steal the press: a
-                    // stolen grab would fire onCanceled and leave the room
-                    // dark with nothing holding it
-                    preventStealing: true
-                    onPressed:
-                    {
-                        if (!trackEngine)
-                            return
-                        if (trackEngine.blackout)
-                        {
-                            // latched on: this tap lets it go
-                            trackEngine.blackout = false
-                            blackoutTile.armed = false
-                        }
-                        else
-                        {
-                            trackEngine.blackout = true
-                            blackoutTile.armed = true
-                        }
-                    }
-                    onReleased: (mouse) =>
-                    {
-                        if (!trackEngine || !blackoutTile.armed)
-                            return
-                        blackoutTile.armed = false
-                        // released ON the button: a momentary hold, let go.
-                        // released off it: leave it latched.
-                        if (mouse.x >= 0 && mouse.y >= 0
-                            && mouse.x <= width && mouse.y <= height)
-                            trackEngine.blackout = false
-                    }
-                    // the grab taken away from us counts as "finger left the
-                    // button": latched, not released
-                    // runde 296 (Tobias: "Ja blackout skal slippe", B20 U3):
-                    // a grab taken away (page hidden) is not a finger sliding
-                    // out: let go, as FLASH does
-                    onCanceled: {
-                        if (blackoutTile.armed && trackEngine)
-                            trackEngine.blackout = false
-                        blackoutTile.armed = false
-                    }
-                }
-            }
-
-// The sliders sit to the RIGHT of the two buttons now
-// (runde 140, Tobias: "FLASH og BLACKOUT skal ogsaa rykkes
-// paa den anden side af haze-sliderne"). The two things you
-// hit in a hurry are together at the near edge, and the two
-// you set once an evening are out of the way.
-Item { Layout.fillWidth: true }
-
-RowLayout
-        {
-            id: atmosRow
-            Layout.fillWidth: true
-            Layout.preferredWidth: footerRow.width * 0.53
-            Layout.fillHeight: false
-            Layout.preferredHeight: 56
-            Layout.maximumHeight: 56
-            spacing: 10
-            visible: trackManager && trackManager.roleMode && trackEngine
-                     && trackEngine.hazeAvailable && !trackViewRoot.setupOpen
-
-            Repeater
-            {
-                model: [ "haze", "fan" ]
-
-                Rectangle
-                {
-                    id: atmosSlider
-                    objectName: modelData
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    radius: 4
-                    color: "#1B1B1B"
-                    border.width: 1
-                    border.color: "#555555"
-
-                    property bool isHaze: modelData === "haze"
-                    property real level: trackEngine
-                                         ? (isHaze ? trackEngine.haze : trackEngine.fan) : 0
-
-                    Rectangle
-                    {
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        anchors.margins: 3
-                        width: (parent.width - 6) * atmosSlider.level
-                        radius: 3
-                        color: atmosSlider.isHaze ? "#8A8A8A" : "#6A8AA0"
-                    }
-
-                    SliderTicks { anchors.fill: parent }
-                    SliderGrip
-                    {
-                        x: Math.max(1, Math.min(parent.width - width - 1,
-                                                3 + (parent.width - 6) * atmosSlider.level - width / 2))
-                        height: parent.height
-                        ink: atmosSlider.isHaze ? "#C8C8C8" : "#A8C4D8"
-                        pressed: atmosArea.pressed
-                    }
-
-                    Text
-                    {
-                        anchors.centerIn: parent
-                        text: (atmosSlider.isHaze ? qsTr("HAZE") : qsTr("FAN SPEED"))
-                              + "  " + Math.round(atmosSlider.level * 100) + "%"
-                        color: "#CCCCCC"
-                        font.bold: true
-                        font.pixelSize: 13
-                    }
-
-                    MouseArea
-                    {
-                        id: atmosArea
-                        objectName: atmosSlider.objectName+"Drag"
-                        anchors.fill: parent
-                        function apply(x)
-                        {
-                            var v = Math.max(0, Math.min(1, (x - 3) / (width - 6)))
-                            if (v < 0.03) v = 0
-                            if (atmosSlider.isHaze) trackEngine.haze = v
-                            else trackEngine.fan = v
-                        }
-                        onPressed: (mouse) => apply(mouse.x)
-                        onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
-                    }
-                }
-            }
-        }
-
-        }
-
-// The engine's own line, moved to the BOTTOM of the page (runde 141,
-// Tobias: "(released) linjen skal staa nederst, saa bruger vi den til at
-// faa lidt afstand til windows linjen"). It is the least urgent thing on
-// the page and it now does a second job: twenty-eight pixels of air
-// between FLASH and the Windows taskbar, so a thumb going for the flash
-// cannot catch the clock instead. The height is unchanged.
-Item
-            {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 28
-                Layout.maximumHeight: 28
-                Layout.leftMargin: 12
-                Layout.rightMargin: 12
-
-                Column
-                {
-                anchors.verticalCenter: parent.verticalCenter
-                width: parent.width
-                spacing: 2
-
-                Text
-                {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text: trackEngine ? trackEngine.report.split("  |  ")[0] : ""
-                    color: "#CCCCCC"
+                    text: qsTr("Running") + ": " + (trackManager ? trackManager.runningLook : "")
+                    color: trackViewRoot.cMute
                     font.pixelSize: 14
-                    font.bold: true
-                }
-                Text
-                {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text:
-                    {
-                        if (!trackEngine || !trackManager) return ""
-                        var parts = trackEngine.report.split("  |  ")
-                        var colour = parts.length > 1 ? parts[1] : ""
-                        var state = parts.length > 2 ? parts[2] : ""
-                        // the next section, in bars
-                        var cur = trackManager.currentBeat
-                        var mk = trackManager.markers
-                        var next = null
-                        for (var i = 0; i < mk.length; i++)
-                            if (mk[i].beat > cur && (next === null || mk[i].beat < next.beat)) next = mk[i]
-                        var count = (next && trackManager.playing) ? "   \u2192 " + next.type.toUpperCase() + " " + Math.ceil((next.beat - cur) / 4) : ""
-                        // the other deck, analysed ahead of time
-                        var nxt = (trackManager.nextTitle !== undefined && trackManager.nextTitle !== "")
-                                  ? "     " + qsTr("NEXT") + ": " + trackManager.nextTitle
-                                    + (trackManager.nextFirstDrop > 0 ? " (" + qsTr("drop at bar") + " " + trackManager.nextFirstDrop + ")" : "")
-                                  : ""
-                        return colour + "   \u00b7   " + state + count + nxt
-                    }
-                    color: "#8A8A8A"
-                    font.pixelSize: 12
-                }
                 }
             }
+        }
     }
 }
