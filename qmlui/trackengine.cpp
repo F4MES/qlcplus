@@ -6819,6 +6819,11 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     {
         if (aimHeld && info->aims)       // R378_POSITIONS: the held aim stands
             continue;
+        // R398_DOWN_NOZOOMPROG: ... and under STRAIGHT DOWN the beam is the
+        // hold's - no programme that zooms by itself (runde 220's chasers)
+        if (aimHeld && m_positionMode == QStringLiteral("down")
+            && info->name.contains(QStringLiteral("zoom"), Qt::CaseInsensitive))
+            continue;
         // a static pattern scene is a look and may show in any section; a
         // chase or EFX is movement and belongs to drops and builds
         if (staticOnly && info->type != int(Function::SceneType))
@@ -16258,16 +16263,67 @@ quint32 TrackEngine::headHoldFunction(const QString &key)
         return m_holdScenes.value(ck);
     if (m_positionMode == QStringLiteral("down"))
     {
+        // R398_DOWN_SHARP (Tobias 10-07: "straight down skal zoome hoveder til
+        // at vaere HELT skarpe (som ogsaa skal resette naar man de-selecter
+        // den)"): the Center's pan and tilt and the sharpest beam, in a hold
+        // scene of its own. The engine's zoom runs only over its own positions
+        // (the zoom: slot below), so it steps aside while this holds and takes
+        // the beam again on the beat the hold lets go - an LTP value would
+        // otherwise stay where the hold left it
         const QString want = ENGINE_POS_PREFIX + key + QStringLiteral(" Center");
+        Scene *center = nullptr;
         foreach (Function *func, m_doc->functions())
         {
             if (func != nullptr && func->name() == want)
+                center = qobject_cast<Scene *>(func);
+        }
+        if (center == nullptr)
+            return Function::invalidId();
+        QList<SceneValue> downValues = center->values();
+        const TrackGroup &dg = m_groups.value(key);
+        foreach (quint32 fxid, dg.fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fxid);
+            if (fxi == nullptr)
+                continue;
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
             {
-                m_holdScenes.insert(ck, func->id());
-                return func->id();
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch == nullptr)
+                    continue;
+                if (qch->preset() == QLCChannel::BeamZoomSmallBig)
+                    downValues.append(SceneValue(fxid, ch, 0));      // the Shark: 0 is the sharp beam
+                else if (qch->preset() == QLCChannel::BeamZoomBigSmall)
+                    downValues.append(SceneValue(fxid, ch, 255));
             }
         }
-        return Function::invalidId();
+        const QString downName = ENGINE_HOLD_PREFIX + key + QLatin1Char(' ') + m_positionMode;
+        Scene *downScene = nullptr;
+        foreach (Function *func, m_doc->functions())
+        {
+            if (func != nullptr && func->name() == downName)
+                downScene = qobject_cast<Scene *>(func);
+        }
+        if (downScene != nullptr)
+        {
+            foreach (SceneValue old, downScene->values())
+                downScene->unsetValue(old.fxi, old.channel);
+        }
+        else
+        {
+            downScene = new Scene(m_doc);
+            downScene->setName(downName);
+            downScene->setVisible(false);
+            if (m_doc->addFunction(downScene) == false)
+            {
+                delete downScene;
+                return Function::invalidId();
+            }
+        }
+        foreach (SceneValue sv, downValues)
+            downScene->setValue(sv);
+        m_holdScenes.insert(ck, downScene->id());
+        return downScene->id();
     }
     QList<Scene *> sources;
     if (m_positionMode == QStringLiteral("start"))
