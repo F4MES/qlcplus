@@ -202,6 +202,11 @@ Rectangle
         function onTrackChanged() { wfArea.release(); wfCanvas.selected = -1; wfCanvas.requestPaint() }
         function onMarkersChanged()
         {
+            // runde 397: the list changed under a drag (the other hand on UNDO,
+            // DELETE or + TYPE): the index may point at another flag now - drop
+            // the drag, move nothing
+            if (trackViewRoot.dragIndex >= 0 || wfArea.pressIndex >= 0)
+                wfArea.release(false)
             // only drop the selection when the flag is actually gone: RETYPE
             // must keep the flag it just retyped
             if (wfCanvas.selected >= trackManager.markers.length)
