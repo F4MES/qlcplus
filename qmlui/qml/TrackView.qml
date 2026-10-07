@@ -485,11 +485,18 @@ Rectangle
         SliderTicks { anchors.fill: parent; level: fd.level }
         Text
         {
+            id: fdName
             visible: fd.name !== ""
-            x: Math.round(16 * trackViewRoot.ks)
+            // runde 391 (the lys-PC at 0 %: "\u2261AZE"): the grip never covers the
+            // name - on the fill left of the grip when it fits there, else just
+            // right of the grip on the empty track
+            readonly property real start: Math.round(16 * trackViewRoot.ks)
+            readonly property real gap: Math.round(12 * trackViewRoot.ks)
+            readonly property bool onFill: fdGrip.x >= start + implicitWidth + gap
+            x: onFill ? start : fdGrip.x + fdGrip.width + gap
             anchors.verticalCenter: parent.verticalCenter
             text: fd.name
-            color: fd.level > 0.30 ? fd.nameInk : "#B8B8C0"
+            color: onFill ? fd.nameInk : "#B8B8C0"
             font.bold: true
             font.pixelSize: trackViewRoot.fs(12)
             font.letterSpacing: (trackViewRoot.fs(12)) * 0.15
@@ -504,10 +511,14 @@ Rectangle
         }
         Text
         {
-            property bool onFill: fd.level > 0.80
+            id: fdValue
+            // at the right end of the empty track - and in front of the grip, on
+            // the fill, as soon as the grip would touch it there (runde 391: a
+            // fixed 80 % let the grip cover "75%" on the narrow trims)
+            readonly property real rightX: parent.width - width - Math.round(18 * trackViewRoot.ks)
+            readonly property bool onFill: fdGrip.x + fdGrip.width + Math.round(10 * trackViewRoot.ks) > rightX
             anchors.verticalCenter: parent.verticalCenter
-            x: onFill ? fdGrip.x - width - Math.round(12 * trackViewRoot.ks)
-                      : parent.width - width - Math.round(18 * trackViewRoot.ks)
+            x: onFill ? fdGrip.x - width - Math.round(12 * trackViewRoot.ks) : rightX
             text: fd.valueText
             color: onFill ? fd.valueOnFill : fd.valueInk
             font.bold: true
