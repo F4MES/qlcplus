@@ -228,10 +228,14 @@ Rectangle
     // =====================================================================
 
     // MULTITOUCH, the way QLC+ does it in VCButtonItem.qml: a MouseArea for the
-    // mouse and, over it, a MultiPointTouchArea for one finger (mouseEnabled:
-    // false). A finger is then this control's own touch point - not the one
-    // synthesised mouse the whole window shares - so FLASH can be held while
-    // the other hand pulls ENERGY, or two faders move at once.
+    // mouse and, over it, a MultiPointTouchArea (mouseEnabled: false). A finger
+    // is then this control's own touch point - not the one synthesised mouse the
+    // whole window shares - so FLASH can be held while the other hand pulls
+    // ENERGY, or two faders move at once.
+    // Runde 390: NOT maximumTouchPoints: 1 as in VCButtonItem - with one allowed,
+    // a second finger (or a palm) on the same control makes Qt drop the first:
+    // no release, no cancel, and a held FLASH stayed on after both let go. The
+    // area takes every finger but follows only the first (its pointId).
     component TouchInput: Item
     {
         id: ti
@@ -254,7 +258,7 @@ Rectangle
             // a Flickable under this must not steal the press: a stolen grab
             // fires onCanceled and would leave a held FLASH or BLACKOUT on
             preventStealing: true
-            onPressed: (m) => { ti.pressedAt(m.x, m.y); if (ti.holdEnabled) holdTimer.restart() }
+            onPressed: (m) => { if (touchIn.held) { m.accepted = false; return } ti.pressedAt(m.x, m.y); if (ti.holdEnabled) holdTimer.restart() }
             onPositionChanged: (m) => { if (pressed) ti.movedTo(m.x, m.y) }
             onReleased: (m) => { holdTimer.stop(); ti.releasedAt(m.x, m.y, ti.inside(m.x, m.y)) }
             onCanceled: { holdTimer.stop(); ti.canceled() }
@@ -264,12 +268,27 @@ Rectangle
             id: touchIn
             anchors.fill: parent
             mouseEnabled: false
-            maximumTouchPoints: 1
-            property bool held: false
-            onPressed: (pts) => { held = true; ti.pressedAt(pts[0].x, pts[0].y); if (ti.holdEnabled) holdTimer.restart() }
-            onUpdated: (pts) => { if (pts.length > 0) ti.movedTo(pts[0].x, pts[0].y) }
-            onReleased: (pts) => { held = false; holdTimer.stop(); ti.releasedAt(pts[0].x, pts[0].y, ti.inside(pts[0].x, pts[0].y)) }
-            onCanceled: (pts) => { held = false; holdTimer.stop(); ti.canceled() }
+            maximumTouchPoints: 10
+            property int pid: -1                // the finger this control follows
+            readonly property bool held: pid >= 0
+            function mine(pts) { for (var i = 0; i < pts.length; i++) if (pts[i].pointId === pid) return pts[i]; return null }
+            onPressed: (pts) =>
+            {
+                if (pid >= 0 || mouseIn.pressed) return     // already held: a second finger is ignored
+                pid = pts[0].pointId
+                ti.pressedAt(pts[0].x, pts[0].y)
+                if (ti.holdEnabled) holdTimer.restart()
+            }
+            onUpdated: (pts) => { var p = mine(pts); if (p) ti.movedTo(p.x, p.y) }
+            onReleased: (pts) =>
+            {
+                var p = mine(pts)
+                if (!p) return
+                pid = -1
+                holdTimer.stop()
+                ti.releasedAt(p.x, p.y, ti.inside(p.x, p.y))
+            }
+            onCanceled: (pts) => { if (pid < 0) return; pid = -1; holdTimer.stop(); ti.canceled() }
         }
         Timer { id: holdTimer; interval: ti.holdMs; onTriggered: ti.held() }
     }
@@ -1065,11 +1084,13 @@ Rectangle
                 {
                     anchors.fill: parent
                     mouseEnabled: false
-                    maximumTouchPoints: 1
-                    onPressed: (pts) => wfArea.press(pts[0].x)
-                    onUpdated: (pts) => { if (pts.length > 0) wfArea.move(pts[0].x) }
-                    onReleased: (pts) => wfArea.release()
-                    onCanceled: (pts) => wfArea.release()
+                    maximumTouchPoints: 10
+                    property int pid: -1          // one finger drags a flag; others are ignored (runde 390)
+                    function mine(pts) { for (var i = 0; i < pts.length; i++) if (pts[i].pointId === pid) return pts[i]; return null }
+                    onPressed: (pts) => { if (pid >= 0 || wfArea.pressed) return; pid = pts[0].pointId; wfArea.press(pts[0].x) }
+                    onUpdated: (pts) => { var p = mine(pts); if (p) wfArea.move(p.x) }
+                    onReleased: (pts) => { if (mine(pts) === null) return; pid = -1; wfArea.release() }
+                    onCanceled: (pts) => { if (pid < 0) return; pid = -1; wfArea.release() }
                 }
             }
 
@@ -1568,12 +1589,13 @@ Rectangle
                                     color: grp.off ? "#7E7E86" : "#123012"
                                     Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
                                 }
-                                // a finger target bigger than the pill it draws
+                                // a finger target bigger than the pill it draws: the
+                                // whole height of the row (runde 390 - it was 44 px)
                                 Item
                                 {
                                     anchors.centerIn: parent
-                                    width: parent.width + 16
-                                    height: parent.height + 16
+                                    width: grpSwitchCell.width + 10
+                                    height: grp.height
                                     TouchInput { onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.setGroupEnabled(grp.md.key, grp.off) } }
                                 }
                             }
@@ -1742,8 +1764,8 @@ Rectangle
                     Repeater
                     {
                         model: [ { key: "start", label: qsTr("START POSITION") },
-                                 { key: "column", label: qsTr("SØJLE MIDT") },
-                                 { key: "down", label: qsTr("LIGE NED") } ]
+                                 { key: "column", label: qsTr("CENTER COLUMN") },
+                                 { key: "down", label: qsTr("STRAIGHT DOWN") } ]
                         Btn
                         {
                             objectName: "position:" + modelData.key
