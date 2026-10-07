@@ -77,6 +77,7 @@ Rectangle
     property var divLabels: [ "-", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8" ]
 
     property bool setupOpen: false
+    property bool helpOpen: false             // runde 393: the guide over the page
     // the pencil: the flag tools stay out until it is tapped again (Tobias 10-07)
     property bool markerEdit: false
 
@@ -343,6 +344,7 @@ Rectangle
             else if (kind === "pencil") { c.beginPath(); c.moveTo(4,20); c.lineTo(5,15); c.lineTo(15.5,4.5); c.lineTo(19.5,8.5); c.lineTo(9,19); c.closePath(); c.stroke(); line(13,7,17,11) }
             else if (kind === "check") { c.beginPath(); c.moveTo(4,12.5); c.lineTo(9.5,18); c.lineTo(20,6.5); c.stroke() }
             else if (kind === "lock") { c.strokeRect(5,10.5,14,10); c.beginPath(); c.moveTo(8,10.5); c.lineTo(8,7.5); c.arc(12,7.5,4,Math.PI,0); c.lineTo(16,10.5); c.stroke() }
+            else if (kind === "help") { circle(12,12,9.5); c.font = "bold 15px sans-serif"; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText("?", 12, 13) }
             else if (kind === "warn") { c.beginPath(); c.moveTo(12,3); c.lineTo(22,21); c.lineTo(2,21); c.closePath(); c.stroke(); line(12,10,12,15); line(12,18,12,18.5) }
             else { circle(12,8,6); c.strokeRect(3,21,18,2); c.beginPath(); c.moveTo(3,8); c.lineTo(3,18); c.lineTo(21,18); c.lineTo(21,8); c.stroke() }
         }
@@ -357,18 +359,27 @@ Rectangle
         property bool active: false
         property color tone: trackViewRoot.cGreen
         property bool autoKind: false        // an AUTO: its icon is green even when off
-        property bool solid: false            // active as a full fill (a section pinned by hand)
+        property bool solid: false            // active as a full fill in its tone
+        property bool idleTint: false         // its tone shows faintly when off too (sections, colours)
+        property bool ring: false             // a white frame: pinned by hand
+        property real idleAlpha: 0.13         // how strong the idle tint is
         property real fontPx: trackViewRoot.fs(14)
         property color dot: "transparent"     // a colour tile's own colour, before its name
         property alias input: btnInput
         signal tapped()
         radius: Math.round(10 * trackViewRoot.ks)
         color: btnInput.down ? Qt.lighter(base, 1.35) : base
-        property color base: solid && active ? tone
-                             : (active ? Qt.tint(trackViewRoot.cBtn, Qt.rgba(tone.r, tone.g, tone.b, 0.20)) : trackViewRoot.cBtn)
-        border.width: solid && active ? 3 : 1
-        border.color: solid && active ? "#FFFFFF"
-                      : (active ? Qt.rgba(tone.r, tone.g, tone.b, 0.85) : trackViewRoot.cBtnEdge)
+        readonly property bool full: solid && active
+        // dark ink on a light fill, white on a dark one
+        readonly property bool lightFill: 0.299 * tone.r + 0.587 * tone.g + 0.114 * tone.b > 0.5
+        property color base: full ? tone
+                             : (active ? Qt.tint(trackViewRoot.cBtn, Qt.rgba(tone.r, tone.g, tone.b, 0.24))
+                                       : (idleTint ? Qt.tint(trackViewRoot.cBtn, Qt.rgba(tone.r, tone.g, tone.b, idleAlpha)) : trackViewRoot.cBtn))
+        border.width: ring ? 3 : (full ? 2 : 1)
+        border.color: ring ? "#FFFFFF"
+                      : (full ? Qt.lighter(tone, 1.25)
+                              : (active ? Qt.rgba(tone.r, tone.g, tone.b, 0.85)
+                                        : (idleTint ? Qt.rgba(tone.r, tone.g, tone.b, 0.38) : trackViewRoot.cBtnEdge)))
         opacity: enabled ? 1.0 : 0.3
         Row
         {
@@ -376,7 +387,7 @@ Rectangle
             spacing: Math.round(9 * trackViewRoot.ks)
             Rectangle
             {
-                visible: btn.dot.a > 0
+                visible: btn.dot.a > 0 && !btn.full
                 anchors.verticalCenter: parent.verticalCenter
                 width: Math.round(12 * trackViewRoot.ks); height: width; radius: width / 2
                 color: btn.dot
@@ -387,7 +398,7 @@ Rectangle
                 anchors.verticalCenter: parent.verticalCenter
                 width: Math.round(18 * trackViewRoot.ks); height: width
                 kind: btn.icon
-                ink: btn.solid && btn.active ? "#101010"
+                ink: btn.full ? (btn.lightFill ? "#101010" : "#FFFFFF")
                      : (btn.autoKind ? trackViewRoot.cGreen : label.color)
             }
             Text
@@ -395,8 +406,8 @@ Rectangle
                 id: label
                 anchors.verticalCenter: parent.verticalCenter
                 text: btn.text
-                color: btn.solid && btn.active ? "#101010"
-                       : (btn.active ? Qt.lighter(btn.tone, 1.45) : "#D6D6DC")
+                color: btn.full ? (btn.lightFill ? "#101010" : "#FFFFFF")
+                       : ((btn.active || btn.idleTint) ? Qt.lighter(btn.tone, 1.45) : "#D6D6DC")
                 font.bold: true
                 font.pixelSize: btn.fontPx
                 font.letterSpacing: btn.fontPx * 0.08
@@ -716,6 +727,19 @@ Rectangle
                     TouchInput { onReleasedAt: (x, y, inside) => { if (inside) showSwitch.tap() } }
                 }
 
+                // runde 393: the guide - between the show switch and SETUP
+                Btn
+                {
+                    objectName: "helpSwitch"
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.round(118 * trackViewRoot.ks)
+                    height: Math.max(48, Math.round(48 * trackViewRoot.ks))
+                    icon: "help"
+                    text: trackViewRoot.helpOpen ? qsTr("CLOSE") : qsTr("HELP")
+                    active: trackViewRoot.helpOpen
+                    tone: trackViewRoot.cGold
+                    onTapped: { trackViewRoot.helpOpen = !trackViewRoot.helpOpen; trackViewRoot.setupOpen = false }
+                }
                 Btn
                 {
                     objectName: "setupSwitch"
@@ -724,7 +748,7 @@ Rectangle
                     height: Math.max(48, Math.round(48 * trackViewRoot.ks))
                     icon: "setupSwitch"
                     text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
-                    onTapped: trackViewRoot.setupOpen = !trackViewRoot.setupOpen
+                    onTapped: { trackViewRoot.setupOpen = !trackViewRoot.setupOpen; trackViewRoot.helpOpen = false }
                 }
             }
         }
@@ -1462,7 +1486,7 @@ Rectangle
                 width: trackViewRoot.rigW
                 height: parent.height
                 // SETUP covers this card: nothing under it may take a finger
-                enabled: !trackViewRoot.setupOpen
+                enabled: !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
                 opacity: trackViewRoot.setupOpen ? 0 : 1
 
                 readonly property real inX: trackViewRoot.cardPad + 2
@@ -1604,9 +1628,14 @@ Rectangle
                                 // whole height of the row (runde 390 - it was 44 px)
                                 Item
                                 {
-                                    anchors.centerIn: parent
-                                    width: grpSwitchCell.width + 10
-                                    height: grp.height
+                                    id: switchTarget
+                                    // runde 392: wider - from the end of the name to the
+                                    // fader's edge, the row's height and half the gap
+                                    readonly property real spare: (grpSwitchCell.width - parent.width) / 2
+                                    width: grpSwitchCell.width + Math.round(28 * trackViewRoot.ks) + Math.round(10 * trackViewRoot.ks)
+                                    height: grp.height + trackViewRoot.g
+                                    x: parent.width + spare + Math.round(10 * trackViewRoot.ks) - width
+                                    y: (parent.height - height) / 2
                                     TouchInput { onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.setGroupEnabled(grp.md.key, grp.off) } }
                                 }
                             }
@@ -1683,7 +1712,7 @@ Rectangle
                 y: 0
                 width: parent.width - trackViewRoot.rigW - trackViewRoot.liveW - 2 * trackViewRoot.gapB
                 height: parent.height
-                enabled: !trackViewRoot.setupOpen
+                enabled: !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
                 opacity: trackViewRoot.setupOpen ? 0 : 1
 
                 readonly property real inX: trackViewRoot.cardPad + 2
@@ -1752,7 +1781,9 @@ Rectangle
                         // pinned by hand: the full colour and a white ring; playing
                         // now: its colour as a tint
                         active: trackManager ? (trackManager.overrideState === modelData || trackViewRoot.liveState === modelData) : false
-                        solid: trackManager ? trackManager.overrideState === modelData : false
+                        solid: true
+                        idleTint: true
+                        ring: trackManager ? trackManager.overrideState === modelData : false
                         onTapped: trackManager.overrideState = (trackManager.overrideState === modelData) ? "" : modelData
                     }
                 }
@@ -1820,6 +1851,9 @@ Rectangle
                         text: (modelData || "").toUpperCase()
                         tone: trackViewRoot.swatch(modelData || "")
                         active: trackEngine ? trackEngine.colourOverrides.indexOf(modelData) >= 0 : false
+                        solid: true
+                        idleTint: true
+                        idleAlpha: 0.22
                         fontPx: trackViewRoot.fs(cells > 7 ? 12 : 14)
                         // the colour itself, as a dot - where the tile has room for it
                         dot: chip.width > 96 * trackViewRoot.ks ? chip.tone : "transparent"
@@ -1969,6 +2003,9 @@ Rectangle
                 y: 0
                 width: trackViewRoot.liveW
                 height: parent.height
+                // under SETUP or HELP since runde 393: nothing here may take a finger
+                enabled: !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
+                opacity: trackViewRoot.setupOpen ? 0 : 1
                 readonly property real inX: trackViewRoot.cardPad + 2
                 readonly property real inW: width - 2 * inX
                 // BLACKOUT and FLASH WHITE share the last three rows: one and a half
@@ -1977,21 +2014,21 @@ Rectangle
 
                 Btn
                 {
-                    objectName: "calm"
+                    objectName: "nextLook"
                     x: liveCard.inX; y: deck.rowY(0); width: liveCard.inW; height: trackViewRoot.rowH
+                    icon: "nextLook"
+                    text: qsTr("NEXT LOOK")
+                    onTapped: trackEngine.next()
+                }
+                Btn
+                {
+                    objectName: "calm"
+                    x: liveCard.inX; y: deck.rowY(1); width: liveCard.inW; height: trackViewRoot.rowH
                     icon: "calm"
                     text: (trackEngine && trackEngine.calmBarsLeft > 0) ? qsTr("CALM") + " " + trackEngine.calmBarsLeft : qsTr("CALM")
                     tone: trackViewRoot.cBlue
                     active: trackEngine ? trackEngine.calmBarsLeft > 0 : false
                     onTapped: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
-                }
-                Btn
-                {
-                    objectName: "nextLook"
-                    x: liveCard.inX; y: deck.rowY(1); width: liveCard.inW; height: trackViewRoot.rowH
-                    icon: "nextLook"
-                    text: qsTr("NEXT LOOK")
-                    onTapped: trackEngine.next()
                 }
                 Btn
                 {
@@ -2158,9 +2195,10 @@ Rectangle
     }
 
     // =====================================================================
-    //  SETUP: over the track, the rig and the look - never over the top bar
-    //  or LIVE: SETUP opened mid-set must leave FLASH, BLACKOUT and SHOW OFF
-    //  where they were (runde 253, BACKLOG 100)
+    //  SETUP: the whole page under the top bar - LIVE and the footer too
+    //  (runde 393, Tobias 10-07: "setup og guide maa gerne daekke LIVE, de maa
+    //  gerne begge to fylde hele siden"; v2 only - runde 253 kept LIVE free).
+    //  The top bar stays: SHOW and the CLOSE on SETUP / HELP live there.
     // =====================================================================
     Loader
     {
@@ -2169,8 +2207,8 @@ Rectangle
         onLoaded: if (item) item.host = trackViewRoot
         x: trackViewRoot.mx
         y: Math.round(14 * trackViewRoot.ks) + trackViewRoot.topH + trackViewRoot.gapB
-        width: trackViewRoot.width - 2 * trackViewRoot.mx - trackViewRoot.liveW - trackViewRoot.gapB
-        height: trackViewRoot.height - y - trackViewRoot.footH - trackViewRoot.gapB
+        width: trackViewRoot.width - 2 * trackViewRoot.mx
+        height: trackViewRoot.height - y - Math.round(6 * trackViewRoot.ks)
         visible: trackViewRoot.setupOpen && trackManager && trackManager.roleMode
         active: visible
         source: "qrc:/TrackSetup.qml"
@@ -2196,6 +2234,160 @@ Rectangle
                     return ""
                 var c = Qt.createComponent("qrc:/TrackSetup.qml")
                 return "TrackSetup.qml failed to load:\n\n" + (c.status === Component.Error ? c.errorString() : "(no detail)")
+            }
+        }
+    }
+
+    // =====================================================================
+    //  HELP (runde 393, Tobias 10-07: "en HELP der laver et overlay med guide
+    //  til programmet"): each explanation lies on what it explains. Like SETUP
+    //  it fills the page under the top bar. A tap anywhere closes it.
+    // =====================================================================
+    component HelpText: Text
+    {
+        color: "#E9E9EE"
+        textFormat: Text.StyledText
+        wrapMode: Text.WordWrap
+        font.pixelSize: trackViewRoot.fs(15)
+        lineHeight: 1.18
+        verticalAlignment: Text.AlignVCenter
+    }
+    component HelpTitle: Text
+    {
+        color: "#E3B44F"
+        font.bold: true
+        font.pixelSize: trackViewRoot.fs(13)
+        font.letterSpacing: (trackViewRoot.fs(13)) * 0.18
+    }
+    component HelpFrame: Rectangle
+    {
+        color: "transparent"
+        radius: Math.round(14 * trackViewRoot.ks)
+        border.width: 2
+        border.color: Qt.rgba(0.89, 0.71, 0.31, 0.75)
+    }
+
+    Item
+    {
+        id: helpOverlay
+        objectName: "helpOverlay"
+        z: 99
+        visible: trackViewRoot.helpOpen
+        x: setupLoader.x
+        y: setupLoader.y
+        width: setupLoader.width
+        height: setupLoader.height
+        // the page column under it: track, gap, deck, gap, footer
+        readonly property real waveH: trackViewRoot.height - y - 2 * trackViewRoot.gapB - trackViewRoot.deckH - trackViewRoot.footH
+        readonly property real deckY: waveH + trackViewRoot.gapB
+        readonly property real pad: Math.round(22 * trackViewRoot.ks)
+        readonly property real colW: (width - 2 * pad - 3 * pad) / 4
+        function rowY(i) { return deckY + deck.rowY(i) }
+
+        Rectangle { anchors.fill: parent; color: Qt.rgba(0.035, 0.035, 0.045, 0.95); radius: Math.round(14 * trackViewRoot.ks) }
+        // a tap anywhere on the guide closes it
+        TouchInput { onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.helpOpen = false } }
+
+        // ---- the track, the top bar, the markers - and LIVE, beside it
+        HelpFrame { x: 0; y: 0; width: parent.width; height: helpOverlay.waveH }
+        Row
+        {
+            x: helpOverlay.pad; y: helpOverlay.pad
+            spacing: helpOverlay.pad
+            Repeater
+            {
+                model: [
+                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
+                    { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track." },
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Tap a marker to <b>RETYPE</b> or <b>DELETE</b> it, drag it to move it. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group." },
+                    { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
+                ]
+                Column
+                {
+                    width: helpOverlay.colW
+                    spacing: Math.round(10 * trackViewRoot.ks)
+                    HelpTitle { text: modelData.t }
+                    HelpText { width: parent.width; text: modelData.b; verticalAlignment: Text.AlignTop }
+                }
+            }
+        }
+
+        // ---- RIG: one line on each kind of row
+        HelpFrame { x: 0; y: helpOverlay.deckY; width: trackViewRoot.rigW; height: trackViewRoot.deckH }
+        HelpTitle { x: rigCard.inX; y: helpOverlay.deckY + trackViewRoot.cardPad; text: "RIG     ·     WHAT IS IN THE SHOW"; width: rigCard.inW; elide: Text.ElideRight }
+        HelpText
+        {
+            x: rigCard.inX; y: helpOverlay.rowY(0); width: rigCard.inW; height: trackViewRoot.rowH
+            text: "<b>MASTER DIMMER</b> - the ceiling for the whole rig."
+        }
+        HelpText
+        {
+            x: rigCard.inX; y: helpOverlay.rowY(1); width: rigCard.inW
+            height: 5 * trackViewRoot.rowH + 4 * trackViewRoot.g
+            verticalAlignment: Text.AlignTop
+            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling.<br><br><font color='#6ECD82'>● on stage</font> - lit now. ○ <b>waiting</b> - in the show, not used right now.<br><br><b>Lock</b> - the base group, always in.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
+        }
+
+        // ---- LOOK: the explanation on each row, after its label
+        HelpFrame { x: lookCard.x; y: helpOverlay.deckY; width: lookCard.width; height: trackViewRoot.deckH }
+        HelpTitle
+        {
+            x: lookCard.x + lookCard.inX; y: helpOverlay.deckY + trackViewRoot.cardPad
+            text: "LOOK     ·     GREEN AUTO = THE ENGINE DECIDES"
+            width: lookCard.inW
+            elide: Text.ElideRight
+        }
+        Repeater
+        {
+            model: [
+                { l: "ENERGY",       b: "How hard the show plays - your hand takes over. <b>AUTO</b>: the clock moves it through the night. At 0 the first SHOW ON puts up the start scene." },
+                { l: "SECTION",      b: "Force a section; the one the music is in is filled. Tap it again or <b>AUTO</b> to follow the music." },
+                { l: "POSITION",     b: "Hold the heads in one position. <b>AUTO</b>: the engine moves them." },
+                { l: "COLOUR",       b: "Tap colours to make your own mix. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },
+                { l: "COLOUR MODE",  b: "<b>FADE</b>: the mix glides over. <b>CHASE</b>: it steps on the kick. <b>SPEED</b>: the pace of moves and chases." },
+                { l: "HAZE MACHINE", b: "Haze and fan - always by hand, the engine never touches them." }
+            ]
+            Item
+            {
+                x: lookCard.x + lookCard.inX
+                y: helpOverlay.rowY(index)
+                width: lookCard.inW
+                height: trackViewRoot.rowH
+                HelpTitle
+                {
+                    width: lookCard.labW + lookCard.colGap + lookCard.autoW
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.l
+                }
+                HelpText
+                {
+                    x: lookCard.cX - lookCard.inX
+                    width: parent.width - x
+                    height: parent.height
+                    text: modelData.b
+                }
+            }
+        }
+
+        // ---- LIVE: on each button
+        HelpFrame { x: liveCard.x; y: helpOverlay.deckY; width: liveCard.width; height: trackViewRoot.deckH }
+        HelpTitle { x: liveCard.x + liveCard.inX; y: helpOverlay.deckY + trackViewRoot.cardPad; text: "LIVE     ·     RIGHT NOW"; width: liveCard.inW; elide: Text.ElideRight }
+        Repeater
+        {
+            model: [
+                { y: 0, h: 1, b: "<b>NEXT LOOK</b> - a new look now." },
+                { y: 1, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
+                { y: 2, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
+                { y: 3, h: 2, b: "<b>BLACKOUT</b> - dark while held. Slide off before letting go to lock it; tap to release." },
+                { y: 4, h: 2, b: "<b>FLASH WHITE</b> - white while held." }
+            ]
+            HelpText
+            {
+                x: liveCard.x + liveCard.inX
+                width: liveCard.inW
+                y: modelData.y < 4 ? helpOverlay.rowY(modelData.y) : helpOverlay.rowY(3) + liveCard.bigH + trackViewRoot.g
+                height: modelData.h === 1 ? trackViewRoot.rowH : liveCard.bigH
+                text: modelData.b
             }
         }
     }
