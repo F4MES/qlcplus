@@ -78,8 +78,9 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     if (var.isValid() && var.toInt() > 0 && var.toInt() <= 300) m_bpmLow = var.toInt();
     var = settings.value(SETTINGS_TRACK_BPMHIGH);
     if (var.isValid() && var.toInt() > 0 && var.toInt() <= 300) m_bpmHigh = var.toInt();
-    var = settings.value(SETTINGS_TRACK_TRIM);
-    if (var.isValid()) m_energyTrim = qBound(0, var.toInt(), 200);
+    // R380_ENERGY_ZERO: ENERGY starts at 0 % every time - not last night's,
+    // not the crash's - the start scene until the slider comes up
+    m_energyTrim = 0;
     var = settings.value(SETTINGS_TRACK_QUANTIZE);
     if (var.isValid()) m_quantize = qBound(1, var.toInt(), 32);
 
@@ -1111,6 +1112,13 @@ void TrackManager::setEnergyTrim(int percent)
         && (m_linkStale || m_playing == false || percent != m_engine->roomPercent()))
         m_engine->laserFaderCheck(energy());
     noteShowRunning();                   // R184_START_SCENE_ENERGY
+    // R379_ZERO_ENERGY: the slider at 0 with the show on - the start scene
+    // again (the DJ's tiles kept); above 0 noteShowRunning() takes it down
+    if (m_autoRun && m_engine != nullptr && m_energyTrim == 0 && m_engine->startScene() == false)
+    {
+        m_engine->setStartScene(true, true);
+        m_startAuto = m_engine->startScene();
+    }
 }
 
 int TrackManager::bpmLow() const { return m_bpmLow; }
@@ -1198,15 +1206,17 @@ void TrackManager::setAutoRun(bool enable)
     if (m_autoRun && m_engine != nullptr && m_showRanNight != TrackEngine::nightKey()
         && QSettings().value(SETTINGS_ENGINE_NIGHT).toString() != TrackEngine::nightKey())
     {
-        m_engine->setRoomAuto(true);          // R201_NEW_NIGHT
+        // R378_ROOM_OFF: ENERGY's clock stays off - only its AUTO tile turns it on (R201_NEW_NIGHT)
         const QStringList trimmed = m_engine->trims().keys();
         for (const QString &k : trimmed)
             m_engine->setGroupTrim(k, 1.0);
     }
     if (m_autoRun && m_engine != nullptr)
         m_engine->announceRoom();
-    if (m_autoRun && m_engine != nullptr && m_showRanNight != TrackEngine::nightKey()
-        && m_energyTrim == 0)
+    // R379_ZERO_START (Tobias 10-06: "naar energi slideren staar paa 0% skal
+    // det bare vaere start scenen"): SHOW ON at ENERGY 0 opens on it - every
+    // night, not only the first (R184) - until ENERGY moves
+    if (m_autoRun && m_engine != nullptr && m_energyTrim == 0)
     {
         m_engine->setStartScene(true);
         m_startAuto = m_engine->startScene();

@@ -126,6 +126,7 @@ static quint32 nameScatter(const QString &name)
 #define ENGINE_ZOOM_PREFIX    QStringLiteral("TRACK Zoom: ")
 #define ENGINE_STROBE_PREFIX  QStringLiteral("TRACK Strobe: ")
 #define ENGINE_OFF_PREFIX     QStringLiteral("TRACK Off: ")
+#define ENGINE_HOLD_PREFIX    QStringLiteral("TRACK Hold: ")   // R378_POSITIONS
 // How many strobe rates ensureStrobeScenes() builds per group. driveStrobe()
 // draws an index in this range, so the two must never disagree.
 #define ENGINE_STROBE_RATES   6
@@ -229,7 +230,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_beatIndex(0)
     , m_testIndex(0)
     , m_room(2)
-    , m_roomAuto(true)
+    , m_roomAuto(false)                  // R378_ROOM_OFF
     , m_roomSent(-1)
     , m_fullAuto(false)
     , m_hold(false)
@@ -289,7 +290,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     // the clock on and every group at 100 %.
     if (settings.value(SETTINGS_ENGINE_NIGHT).toString() == nightKey())
     {
-        m_roomAuto = settings.value(SETTINGS_ENGINE_ROOMAUTO, true).toBool();
+        m_roomAuto = false;              // R378_ROOM_OFF (Tobias 10-06): off at every start-up - only its AUTO tile turns it on
         foreach (const QString &entry, settings.value(SETTINGS_ENGINE_GROUPTRIM, QString())
                                                .toString().split(';', Qt::SkipEmptyParts))
         {
@@ -475,6 +476,7 @@ void TrackEngine::slotDocSettled()
     m_sweepFunc.clear();
     m_splitScenes.clear();
     m_chaseScenes.clear();               // runde 370
+    m_holdScenes.clear();                // R378_POSITIONS
     m_chaseShown.clear();                // runde 371
     m_chaseSide.clear();
     m_layerFids.clear();
@@ -5448,7 +5450,10 @@ void TrackEngine::toggleColourOverride(const QString &colour)
     }
     // the start scene's red is not the DJ's (review 305): a tile tapped while
     // it is up starts a set of its own, and outlives it (m_startColour)
-    QStringList set = m_startColour ? QStringList() : m_overrideSet;
+    // R378_START_LAYER (Tobias 10-06: "hvis man f.eks. tilfoejer en eller flere
+    // farver"): a tile tapped on the opening picture ADDS to its red - the red
+    // is his from then on; tapping red off changes it altogether
+    QStringList set = m_overrideSet;
     // ... and that is so even when the tap lands on the start scene's own
     // colour: setColourOverride() then returns early (nothing changed) and
     // m_startColour stayed true, so the DJ's red was cleared with the start
@@ -5502,6 +5507,8 @@ void TrackEngine::toggleColourOverride(const QString &colour)
     }
     applyOverride(lead);
     // applyOverride() returns early when the lead did not change: the set did
+    if (m_startScene)
+        startLook();                     // R378_START_LAYER: the picture fades/chases the set
     emit liveChanged();
 }
 
@@ -5570,6 +5577,8 @@ void TrackEngine::setColourMode(int mode)
         m_colourMode = mode;
     logSignal(QStringLiteral("sig:colour-mode:")
               + (mode == 1 ? QStringLiteral("fade") : mode == 2 ? QStringLiteral("chase") : QStringLiteral("auto")));
+    if (m_startScene)
+        startLook();                     // R378_START_LAYER
     emit liveChanged();
 }
 
@@ -5945,6 +5954,38 @@ quint32 TrackEngine::chaseColourFunction(const QString &group, const QStringList
 
 void TrackEngine::slotLayerTimer()
 {
+    // R378_START_LAYER: the opening picture's fade or chase, on a clock - a
+    // colour per 32 s, a chase step per 8 s (16 and 4 bars at 120); SPEED
+    // halves or doubles it
+    if (m_startScene)
+    {
+        if (m_layerStyle == 0 || m_layerOwned.isEmpty() || m_docTimer.isActive() || m_building)
+        {
+            m_layerTimer.stop();
+            return;
+        }
+        const qint64 now = m_clock.elapsed();
+        qreal per = m_layerStyle == 1 ? 32000.0 : 8000.0;
+        if (m_speed < 0)
+            per *= 2.0;
+        else if (m_speed > 0)
+            per /= 2.0;
+        m_layerPos += qreal(now - m_startLayerMs) / per;
+        m_startLayerMs = now;
+        const int n = int(m_overrideSet.count());
+        if (n > 0 && m_layerPos >= 1000.0 * n)
+            m_layerPos -= 1000.0 * n;
+        foreach (const QString &key, m_layerOwned)
+        {
+            if (m_active.contains(QStringLiteral("col:") + key) == false)
+                continue;
+            if (m_flash && m_flashHeld.contains(key))
+                continue;
+            applyColourLayer(key, true);
+        }
+        emit colourFadeChanged();
+        return;
+    }
     // the fade between two beats; tick() decides each beat which groups it paints
     // R371: ... and when the beats stop (a paused deck, SHOW OFF): tick()
     // starts it again with the next beat
@@ -6767,6 +6808,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // drew its wildest patterns at 35 % twice as often as at 100 %
     const bool patternGroup = m_groups.value(group).patternDevice;
     const bool layerG = layerGroup(group) || (m_mixGlide && group == m_mixGlideKey);   // R370 (R374: the mix's glide)
+    const bool aimHeld = positionHeld(group);     // R378_POSITIONS
     int calmest = 3;
     if (patternGroup)
     {
@@ -6775,6 +6817,8 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     }
     foreach (TrackFuncInfo *info, all)
     {
+        if (aimHeld && info->aims)       // R378_POSITIONS: the held aim stands
+            continue;
         // a static pattern scene is a look and may show in any section; a
         // chase or EFX is movement and belongs to drops and builds
         if (staticOnly && info->type != int(Function::SceneType))
@@ -9106,6 +9150,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           : (m_curveGroove ? QStringLiteral("normal") : state)));
     const bool partChanged = m_lastState.isEmpty() || m_lastState != state
                           || m_lookState.isEmpty() || m_lookState != lookNow || forceNext;
+    // R384_ALONE_LATCH: the bars' alone is decided where the section starts
+    if (sectionChanged)
+        m_aloneArmed = hold == false && fader >= 0.90;
     if (sectionChanged && hold == false)
     {
         // a random stride, so the rotation of groups, looks and positions
@@ -9690,10 +9737,39 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             i++;
         }
     }
+    // R383_BARS_ALONE (Tobias 10-06: "eller taendt alene med 8-eye chase (uden
+    // basen i breaks)"): from 90 % on the slider one break in three is the
+    // laser bars alone - the base and the other washes sit it out
+    QString aloneBars;
+    // R385_BARS_FULL: under 85 % the alone lets go for the rest of the section
+    if (m_aloneArmed && fader < 0.85)
+        m_aloneArmed = false;
+    if (isBreak && m_aloneArmed && fader >= 0.85 && (m_castCursor % 3) == 1
+        && (hold == false || m_barsAloneNow) && isCalm == false   // R384_ALONE_HOLD: HOLD keeps it
+        && still == false && silent == false)
+    {
+        foreach (const QString &key, eligible)
+        {
+            const TrackGroup &ag = m_groups.value(key);
+            if (ag.lasers && ag.patternDevice == false && ag.parts.count() >= 2)
+            {
+                aloneBars = key;
+                break;
+            }
+        }
+    }
+    // R385_BARS_FULL: the two kinds in turn - the whole-bar chase, then full
+    // light with the slow lift - counted per alone break
+    if (aloneBars.isEmpty() == false && m_barsAloneNow == false)
+        m_aloneBreaks++;
+    m_barsAloneNow = aloneBars.isEmpty() == false;
+    m_aloneFull = m_barsAloneNow && (m_aloneBreaks % 2) == 0;
     QSet<QString> castSet;
-    if (base.isEmpty() == false)
+    if (m_barsAloneNow)
+        castSet.insert(aloneBars);
+    else if (base.isEmpty() == false)
         castSet.insert(base);
-    if (silent == false)
+    if (silent == false && m_barsAloneNow == false)
     {
         for (int i = 0; i < qMin(effects, int(priority.count())); i++)
             castSet.insert(priority.at(i));
@@ -9727,7 +9803,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 && (m_groups.value(key).strobes == false || fader >= ENGINE_STROBE_ON))
                 castSet.insert(key);
         }
-        if (base.isEmpty() == false) castSet.insert(base);
+        if (base.isEmpty() == false && m_barsAloneNow == false)   // R384_ALONE_HOLD
+            castSet.insert(base);
         // ... nor the one-laser line (runde 287): held with both laser types
         // on above 85 % and the fader brought under it, the first type in
         // the room's order stays and the other goes, as it does unheld. The
@@ -10362,6 +10439,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 stopSlot("pos:" + key, true);
             m_position.remove(key);
             continue;
+        }
+        // R378_POSITIONS: a position chosen on the page holds the heads until AUTO
+        if (positionHeld(key))
+        {
+            const quint32 holdAim = headHoldFunction(key);
+            if (holdAim != Function::invalidId())
+            {
+                run("pos:" + key, holdAim, 1.0, 0, true);
+                m_position.insert(key, holdAim);
+                continue;
+            }
         }
 
         bool inCast = castSet.contains(key);
@@ -11072,10 +11160,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         //
         // No figure in a break - there the bars sit at the home aim - and CALM
         // stops the lasers while the heads keep drifting.
+        // R385_BARS_FULL: the bars' slow lift in their full-light alone break
+        const bool liftBreak = m_barsAloneNow && m_aloneFull && g.lasers && g.patternDevice == false
+                            && (m_active.contains(slot) == false || m_sweepShown.value(key).upOnly);
+        // R386_LIFT_ENDS: the lift is the break's - it does not run on into
+        // the drop as the bars' figure (they are never redrawn while running)
+        const bool liftLeft = g.lasers && m_active.contains(slot) && m_sweepShown.value(key).upOnly
+                           && (m_barsAloneNow && m_aloneFull) == false;
         bool wanted = castSet.contains(key) && aimed && aimMoves == false
                    && userMoves == false && (g.lasers ? moveDark : darkGroups).contains(key) == false
                    && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
-                   && (g.lasers == false || (m_fullAuto && isBreak == false && isBuild == false && isCalm == false))
+                   && (g.lasers == false || (m_fullAuto && (isBreak == false || liftBreak) && isBuild == false && isCalm == false))
+                   && liftLeft == false
                    // "Indtil 40 % energi skal de slet ikke bevaege sig"
                    // (Tobias, 2026-09-18). drawSweep() only asks on the beat
                    // a figure is DRAWN, so a figure drawn at 45 % kept running
@@ -11210,7 +11306,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
         // the floor round: no figure on the heads - they stand straight down (r214)
-        if (applySweep(key, (m_floorRound && g.heads) ? TrackSweep() : m_sweep.value(key), bpm, energy)
+        if (applySweep(key, ((m_floorRound || positionHeld(key)) && g.heads) ? TrackSweep() : m_sweep.value(key), bpm, energy)   // R378_POSITIONS: no figure on a held aim
             && g.lasers)
             darkGroups.insert(key);              // a lift is a reposition: dark (runde 303)
     }
@@ -11797,7 +11893,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // trim still apply.
         if (g.strobes && isDrop && support < 1.0)
             support = qMax(support, 0.70 + 0.30 * qBound(0.0, (fader - 0.60) / 0.40, 1.0));
-        qreal groupLevel = qBound(0.0, level * ((isBreak && key == base && still == false) ? 1.4 : 1.0) * duck * support, 1.0);
+        qreal groupLevel = qBound(0.0, level * ((isBreak && (key == base || m_barsAloneNow) && still == false) ? 1.4 : 1.0) * duck * support, 1.0);   // R383_BARS_ALONE: the bars alone have the base's lift
+        // R385_BARS_FULL: full light - MASTER and the trim put on after
+        if (m_barsAloneNow && m_aloneFull && g.lasers && g.patternDevice == false && still == false)
+            groupLevel = 1.0;
         // runde 352: ... and from 75 % the walking strobe lamp punches on its
         // beat whatever the section's level is - 0.80 at 75 %, full at 100 %
         // (measured at 90 %: the lit lamp stood at 120-160 of 255 in drops,
@@ -11894,10 +11993,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
             cursor += m_turnCursor.value(key, 0);
         }
+        // R384_BARS_WHOLE: the bars alone in a break take NO programme - the AUTO
+        // bar programmes are mostly eye figures (two or three eyes of eight).
+        // The colour scene lights the whole bar and the engine's move chases
+        // whole bars (Tobias 10-07: "alle 8 oejne taendt samtidigt (hele baren)")
+        const bool barsWhole = m_barsAloneNow && g.lasers && g.patternDevice == false && tier == 0;
+        const int mTier = tier;
         quint32 mf = Function::invalidId();
+        if (barsWhole)
+            m_sectionMotion.remove(key);
         // no programme on the heads under the floor round: the round is the
         // engine's own blink on the dimmers (runde 214)
-        if (isCalm == false && (m_floorRound && g.heads) == false)
+        if (isCalm == false && (m_floorRound && g.heads) == false && barsWhole == false)
         {
             // the base must leave the room lit: most in a break, least in a
             // drop, where a punch is the point
@@ -12035,7 +12142,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 && (m_buildLen == 32 || m_buildLen == 16)
                 && m_funcs.value(mf).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive) == false)
             {
-                const quint32 c = motionFor(key, colour, castSet, cursor, tier, bpm, division, false, stars, litFloor);
+                const quint32 c = motionFor(key, colour, castSet, cursor, mTier, bpm, division, false, stars, litFloor);
                 if (c != Function::invalidId()
                     && m_funcs.value(c).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
                 {
@@ -12045,10 +12152,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
             if (mf == Function::invalidId())
             {
-                mf = motionFor(key, colour, castSet, cursor, tier, bpm, division,
+                mf = motionFor(key, colour, castSet, cursor, mTier, bpm, division,
                                moving == false, stars, litFloor);
                 if (mf == Function::invalidId() && moving)
-                    mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars, litFloor);
+                    mf = motionFor(key, colour, castSet, cursor, mTier, bpm, division, true, stars, litFloor);
                 // the first half of a build opens to a group with build
                 // programmes FOR those programmes (runde 227). When none got
                 // through (stars, a ban, the cast) it is the old rule: a
@@ -12058,7 +12165,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (mf != Function::invalidId() && isBuild && barProg < 0.5 && m_climbGroups.contains(key)
                     && m_funcs.value(mf).type != int(Function::SceneType)
                     && m_funcs.value(mf).name.contains(QStringLiteral("climb"), Qt::CaseInsensitive) == false)
-                    mf = motionFor(key, colour, castSet, cursor, tier, bpm, division, true, stars, litFloor);
+                    mf = motionFor(key, colour, castSet, cursor, mTier, bpm, division, true, stars, litFloor);
                 if (mf != Function::invalidId())
                     m_sectionMotion.insert(key, mf);
             }
@@ -13210,8 +13317,27 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // Read at the draw (runde 288): every section, the 8-bar redraw and a
         // fader jump draw again. Written into a running move on the bar line
         // it made the chase jump across the row (step = beat / stepBeats).
-        const bool slider = tier > 0 && m_faderNow >= 0.40;
-        if (chance(slider ? qMax(busy, 0.50) : busy))
+        // R383_BARS_ALONE: alone in a break the bars chase at the slider's
+        // pace - the groove's menu, not the break's still picture. R384: whole
+        // bars, all eight eyes lit (no AUTO programme runs on them then)
+        const bool alone = m_barsAloneNow && tier == 0;
+        // R385_BARS_FULL: the full kind - every bar lit at once, steady
+        if (alone && m_aloneFull)
+        {
+            mv.ownChaser = false;
+            mv.pattern = ENGINE_PAT_STATIC;
+            mv.stepBeats = 8;
+            mv.subSteps = 1;
+            mv.bare = false;
+            mv.width = 1;
+            mv.pulse = 0.0;
+            mv.pulseOn = 3;
+            mv.colourBars = 0;
+            mv.flashBar = false;
+            return mv;
+        }
+        const bool slider = (tier > 0 || alone) && m_faderNow >= 0.40;
+        if (alone || chance(slider ? qMax(busy, 0.50) : busy))
         {
             mv.pattern = pick({ ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG,
                                 ENGINE_PAT_ODDEVEN, ENGINE_PAT_CHASE });
@@ -13236,11 +13362,11 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             // ping-pong walks a BLOCK of two or three bars. At 90 % and up a
             // single bar walking alone is rare.
             const qreal hot = qBound(0.0, (m_faderNow - 0.55) / 0.35, 1.0);
-            if (tier > 0 && hot > 0.0 && chance(0.35 + 0.60 * hot))
+            if ((tier > 0 || alone) && hot > 0.0 && chance(0.35 + 0.60 * hot))
                 mv.pattern = pick({ ENGINE_PAT_ODDEVEN, ENGINE_PAT_HALVES, ENGINE_PAT_SPARKLE,
                                     ENGINE_PAT_CHASE, ENGINE_PAT_PINGPONG });
             if ((mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG)
-                && g.parts.count() >= 4 && tier > 0 && hot > 0.0 && chance(0.30 + 0.70 * hot))
+                && g.parts.count() >= 4 && (tier > 0 || alone) && hot > 0.0 && chance(0.30 + 0.70 * hot))
                 mv.width = g.parts.count() >= 6 ? pick({ 2, 3, 3 }) : 2;
         }
         else
@@ -14504,6 +14630,32 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // delicate thing in the rig and nothing here is ever allowed to hurry.
         // the 40 % line is the slider's, not the section-scaled energy's (see tick)
         qreal lw = qBound(0.0, (m_faderNow - 0.40) / 0.60, 1.0);
+        // R383_LASER_HOME (Tobias 10-06: "Laserne maa ogsaa gerne ved de helt
+        // hoeje energier staa paa deres hjem (stille) med chases"): from 90 % on
+        // the slider one section in three the bars hold their home aim
+        const qreal top = qBound(0.0, (m_faderNow - 0.90) / 0.10, 1.0);
+        if (m_faderNow >= 0.90 && (m_castCursor % 3) == 2)
+            lw = 0.0;
+        // R385_BARS_FULL (Tobias 10-07: "fuldt lys med langsom opad"): the
+        // whole row lifts together off the home aim, at the bars' slowest pace
+        if (m_barsAloneNow && m_aloneFull && tier == 0 && build == false)
+        {
+            const qreal lwNow = qBound(0.0, (m_faderNow - 0.40) / 0.60, 1.0);
+            // R387_LIFT_FULL (Tobias 10-07: "fint med 26 enheder max i breaket
+            // ogsaa"): the bars' ordinary figure height - at most 13, so the
+            // lift tops out 26 units over the aim, like every bar figure
+            sw.height = int(4 + 6 * lwNow) + int(rng->bounded(4));
+            sw.drawnF = m_faderNow;
+            sw.beats = qMax(48, int(qRound(96.0 + 32.0 * rng->generateDouble())));
+            sw.dx = 0;
+            sw.dy = -sw.height;              // the lowest point on the aim
+            sw.spread = 0;
+            sw.mirror = false;
+            sw.fan = 0;
+            sw.laserForm = 1;                // the row in unison
+            sw.upOnly = true;
+            return sw;
+        }
         if (lw <= 0.0 || tier == 0 || build)
         {
             sw.shape = -1;
@@ -14545,7 +14697,12 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         qreal period = 96.0 + 32.0 * rng->generateDouble();
         if (tier == 2)
             period = (96.0 - 32.0 * lw) * (0.90 + 0.20 * rng->generateDouble());
-        sw.beats = qMax(48, int(qRound(period)));
+        // R383_LASER_FAST (Tobias 10-06: "op til dobbelt saa hurtige som de
+        // nuvaerende (kun ved de rigtigt hoeje energier)"): from 90 % on the
+        // slider the cycle shortens, to half at 100 % - a groove 48-64 beats, a
+        // drop 32. The size and every safety line stay as they are
+        period /= 1.0 + top;
+        sw.beats = qMax(top > 0.0 ? 24 : 48, int(qRound(period)));
         sw.dx = 0;
         // The figure is a line of +-height around aim + dy. It is drawn
         // UP-ONLY: dy = -height puts its lowest point exactly on the home
@@ -14586,6 +14743,12 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
             // so min > max silently returns min, the opposite of a clamp.
             int even = qMax(1, 360 / qMax(1, heads));
             sw.fan = qMax(1, qMin(even, int(qRound(even * (0.35 + 0.65 * lw)))));
+            // R383_LASER_FAST: at the top of the slider three more figures -
+            // the row in unison, from the middle out, the wave back - beside
+            // the wave down the row; all of them a figure the row makes
+            // together ("offset ift. naboen", 2026-09-20)
+            if (top > 0.0)
+                sw.laserForm = int(rng->bounded(4));
         }
     }
     return sw;
@@ -14644,7 +14807,8 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // home aim it may use the fader's whole allowance; from any other aim
         // - which may already be dipping by that allowance - none, or the two
         // add up to twice what the fader allows (runde 171).
-        allowed = m_position.value(group, Function::invalidId()) == homePosition(group)
+        allowed = (m_position.value(group, Function::invalidId()) == homePosition(group)
+                   && sw.upOnly == false)     // R385_BARS_FULL: the lift never dips
                 ? laserDownAllowed(m_faderNow) : 0;
         dy = -sw.height + qMin(2 * sw.height, allowed);
     }
@@ -14730,7 +14894,7 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     {
         const qreal lwNow = qBound(0.0, (m_faderNow - 0.40) / 0.60, 1.0);
         const qreal lwThen = qBound(0.0, (sw.drawnF - 0.40) / 0.60, 1.0);
-        barHeight = qBound(4, sw.height + int(qRound(6.0 * (lwNow - lwThen))), 13);
+        barHeight = qBound(4, sw.height + int(qRound(6.0 * (lwNow - lwThen))), 13);   // R387_LIFT_FULL: the lift too
     }
     auto barGrow = [&](qreal elapsedMs, int &h, int &d) {
         h = qMin(barHeight, int(elapsedMs / beatMs) / 2);
@@ -14825,7 +14989,12 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     foreach (EFXFixture *ef, efx->fixtures())
     {
         ef->setDirection((sw.mirror && (i % 2) == 1) ? Function::Backward : Function::Forward);
-        ef->setStartOffset((sw.fan * i) % 360);
+        // R383_LASER_FAST: the bars' forms - unison, middle out, the wave back
+        const int nFx = int(efx->fixtures().count());
+        const int step = sw.laserForm == 1 ? 0
+                       : sw.laserForm == 2 ? qAbs(2 * i - (nFx - 1)) / 2
+                       : sw.laserForm == 3 ? (nFx - 1 - i) : i;
+        ef->setStartOffset((sw.fan * step) % 360);
         i++;
     }
     m_sweepShown.insert(group, sw);
@@ -14839,6 +15008,8 @@ QString TrackEngine::sweepName(const TrackSweep &sw) const
         return QString();
     QString shape = EFX::algorithmToString(EFX::Algorithm(sw.shape)).toLower();
     QString rel = sw.spread == 1 ? "~" : (sw.spread == 2 ? ">" : (sw.mirror ? "><" : (sw.fan ? "*" : "")));
+    if (sw.laserForm > 0)                // R383: = unison, <> middle out, << the wave back
+        rel = sw.laserForm == 1 ? QStringLiteral("=") : (sw.laserForm == 2 ? QStringLiteral("<>") : QStringLiteral("<<"));
     return QString("(%1%2 %3 %4b)").arg(shape).arg(rel).arg(sw.width).arg(qMax(sweepFloor(sw), sw.beats));
 }
 
@@ -16063,7 +16234,200 @@ void TrackEngine::closingTick(bool showOn)
 
 bool TrackEngine::startScene() const { return m_startScene; }
 
+bool TrackEngine::positionHeld(const QString &key) const
+{
+    // R378_POSITIONS: the moving heads only (Tobias 10-06) - the laser bars and
+    // the animation lasers keep the engine's aims and their safety lines
+    if (m_positionMode.isEmpty())
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    return g.heads && g.patternDevice == false && g.lasers == false;
+}
+
+quint32 TrackEngine::headHoldFunction(const QString &key)
+{
+    // R378_POSITIONS: LIGE NED is the generated Center (tilt 128, straight
+    // down, on the learned pan); START POSITION and SOEJLE MIDT are the
+    // START scene's and the rider's "Soejle stop" pan, tilt, speed and zoom
+    // for these heads, in a hidden scene of their own - written again on
+    // first use (QLC+ saves a hidden scene's values as nought)
+    if (positionHeld(key) == false || m_doc == nullptr)
+        return Function::invalidId();
+    const QString ck = key + QLatin1Char('|') + m_positionMode;
+    if (m_holdScenes.contains(ck) && m_doc->function(m_holdScenes.value(ck)) != nullptr)
+        return m_holdScenes.value(ck);
+    if (m_positionMode == QStringLiteral("down"))
+    {
+        const QString want = ENGINE_POS_PREFIX + key + QStringLiteral(" Center");
+        foreach (Function *func, m_doc->functions())
+        {
+            if (func != nullptr && func->name() == want)
+            {
+                m_holdScenes.insert(ck, func->id());
+                return func->id();
+            }
+        }
+        return Function::invalidId();
+    }
+    QList<Scene *> sources;
+    if (m_positionMode == QStringLiteral("start"))
+    {
+        foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_IDLE, QString()))
+        {
+            Scene *sc = qobject_cast<Scene *>(m_doc->function(info->id));
+            if (sc != nullptr)
+                sources << sc;
+        }
+    }
+    else if (m_positionMode == QStringLiteral("column"))
+    {
+        const QString column = QString::fromUtf8("S\xc3\xb8jle stop");
+        foreach (Function *func, m_doc->functions())
+        {
+            Scene *sc = qobject_cast<Scene *>(func);
+            if (sc != nullptr && sc->name().startsWith(column, Qt::CaseInsensitive))
+            {
+                sources << sc;
+                break;
+            }
+        }
+    }
+    const TrackGroup &g = m_groups.value(key);
+    QList<SceneValue> values;
+    foreach (quint32 fxid, g.fixtures)
+    {
+        Fixture *fxi = m_doc->fixture(fxid);
+        if (fxi == nullptr)
+            continue;
+        QSet<quint32> aimChannels;
+        for (quint32 ch = 0; ch < fxi->channels(); ch++)
+        {
+            const QLCChannel *qch = fxi->channel(ch);
+            if (qch == nullptr)
+                continue;
+            switch (qch->preset())
+            {
+                case QLCChannel::PositionPan:
+                case QLCChannel::PositionPanFine:
+                case QLCChannel::PositionTilt:
+                case QLCChannel::PositionTiltFine:
+                case QLCChannel::SpeedPanTiltFastSlow:
+                case QLCChannel::SpeedPanTiltSlowFast:
+                case QLCChannel::BeamZoomSmallBig:
+                case QLCChannel::BeamZoomBigSmall:
+                    aimChannels.insert(ch);
+                    break;
+                default:
+                    break;
+            }
+            if (qch->group() == QLCChannel::Pan || qch->group() == QLCChannel::Tilt)
+                aimChannels.insert(ch);
+        }
+        foreach (Scene *src, sources)
+        {
+            bool named = false;
+            foreach (const SceneValue &sv, src->values())
+            {
+                if (sv.fxi == fxid && aimChannels.contains(sv.channel))
+                {
+                    values.append(sv);
+                    named = true;
+                }
+            }
+            if (named)
+                break;                   // the first scene that aims this head
+        }
+    }
+    if (values.isEmpty())
+        return Function::invalidId();
+    const QString name = ENGINE_HOLD_PREFIX + key + QLatin1Char(' ') + m_positionMode;
+    Scene *scene = nullptr;
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func != nullptr && func->name() == name)
+            scene = qobject_cast<Scene *>(func);
+    }
+    if (scene != nullptr)
+    {
+        foreach (SceneValue old, scene->values())
+            scene->unsetValue(old.fxi, old.channel);
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+    }
+    else
+    {
+        scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setVisible(false);
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+        if (m_doc->addFunction(scene) == false)
+        {
+            delete scene;
+            return Function::invalidId();
+        }
+    }
+    m_holdScenes.insert(ck, scene->id());
+    return scene->id();
+}
+
+void TrackEngine::applyHeadHold(bool restart)
+{
+    // R378_POSITIONS: restart puts the hold after whatever else aims the heads
+    // (the START scene in the opening picture and the pauses): pan and tilt
+    // are LTP, and the function started last wins them
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (positionHeld(key) == false || m_groupOff.contains(key))
+            continue;
+        const quint32 fid = headHoldFunction(key);
+        if (fid == Function::invalidId())
+            continue;
+        if (restart && m_active.value(QStringLiteral("pos:") + key, Function::invalidId()) == fid)
+            stopSlot(QStringLiteral("pos:") + key, true);
+        stopSlot(QStringLiteral("efx:") + key, true);
+        run(QStringLiteral("pos:") + key, fid, 1.0, 0, false);
+        m_position.insert(key, fid);
+    }
+}
+
+void TrackEngine::setPositionMode(const QString &mode)
+{
+    // R378_POSITIONS (Tobias 10-06: "Positions med en AUTO knap ... START
+    // POSITION, Soejle midt, lige ned"): held until AUTO
+    if (mode.isEmpty() == false && mode != QStringLiteral("start")
+        && mode != QStringLiteral("column") && mode != QStringLiteral("down"))
+        return;
+    if (mode == m_positionMode)
+        return;
+    ensureTable();
+    // the hold that goes lets go of the heads: AUTO draws their next aim on the
+    // next beat, the opening picture gives them back to the START scene
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (positionHeld(key) == false)
+            continue;
+        const quint32 was = headHoldFunction(key);
+        if (was != Function::invalidId() && m_active.value(QStringLiteral("pos:") + key, Function::invalidId()) == was)
+            stopSlot(QStringLiteral("pos:") + key, true);
+        m_position.remove(key);
+        m_sectionMotion.remove(key);     // a programme that aims them is drawn again
+    }
+    m_positionMode = mode;
+    logSignal(QStringLiteral("sig:position:") + (mode.isEmpty() ? QStringLiteral("auto") : mode));
+    if (m_startScene)
+        startLook();
+    else if (mode.isEmpty() == false)
+        applyHeadHold(true);
+    emit liveChanged();
+}
+
 void TrackEngine::setStartScene(bool on)
+{
+    setStartScene(on, false);
+}
+
+void TrackEngine::setStartScene(bool on, bool keepTiles)
 {
     if (on == m_startScene)
         return;
@@ -16078,6 +16442,9 @@ void TrackEngine::setStartScene(bool on)
         // paa roed") - also over a tile the DJ left picked, which it replaces
         // - and the tile lights up, so it is clear which it is. A tile tapped
         // while it is up is the DJ's and outlives it (m_startColour).
+        // R379_ZERO_START: ENERGY pulled to 0 in the show keeps the DJ's own
+        // tiles - red is the start scene's colour only when there are none
+        if (keepTiles == false || m_overrideSet.isEmpty() || m_startColour)
         {
             QString want = m_palette.contains(QStringLiteral("red"))
                            ? QStringLiteral("red")
@@ -16112,6 +16479,10 @@ void TrackEngine::setStartScene(bool on)
             // not the OFF and BLACKOUT masks: with SHOW OFF nothing puts them
             // back, and the BLACKOUT tile stood lit over a lit room (r199)
             if (slot.startsWith("off:") || slot.startsWith("black:"))
+                continue;
+            // R381_HOLD_STAYS: nor a held position - stopped here, the START
+            // scene's aim (still fading out) had the heads for half a second
+            if (slot.startsWith(QStringLiteral("pos:")) && positionHeld(slotGroup(slot)))
                 continue;
             stopSlot(slot, false);
         }
@@ -16176,6 +16547,29 @@ void TrackEngine::startLook()
     // between tracks is not this and keeps the scene's own levels.
     foreach (TrackFuncInfo *info, idles)
         run("idle:" + QString::number(info->id), info->id, 0.0, 0, false);
+    // R378_POSITIONS: a position chosen on the page holds the heads here too,
+    // started after the START scene so it wins their pan and tilt
+    applyHeadHold(true);
+
+    // R378_START_LAYER (Tobias 10-06: "det skal ogsaa vaere muligt at saette
+    // fades/chases paa start-scenen"): two tiles or more take turns on the
+    // opening picture as they do in the show - AUTO and FADE glide (the room
+    // eats: the calm way), CHASE steps the groups through them. No beats
+    // here: slotLayerTimer() moves it on a clock of its own
+    m_layerOwned.clear();
+    const int startStyle = m_overrideSet.count() >= 2 ? (m_colourMode == 2 ? 2 : 1) : 0;
+    if (startStyle != m_layerStyle)
+    {
+        if (m_layerStyle == 0)
+            m_layerPos = qreal(m_overrideIdx);
+        m_layerStyle = startStyle;
+    }
+    m_layerPattern = 0;                  // a chase: the whole group, a colour at a time
+    m_layerRate = 0.0;                   // the clock moves it, not the beats
+    m_layerBaseKey = baseGroup();
+    m_startLayerMs = m_clock.elapsed();
+    if (startStyle != 0 && m_layerTimer.isActive() == false)
+        m_layerTimer.start();
 
     foreach (const QString &key, m_groupOrder)
     {
@@ -16190,9 +16584,17 @@ void TrackEngine::startLook()
             continue;
         }
         quint32 cf = colourFunction(key, colour);
-        if (cf != Function::invalidId())
+        if (cf != Function::invalidId() && startStyle != 0 && layerGroup(key))   // R378_START_LAYER
+        {
+            m_layerOwned.insert(key);
+            m_layerLevel.insert(key, m_startLevel);
+            applyColourLayer(key, false);
+            lit.insert(key);
+        }
+        else if (cf != Function::invalidId())
         {
             run("col:" + key, cf, m_funcs.value(cf).dimmer ? m_startLevel : 1.0, 0, false);
+            stopSlot("colx:" + key, true);   // R378: the fade's second colour, if the set went
             lit.insert(key);
         }
         else
@@ -16269,6 +16671,7 @@ QByteArray TrackEngine::logSettings() const
     live.insert("colourOverrides", QJsonArray::fromStringList(m_overrideSet));   // runde 304
     live.insert("colourMode", m_colourMode);                                       // runde 370
     live.insert("roomAuto", m_roomAuto);
+    live.insert("positionMode", m_positionMode);   // R378
     live.insert("rating", m_ratingOn);
     QJsonObject trims, disabled;
     foreach (const QString &group, m_groupOrder)
@@ -16845,6 +17248,7 @@ void TrackEngine::idle()
         run("idle:" + QString::number(info->id), info->id,
             info->dimmer ? m_startLevel : 1.0, 0, false);
     }
+    applyHeadHold(true);                 // R378_POSITIONS: after the START scene, so it wins the heads
 
     if (holdBase)
     {

@@ -389,54 +389,17 @@ Rectangle
                     }
                 }
 
+// R379_SHOW_SWITCH: the START SCENE button went (runde 378) - ENERGY at 0 is the
+                // start scene now, and START POSITION is a position
 Button
                 {
-                    width: 160
-                    height: 48
-                    // a tap must not leave keyboard focus behind: Space would
-                    // press it again (runde 187, all four Buttons on the page)
-                    focusPolicy: Qt.NoFocus
-                    anchors.verticalCenter: parent.verticalCenter
-                    visible: trackManager ? trackManager.roleMode : false
-                    checked: trackEngine ? trackEngine.startScene : false
-                    objectName: "startScene"
-                    text: qsTr("START SCENE")
-                    // off with the deck stopped: nothing else would build the
-                    // room until play is pressed, so ask for the idle look
-                    // (reroll -> runEngine -> idle; runde 185)
-                    onClicked: {
-                        if (!trackEngine)
-                            return
-                        var on = !checked
-                        trackEngine.startScene = on
-                        if (!on && trackManager)
-                            trackManager.reroll()
-                    }
-
-                    contentItem: Text
-                    {
-                        text: parent.text
-                        color: parent.checked ? "#101010" : trackViewRoot.cText
-                        font.bold: true
-                        font.pixelSize: 15
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle
-                    {
-                        radius: 5
-                        color: parent.checked ? "#E3B44F" : trackViewRoot.cBtn
-                        border.width: parent.checked ? 3 : 1
-                        border.color: parent.checked ? "#E3B44F" : trackViewRoot.cLine
-                    }
-                }
-Button
-                {
-                    width: 196
+                    width: 220
                     height: 48
                     focusPolicy: Qt.NoFocus
                     anchors.verticalCenter: parent.verticalCenter
                     checked: trackManager ? trackManager.autoRun : false
+                    // R379_SHOW_SWITCH (Tobias 10-06): as before - one tap on, SURE? off -
+                    // its off face reads START SHOW
                     id: showSwitch
                     objectName: "showSwitch"
                     // runde 296 (Tobias: "Ja, men lav et 'er du sikker' ligesom
@@ -446,7 +409,7 @@ Button
                     property bool armOff: false
                     Timer { id: showOffArm; interval: 4000; onTriggered: showSwitch.armOff = false }
                 ControlIcon { x: 6; anchors.verticalCenter: parent.verticalCenter;  kind: "showSwitch" }
-                    text: checked ? (armOff ? qsTr("SURE?") : qsTr("SHOW ON")) : qsTr("SHOW OFF")
+                    text: checked ? (armOff ? qsTr("SURE?") : qsTr("SHOW ON")) : qsTr("START SHOW")
                     onClicked: {
                         if (!checked) { trackManager.autoRun = true; return }
                         if (!armOff) { armOff = true; showOffArm.restart(); return }
@@ -1368,8 +1331,16 @@ Rectangle
                 }
             }
         }
+RowLayout {
+            // R378_POSITIONS (Tobias 10-06: "Ryk start position knappen til et nyt sted
+            // kaldet 'Positions' med en 'AUTO' knap som de andre"): SECTION shares its
+            // row with POSITIONS, split as COLOUR and INTERVENTION are below it
+            id: sectionRow
+            Layout.fillWidth: true
+            spacing: 10
 Rectangle
         {
+            Layout.preferredWidth: positionsPanel.visible ? sectionRow.width * 0.65 : sectionRow.width
             // SECTION is built like COLOUR now (runde 141): the heading on
             // its own line at the top left, the buttons in a row underneath,
             // 48 tall - the same shape, the same height, the same margins.
@@ -1477,6 +1448,70 @@ Rectangle
                 // when the engine is not running, green when it is
 
             }
+        }
+Rectangle
+        {
+            id: positionsPanel
+            objectName: "positionsPanel"
+            visible: trackManager && trackEngine && trackManager.roleMode
+            Layout.fillWidth: true
+            Layout.preferredWidth: sectionRow.width * 0.35
+            Layout.preferredHeight: trackViewRoot.compactLayout ? 88 : 112
+            Layout.minimumHeight: trackViewRoot.compactLayout ? 88 : 112
+            Layout.maximumHeight: trackViewRoot.compactLayout ? 88 : 112
+            color: trackViewRoot.cPanel
+            radius: 4
+
+            Text { x: 12; y: 8; text: "POSITIONS"; color: trackViewRoot.cText
+                   font.pixelSize: trackViewRoot.compactLayout ? 16 : 20 }
+
+            RowLayout
+            {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.bottom: parent.bottom; anchors.margins: 10
+                height: 48
+                spacing: 6
+                // AUTO: the engine aims the heads, as before. The others hold the
+                // moving heads until AUTO - in the show, the pauses and the opening
+                // picture; the laser bars keep the engine's aims and their safety
+                TrackTile
+                {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    objectName: "positionAuto"
+                    label: qsTr("AUTO")
+                    active: trackEngine ? trackEngine.positionMode === "" : true
+                    activeColor: "#7ED07E"
+                    onTapped: trackEngine.positionMode = ""
+                    ControlIcon
+                    {
+                        x: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 16; height: 16
+                        ink: (trackEngine && trackEngine.positionMode === "") ? "#101010" : "#DDDDDD"
+                        kind: "revert"
+                    }
+                }
+                Repeater
+                {
+                    model: [ { key: "start", label: qsTr("START POSITION") },
+                             { key: "column", label: qsTr("S\u00d8JLE MIDT") },
+                             { key: "down", label: qsTr("LIGE NED") } ]
+                    TrackTile
+                    {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        objectName: "position:" + modelData.key
+                        label: modelData.label
+                        active: trackEngine ? trackEngine.positionMode === modelData.key : false
+                        activeColor: "#E3B44F"
+                        // tapped again: AUTO
+                        onTapped: trackEngine.positionMode =
+                                  (trackEngine.positionMode === modelData.key) ? "" : modelData.key
+                    }
+                }
+            }
+        }
         }
 RowLayout {
             id: dialsRow

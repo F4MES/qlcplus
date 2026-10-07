@@ -285,12 +285,18 @@ struct TrackSweep
     // the SLIDER a laser bar figure was drawn at (runde 293): its height
     // follows the slider live from there (applySweep), -1 = not a bar figure
     qreal drawnF = -1.0;
+    // R383_LASER_FAST: how the bars relate at the top of the slider - 0 the wave
+    // down the row, 1 the row in unison, 2 from the middle out, 3 the wave back
+    int laserForm = 0;
+    // R385_BARS_FULL: the bars' slow lift in their alone break - never under
+    // the home aim, whatever the slider allows a drop
+    bool upOnly = false;
     bool operator==(const TrackSweep &o) const
     {
         return shape == o.shape && width == o.width && height == o.height && rotation == o.rotation
             && beats == o.beats && spread == o.spread && mirror == o.mirror && fan == o.fan
             && fx == o.fx && fy == o.fy && dx == o.dx && dy == o.dy && minBeats == o.minBeats
-            && paceRole == o.paceRole;
+            && paceRole == o.paceRole && laserForm == o.laserForm && upOnly == o.upOnly;
     }
 };
 
@@ -456,6 +462,8 @@ class TrackEngine : public QObject
      *  that one down again (TrackManager, runde 184); by hand it stays until
      *  the tile is tapped again or the show is switched. */
     Q_PROPERTY(bool startScene READ startScene WRITE setStartScene NOTIFY liveChanged)
+    /** R378_POSITIONS: "" AUTO, "start", "column" (Soejle midt), "down" (lige ned) */
+    Q_PROPERTY(QString positionMode READ positionMode WRITE setPositionMode NOTIFY liveChanged)
 
     /** Freeze the look: no colour, cast or move changes until released. */
     Q_PROPERTY(bool hold READ hold WRITE setHold NOTIFY liveChanged)
@@ -558,6 +566,10 @@ public:
     /** The evening's opening picture, held by hand. */
     bool startScene() const;
     void setStartScene(bool on);
+    /** R379_ZERO_START: keepTiles - the DJ's own tiles stay (red only without) */
+    void setStartScene(bool on, bool keepTiles);
+    QString positionMode() const { return m_positionMode; }
+    void setPositionMode(const QString &mode);
     /** Draw the opening picture: the IDLE functions for the aim, every group
      *  lit in one colour, no motion. Follows the colour tiles, MASTER and the
      *  cast faders live. */
@@ -1029,6 +1041,21 @@ private:
     bool m_mixGlideFinish = false;         // R376_GLIDE_FINISH: adopted at the handover, finishing
     QString m_mixGlideFrom, m_mixGlideTo, m_mixGlideKey;
     void applyMixGlide(bool frame);
+    /* R378_POSITIONS: a position chosen on the page holds the moving heads */
+    QString m_positionMode;
+    QHash<QString, quint32> m_holdScenes;  // "group|mode" -> the hold scene
+    /* R383_BARS_ALONE: this beat's break has the laser bars alone */
+    bool m_barsAloneNow = false;
+    /* R384_ALONE_LATCH: the section started at 90 % on the slider */
+    bool m_aloneArmed = false;
+    /* R385_BARS_FULL: this alone break is the full-light one (every second) */
+    bool m_aloneFull = false;
+    int m_aloneBreaks = 0;
+    bool positionHeld(const QString &key) const;
+    quint32 headHoldFunction(const QString &key);
+    void applyHeadHold(bool restart);
+    /* R378_START_LAYER: the opening picture's fade/chase runs on a clock */
+    qint64 m_startLayerMs = 0;
     QTimer m_layerTimer;
     void updateColourLayer(int beat, const QString &base, bool isBreak, bool isBuild, bool isDrop,
                            qreal prog, qreal fader, bool frozen, bool jump, qreal kick);
