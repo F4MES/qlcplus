@@ -77,18 +77,48 @@ Rectangle
     property var divLabels: [ "-", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8" ]
 
     property bool setupOpen: false
-    property bool helpOpen: false             // runde 393: the guide over the page
+    property bool helpOpen: false
+
+    // runde 396: the four AUTO tiles in one - lit as their own tiles are lit
+    readonly property bool allAutoOn: trackEngine && trackManager
+        && trackEngine.roomAuto
+        && trackManager.overrideState === ""
+        && trackEngine.positionMode === ""
+        && trackEngine.colourMode === 0 && (trackEngine.colourOverride === "" || trackEngine.colourOverrides.length > 1)
+    function allAuto()
+    {
+        if (!trackEngine || !trackManager) return
+        trackEngine.roomAuto = true
+        trackManager.overrideState = ""
+        trackEngine.positionMode = ""
+        trackEngine.colourOverride = ""        // AUTO colour - and FADE / CHASE off with it
+    }             // runde 393: the guide over the page
     // the pencil: the flag tools stay out until it is tapped again (Tobias 10-07)
     property bool markerEdit: false
 
     property int dragIndex: -1
+    // runde 396: the bar a dragged flag would land on - drawn while the finger moves,
+    // moved ONCE on release (one undo step, one note to BLT, no section flipping live
+    // while the flag passes the playhead); a cancelled drag moves nothing
+    property int previewBeat: -1
+    function markerBeat(i)
+    {
+        if (i === dragIndex && previewBeat > 0) return previewBeat
+        var mk = trackManager ? trackManager.markers : []
+        return (i >= 0 && i < mk.length) ? mk[i].beat : 0
+    }
+    function barOf(beat)
+    {
+        var db = trackManager ? (trackManager.downbeat || 0) : 0
+        return Math.max(1, Math.floor((beat - 1 - db) / 4) + 1)
+    }
     property real dragX: 0
     property real dragOffset: 0
     property bool zoomActive: false
     property int zoomCenter: 1
     property int zoomSpan: 64
 
-    onMarkerEditChanged: if (!markerEdit) { wfArea.release(); wfCanvas.selected = -1; wfCanvas.requestPaint() }
+    onMarkerEditChanged: { if (!markerEdit) { wfArea.release(); wfCanvas.selected = -1 } wfCanvas.requestPaint() }
 
     function markerColor(type)
     {
@@ -212,14 +242,7 @@ Rectangle
             trackViewRoot.zoomCenter =
                 Math.max(1, Math.min(trackViewRoot.beatCount,
                                      trackViewRoot.zoomCenter + dir * step))
-            var want = wfArea.beatAt(trackViewRoot.dragX) + trackViewRoot.dragOffset
-            if (wfArea.barTaken(want) === false)
-            {
-                var before = trackManager.markers.length
-                trackManager.moveMarker(trackViewRoot.dragIndex, want)
-                if (trackManager.markers.length !== before)
-                    wfArea.reindex(want)
-            }
+            wfArea.preview(wfArea.beatAt(trackViewRoot.dragX) + trackViewRoot.dragOffset)
             wfCanvas.requestPaint()
         }
     }
@@ -290,6 +313,10 @@ Rectangle
                 ti.releasedAt(p.x, p.y, ti.inside(p.x, p.y))
             }
             onCanceled: (pts) => { if (pid < 0) return; pid = -1; holdTimer.stop(); ti.canceled() }
+            // disabled or hidden under the finger (SETUP / HELP): forget it, let go (runde 395)
+            function drop() { if (pid < 0) return; pid = -1; holdTimer.stop(); ti.canceled() }
+            onEnabledChanged: if (!enabled) drop()
+            onVisibleChanged: if (!visible) drop()
         }
         Timer { id: holdTimer; interval: ti.holdMs; onTriggered: ti.held() }
     }
@@ -731,6 +758,8 @@ Rectangle
                 Btn
                 {
                     objectName: "helpSwitch"
+                    // the guide explains the deck: no deck (the classic slot page), no HELP
+                    visible: trackManager ? trackManager.roleMode : false
                     anchors.verticalCenter: parent.verticalCenter
                     width: Math.round(118 * trackViewRoot.ks)
                     height: Math.max(48, Math.round(48 * trackViewRoot.ks))
@@ -788,6 +817,47 @@ Rectangle
                 property int selected: -1          // the selected flag, an index into trackManager.markers
                 property real stripH: Math.max(34, Math.round(44 * trackViewRoot.ks))
 
+                // runde 396: in MARKERS, every flag has a handle at the foot of the track -
+                // a tab the thumb can take, not a 2 px line (Tobias 10-07: "de kan godt
+                // vaere lidt svaere at hive i med tommelfingeren"). Two rows: a handle
+                // that would cover its neighbour goes up one.
+                readonly property real handleH: Math.max(44, Math.round(50 * trackViewRoot.ks))
+                function handles()
+                {
+                    var out = []
+                    if (!trackViewRoot.markerEdit || !trackManager || trackViewRoot.beatCount <= 0) return out
+                    var vf = trackViewRoot.viewFirst(), vc = trackViewRoot.viewCount(), px = width / vc
+                    var ks = trackViewRoot.ks
+                    var base = height - 8
+                    var rowEnd = [ -1e9, -1e9 ]
+                    var sorted = sortedMarkers()
+                    for (var j = 0; j < sorted.length; j++)
+                    {
+                        var m = sorted[j]
+                        if (m.beat < vf - 4 || m.beat > vf + vc + 4) continue
+                        var label = m.type.toUpperCase()
+                        // the dragged one says where it lands
+                        if (m.index === trackViewRoot.dragIndex) label += "  \u2192  " + qsTr("BAR") + " " + trackViewRoot.barOf(m.beat)
+                        var w = Math.max(Math.round(84 * ks), Math.round((label.length * 10 + 44) * ks))
+                        var fx = (m.beat - vf) * px
+                        var x = Math.min(Math.max(fx - w / 2, 0), width - w)
+                        var row = (x < rowEnd[0] + 6) ? 1 : 0
+                        rowEnd[row] = Math.max(rowEnd[row], x + w)
+                        out.push({ index: m.index, type: m.type, label: label, fx: fx, x: x, w: w,
+                                   y: base - handleH - row * (handleH + Math.round(6 * ks)), h: handleH })
+                    }
+                    return out
+                }
+                function handleAt(x, y)
+                {
+                    var hs = handles()
+                    // the upper row first: it lies over the lower one's line
+                    for (var i = hs.length - 1; i >= 0; i--)
+                        if (x >= hs[i].x - 4 && x <= hs[i].x + hs[i].w + 4 && y >= hs[i].y - 4 && y <= hs[i].y + hs[i].h + 4)
+                            return hs[i].index
+                    return -1
+                }
+
                 onWidthChanged: requestPaint()
                 onHeightChanged: requestPaint()
 
@@ -795,7 +865,7 @@ Rectangle
                 {
                     var mk = trackManager ? trackManager.markers : []
                     var out = []
-                    for (var i = 0; i < mk.length; i++) out.push({ beat: mk[i].beat, type: mk[i].type, energy: mk[i].energy, index: i })
+                    for (var i = 0; i < mk.length; i++) out.push({ beat: trackViewRoot.markerBeat(i), type: mk[i].type, energy: mk[i].energy, index: i })
                     out.sort(function(a, b) { return a.beat - b.beat })
                     return out
                 }
@@ -959,7 +1029,7 @@ Rectangle
                     var mk = trackManager.markers
                     for (var o = 0; o < mk.length; o++)
                     {
-                        var mb = mk[o].beat
+                        var mb = trackViewRoot.markerBeat(o)
                         if (mb < vf - 2 || mb > vf + vc + 2) continue
                         var fx = xOf(mb)
                         var held = (o === trackViewRoot.dragIndex)
@@ -970,9 +1040,38 @@ Rectangle
                         if (held)
                         {
                             ctx.fillStyle = Qt.rgba(fc.r, fc.g, fc.b, 1)
-                            ctx.font = "bold " + Math.max(10, Math.round(11 * ks)) + "px sans-serif"
-                            ctx.fillText("beat " + mb, fx + 6, strip + 14)
+                            ctx.font = "bold " + Math.max(11, Math.round(13 * ks)) + "px sans-serif"
+                            ctx.fillText(qsTr("BAR") + " " + trackViewRoot.barOf(mb), fx + 8, strip + 16)
                         }
+                    }
+
+                    // the handles (MARKERS on)
+                    var hs = handles()
+                    ctx.textBaseline = "middle"
+                    for (var hi = 0; hi < hs.length; hi++)
+                    {
+                        var hd = hs[hi]
+                        var hc = Qt.color(trackViewRoot.markerColor(hd.type))
+                        var sel = (hd.index === selected || hd.index === trackViewRoot.dragIndex)
+                        // the stem from the flag line into the tab
+                        ctx.strokeStyle = Qt.rgba(hc.r, hc.g, hc.b, 1); ctx.lineWidth = sel ? 3 : 2
+                        ctx.beginPath(); ctx.moveTo(hd.fx, strip + 1); ctx.lineTo(hd.fx, hd.y); ctx.stroke()
+                        var rr = Math.round(10 * ks)
+                        ctx.beginPath()
+                        ctx.moveTo(hd.x + rr, hd.y); ctx.lineTo(hd.x + hd.w - rr, hd.y); ctx.arcTo(hd.x + hd.w, hd.y, hd.x + hd.w, hd.y + rr, rr)
+                        ctx.lineTo(hd.x + hd.w, hd.y + hd.h - rr); ctx.arcTo(hd.x + hd.w, hd.y + hd.h, hd.x + hd.w - rr, hd.y + hd.h, rr)
+                        ctx.lineTo(hd.x + rr, hd.y + hd.h); ctx.arcTo(hd.x, hd.y + hd.h, hd.x, hd.y + hd.h - rr, rr)
+                        ctx.lineTo(hd.x, hd.y + rr); ctx.arcTo(hd.x, hd.y, hd.x + rr, hd.y, rr); ctx.closePath()
+                        ctx.fillStyle = sel ? Qt.rgba(hc.r, hc.g, hc.b, 1) : Qt.rgba(hc.r * 0.35 + 0.05, hc.g * 0.35 + 0.05, hc.b * 0.35 + 0.06, 0.96)
+                        ctx.fill()
+                        ctx.strokeStyle = sel ? "#FFFFFF" : Qt.rgba(hc.r, hc.g, hc.b, 1); ctx.lineWidth = sel ? 3 : 2; ctx.stroke()
+                        // the grip and the type
+                        var ink = sel ? "#101010" : Qt.lighter(Qt.rgba(hc.r, hc.g, hc.b, 1), 1.5)
+                        ctx.fillStyle = ink
+                        var gx = hd.x + Math.round(14 * ks), gy = hd.y + hd.h / 2
+                        for (var gl = -1; gl <= 1; gl++) ctx.fillRect(gx, gy + gl * Math.round(5 * ks) - 1, Math.round(10 * ks), 2)
+                        ctx.font = "bold " + Math.max(11, Math.round(13 * ks)) + "px sans-serif"
+                        ctx.fillText(hd.label, gx + Math.round(18 * ks), gy + 1)
                     }
 
                     // the playhead
@@ -993,6 +1092,8 @@ Rectangle
                     function onZoomActiveChanged() { wfCanvas.requestPaint() }
                     function onZoomCenterChanged() { wfCanvas.requestPaint() }
                     function onDragIndexChanged() { wfCanvas.requestPaint() }
+                    function onPreviewBeatChanged() { wfCanvas.requestPaint() }
+                    function onMarkerEditChanged() { wfCanvas.requestPaint() }
                 }
             }
 
@@ -1007,7 +1108,8 @@ Rectangle
                 y: wfCanvas.y
                 width: wfCanvas.width
                 height: wfCanvas.height
-                enabled: trackViewRoot.beatCount > 0
+                // runde 395: SETUP or HELP over it ends a flag drag (onCanceled = release)
+                enabled: trackViewRoot.beatCount > 0 && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
                 preventStealing: true
 
                 property int pressIndex: -1
@@ -1019,9 +1121,19 @@ Rectangle
                            + trackViewRoot.viewFirst()
                 }
 
-                function press(px)
+                function press(px, py)
                 {
                     if (!trackViewRoot.markerEdit) return
+                    var hit = wfCanvas.handleAt(px, py)
+                    if (hit >= 0)
+                    {
+                        pressIndex = hit
+                        pressX = px
+                        trackViewRoot.dragIndex = -1
+                        wfCanvas.selected = hit
+                        wfCanvas.requestPaint()
+                        return
+                    }
                     var b = beatAt(px)
                     var mk = trackManager.markers
                     var best = -1, bestDist = 1e9
@@ -1046,7 +1158,7 @@ Rectangle
                         snapped = Math.min(snapped, trackViewRoot.beatCount)
                     var mk = trackManager.markers
                     var from = (trackViewRoot.dragIndex >= 0 && trackViewRoot.dragIndex < mk.length)
-                               ? mk[trackViewRoot.dragIndex].beat : snapped
+                               ? mk[trackViewRoot.dragIndex].beat : snapped   // where it stands, not the preview
                     var lo = Math.min(from, snapped), hi = Math.max(from, snapped)
                     for (var i = 0; i < mk.length; i++)
                         if (i !== trackViewRoot.dragIndex
@@ -1075,7 +1187,8 @@ Rectangle
                     if (pressIndex < 0) return
                     if (trackViewRoot.dragIndex < 0)
                     {
-                        if (Math.abs(px - pressX) < 6) return
+                        // a thumb trembles: a press that moves less than this only selects
+                        if (Math.abs(px - pressX) < Math.max(10, Math.round(12 * trackViewRoot.ks))) return
                         var mk = trackManager.markers[pressIndex]
                         if (!mk) { pressIndex = -1; return }
                         trackViewRoot.dragIndex = pressIndex
@@ -1085,34 +1198,50 @@ Rectangle
                         trackViewRoot.dragOffset = mk.beat - beatAt(px)
                     }
                     trackViewRoot.dragX = px
-                    var want = beatAt(px) + trackViewRoot.dragOffset
-                    if (barTaken(want) === false)
-                    {
-                        var before = trackManager.markers.length
-                        trackManager.moveMarker(trackViewRoot.dragIndex, want)
-                        if (trackManager.markers.length !== before)
-                            reindex(want)
-                    }
+                    preview(beatAt(px) + trackViewRoot.dragOffset)
                     var edge = width * 0.08
                     panTimer.dir = px < edge ? -1 : (px > width - edge ? 1 : 0)
                     panTimer.running = (panTimer.dir !== 0)
                     wfCanvas.requestPaint()
                 }
 
-                function release()
+                // the bar the flag would land on - up to a neighbour, never past it
+                function preview(wantBeat)
                 {
+                    if (trackViewRoot.dragIndex < 0) return
+                    if (barTaken(wantBeat)) return
+                    var snapped = trackViewRoot.snapBeat(wantBeat)
+                    if (trackViewRoot.beatCount > 0)
+                        snapped = Math.max(1, Math.min(snapped, trackViewRoot.beatCount))
+                    trackViewRoot.previewBeat = snapped
+                }
+
+                // commit: a finger let go on purpose - the flag moves once, to the preview.
+                // Anything else (cancel, SETUP / HELP, a new track, DONE) moves nothing.
+                function release(commit)
+                {
+                    var idx = trackViewRoot.dragIndex, to = trackViewRoot.previewBeat
                     panTimer.running = false
                     panTimer.dir = 0
                     pressIndex = -1
                     trackViewRoot.dragIndex = -1
+                    trackViewRoot.previewBeat = -1
                     trackViewRoot.zoomActive = false
+                    if (commit === true && idx >= 0 && to > 0 && trackManager
+                        && idx < trackManager.markers.length && trackManager.markers[idx].beat !== to)
+                    {
+                        trackManager.moveMarker(idx, to)
+                        wfCanvas.selected = idx
+                    }
                     wfCanvas.requestPaint()
                 }
 
-                onPressed: (mouse) => press(mouse.x)
+                onPressed: (mouse) => press(mouse.x, mouse.y)
                 onPositionChanged: (mouse) => move(mouse.x)
-                onReleased: release()
-                onCanceled: release()
+                onReleased: release(true)
+                onCanceled: release(false)
+                // disabled under a finger (SETUP / HELP opened): no cancel comes - end it here
+                onEnabledChanged: if (!enabled) release()
 
                 // the same, for one finger of its own (multitouch)
                 MultiPointTouchArea
@@ -1122,10 +1251,11 @@ Rectangle
                     maximumTouchPoints: 10
                     property int pid: -1          // one finger drags a flag; others are ignored (runde 390)
                     function mine(pts) { for (var i = 0; i < pts.length; i++) if (pts[i].pointId === pid) return pts[i]; return null }
-                    onPressed: (pts) => { if (pid >= 0 || wfArea.pressed) return; pid = pts[0].pointId; wfArea.press(pts[0].x) }
+                    onPressed: (pts) => { if (pid >= 0 || wfArea.pressed) return; pid = pts[0].pointId; wfArea.press(pts[0].x, pts[0].y) }
                     onUpdated: (pts) => { var p = mine(pts); if (p) wfArea.move(p.x) }
-                    onReleased: (pts) => { if (mine(pts) === null) return; pid = -1; wfArea.release() }
+                    onReleased: (pts) => { if (mine(pts) === null) return; pid = -1; wfArea.release(true) }
                     onCanceled: (pts) => { if (pid < 0) return; pid = -1; wfArea.release() }
+                    onEnabledChanged: if (!enabled) pid = -1     // runde 395: no stale finger after SETUP / HELP
                 }
             }
 
@@ -1354,7 +1484,7 @@ Rectangle
                     anchors.right: parent.right
                     anchors.rightMargin: Math.round(10 * trackViewRoot.ks)
                     anchors.verticalCenter: parent.verticalCenter
-                    visible: trackManager && trackEngine && trackManager.beatCount > 0 && !trackViewRoot.setupOpen
+                    visible: trackManager && trackEngine && trackManager.beatCount > 0 && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
                     property int blaming: 0
                     property var stageRows: []
                     width: blaming === 0 ? thumbRow.width : blameRow.width
@@ -1726,6 +1856,32 @@ Rectangle
                 readonly property real cg: Math.round(8 * trackViewRoot.ks)          // between the tiles of a row
                 function cell(n) { return (cW - (n - 1) * cg) / n }
 
+                // ALL AUTO (runde 396, Tobias 10-07: "en lille full-auto knap der dukker
+                // op et sted hvor det passer til hurtigt at toggle alle auto knapperne paa
+                // hvis de ikke er det"): over the AUTO column, only while one is off
+                Btn
+                {
+                    id: allAutoTile
+                    objectName: "allAuto"
+                    visible: !trackViewRoot.allAutoOn
+                    x: lookCard.autoX
+                    width: lookCard.autoW
+                    height: Math.round(32 * trackViewRoot.ks)
+                    y: Math.round((deck.rowsY - height) / 2) + Math.round(2 * trackViewRoot.ks)
+                    text: qsTr("ALL AUTO"); icon: "revert"; autoKind: true
+                    fontPx: trackViewRoot.fs(11)
+                    active: true
+                    onTapped: trackViewRoot.allAuto()
+                    // a finger target the whole height of the header band, wider than the pill
+                    Item
+                    {
+                        x: -Math.round(10 * trackViewRoot.ks); y: -parent.y
+                        width: parent.width + 2 * Math.round(10 * trackViewRoot.ks)
+                        height: deck.rowsY - Math.round(3 * trackViewRoot.ks)
+                        TouchInput { onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.allAuto() } }
+                    }
+                }
+
                 // row 0: ENERGY - by the hand. AUTO gives it back to the clock. On top
                 // (runde 389, Tobias 10-07: "saa alle Auto-knapperne er over hinanden")
                 RowLabel { x: lookCard.inX; y: deck.rowY(0); width: lookCard.labW; height: trackViewRoot.rowH; text: "ENERGY"; color: trackViewRoot.cGold }
@@ -2022,23 +2178,23 @@ Rectangle
                 }
                 Btn
                 {
-                    objectName: "calm"
-                    x: liveCard.inX; y: deck.rowY(1); width: liveCard.inW; height: trackViewRoot.rowH
-                    icon: "calm"
-                    text: (trackEngine && trackEngine.calmBarsLeft > 0) ? qsTr("CALM") + " " + trackEngine.calmBarsLeft : qsTr("CALM")
-                    tone: trackViewRoot.cBlue
-                    active: trackEngine ? trackEngine.calmBarsLeft > 0 : false
-                    onTapped: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
-                }
-                Btn
-                {
                     objectName: "hold"
-                    x: liveCard.inX; y: deck.rowY(2); width: liveCard.inW; height: trackViewRoot.rowH
+                    x: liveCard.inX; y: deck.rowY(1); width: liveCard.inW; height: trackViewRoot.rowH
                     icon: "hold"
                     text: qsTr("HOLD")
                     tone: trackViewRoot.cGold
                     active: trackEngine ? trackEngine.hold : false
                     onTapped: trackEngine.hold = !trackEngine.hold
+                }
+                Btn
+                {
+                    objectName: "calm"
+                    x: liveCard.inX; y: deck.rowY(2); width: liveCard.inW; height: trackViewRoot.rowH
+                    icon: "calm"
+                    text: (trackEngine && trackEngine.calmBarsLeft > 0) ? qsTr("CALM") + " " + trackEngine.calmBarsLeft : qsTr("CALM")
+                    tone: trackViewRoot.cBlue
+                    active: trackEngine ? trackEngine.calmBarsLeft > 0 : false
+                    onTapped: trackEngine.calm(trackEngine.calmBarsLeft > 0 ? 0 : 16)
                 }
 
                 // BLACKOUT: held = dark while held; slid off = latched; a tap on a
@@ -2272,7 +2428,7 @@ Rectangle
         id: helpOverlay
         objectName: "helpOverlay"
         z: 99
-        visible: trackViewRoot.helpOpen
+        visible: trackViewRoot.helpOpen && trackManager && trackManager.roleMode
         x: setupLoader.x
         y: setupLoader.y
         width: setupLoader.width
@@ -2299,7 +2455,7 @@ Rectangle
                 model: [
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Tap a marker to <b>RETYPE</b> or <b>DELETE</b> it, drag it to move it. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group." },
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group." },
                     { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column
@@ -2340,7 +2496,7 @@ Rectangle
         Repeater
         {
             model: [
-                { l: "ENERGY",       b: "How hard the show plays - your hand takes over. <b>AUTO</b>: the clock moves it through the night. At 0 the first SHOW ON puts up the start scene." },
+                { l: "ENERGY",       b: "How hard the show plays - your hand takes over. <b>AUTO</b>: the clock moves it through the night. <b>ALL AUTO</b> (above, when one is off) puts all four back." },
                 { l: "SECTION",      b: "Force a section; the one the music is in is filled. Tap it again or <b>AUTO</b> to follow the music." },
                 { l: "POSITION",     b: "Hold the heads in one position. <b>AUTO</b>: the engine moves them." },
                 { l: "COLOUR",       b: "Tap colours to make your own mix. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },
@@ -2376,8 +2532,8 @@ Rectangle
         {
             model: [
                 { y: 0, h: 1, b: "<b>NEXT LOOK</b> - a new look now." },
-                { y: 1, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
-                { y: 2, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
+                { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
+                { y: 2, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
                 { y: 3, h: 2, b: "<b>BLACKOUT</b> - dark while held. Slide off before letting go to lock it; tap to release." },
                 { y: 4, h: 2, b: "<b>FLASH WHITE</b> - white while held." }
             ]
