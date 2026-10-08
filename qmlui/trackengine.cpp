@@ -3249,14 +3249,21 @@ void TrackEngine::ensureOffScenes()
             Fixture *fxi = m_doc->fixture(fid);
             if (fxi == nullptr)
                 continue;
+            // R400_DARK_DIMMER: g.hasDimmer is not known yet here -
+            // ensureDimmerScenes() sets it after this, on groups rebuilt from
+            // nothing - so every dark mask was the full off mask, and each dark
+            // beat sent the heads' zoom to nought and back (harness: 168 -> 0
+            // -> 168 in 120 ms, every beat of a break). The fixture's own
+            // dimmer decides, by the test that makes it a dimmer part.
+            const bool fxDimmer = dimmerChannel(fxi) != QLCChannel::invalid();
             for (quint32 i = 0; i < fxi->channels(); i++)
             {
                 const QLCChannel *qch = fxi->channel(i);
                 if (qch == nullptr)
                     continue;
-                if (g.hasDimmer ? qch->group() == QLCChannel::Intensity
-                                : (qch->group() != QLCChannel::Pan && qch->group() != QLCChannel::Tilt
-                                   && qch->group() != QLCChannel::Speed))
+                if (fxDimmer ? qch->group() == QLCChannel::Intensity
+                             : (qch->group() != QLCChannel::Pan && qch->group() != QLCChannel::Tilt
+                                && qch->group() != QLCChannel::Speed))
                     values.append(SceneValue(fid, i, uchar(0)));
             }
         }
@@ -12100,6 +12107,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     && pairFits(m_funcs.value(mf), m_colour, m_partnerPick) == false)
                     mf = Function::invalidId();
             }
+            // R400_HOLD_AIM: a position held on the page lets go of the
+            // section's programme when it aims the heads (or zooms them under
+            // STRAIGHT DOWN) - motionFor() would not draw it now
+            // - and the one running goes hard: a soft stop fades its level
+            // over up to two seconds and the chase goes on stepping pan and
+            // tilt (LTP, not scaled) over the hold
+            const quint32 motRunning = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+            if (motRunning != Function::invalidId() && heldAimBlocks(key, m_funcs.value(motRunning)))
+                stopSlot(QStringLiteral("mot:") + key, true);
+            if (mf != Function::invalidId() && heldAimBlocks(key, m_funcs.value(mf)))
+                mf = Function::invalidId();
             // The fader moved the ceiling (ceilMoved): a programme hotter
             // than the new ceiling, or two notches colder, is not what the
             // hand asked for. One notch colder stays - the pool doubles the
@@ -16249,6 +16267,19 @@ bool TrackEngine::positionHeld(const QString &key) const
     return g.heads && g.patternDevice == false && g.lasers == false;
 }
 
+bool TrackEngine::heldAimBlocks(const QString &key, const TrackFuncInfo &info) const
+{
+    // R400_HOLD_AIM: what a position held on the page keeps off the heads -
+    // a programme that aims them (R378), and under STRAIGHT DOWN one that
+    // zooms them by itself (R398)
+    if (positionHeld(key) == false)
+        return false;
+    if (info.aims)
+        return true;
+    return m_positionMode == QStringLiteral("down")
+        && info.name.contains(QStringLiteral("zoom"), Qt::CaseInsensitive);
+}
+
 quint32 TrackEngine::headHoldFunction(const QString &key)
 {
     // R378_POSITIONS: LIGE NED is the generated Center (tilt 128, straight
@@ -16442,7 +16473,23 @@ void TrackEngine::applyHeadHold(bool restart)
         if (restart && m_active.value(QStringLiteral("pos:") + key, Function::invalidId()) == fid)
             stopSlot(QStringLiteral("pos:") + key, true);
         stopSlot(QStringLiteral("efx:") + key, true);
-        run(QStringLiteral("pos:") + key, fid, 1.0, 0, false);
+        // R400_HOLD_AIM: a programme that aims them (or, straight down, zooms
+        // them) lets go now - its next step's fader came after the hold's and
+        // took pan and tilt back for a beat, lit (harness: CENTER COLUMN from
+        // AUTO, the heads snapped back and glided to the column again)
+        const quint32 motNow = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        if (motNow != Function::invalidId() && heldAimBlocks(key, m_funcs.value(motNow)))
+        {
+            stopSlot(QStringLiteral("mot:") + key, true);    // hard: a soft stop fades
+            m_motionDim.remove(key);                          // its level and goes on stepping
+            m_sectionMotion.remove(key);
+        }
+        // ... and the position it takes over from goes hard too: the AUTO head
+        // figures run in pos: (runde 255) - the snap in the harness was one of
+        // them, "AUTO Wash Drop Ripple Tilt Offset", soft-stopped by run() and
+        // stepping on for its fade. Pan and tilt are LTP: a soft stop fades
+        // nothing on them (tick() hands the hold over hard as well)
+        run(QStringLiteral("pos:") + key, fid, 1.0, 0, true);
         m_position.insert(key, fid);
     }
 }
