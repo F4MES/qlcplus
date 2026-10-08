@@ -9172,6 +9172,47 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_lastState.isEmpty() == false && partChanged)
             m_castCursor += 1 + int(rng->bounded(2));
         m_motionCursor += 1 + int(rng->bounded(3));
+        if (partChanged)
+        {
+            // R401_CAST_DRAW (Tobias 10-08: "det er bedre hvis det er random,
+            // eller den traekker paa en bedre maade"): the effect groups'
+            // order for this section, drawn by how long each has rested - the
+            // ring the cursor turned only ever put neighbours on stage
+            QList<QPair<QString, int>> bag;
+            foreach (const QString &key, m_groupOrder)
+            {
+                const int rest = m_cast.contains(key) ? 0 : qMin(6, m_castRest.value(key, 3) + 1);
+                m_castRest.insert(key, rest);
+                bag.append(qMakePair(key, 1 + rest));
+            }
+            m_castOrder.clear();
+            while (bag.isEmpty() == false)
+            {
+                int total = 0;
+                for (int i = 0; i < bag.count(); i++)
+                    total += bag.at(i).second;
+                int roll = int(rng->bounded(qMax(1, total)));
+                int pick = 0;
+                while (pick < bag.count() - 1 && roll >= bag.at(pick).second)
+                    roll -= bag.at(pick++).second;
+                m_castOrder.append(bag.takeAt(pick).first);
+            }
+            // R401_SPECIAL_DRAW: each special a draw of its own, on its own
+            // occasions, the odds growing with every one it missed
+            m_drawAlone = isBreak && fader >= 0.90 && varietyDraw(m_aloneWait, rng);
+            m_drawHome = fader >= 0.90 && varietyDraw(m_homeWait, rng);
+            m_drawGrooveStrobes = isDrop == false && preDrop == false && isBuild == false
+                               && isBreak == false && isIntro == false && isOutro == false
+                               && fader >= ENGINE_STROBE_ON && varietyDraw(m_grooveWait, rng);
+            // R401_DROP_LEAD: a drop with room for one group gave it to the
+            // strobes every time - the night at 55 % had the wash and the
+            // strobes alone in 28 of 39 drops. After such a drop the next
+            // one hands the first place to the drawn order more often than not
+            if (m_lastState == QStringLiteral("drop"))
+                m_lastDropStrobesOnly = m_dropStrobesOnly;
+            m_dropStrobesOnly = isDrop;
+            m_dropLeadYields = isDrop && m_lastDropStrobesOnly && rng->bounded(100) < 60;
+        }
         // the cooldown is judged from HERE for the whole section: judged from
         // "now" every beat, the programme that had just started counted as
         // recent on its second beat, fell out of the list, and the pick moved
@@ -9665,9 +9706,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     if (hats < 0.0) m_hatsOut = false;
     QStringList priority;
-    for (int i = 0; i < pool.count(); i++)
+    // R401_CAST_DRAW: the section's drawn order, then any group it did not know
+    QStringList castOrder;
+    foreach (const QString &key, m_castOrder)
+        if (pool.contains(key))
+            castOrder.append(key);
+    foreach (const QString &key, pool)
+        if (castOrder.contains(key) == false)
+            castOrder.append(key);
+    for (int i = 0; i < castOrder.count(); i++)
     {
-        QString key = pool.at((m_castCursor + i) % pool.count());
+        QString key = castOrder.at(i);
         if (m_hatsOut && m_groups.value(key).strobes)
             continue;
         priority.append(key);
@@ -9686,11 +9735,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // beats 2-4 and the downbeat swapped again (fejljagt 2 by a side door).
     const bool grooveStrobes = isDrop == false && preDrop == false && isBuild == false
                             && isBreak == false && isIntro == false && isOutro == false
-                            && m_strobesPooled && (m_castCursor % 3) == 0;
+                            && m_strobesPooled && m_drawGrooveStrobes;   // R401_SPECIAL_DRAW
     // (not the last bar of a BREAK before a drop, runde 236: the strobes are
     // in the break's pool now, and preDrop lifts the budget to one - they
     // took the slot before every drop and stood one lamp lit for a bar)
-    const bool strobeLead = (isDrop && dropSettled == false) || (preDrop && isBreak == false) || grooveStrobes;
+    const bool strobeLead = (isDrop && dropSettled == false && m_dropLeadYields == false)   // R401_DROP_LEAD
+                         || (preDrop && isBreak == false) || grooveStrobes;
     if (strobeLead && hold == false && isCalm == false)
     {
         for (int i = 0; i < priority.count(); i++)
@@ -9756,7 +9806,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // R385_BARS_FULL: under 85 % the alone lets go for the rest of the section
     if (m_aloneArmed && fader < 0.85)
         m_aloneArmed = false;
-    if (isBreak && m_aloneArmed && fader >= 0.85 && (m_castCursor % 3) == 1
+    if (isBreak && m_aloneArmed && fader >= 0.85 && m_drawAlone     // R401_SPECIAL_DRAW
         && (hold == false || m_barsAloneNow) && isCalm == false   // R384_ALONE_HOLD: HOLD keeps it
         && still == false && silent == false)
     {
@@ -9770,12 +9820,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
     }
-    // R385_BARS_FULL: the two kinds in turn - the whole-bar chase, then full
-    // light with the slow lift - counted per alone break
+    // R385_BARS_FULL: two kinds - the whole-bar chase, or full light with the
+    // slow lift. R401_ALONE_KIND: drawn when the alone starts, the other kind
+    // than last time more often than not (it was strictly in turn)
     if (aloneBars.isEmpty() == false && m_barsAloneNow == false)
+    {
         m_aloneBreaks++;
+        m_aloneFullLast = rng->bounded(100) < 65 ? m_aloneFullLast == false : m_aloneFullLast;
+    }
     m_barsAloneNow = aloneBars.isEmpty() == false;
-    m_aloneFull = m_barsAloneNow && (m_aloneBreaks % 2) == 0;
+    m_aloneFull = m_barsAloneNow && m_aloneFullLast;
     QSet<QString> castSet;
     if (m_barsAloneNow)
         castSet.insert(aloneBars);
@@ -9846,6 +9900,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
+    // R401_DROP_LEAD: does this drop show the strobes alone beside the base?
+    if (isDrop)
+    {
+        QSet<QString> fx = castSet;
+        fx.remove(base);
+        const bool strobesOnly = fx.count() == 1 && m_groups.value(*fx.constBegin()).strobes;
+        m_dropStrobesOnly = m_dropStrobesOnly && strobesOnly;
+    }
     /* ---- accent: a partner colour on one effect group in drops ---- */
     QString accentColour;
     // runde 304: two tiles or more - the next one is the accent in every
@@ -10543,6 +10605,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // "in or out of the cast", and picked these mid-swing
                     // (runde 172). Out of the cast they are not lit anyway.
                     darkGroups.insert(key);
+                    // R401_LASER_MOVE_DARK (harness, stress: a new track starting
+                    // in a break - the bars sent home from a moving aim, and
+                    // the programme in mot: still lit at its own level on the
+                    // frame the mirrors moved, 11 units). darkGroups reaches
+                    // the levels later in tick() and through an attribute; the
+                    // light goes NOW, hard, as a lift and a cast exit do (runde
+                    // 303/305). Not under the operator's FLASH.
+                    if (m_flashHeld.contains(key) == false)
+                    {
+                        stopSlot("col:" + key, true);
+                        stopSlot("mot:" + key, true);
+                        for (int i = 0; i < g.parts.count(); i++)
+                            stopSlot(partSlot(key, i), true);
+                    }
                     {
                         // (fejljagt 3) the four bars from an UNKNOWN aim hold
                         // in the cast or not: out of the cast the bars got one
@@ -10629,6 +10705,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (g.lasers && (inCast || want == Function::invalidId()))
                 {
                     darkGroups.insert(key);
+                    // R401_LASER_MOVE_DARK: the light goes now, before the new aim
+                    if (m_flashHeld.contains(key) == false)
+                    {
+                        stopSlot("col:" + key, true);
+                        stopSlot("mot:" + key, true);
+                        for (int i = 0; i < g.parts.count(); i++)
+                            stopSlot(partSlot(key, i), true);
+                    }
                     // four bars from an unknown aim as well (runde 190, above) -
                     // in the cast or not, as above (fejljagt 3)
                     if (((inCast && isBreak) || want == Function::invalidId()) && key != base)     // never the base, see above
@@ -11197,6 +11281,29 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                    && (g.lasers == false || fader >= (m_active.contains(slot) ? 0.40 : 0.43));
         if (wanted == false)
         {
+            // R401_FIGURE_END_DARK (harness: stress, and the 98 % night - a new
+            // track starting in a break, the bars in the cast). The figure was
+            // stopped on the same beat the group went dark, and the MasterTimer
+            // put the mirrors back on the home aim a frame before the light
+            // went: 8-13 units with the programme in mot: still at its level.
+            // Off its aim, a laser figure now ends in two beats: the light goes
+            // on the first while the figure still runs, the figure stops on the
+            // second, dark as well (below)
+            EFX *endFx = qobject_cast<EFX *>(m_doc->function(m_sweepFunc.value(key)));
+            const bool offAim = endFx != nullptr
+                             && endFx->height() + endFx->width() + qAbs(int(endFx->yOffset()) - 127) >= 2;
+            if (g.lasers && m_active.contains(slot) && offAim && m_flashHeld.contains(key) == false
+                && m_figureEndDark.contains(key) == false)
+            {
+                stopSlot("col:" + key, true);
+                stopSlot("mot:" + key, true);
+                for (int i = 0; i < g.parts.count(); i++)
+                    stopSlot(partSlot(key, i), true);
+                darkGroups.insert(key);
+                m_figureEndDark.insert(key);
+                continue;
+            }
+            m_figureEndDark.remove(key);
             // An EFX has no fade-out: a bar figure stopped puts the beams
             // straight back on the aim - up to 26 steps (20 degrees) lit.
             // Dark for that beat, like a position move (runde 220). The
@@ -14657,7 +14764,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         // hoeje energier staa paa deres hjem (stille) med chases"): from 90 % on
         // the slider one section in three the bars hold their home aim
         const qreal top = qBound(0.0, (m_faderNow - 0.90) / 0.10, 1.0);
-        if (m_faderNow >= 0.90 && (m_castCursor % 3) == 2)
+        if (m_faderNow >= 0.90 && m_drawHome && m_barsAloneNow == false)   // R401_SPECIAL_DRAW
             lw = 0.0;
         // R385_BARS_FULL (Tobias 10-07: "fuldt lys med langsom opad"): the
         // whole row lifts together off the home aim, at the bars' slowest pace
@@ -14947,6 +15054,12 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             const int cur = int(efx->yOffset());
             if (y > cur)
                 y = qMin(y, cur + 1);
+            // R401_GROW_ONE (harness top98 / the 98 % night: the centre a unit
+            // down and the size a unit up on the same beat put the lowest point
+            // two units down at once, lit - 2.01 with the fine channel). One or
+            // the other a beat: the size first, the centre on the next
+            if (y > cur && h > int(efx->height()))
+                y = cur;
             // ... and a lift of two units or more is a reposition: dark for
             // the beat (runde 303, bane B's headless B23 R2 - the fader from
             // 100 to 50 % lifted the bars 8 units lit; REGLER: mørke ved
@@ -14963,12 +15076,32 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
                 for (int i = 0; i < lg.parts.count(); i++)
                     stopSlot(partSlot(group, i), true);
             }
+            // R401_LIFT_TWO_BEATS (harness: wobble, latch_up - the ENERGY
+            // fader moved and the bars' figure jumped 3-6 units with the light
+            // on). The stops above take a MasterTimer tick; setYOffset() is read
+            // at once - the mirror won. So a jump (a lift of two, or centre and
+            // size together three or more) waits: this beat the light goes and
+            // the figure stands, the next beat it moves in the dark, the beat
+            // after it is lit again
+            const int jump = qAbs(cur - y) + qAbs(int(efx->height()) - h);
+            const bool moveDark = (lifted || jump >= 3) && m_flashHeld.contains(group) == false;
+            if (moveDark && m_laserMoveDark.contains(group) == false)
+            {
+                const TrackGroup &lg = m_groups.value(group);
+                stopSlot("col:" + group, true);
+                stopSlot("mot:" + group, true);
+                for (int i = 0; i < lg.parts.count(); i++)
+                    stopSlot(partSlot(group, i), true);
+                m_laserMoveDark.insert(group);
+                return true;
+            }
+            m_laserMoveDark.remove(group);
             // the centre first: lifted before the figure grows under it
             if (efx->yOffset() != y)
                 efx->setYOffset(y);
             if (efx->height() != h)
                 efx->setHeight(h);
-            return lifted;
+            return lifted || moveDark;
         }
         if (sw.shape >= 0 && efx->width() != width)
             efx->setWidth(width);
@@ -14995,6 +15128,31 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         const bool live = efx->isRunning() && efx->stopped() == false;
         barGrow(live ? qreal(efx->elapsed()) : 0.0, height, dy);
     }
+    // R401_LIFT_TWO_BEATS: ... and a new figure on a bar EFX that is running
+    // (a fader jump redraws it) takes its new centre and size the same way -
+    // the light first, the mirror a beat later
+    bool reconfDark = false;
+    if (laser && sw.shape >= 0 && m_flashHeld.contains(group) == false
+        && efx->isRunning() && efx->stopped() == false && m_active.contains(slot))
+    {
+        const int jump = qAbs(int(efx->yOffset()) - qBound(0, 127 + dy, 255))
+                       + qAbs(int(efx->height()) - height) + qAbs(int(efx->width()) - width);
+        if (jump >= 3)
+        {
+            if (m_laserMoveDark.contains(group) == false)
+            {
+                const TrackGroup &lg = m_groups.value(group);
+                stopSlot("col:" + group, true);
+                stopSlot("mot:" + group, true);
+                for (int i = 0; i < lg.parts.count(); i++)
+                    stopSlot(partSlot(group, i), true);
+                m_laserMoveDark.insert(group);
+                return true;
+            }
+            reconfDark = true;
+        }
+    }
+    m_laserMoveDark.remove(group);
     efx->setAlgorithm(sw.shape < 0 ? EFX::Circle : EFX::Algorithm(sw.shape));
     efx->setYOffset(qBound(0, 127 + dy, 255));     // the centre before the size
     efx->setWidth(sw.shape < 0 ? 0 : width);
@@ -15022,7 +15180,7 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     }
     m_sweepShown.insert(group, sw);
     run(slot, fid, 1.0, 0, true);
-    return false;
+    return reconfDark;               // R401_LIFT_TWO_BEATS: dark on the beat it moved
 }
 
 QString TrackEngine::sweepName(const TrackSweep &sw) const
@@ -16056,7 +16214,30 @@ void TrackEngine::laserFaderCheck(qreal slider)
                 // 219), and lifting to the full size's centre jumped it
                 const int h = int(efx->height());
                 const int y = qBound(0, 127 - h + qMin(2 * h, allowed), 255);
-                if (int(efx->yOffset()) > y)
+                // R401_FADER_LIFT_DARK (harness: wobble, latch_up - the ENERGY
+                // fader brought down by 5 points or more lifted the running bar
+                // figure 3-6 units at once, lit). A lift of two units or more
+                // goes as a reposition does: the light now, the mirror 60 ms
+                // later (three MasterTimer frames - the stops take a tick,
+                // setYOffset() is read at once). The next beat lights the bars
+                // again where tick() says they may be. A drag gives one-unit
+                // steps and moves as before.
+                const int lift = int(efx->yOffset()) - y;
+                if (lift >= 2 && m_flashHeld.contains(key) == false)
+                {
+                    stopSlot("col:" + key, true);
+                    stopSlot("mot:" + key, true);
+                    for (int i = 0; i < g.parts.count(); i++)
+                        stopSlot(partSlot(key, i), true);
+                    m_cast.remove(key);
+                    const quint32 efxId = m_sweepFunc.value(key, Function::invalidId());
+                    QTimer::singleShot(60, this, [this, efxId, y]() {
+                        EFX *later = m_doc ? qobject_cast<EFX *>(m_doc->function(efxId)) : nullptr;
+                        if (later != nullptr && int(later->yOffset()) > y)
+                            later->setYOffset(y);
+                    });
+                }
+                else if (lift > 0)
                     efx->setYOffset(y);
             }
         }
@@ -16265,6 +16446,18 @@ bool TrackEngine::positionHeld(const QString &key) const
         return false;
     const TrackGroup &g = m_groups.value(key);
     return g.heads && g.patternDevice == false && g.lasers == false;
+}
+
+bool TrackEngine::varietyDraw(int &wait, QRandomGenerator *rng) const
+{
+    // R401_SPECIAL_DRAW: about one occasion in three, never by a pattern and
+    // never far apart - the odds grow with every occasion it missed, so the
+    // gap is one to five occasions, each about as likely as the others
+    // (steeper odds bunched it on two and three - a rhythm again)
+    static const int odds[] = { 20, 25, 35, 50, 100 };
+    const bool hit = int(rng->bounded(100)) < odds[qBound(0, wait, 4)];
+    wait = hit ? 0 : wait + 1;
+    return hit;
 }
 
 bool TrackEngine::heldAimBlocks(const QString &key, const TrackFuncInfo &info) const
