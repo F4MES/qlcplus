@@ -36,6 +36,8 @@
 #include <QPainter>
 #include <QScreen>
 #include <QFileInfo>
+#include <QEventLoop>          // DARK_INC_R404
+#include <QTimer>
 #include <unistd.h>
 
 #include "app.h"
@@ -74,6 +76,24 @@
 
 #define MAX_RECENT_FILES    10
 
+#if defined(Q_OS_WIN)
+#include <QLibrary>
+// DARK_CLOAK_R404: Windows shows a window that has not drawn its first frame
+// white (Qt gives its windows no background brush). Hidden from the
+// compositor (DWM cloak) until the first frame is drawn, the window never
+// shows that white. dwmapi is looked up, not linked: without it nothing changes
+static void setWindowCloaked(QWindow *window, bool cloaked)
+{
+    typedef long (__stdcall *DwmSetWindowAttributeFn)(void *, unsigned long, const void *, unsigned long);
+    static const DwmSetWindowAttributeFn dwmSet = reinterpret_cast<DwmSetWindowAttributeFn>(
+        QLibrary::resolve(QStringLiteral("dwmapi"), "DwmSetWindowAttribute"));
+    if (dwmSet == nullptr)
+        return;
+    const int value = cloaked ? 1 : 0;   // BOOL
+    dwmSet(reinterpret_cast<void *>(window->winId()), 13 /* DWMWA_CLOAK */, &value, sizeof(value));
+}
+#endif
+
 App::App()
     : QQuickView()
     , m_forceQuit(false)
@@ -101,6 +121,8 @@ App::App()
     QSettings settings;
 
     setResizeMode(QQuickView::SizeRootObjectToView);
+    // DARK_START_R404: the window's own colour is the pages' dark, never white
+    setColor(QColor(0x0A, 0x0A, 0x0D));
 
     updateRecentFilesList();
 
@@ -222,6 +244,7 @@ void App::startup()
     QSettings settings;
     QRect rect(0, 0, 800, 600);
     bool restoreWindowGeometry = false;
+    bool showMaximizedLate = false;     // DARK_SHOW_LATE_R404
     QVariant var = settings.value(SETTINGS_GEOMETRY);
 #if defined(Q_OS_ANDROID)
     QScreen *currScreen = screen();
@@ -235,14 +258,14 @@ void App::startup()
         rect = var.toRect();
         restoreWindowGeometry = true;
         setGeometry(rect);
-        show();
+        // shown below, once MainView is built (DARK_SHOW1_R404)
     }
     else
     {
         QScreen *currScreen = screen();
         rect.moveTopLeft(currScreen->geometry().topLeft());
         setGeometry(rect);
-        showMaximized();
+        showMaximizedLate = true;       // DARK_SHOW2_R404: shown below
     }
 #endif
 
@@ -255,6 +278,29 @@ void App::startup()
 
     if (restoreWindowGeometry)
         setGeometry(rect);
+
+    // DARK_FIRST_FRAME_R404: shown only now, with MainView built, and it
+    // draws its first (dark) frame before the show file loads - main()
+    // loads it before the event loop runs, and a window that has not drawn
+    // yet stays the system's white all that time. Bounded: 2 s at most
+    if (isVisible() == false)
+    {
+#if defined(Q_OS_WIN)
+        setWindowCloaked(this, true);
+#endif
+        if (showMaximizedLate)
+            showMaximized();
+        else
+            show();
+    }
+    QEventLoop firstFrame;
+    connect(this, &QQuickWindow::frameSwapped, &firstFrame, &QEventLoop::quit, Qt::QueuedConnection);
+    QTimer::singleShot(2000, &firstFrame, &QEventLoop::quit);
+    update();
+    firstFrame.exec(QEventLoop::ExcludeUserInputEvents);
+#if defined(Q_OS_WIN)
+    setWindowCloaked(this, false);          // always - drawn or not after 2 s
+#endif
 }
 
 void App::toggleFullscreen()
