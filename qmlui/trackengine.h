@@ -1051,6 +1051,20 @@ private:
     /* R385_BARS_FULL: this alone break is the full-light one (every second) */
     bool m_aloneFull = false;
     int m_aloneBreaks = 0;
+    // R401_CAST_DRAW / R401_SPECIAL_DRAW / R401_ALONE_KIND: drawn per section
+    QStringList m_castOrder;              // the effect groups' order this section
+    QMap<QString, int> m_castRest;        // sections each group has been off stage
+    bool m_drawAlone = false;             // this break may be the bars alone
+    bool m_drawHome = false;              // this section the bars may hold home
+    bool m_drawGrooveStrobes = false;     // this groove the strobes may lead
+    int m_aloneWait = 0;                  // occasions missed since the last one
+    int m_homeWait = 0;
+    int m_grooveWait = 0;
+    bool m_aloneFullLast = false;         // the kind of the last alone break
+    bool m_dropStrobesOnly = false;       // R401_DROP_LEAD: this drop has shown the strobes alone beside the base
+    bool m_lastDropStrobesOnly = false;   // ... and the drop before it did
+    bool m_dropLeadYields = false;        // this drop the strobes do not take the first place
+    bool varietyDraw(int &wait, QRandomGenerator *rng) const;
     bool positionHeld(const QString &key) const;
     quint32 headHoldFunction(const QString &key);
     bool heldAimBlocks(const QString &key, const TrackFuncInfo &info) const;   // R400_HOLD_AIM
@@ -1352,6 +1366,8 @@ private:
     qreal m_closingDim = 1.0;              // closingCap() as last applied to the light (closingTick)
     int m_roomSent;                        // last percent handed to the ENERGY trim
     bool m_fullAuto;
+    QSet<QString> m_laserMoveDark;         // R401_LIFT_TWO_BEATS: bar figures waiting a dark beat to move
+    QSet<QString> m_figureEndDark;         // R401_FIGURE_END_DARK: laser figures dark a beat before they stop
     QSet<QString> m_flashHeld;             // strobe groups the generated flash lit
     bool m_hold;
     // runde 227: the build's own programmes ("... Climb" in the name, from
