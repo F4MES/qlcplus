@@ -78,6 +78,12 @@ Rectangle
 
     property bool setupOpen: false
     property bool helpOpen: false
+    // R402_MOTION (runde 402): the page's motion - presses, fades, the beat, the
+    // faders' glide. The Qt check turns it off to read every end state at once
+    property bool animate: true
+    // the beat in the bar, 0..3, from the track's own downbeat (as barOf)
+    readonly property int beatInBar: currentBeat > 0
+        ? (((currentBeat - 1 - (trackManager ? (trackManager.downbeat || 0) : 0)) % 4) + 4) % 4 : -1
 
     // runde 396: the four AUTO tiles in one - lit as their own tiles are lit
     readonly property bool allAutoOn: trackEngine && trackManager
@@ -391,7 +397,7 @@ Rectangle
         property bool active: false
         property color tone: trackViewRoot.cGreen
         property bool autoKind: false        // an AUTO: its icon is green even when off
-        property bool solid: false            // active as a full fill in its tone
+        property bool solid: true             // R402_ONE_ON: every tile that is ON is a full fill in its tone (flat)
         property bool idleTint: false         // its tone shows faintly when off too (sections, colours)
         property bool ring: false             // a white frame: pinned by hand
         property real idleAlpha: 0.13         // how strong the idle tint is
@@ -401,6 +407,11 @@ Rectangle
         signal tapped()
         radius: Math.round(10 * trackViewRoot.ks)
         color: btnInput.down ? Qt.lighter(base, 1.35) : base
+        // R402_PRESS: the tile gives under the finger; R402_FADE: colours fade over
+        scale: btnInput.down ? 0.965 : 1.0
+        Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
+        Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: btnInput.down ? 60 : 150 } }
+        Behavior on border.color { enabled: trackViewRoot.animate; ColorAnimation { duration: 150 } }
         readonly property bool full: solid && active
         // dark ink on a light fill, white on a dark one
         readonly property bool lightFill: 0.299 * tone.r + 0.587 * tone.g + 0.114 * tone.b > 0.5
@@ -440,6 +451,7 @@ Rectangle
                 text: btn.text
                 color: btn.full ? (btn.lightFill ? "#101010" : "#FFFFFF")
                        : ((btn.active || btn.idleTint) ? Qt.lighter(btn.tone, 1.45) : "#D6D6DC")
+                Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 150 } }
                 font.bold: true
                 font.pixelSize: btn.fontPx
                 font.letterSpacing: btn.fontPx * 0.08
@@ -509,6 +521,13 @@ Rectangle
         property alias inputName: fdInput.objectName
         signal setLevel(real v)
         signal pressed()
+        // R402_GLIDE: what the fader SHOWS glides to its level when something
+        // other than the finger moves it (ENERGY's AUTO clock, a VC fader) -
+        // under the finger it follows at once. The value is never animated
+        property real shown: level
+        // set in the press itself: the press's own level comes before 'down' turns true
+        property bool dragging: false
+        Behavior on shown { enabled: trackViewRoot.animate && !fd.dragging && !fdInput.down; NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
         radius: Math.round(10 * trackViewRoot.ks)
         color: "#0B0B0D"
         border.width: 1
@@ -518,14 +537,14 @@ Rectangle
 
         Rectangle
         {
-            visible: fd.level > 0
+            visible: fd.shown > 0
             x: 3; y: 3
             height: parent.height - 6
-            width: (parent.width - 6) * fd.level
+            width: (parent.width - 6) * fd.shown
             radius: Math.max(3, fd.radius - 3)
             color: fd.fill
         }
-        SliderTicks { anchors.fill: parent; level: fd.level }
+        SliderTicks { anchors.fill: parent; level: fd.shown }
         Text
         {
             id: fdName
@@ -547,7 +566,7 @@ Rectangle
         SliderGrip
         {
             id: fdGrip
-            x: Math.max(1, Math.min(parent.width - width - 1, 3 + (parent.width - 6) * fd.level - width / 2))
+            x: Math.max(1, Math.min(parent.width - width - 1, 3 + (parent.width - 6) * fd.shown - width / 2))
             height: parent.height
             ink: fd.gripInk
             pressed: fdInput.down
@@ -570,8 +589,39 @@ Rectangle
         TouchInput
         {
             id: fdInput
-            onPressedAt: (x, y) => { fd.pressed(); fd.setLevel(fd.at(x)) }
+            onPressedAt: (x, y) => { fd.dragging = true; fd.pressed(); fd.setLevel(fd.at(x)) }
             onMovedTo: (x, y) => fd.setLevel(fd.at(x))
+            onReleasedAt: (x, y, inside) => fd.dragging = false
+            onCanceled: fd.dragging = false
+        }
+        // R402_BUBBLE: the value over the finger while it drags - the finger
+        // covers the fader's own number. On the page, not in the fader (it clips)
+        Rectangle
+        {
+            id: fdBubble
+            objectName: "faderBubble"
+            parent: trackViewRoot
+            z: 300
+            visible: fdInput.down
+            property point p: Qt.point(0, 0)
+            function place() { p = fd.mapToItem(trackViewRoot, fdGrip.x + fdGrip.width / 2, 0) }
+            onVisibleChanged: if (visible) place()
+            Connections { target: fdGrip; function onXChanged() { if (fdBubble.visible) fdBubble.place() } }
+            width: fdBubbleText.implicitWidth + Math.round(28 * trackViewRoot.ks)
+            height: Math.round(44 * trackViewRoot.ks)
+            x: p.x - width / 2
+            y: p.y - height - Math.round(10 * trackViewRoot.ks)
+            radius: Math.round(10 * trackViewRoot.ks)
+            color: "#F2F2F5"
+            Text
+            {
+                id: fdBubbleText
+                anchors.centerIn: parent
+                text: fd.valueText
+                color: "#101012"
+                font.bold: true
+                font.pixelSize: trackViewRoot.fs(20)
+            }
         }
     }
 
@@ -631,6 +681,7 @@ Rectangle
                 height: Math.round(trackViewRoot.topH * 0.72)
                 radius: Math.round(10 * trackViewRoot.ks)
                 color: trackViewRoot.markerColor(trackViewRoot.liveState)
+                Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 150 } }     // R402_FADE
                 // a section pinned by hand: a white ring
                 border.width: trackManager && trackManager.overrideState !== "" ? 3 : 0
                 border.color: "#FFFFFF"
@@ -688,6 +739,31 @@ Rectangle
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Math.round(18 * trackViewRoot.ks)
 
+                // R402_BEAT_DOTS (Tobias 10-08: "kun fire beat prikker ved uret"): the beat
+                // in the bar - the one playing lit, the downbeat white - and a small
+                // pop on each beat (R402_BEAT_PULSE)
+                Row
+                {
+                    objectName: "beatDots"
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Math.round(8 * trackViewRoot.ks)
+                    Repeater
+                    {
+                        model: 4
+                        Rectangle
+                        {
+                            id: beatDot
+                            objectName: "beatDot" + index
+                            readonly property bool on: trackManager && trackManager.playing && trackViewRoot.beatInBar === index
+                            width: Math.round(12 * trackViewRoot.ks); height: width; radius: width / 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: on ? (index === 0 ? "#FFFFFF" : trackViewRoot.cGreen) : Qt.rgba(1, 1, 1, 0.14)
+                            onOnChanged: if (on && trackViewRoot.animate) beatPop.restart()
+                            ScaleAnimator { id: beatPop; target: beatDot; from: 1.45; to: 1.0; duration: 180; easing.type: Easing.OutQuad }
+                        }
+                    }
+                }
+
                 Column
                 {
                     anchors.verticalCenter: parent.verticalCenter
@@ -731,6 +807,9 @@ Rectangle
                     property string text: checked ? (armOff ? qsTr("SURE?") : qsTr("SHOW ON")) : qsTr("START SHOW")
                     Timer { id: showOffArm; interval: 4000; onTriggered: showSwitch.armOff = false }
                     color: armOff ? "#E3B44F" : (checked ? "#3FBF3F" : "#4A1E1E")
+                    Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 150 } }     // R402_FADE
+                    scale: showIn.down ? 0.965 : 1.0                                                         // R402_PRESS
+                    Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                     border.width: 2
                     border.color: armOff ? "#FFE3A0" : (checked ? "#9BE89B" : "#B03030")
                     function tap()
@@ -756,7 +835,7 @@ Rectangle
                             font.letterSpacing: (trackViewRoot.fs(18)) * 0.1
                         }
                     }
-                    TouchInput { onReleasedAt: (x, y, inside) => { if (inside) showSwitch.tap() } }
+                    TouchInput { id: showIn; onReleasedAt: (x, y, inside) => { if (inside) showSwitch.tap() } }
                 }
 
                 // runde 393: the guide - between the show switch and SETUP
@@ -1102,6 +1181,30 @@ Rectangle
                 }
             }
 
+            // R402_BEAT_PULSE: a soft band on the playhead that fades out over the
+            // first half of each beat
+            Rectangle
+            {
+                id: playPulse
+                objectName: "playPulse"
+                readonly property int vf: trackViewRoot.viewFirst()
+                readonly property int vc: trackViewRoot.viewCount()
+                readonly property int cur: trackViewRoot.currentBeat
+                visible: trackManager && trackManager.playing && cur > 0 && cur >= vf && cur < vf + vc
+                width: Math.round(12 * trackViewRoot.ks)
+                x: wfCanvas.x + (cur - vf) * wfCanvas.width / Math.max(1, vc) - width / 2
+                y: wfCanvas.y + wfCanvas.stripH + 1
+                height: wfCanvas.height - wfCanvas.stripH - 1
+                color: "#FFFFFF"
+                opacity: 0
+                OpacityAnimator { id: playFade; target: playPulse; from: 0.30; to: 0.0; duration: 320; easing.type: Easing.OutQuad }
+                Connections
+                {
+                    target: trackViewRoot
+                    function onCurrentBeatChanged() { if (trackViewRoot.animate && playPulse.visible) playFade.restart() }
+                }
+            }
+
             // A finger on a flag - while the pencil is on: press = select it
             // (RETYPE / DELETE wake up), move = drag it. The flag keeps its
             // distance to the finger and the zoom opens around it.
@@ -1372,6 +1475,15 @@ Rectangle
                         id: flagTools
                         visible: trackViewRoot.markerEdit
                         spacing: Math.round(8 * trackViewRoot.ks)
+                        // R402_SLIDE_IN: up from the rail's foot as the pencil opens them
+                        transform: Translate { id: flagShift }
+                        onVisibleChanged: if (visible && trackViewRoot.animate) flagIn.restart()
+                        ParallelAnimation
+                        {
+                            id: flagIn
+                            NumberAnimation { target: flagShift; property: "y"; from: rail.bh * 0.7; to: 0; duration: 220; easing.type: Easing.OutCubic }
+                            OpacityAnimator { target: flagTools; from: 0; to: 1; duration: 180 }
+                        }
                         property real tw: Math.max(56, (rail.width - verdictTools.width - Math.round(210 * trackViewRoot.ks)
                                                         - 9 * spacing - Math.round(30 * trackViewRoot.ks)) / 10)
                         Repeater
@@ -1385,6 +1497,8 @@ Rectangle
                                 height: rail.bh
                                 radius: Math.round(10 * trackViewRoot.ks)
                                 color: addIn.down ? "#2C2C33" : trackViewRoot.cBtn
+                                scale: addIn.down ? 0.965 : 1.0      // R402_PRESS
+                                Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                                 border.width: 1
                                 border.color: trackViewRoot.cBtnEdge
                                 Row
@@ -1710,10 +1824,18 @@ Rectangle
                             }
                             Text
                             {
+                                id: grpStatus
                                 width: parent.width
                                 elide: Text.ElideRight
                                 textFormat: Text.StyledText
                                 font.pixelSize: trackViewRoot.fs(12)
+                                // R402_BEAT_PULSE: a group on stage breathes with the beat
+                                OpacityAnimator { id: stagePulse; target: grpStatus; from: 0.45; to: 1.0; duration: 260; easing.type: Easing.OutQuad }
+                                Connections
+                                {
+                                    target: trackViewRoot
+                                    function onCurrentBeatChanged() { if (grp.lit && trackViewRoot.animate && trackManager && trackManager.playing) stagePulse.restart() }
+                                }
                                 color: grp.off ? "#5E5E68" : (grp.lit ? trackViewRoot.cGreen : "#6E6E78")
                                 text: (grp.md.base ? "<font color='#4FA3E3'><b>BASE</b></font> · " : "")
                                       + (grp.off ? qsTr("off") : (grp.lit ? "● " + qsTr("on stage") : "○ " + qsTr("waiting")))
@@ -2213,6 +2335,9 @@ Rectangle
                     x: liveCard.inX; y: deck.rowY(3); width: liveCard.inW; height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#B03030" : (boIn.down ? "#1A1A1F" : "#0A0A0C")
+                    Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 120 } }     // R402_FADE
+                    scale: boIn.down ? 0.975 : 1.0                                                           // R402_PRESS
+                    Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                     border.width: 1
                     border.color: on ? Qt.lighter("#B03030", 1.3) : "#3A3A42"
                     Row
@@ -2266,6 +2391,8 @@ Rectangle
                     height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#FFFFFF" : (flashIn.down ? "#34343C" : "#24242A")
+                    scale: flashIn.down ? 0.975 : 1.0                                                        // R402_PRESS
+                    Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                     border.width: 2
                     border.color: "#F2F2F5"
                     Row
@@ -2373,6 +2500,15 @@ Rectangle
         visible: trackViewRoot.setupOpen && trackManager && trackManager.roleMode
         active: visible
         source: "qrc:/TrackSetup.qml"
+        // R402_OVERLAY_IN: a fade and a small zoom on the way in (out at once - a
+        // closed page must never take a finger)
+        onVisibleChanged: if (visible && trackViewRoot.animate) setupIn.restart()
+        ParallelAnimation
+        {
+            id: setupIn
+            OpacityAnimator { target: setupLoader; from: 0; to: 1; duration: 200; easing.type: Easing.OutQuad }
+            ScaleAnimator { target: setupLoader; from: 0.97; to: 1; duration: 200; easing.type: Easing.OutCubic }
+        }
     }
 
     Rectangle
@@ -2434,6 +2570,14 @@ Rectangle
         objectName: "helpOverlay"
         z: 99
         visible: trackViewRoot.helpOpen && trackManager && trackManager.roleMode
+        // R402_OVERLAY_IN: as SETUP
+        onVisibleChanged: if (visible && trackViewRoot.animate) helpIn.restart()
+        ParallelAnimation
+        {
+            id: helpIn
+            OpacityAnimator { target: helpOverlay; from: 0; to: 1; duration: 200; easing.type: Easing.OutQuad }
+            ScaleAnimator { target: helpOverlay; from: 0.97; to: 1; duration: 200; easing.type: Easing.OutCubic }
+        }
         x: setupLoader.x
         y: setupLoader.y
         width: setupLoader.width
@@ -2458,7 +2602,7 @@ Rectangle
             Repeater
             {
                 model: [
-                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
+                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track." },
                     { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group." },
                     { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
