@@ -1053,6 +1053,7 @@ private:
     int m_aloneBreaks = 0;
     bool positionHeld(const QString &key) const;
     quint32 headHoldFunction(const QString &key);
+    bool heldAimBlocks(const QString &key, const TrackFuncInfo &info) const;   // R400_HOLD_AIM
     void applyHeadHold(bool restart);
     /* R378_START_LAYER: the opening picture's fade/chase runs on a clock */
     qint64 m_startLayerMs = 0;
