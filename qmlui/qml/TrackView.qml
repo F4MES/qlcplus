@@ -26,7 +26,7 @@ Rectangle
 {
     id: trackViewRoot
     anchors.fill: parent
-    color: "#0E0E10"
+    color: "#0A0A0D"                    // R403_TONES: page, card, tile - parted by tone alone
 
     // ---------------------------------------------------------------------
     // ONE GRID (proposal 8). Drawn for the lys-PC - 3072x1920 at 150 % leaves
@@ -53,9 +53,9 @@ Rectangle
     function fs(px) { return Math.max(10, Math.round(px * ks)) }
 
     // colours: a quiet page, colour only where something is ON
-    readonly property color cCard:    "#16161A"
+    readonly property color cCard:    "#141418"
     readonly property color cEdge:    "#24242A"
-    readonly property color cBtn:     "#1E1E23"
+    readonly property color cBtn:     "#202027"
     readonly property color cBtnEdge: "#2E2E36"
     readonly property color cText:    "#E9E9EE"
     readonly property color cMute:    "#8C8C96"
@@ -64,7 +64,7 @@ Rectangle
     readonly property color cGold:    "#E3B44F"
     readonly property color cBlue:    "#4FA3E3"
     // kept for TrackSetup and older bindings
-    readonly property color cPanel:  "#16161A"
+    readonly property color cPanel:  "#141418"
     readonly property color cBtnHi:  "#2A2A30"
     readonly property color cLine:   "#2E2E36"
 
@@ -398,11 +398,9 @@ Rectangle
         property color tone: trackViewRoot.cGreen
         property bool autoKind: false        // an AUTO: its icon is green even when off
         property bool solid: true             // R402_ONE_ON: every tile that is ON is a full fill in its tone (flat)
-        property bool idleTint: false         // its tone shows faintly when off too (sections, colours)
+        property bool idleTint: false         // its tone shows when off too, as a bar along the foot (sections, colours)
         property bool ring: false             // a white frame: pinned by hand
-        property real idleAlpha: 0.13         // how strong the idle tint is
         property real fontPx: trackViewRoot.fs(14)
-        property color dot: "transparent"     // a colour tile's own colour, before its name
         property alias input: btnInput
         signal tapped()
         radius: Math.round(10 * trackViewRoot.ks)
@@ -411,30 +409,30 @@ Rectangle
         scale: btnInput.down ? 0.965 : 1.0
         Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
         Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: btnInput.down ? 60 : 150 } }
-        Behavior on border.color { enabled: trackViewRoot.animate; ColorAnimation { duration: 150 } }
         readonly property bool full: solid && active
         // dark ink on a light fill, white on a dark one
         readonly property bool lightFill: 0.299 * tone.r + 0.587 * tone.g + 0.114 * tone.b > 0.5
         property color base: full ? tone
-                             : (active ? Qt.tint(trackViewRoot.cBtn, Qt.rgba(tone.r, tone.g, tone.b, 0.24))
-                                       : (idleTint ? Qt.tint(trackViewRoot.cBtn, Qt.rgba(tone.r, tone.g, tone.b, idleAlpha)) : trackViewRoot.cBtn))
-        border.width: ring ? 3 : (full ? 2 : 1)
-        border.color: ring ? "#FFFFFF"
-                      : (full ? Qt.lighter(tone, 1.25)
-                              : (active ? Qt.rgba(tone.r, tone.g, tone.b, 0.85)
-                                        : (idleTint ? Qt.rgba(tone.r, tone.g, tone.b, 0.38) : trackViewRoot.cBtnEdge)))
+                             : (active ? Qt.tint(trackViewRoot.cBtn, Qt.rgba(tone.r, tone.g, tone.b, 0.24)) : trackViewRoot.cBtn)
+        border.width: ring ? 3 : 0       // R403_NO_LINES: the white ring - pinned by hand - is the one line
+        border.color: "#FFFFFF"
         opacity: enabled ? 1.0 : 0.3
+        // R403_IDLE_BAR: at rest a colour or section tile is dark like the rest,
+        // its colour a flat bar along the foot; ON fills the tile
+        Rectangle
+        {
+            objectName: btn.objectName !== "" ? btn.objectName + ":bar" : ""
+            visible: btn.idleTint && !btn.full
+            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+            anchors.leftMargin: Math.round(14 * trackViewRoot.ks); anchors.rightMargin: anchors.leftMargin
+            anchors.bottomMargin: Math.round(7 * trackViewRoot.ks)
+            height: Math.max(3, Math.round(5 * trackViewRoot.ks)); radius: height / 2
+            color: btn.tone
+        }
         Row
         {
             anchors.centerIn: parent
             spacing: Math.round(9 * trackViewRoot.ks)
-            Rectangle
-            {
-                visible: btn.dot.a > 0 && !btn.full
-                anchors.verticalCenter: parent.verticalCenter
-                width: Math.round(12 * trackViewRoot.ks); height: width; radius: width / 2
-                color: btn.dot
-            }
             ControlIcon
             {
                 visible: btn.icon !== ""
@@ -529,9 +527,8 @@ Rectangle
         property bool dragging: false
         Behavior on shown { enabled: trackViewRoot.animate && !fd.dragging && !fdInput.down; NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
         radius: Math.round(10 * trackViewRoot.ks)
-        color: "#0B0B0D"
-        border.width: 1
-        border.color: trackViewRoot.cBtnEdge
+        color: "#0A0A0D"
+        border.width: 0                 // R403_NO_LINES
         clip: true
         function at(x) { return Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
 
@@ -630,8 +627,7 @@ Rectangle
         property string title: ""
         color: trackViewRoot.cCard
         radius: Math.round(14 * trackViewRoot.ks)
-        border.width: 1
-        border.color: trackViewRoot.cEdge
+        border.width: 0                 // R403_NO_LINES
         Text
         {
             x: trackViewRoot.cardPad + 2
@@ -810,8 +806,6 @@ Rectangle
                     Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 150 } }     // R402_FADE
                     scale: showIn.down ? 0.965 : 1.0                                                         // R402_PRESS
                     Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
-                    border.width: 2
-                    border.color: armOff ? "#FFE3A0" : (checked ? "#9BE89B" : "#B03030")
                     function tap()
                     {
                         if (!checked) { trackManager.autoRun = true; return }
@@ -873,9 +867,9 @@ Rectangle
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumHeight: 160
-            color: "#101012"
+            color: "#111115"
             radius: Math.round(14 * trackViewRoot.ks)
-            border.width: trackViewRoot.zoomActive ? 2 : 1
+            border.width: trackViewRoot.zoomActive ? 2 : 0      // R403_NO_LINES: the orange frame when zoomed
             border.color: trackViewRoot.zoomActive ? "#E0921A" : trackViewRoot.cEdge
             clip: true
 
@@ -1437,9 +1431,8 @@ Rectangle
                 anchors.bottom: parent.bottom
                 anchors.margins: 1
                 height: trackViewRoot.railH
-                color: "#141417"
+                color: "#111115"
                 radius: waveCard.radius
-                Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 1; color: trackViewRoot.cEdge }
                 // a press that misses a tile must not reach anything underneath
                 MouseArea { anchors.fill: parent }
 
@@ -1497,10 +1490,9 @@ Rectangle
                                 height: rail.bh
                                 radius: Math.round(10 * trackViewRoot.ks)
                                 color: addIn.down ? "#2C2C33" : trackViewRoot.cBtn
+                                // R403_NO_LINES
                                 scale: addIn.down ? 0.965 : 1.0      // R402_PRESS
                                 Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
-                                border.width: 1
-                                border.color: trackViewRoot.cBtnEdge
                                 Row
                                 {
                                     anchors.centerIn: parent
@@ -1626,8 +1618,6 @@ Rectangle
                                 radius: Math.round(10 * trackViewRoot.ks)
                                 property bool lit: false
                                 color: lit ? (modelData > 0 ? "#3E7E4E" : "#8E3A3A") : (modelData > 0 ? "#18241B" : "#271818")
-                                border.width: 1
-                                border.color: modelData > 0 ? "#4FA36B" : "#B05050"
                                 Canvas
                                 {
                                     anchors.centerIn: parent
@@ -1870,8 +1860,6 @@ Rectangle
                                 height: Math.round(28 * trackViewRoot.ks)
                                 radius: height / 2
                                 color: grp.off ? "#2C2C33" : trackViewRoot.cGreen
-                                border.width: 1
-                                border.color: grp.off ? "#44444C" : "#9FE3AE"
                                 Behavior on color { ColorAnimation { duration: 120 } }
                                 Rectangle
                                 {
@@ -1936,9 +1924,7 @@ Rectangle
                             width: grp.faderW
                             height: grp.height
                             radius: Math.round(10 * trackViewRoot.ks)
-                            color: grp.off ? "transparent" : (grp.lit ? "#3D86C4" : "#3A3A42")
-                            border.width: 1
-                            border.color: grp.off ? "#3A3A42" : "transparent"
+                            color: grp.off ? "#0A0A0D" : (grp.lit ? "#3D86C4" : "#3A3A42")      // R403_NO_LINES
                             Text
                             {
                                 anchors.centerIn: parent
@@ -2062,7 +2048,7 @@ Rectangle
                         text: modelData.toUpperCase()
                         tone: trackViewRoot.markerColor(modelData)
                         // pinned by hand: the full colour and a white ring; playing
-                        // now: its colour as a tint
+                        // now: the full colour; at rest: its colour as a bar (r403)
                         active: trackManager ? (trackManager.overrideState === modelData || trackViewRoot.liveState === modelData) : false
                         solid: true
                         idleTint: true
@@ -2136,10 +2122,7 @@ Rectangle
                         active: trackEngine ? trackEngine.colourOverrides.indexOf(modelData) >= 0 : false
                         solid: true
                         idleTint: true
-                        idleAlpha: 0.22
                         fontPx: trackViewRoot.fs(cells > 7 ? 12 : 14)
-                        // the colour itself, as a dot - where the tile has room for it
-                        dot: chip.width > 96 * trackViewRoot.ks ? chip.tone : "transparent"
                         onTapped: trackEngine.toggleColourOverride(modelData)
                         // the ring: the colour leading right now
                         Rectangle
@@ -2338,8 +2321,6 @@ Rectangle
                     Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 120 } }     // R402_FADE
                     scale: boIn.down ? 0.975 : 1.0                                                           // R402_PRESS
                     Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
-                    border.width: 1
-                    border.color: on ? Qt.lighter("#B03030", 1.3) : "#3A3A42"
                     Row
                     {
                         anchors.centerIn: parent
