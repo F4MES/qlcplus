@@ -2019,6 +2019,8 @@ Rectangle
                     gripInk: "#F6D98A"
                     valueInk: "#F2D58E"
                     valueOnFill: "#2A1D05"
+                    // R404_ENERGY_EDGE: the one fader with an edge - ENERGY's gold
+                    border.width: 1
                     border.color: Qt.rgba(0.89, 0.71, 0.31, 0.45)
                     // a hand on the bar takes over from the clock - also when it
                     // lands where the clock already put it
