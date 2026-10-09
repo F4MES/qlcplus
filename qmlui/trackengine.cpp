@@ -7563,7 +7563,49 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
     QList<TrackFuncInfo *> pool = tagged + tagged + plain;
     if (pool.isEmpty())
         pool = safe;
+    // R405_AIM_DRAW: the heads' aims are drawn by rest. A place on in this
+    // list per walk took the heads round the same tour all night (the next
+    // aim 60-70 % predictable from 33). The bars keep the cursor (runde 190).
+    if (lasers == false)
+        return drawAim(group, pool);
     return pickWeighted(pool, cursor);
+}
+
+quint32 TrackEngine::drawAim(const QString &group, const QList<TrackFuncInfo *> &pool) const
+{
+    // R405_AIM_DRAW (runde 405). Every entry of the pool is a ticket - the
+    // tier's own aims are in it twice - times how long the aim has rested:
+    // 1 for the one before, up to 8 for one not taken in the last eight (or
+    // never). Never the aim the heads stand on: a walk is a move. With rating
+    // on, the stars weigh in as pickWeighted() lets them.
+    if (pool.isEmpty())
+        return Function::invalidId();
+    const quint32 now = m_position.value(group, Function::invalidId());
+    const QHash<quint32, int> taken = m_aimTakenAt.value(group);
+    const int seq = m_aimSeq.value(group, 0);
+    QList<quint32> ids;
+    QList<int> tickets;
+    int total = 0;
+    foreach (TrackFuncInfo *info, pool)
+    {
+        if (info->id == now)
+            continue;
+        const int rest = taken.contains(info->id) ? qBound(1, seq - taken.value(info->id), 8) : 8;
+        const int t = rest * (m_ratingOn ? rateWeight(*info) : 1);
+        ids.append(info->id);
+        tickets.append(t);
+        total += t;
+    }
+    if (ids.isEmpty())
+        return now;                          // the pool is the aim they stand on
+    int r = int(QRandomGenerator::global()->bounded(total));
+    for (int i = 0; i < ids.count(); i++)
+    {
+        r -= tickets.at(i);
+        if (r < 0)
+            return ids.at(i);
+    }
+    return ids.last();
 }
 
 bool TrackEngine::laserSweepSafe(quint32 fid, const QString &group, int downAllowed) const
@@ -10802,6 +10844,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             const int fb = (g.heads && g.lasers == false) ? figureBeats(want) : 0;
             run("pos:" + key, want, 1.0, fb > 0 ? fb * 1000 : 0, true);
+            // R405_AIM_DRAW: the heads' aims counted, for the rest in drawAim()
+            if (g.heads && g.lasers == false && m_aimLast.value(key, Function::invalidId()) != want)
+            {
+                const int seq = m_aimSeq.value(key, 0) + 1;
+                m_aimSeq.insert(key, seq);
+                m_aimTakenAt[key].insert(want, seq);
+                m_aimLast.insert(key, want);
+            }
         }
     }
 

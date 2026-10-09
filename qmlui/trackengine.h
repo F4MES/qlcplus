@@ -877,6 +877,7 @@ protected:
                       qreal litFloor = 0.0) const;
     /** fader: the slider as the operator reads it (tick() recovers it), not the section-scaled energy */
     quint32 positionFunction(const QString &group, int cursor, int tier, qreal fader) const;
+    quint32 drawAim(const QString &group, const QList<TrackFuncInfo *> &pool) const;   // R405_AIM_DRAW
     /** True if this scene switches a fixture's own effect/movement macro on. */
     bool macroPosition(quint32 fid) const;
     /** A function (a scene, or a chaser's step scenes) writes a non-zero
@@ -1058,6 +1059,11 @@ private:
     bool m_drawHome = false;              // this section the bars may hold home
     bool m_drawGrooveStrobes = false;     // this groove the strobes may lead
     int m_aloneWait = 0;                  // occasions missed since the last one
+    // R405_AIM_DRAW: per head group, how many aims it has taken, when (in that
+    // count) each aim was last taken, and the aim it took last
+    QHash<QString, int> m_aimSeq;
+    QHash<QString, QHash<quint32, int>> m_aimTakenAt;
+    QHash<QString, quint32> m_aimLast;
     int m_homeWait = 0;
     int m_grooveWait = 0;
     bool m_aloneFullLast = false;         // the kind of the last alone break
