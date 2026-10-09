@@ -1011,7 +1011,7 @@ void TrackManager::slotEnergyTick()
     }
     // STOP_GRACE_R105_IDLE: a stop that lasted its second goes idle now
     if (m_playing == false && m_stopSinceMs > 0
-        && QDateTime::currentMSecsSinceEpoch() - m_stopSinceMs >= 1000)
+        && QDateTime::currentMSecsSinceEpoch() - m_stopSinceMs >= 4000)   // R412_STOP_GRACE_IDLE
     {
         m_stopSinceMs = 0;
         runEngine(false);
@@ -1761,7 +1761,7 @@ void TrackManager::runEngine(bool sectionChanged)
     {
         // STOP_GRACE_R105_HOLD: not for the first second - a touched jog
         // says stop for a moment; slotEnergyTick() idles when it lasts
-        if (m_stopSinceMs > 0 && QDateTime::currentMSecsSinceEpoch() - m_stopSinceMs < 1000)
+        if (m_stopSinceMs > 0 && QDateTime::currentMSecsSinceEpoch() - m_stopSinceMs < 4000)   // R412_STOP_GRACE
             return;
         // nothing playing: the start scene, not darkness
         m_engine->idle();
