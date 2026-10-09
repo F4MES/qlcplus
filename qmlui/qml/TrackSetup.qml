@@ -260,6 +260,22 @@ Rectangle
                 onTapped: if (trackEngine) trackEngine.selfTest()
             }
 
+            // R410_LAB: LASER LAB - the animation laser's looks one by one, kept
+            // or not, and the kept ones into the show as AUTO programmes. SHOW
+            // OFF only: the rig is the operator's while it is open.
+            TrackTile
+            {
+                objectName: "labTile"
+                Layout.preferredWidth: 120
+                Layout.preferredHeight: 34
+                visible: trackEngine ? trackEngine.labAvailable : false
+                readonly property bool showOn: trackManager ? trackManager.autoRun : false
+                label: showOn ? qsTr("LAB: SHOW OFF") : qsTr("LASER LAB")
+                active: trackEngine ? trackEngine.labActive : false
+                activeColor: "#E3B44F"
+                onTapped: if (trackEngine && !showOn) trackEngine.labOpen()
+            }
+
             TrackTile
             {
                 Layout.preferredWidth: 120
@@ -1027,5 +1043,19 @@ Rectangle
             font.pixelSize: 13
             elide: Text.ElideRight
         }
+    }
+
+    // R410_LAB: the lab over the whole Track page (its root, handed over as
+    // host), the page's own top bar included - CLOSE is on the lab
+    Loader
+    {
+        id: labLoader
+        objectName: "labLoader"
+        parent: setupRoot.host ? setupRoot.host : setupRoot
+        anchors.fill: parent
+        z: 1000
+        active: trackEngine ? trackEngine.labActive : false
+        visible: active
+        source: "qrc:/LaserLab.qml"
     }
 }

@@ -77,6 +77,10 @@ static quint32 nameScatter(const QString &name)
 // from this rig's fixtures and named in the engine's own language (tier,
 // colour, stars), and FULL AUTO is what it was built for.
 #define ENGINE_AUTO_PATH      QStringLiteral("AUTO Programs")
+// R410_LAB: LASER LAB's kept looks, and the steps of its beat variants (under
+// ENGINE_STEP_PATH, so the table never takes a step for a look)
+#define ENGINE_LAB_PATH       QStringLiteral("AUTO Programs/Laser Lab")
+#define ENGINE_LAB_STEP_PATH  QStringLiteral("AUTO Programs/Steps/Laser Lab")
 // How long a group stays dark while its beams walk home at the top of a
 // break. Four bars: long enough for the motor, short enough to be a pause.
 // A break programme may run on the BASE only if it keeps this much of the
@@ -350,6 +354,8 @@ void TrackEngine::slotFadeTimer()
 
 void TrackEngine::slotDocChanged()
 {
+    labShutdown(false);                  // R410_LAB: an edit or a load under the lab
+    m_labScene[0] = m_labScene[1] = 0xFFFFFFFFu;
     // a function or fixture went: the index's m_doc->function() test is stale
     invalidateCandidates();
     m_autoStageKeys.clear();
@@ -1122,6 +1128,10 @@ void TrackEngine::ensureTable()
         });
     }
 
+    // R410_LAB: the looks kept in LASER LAB, written into the show before the
+    // table reads it (they are found by name and rewritten every build)
+    labEnsureShow();
+
     /* ---- functions ---- */
     // A scene that blends instead of adding is a modifier, not a look: the
     // Light Rider page's colour masks filter what is already on, and its
@@ -1194,6 +1204,9 @@ void TrackEngine::ensureTable()
         // program in the show. They are visible functions in their own folder
         // now, and this is the line that keeps them out of the table.
         if (func->path(true).startsWith(ENGINE_STEP_PATH))
+            continue;
+        // R410_LAB: a lab look no longer kept stays in the file, out of here
+        if (func->path(true) == ENGINE_LAB_PATH && m_labLive.contains(func->id()) == false)
             continue;
         if (func->name().startsWith(ENGINE_DIMMER_PREFIX)
             || func->name().startsWith(ENGINE_STROBE_PREFIX)
@@ -1457,6 +1470,7 @@ void TrackEngine::ensureTable()
     for (QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.begin(); it != m_funcs.end(); ++it)
         if (it.value().role == -2)
             it.value().role = it.value().step ? -1 : it.value().guess;
+    labApplyTags();                      // R410_LAB: what he said, over the names
 
     learnGroups();
 
@@ -6099,6 +6113,8 @@ void TrackEngine::setBlackout(bool on)
         stopEcho();
     if (on && m_testTimer.isActive())   // a test under BLACKOUT tests nothing (runde 202)
         selfTest();
+    if (on)
+        labShutdown(false);             // R410_LAB
 
     applyGroupOff();          // it owns both masks: the off ones and the black ones
 
@@ -6826,6 +6842,9 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     {
         if (aimHeld && info->aims)       // R378_POSITIONS: the held aim stands
             continue;
+        // R410_LAB: a kept lab look runs in the ENERGY window it was given
+        if (info->lab && (m_faderNow + 1e-6 < info->labMin || m_faderNow - 1e-6 > info->labMax))
+            continue;
         // R398_DOWN_NOZOOMPROG: ... and under STRAIGHT DOWN the beam is the
         // hold's - no programme that zooms by itself (runde 220's chasers)
         if (aimHeld && m_positionMode == QStringLiteral("down")
@@ -6908,6 +6927,20 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         if (info->colour.isEmpty() || info->colour == colour
             || m_groups.value(group).patternDevice)
             ok.append(info);
+    }
+    // R410_LAB_ONLY: six kept looks or more, and the animation laser plays his
+    // own from the lab - the busking scenes it borrowed step aside. Only when
+    // one passes here: it is never dark for it.
+    if (patternGroup && m_labOnlyGroups.contains(group))
+    {
+        QList<TrackFuncInfo *> labOwn;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (info->lab)
+                labOwn.append(info);
+        }
+        if (labOwn.isEmpty() == false)
+            ok = labOwn;
     }
     // a pattern device is never in the cast and dark (review 294): when the
     // ceiling left it nothing that passes the other filters, it may show
@@ -7087,6 +7120,13 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         {
             if (tagged.contains(info))
                 continue;
+            // R410_LAB: a kept lab look by its CALM tag, never by its name
+            if (info->lab)
+            {
+                if (info->labCalm)
+                    tagged.append(info);
+                continue;
+            }
             const QString lowName = info->name.toLower();
             bool calmOne = false;
             bool wildOne = lowName.startsWith(QStringLiteral("wave"));   // WaveBlue, WaveRed ...
@@ -7987,6 +8027,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
+    labShutdown(false);          // R410_LAB: so does the lab (the table rebuilds below)
     if (m_startScene)            // the opening picture is up: nothing else runs
     {
         clearMusicDark();        // runde 356
@@ -16775,6 +16816,8 @@ void TrackEngine::setStartScene(bool on)
 
 void TrackEngine::setStartScene(bool on, bool keepTiles)
 {
+    if (on)
+        labShutdown(false);              // R410_LAB: SHOW ON puts the start picture up
     if (on == m_startScene)
         return;
     m_startScene = on;
@@ -17156,6 +17199,7 @@ void TrackEngine::release()
         setStartScene(false);
     if (m_testTimer.isActive())
         selfTest(); // cancel the test before releasing its output
+    labShutdown(false);          // R410_LAB
     // AUTO went off: let everything fade out over a bar instead of clipping,
     // and let the dimmers fall back to the sliders. Positions stay where they
     // are - stopping a laser position is a move, and a slider may still have
@@ -17485,6 +17529,8 @@ void TrackEngine::idle()
         return;
     if (m_testTimer.isActive())   // SELF TEST owns the stage until it is done
         return;
+    if (m_labActive)              // R410_LAB: and so does LASER LAB
+        return;
     // the opening picture is up: nothing else runs - as in tick(). A stopped
     // deck (and the 30 s watchdog) called this and replaced the picture with
     // the idle look while the START SCENE tile stayed lit (runde 176).
@@ -17663,6 +17709,7 @@ int TrackEngine::keyBiasOf(const QString &key)
 
 void TrackEngine::resetConsole()
 {
+    labShutdown(false);                  // R410_LAB: SHOW ON - the lab gives the rig back
     // SHOW ON, once (TrackManager::setAutoRun). Tobias, 2026-09-22: "SHOW ON
     // skal ikke lukke for VC siderne, den skal blot soerge for at resette alt
     // paa VC saa naar auto-show starter, er vi sikre paa intet i VC'en kan
@@ -18289,6 +18336,7 @@ void TrackEngine::stopAll()
     m_restUntil = -1;
     if (m_testTimer.isActive())
         selfTest(); // no later test step may relight a stopped/replaced show
+    labShutdown(false);          // R410_LAB
     foreach (const QString &slot, m_active.keys())
         stopSlot(slot, true);
 
@@ -18350,4 +18398,1408 @@ void TrackEngine::stopAll()
                                  // beat skips the whole out-of-cast teardown
     m_report = tr("(stopped)");
     emit liveChanged();
+}
+
+/* =====================================================================
+ *  LASER LAB (runde 410) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/tracklab.inc.cpp.
+ *
+ *  Tobias, 2026-10-09: "Ja vi skal have lavet en masse flere auto-programmer
+ *  til laserne ... et system i SETUP hvor jeg kan koere programmerne igennem
+ *  og paa en maade godkende de programmer jeg ser, som er fede (evt. med
+ *  kommentar hvor jeg kan skrive/vaelge hvorhenne looket passer?)" - and,
+ *  for the build, that the laser is the Yuer 6W 16-channel with no manual to
+ *  be found. There is no DMX chart for it anywhere (the maker's page says
+ *  "16P"), so the lab does not pretend to know what a value draws: the ATLAS
+ *  walks Graphic Group, Group Selection and the built-in effects in steps,
+ *  and the operator says what he sees. Every look he keeps becomes an AUTO
+ *  programme of the show (labEnsureShow, from ensureTable()).
+ *
+ *  What the lab never does (REGLER, the laser rules): the height is the
+ *  operator's - the most common vertical position in his own scenes, 118 on
+ *  this rig - and so are the horizontal position and both X/Y rotations. The
+ *  lab writes all four in every scene, always at his values, so nothing in
+ *  it can tilt the beams towards the room. With no value of his to hold, the
+ *  lab does not open. TOO LOW / AUDIENCE darkens the laser at once and files
+ *  the look as never.
+ *
+ *  It owns the stage only with SHOW OFF, the way SELF TEST does: a beat, SHOW
+ *  ON (resetConsole, the start picture), BLACKOUT, STOP ALL and a project
+ *  load each close it (labShutdown).
+ * ===================================================================== */
+
+#include <QFile>
+
+#define ENGINE_LAB_G_STEP     4       // Graphic Group: 64 values to look at
+#define ENGINE_LAB_P_STEP     4       // Group Selection under a kept group: 63
+#define ENGINE_LAB_F_STEP     8       // the built-in effects: 31
+#define ENGINE_LAB_ONLY       6       // kept looks before the lab's own replace the borrowed busking scenes
+
+namespace
+{
+struct EngineLabKey
+{
+    bool ok = false;
+    bool fx = false;          // F<v>: a built-in effect
+    int a = -1;               // G<a> / F<a>
+    int b = -1;               // ... P<b>
+    QString kind;             // "" or a variant: spin, turn, pump, wave, draw, swap
+};
+
+EngineLabKey engineLabParse(const QString &key)
+{
+    static const QRegularExpression re(QStringLiteral("^([GF])(\\d+)(?:P(\\d+))?(?:/([a-z]+))?$"));
+    EngineLabKey k;
+    const QRegularExpressionMatch m = re.match(key);
+    if (m.hasMatch() == false)
+        return k;
+    k.fx = m.captured(1) == QStringLiteral("F");
+    k.a = m.captured(2).toInt();
+    k.b = m.captured(3).isEmpty() ? -1 : m.captured(3).toInt();
+    k.kind = m.captured(4);
+    if (k.a > 255 || k.b > 255 || (k.fx && k.b >= 0))
+        return k;
+    static const QStringList kinds = { "", "spin", "turn", "pump", "wave", "draw", "swap" };
+    k.ok = kinds.contains(k.kind);
+    return k;
+}
+
+const QStringList &engineLabKinds()
+{
+    static const QStringList kinds = { "spin", "turn", "pump", "wave", "draw", "swap" };
+    return kinds;
+}
+
+int engineLabSteps(const QString &kind)
+{
+    if (kind == QStringLiteral("turn") || kind == QStringLiteral("draw"))
+        return 4;
+    if (kind == QStringLiteral("pump") || kind == QStringLiteral("swap"))
+        return 2;
+    return 1;
+}
+
+QString engineLabKindWord(const QString &kind)
+{
+    // the show's names: one word after the look's own key, so familyOf() reads
+    // the key (each kept look is its own figure) and no tier, star or colour
+    // word of the engine's language sneaks in
+    if (kind == QStringLiteral("spin")) return QStringLiteral("Spin");
+    if (kind == QStringLiteral("turn")) return QStringLiteral("Turn");
+    if (kind == QStringLiteral("pump")) return QStringLiteral("Pump");
+    if (kind == QStringLiteral("wave")) return QStringLiteral("Ripple");
+    if (kind == QStringLiteral("draw")) return QStringLiteral("Draw");
+    if (kind == QStringLiteral("swap")) return QStringLiteral("Swap");
+    return QStringLiteral("Look");
+}
+
+QString engineLabKindText(const QString &kind)
+{
+    if (kind == QStringLiteral("spin")) return QStringLiteral("turning round its centre");
+    if (kind == QStringLiteral("turn")) return QStringLiteral("a quarter turn on every beat");
+    if (kind == QStringLiteral("pump")) return QStringLiteral("size pump on the beat");
+    if (kind == QStringLiteral("wave")) return QStringLiteral("with the wave on");
+    if (kind == QStringLiteral("draw")) return QStringLiteral("drawn in, a quarter a beat");
+    if (kind == QStringLiteral("swap")) return QStringLiteral("the lamps take turns, a beat each");
+    return QString();
+}
+
+QString engineLabRole(const QString &channelName)
+{
+    // By name, in this order: "Automatic Scaling of Patterns", "Pattern
+    // Rotates around the center" and "Gradual Drawing of patterns" all say
+    // "pattern" too, and "Dynamic Effects Speed" says "dynamic".
+    const QString n = channelName.toLower();
+    if (n.contains(QStringLiteral("dimmer"))) return QStringLiteral("dimmer");
+    if (n.contains(QStringLiteral("color select")) || n.contains(QStringLiteral("colour select"))) return QStringLiteral("colour");
+    if (n.contains(QStringLiteral("flow"))) return QStringLiteral("flow");
+    if (n.contains(QStringLiteral("size"))) return QStringLiteral("size");
+    if (n.contains(QStringLiteral("speed"))) return QStringLiteral("fxspeed");
+    if (n.contains(QStringLiteral("graphic"))) return QStringLiteral("graphic");
+    if (n.contains(QStringLiteral("scaling"))) return QStringLiteral("scale");
+    if (n.contains(QStringLiteral("center")) || n.contains(QStringLiteral("centre"))) return QStringLiteral("spin");
+    if (n.contains(QStringLiteral("x-axis")) || n.contains(QStringLiteral("x axis"))) return QStringLiteral("rotx");
+    if (n.contains(QStringLiteral("y-axis")) || n.contains(QStringLiteral("y axis"))) return QStringLiteral("roty");
+    if (n.contains(QStringLiteral("horizontal"))) return QStringLiteral("hpos");
+    if (n.contains(QStringLiteral("vertical"))) return QStringLiteral("vpos");
+    if (n.contains(QStringLiteral("wave"))) return QStringLiteral("wave");
+    if (n.contains(QStringLiteral("draw"))) return QStringLiteral("draw");
+    if (n.contains(QStringLiteral("group selection")) || n.contains(QStringLiteral("pattern"))) return QStringLiteral("pattern");
+    if (n.contains(QStringLiteral("dynamic")) || n.contains(QStringLiteral("effect"))) return QStringLiteral("fx");
+    return QString();
+}
+
+// the four the lab holds at the operator's own values, in every scene it writes
+const QStringList &engineLabLocked()
+{
+    static const QStringList locked = { "vpos", "hpos", "rotx", "roty" };
+    return locked;
+}
+
+int engineLabTier(const QJsonArray &sections)
+{
+    int tier = -2;
+    for (const QJsonValue &v : sections)
+    {
+        const QString s = v.toString();
+        int t = -1;
+        if (s == QStringLiteral("break")) t = 0;
+        else if (s == QStringLiteral("groove") || s == QStringLiteral("build")) t = 1;
+        else if (s == QStringLiteral("drop")) t = 2;
+        if (t < 0)
+            return -1;
+        if (tier == -2)
+            tier = t;
+        else if (tier != t)
+            return -1;                       // two kinds of section: a look for any
+    }
+    return tier == -2 ? -1 : tier;
+}
+
+void engineLabWindow(const QJsonArray &energy, qreal &lo, qreal &hi)
+{
+    // the ENERGY tiles, as windows on the slider (the animation laser plays
+    // from ENGINE_ANI_ON, 70 %): LOW to 80, MID 75-90, HIGH from 85, TOP
+    // from 95. Several tiles: the span of them.
+    lo = 0.0;
+    hi = 1.0;
+    if (energy.isEmpty())
+        return;
+    qreal l = 1.0, h = 0.0;
+    for (const QJsonValue &v : energy)
+    {
+        const QString s = v.toString();
+        qreal a = -1.0, b = -1.0;
+        if (s == QStringLiteral("low")) { a = 0.0; b = 0.80; }
+        else if (s == QStringLiteral("mid")) { a = 0.75; b = 0.90; }
+        else if (s == QStringLiteral("high")) { a = 0.85; b = 1.0; }
+        else if (s == QStringLiteral("top")) { a = 0.95; b = 1.0; }
+        if (a < 0.0)
+            continue;
+        l = qMin(l, a);
+        h = qMax(h, b);
+    }
+    if (l <= h)
+    {
+        lo = l;
+        hi = h;
+    }
+}
+
+QString engineLabPath()
+{
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                  + QDir::separator() + "QLC+";
+    QDir().mkpath(dir);
+    return dir + QDir::separator() + "laser-lab.json";
+}
+} // namespace
+
+/* ---------------------------------------------------------------------
+ *  the store: Documents/QLC+/laser-lab.json, written on every change
+ * --------------------------------------------------------------------- */
+
+void TrackEngine::labLoad()
+{
+    if (m_labLoaded)
+        return;
+    m_labLoaded = true;
+    QFile f(engineLabPath());
+    if (f.open(QIODevice::ReadOnly) == false)
+        return;
+    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+    m_labStore = root.value(QStringLiteral("looks")).toObject();
+    const QJsonObject resume = root.value(QStringLiteral("resume")).toObject();
+    m_labPass = qBound(0, resume.value(QStringLiteral("pass")).toInt(0), 2);
+    m_labResumeKey = resume.value(QStringLiteral("key")).toString();
+}
+
+void TrackEngine::labSave()
+{
+    QJsonObject root;
+    root.insert(QStringLiteral("about"), QStringLiteral("LASER LAB (Track page, SETUP): the operator's verdicts on the animation "
+                                                        "laser's looks. v: 1 kept, -1 no, 2 same as the one before. "
+                                                        "sec/en/ch: where it belongs. st: stars. Kept looks become AUTO programmes."));
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("looks"), m_labStore);
+    QJsonObject resume;
+    resume.insert(QStringLiteral("pass"), m_labPass);
+    resume.insert(QStringLiteral("key"), labCurrentKey());
+    root.insert(QStringLiteral("resume"), resume);
+    QSaveFile f(engineLabPath());
+    if (f.open(QIODevice::WriteOnly) == false)
+    {
+        m_labMessage = tr("could not save laser-lab.json");
+        return;
+    }
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    if (f.commit() == false)
+        m_labMessage = tr("could not save laser-lab.json");
+}
+
+int TrackEngine::labVerdictOf(const QString &key) const
+{
+    return m_labStore.value(key).toObject().value(QStringLiteral("v")).toInt(0);
+}
+
+/* ---------------------------------------------------------------------
+ *  the laser: which fixtures, which channel does what, the operator's values
+ * --------------------------------------------------------------------- */
+
+void TrackEngine::labScan()
+{
+    m_labFixtures.clear();
+    m_labChan.clear();
+    m_labBase.clear();
+    m_labColourValue.clear();
+    m_labColours.clear();
+    m_labGroup.clear();
+    if (m_doc == nullptr)
+        return;
+    QList<Fixture *> found;
+    foreach (Fixture *fxi, m_doc->fixtures())
+    {
+        if (fxi == nullptr)
+            continue;
+        QHash<QString, quint32> roles;
+        for (quint32 ch = 0; ch < fxi->channels(); ch++)
+        {
+            const QLCChannel *qch = fxi->channel(ch);
+            if (qch == nullptr)
+                continue;
+            const QString r = engineLabRole(qch->name());
+            if (r.isEmpty() == false && roles.contains(r) == false)
+                roles.insert(r, ch);
+        }
+        // an animation laser: its pictures are Graphic Group x Group Selection
+        if (roles.contains(QStringLiteral("graphic")) && roles.contains(QStringLiteral("pattern"))
+            && roles.contains(QStringLiteral("dimmer")))
+        {
+            found.append(fxi);
+            m_labChan.insert(fxi->id(), roles);
+        }
+    }
+    if (found.isEmpty())
+        return;
+    std::sort(found.begin(), found.end(), [](Fixture *a, Fixture *b) {
+        if (a->universe() != b->universe())
+            return a->universe() < b->universe();
+        return a->address() != b->address() ? a->address() < b->address() : a->id() < b->id();
+    });
+    m_labGroup = groupOfFixture(found.first()->id());
+    foreach (Fixture *fxi, found)
+    {
+        // one group: the first one's (by address)
+        if (groupOfFixture(fxi->id()) == m_labGroup)
+            m_labFixtures.append(fxi->id());
+        else
+            m_labChan.remove(fxi->id());
+    }
+    if (m_labGroup.isEmpty())
+        m_labGroup = found.first()->name();
+
+    // the operator's own values: the most common one per channel over his
+    // scenes on these fixtures - and per colour word, his colour values
+    QHash<QString, QHash<int, int> > counts;
+    QHash<QString, QHash<int, int> > colours;
+    foreach (Function *func, m_doc->functions())
+    {
+        Scene *scene = qobject_cast<Scene *>(func);
+        if (scene == nullptr || func->isVisible() == false)
+            continue;
+        const QString path = func->path(true);
+        if (path.startsWith(ENGINE_LAB_PATH) || path.startsWith(ENGINE_LAB_STEP_PATH))
+            continue;
+        const QString colour = colourOf(func->name().toLower());
+        foreach (const SceneValue &sv, scene->values())
+        {
+            QHash<quint32, QHash<QString, quint32> >::const_iterator rc = m_labChan.constFind(sv.fxi);
+            if (rc == m_labChan.constEnd())
+                continue;
+            for (QHash<QString, quint32>::const_iterator it = rc->constBegin(); it != rc->constEnd(); ++it)
+            {
+                if (it.value() != sv.channel)
+                    continue;
+                counts[it.key()][int(sv.value)]++;
+                if (it.key() == QStringLiteral("colour") && colour.isEmpty() == false)
+                    colours[colour][int(sv.value)]++;
+            }
+        }
+    }
+    auto mode = [](const QHash<int, int> &c) -> int {
+        int best = -1, bestN = 0;
+        for (QHash<int, int>::const_iterator it = c.constBegin(); it != c.constEnd(); ++it)
+        {
+            if (it.value() > bestN || (it.value() == bestN && it.key() < best))
+            {
+                best = it.key();
+                bestN = it.value();
+            }
+        }
+        return best;
+    };
+    for (QHash<QString, QHash<int, int> >::const_iterator it = counts.constBegin(); it != counts.constEnd(); ++it)
+        m_labBase.insert(it.key(), mode(it.value()));
+    // the colours: his where his scenes say, else what this laser is known to
+    // answer (white 0, red 15, blue 20, cyan 40 - read off PSMAIN 2026-10-09)
+    static const QList<QPair<QString, int> > known = { { "white", 0 }, { "red", 15 }, { "blue", 20 }, { "cyan", 40 } };
+    for (const QPair<QString, int> &k : known)
+    {
+        m_labColours.append(k.first);
+        m_labColourValue.insert(k.first, colours.contains(k.first) ? mode(colours.value(k.first)) : k.second);
+    }
+    static const QStringList others = { "green", "magenta", "yellow", "orange" };
+    for (const QString &c : others)
+    {
+        if (colours.contains(c))
+        {
+            m_labColours.append(c);
+            m_labColourValue.insert(c, mode(colours.value(c)));
+        }
+    }
+}
+
+bool TrackEngine::labReady() const
+{
+    if (m_labFixtures.isEmpty())
+        return false;
+    // the height and the rest of the aim are his, or the lab does not run
+    foreach (const QString &r, engineLabLocked())
+    {
+        foreach (quint32 fx, m_labFixtures)
+        {
+            if (m_labChan.value(fx).contains(r) && m_labBase.contains(r) == false)
+                return false;
+        }
+    }
+    return true;
+}
+
+QHash<QString, int> TrackEngine::labValues(const QString &key, int step) const
+{
+    // Every channel but the dimmer and the colour. What the atlas does not
+    // scan starts where the operator's scenes have it (speed, size, scaling,
+    // colour flow) or at nought (effects, wave, drawing, rotation) - and the
+    // four locked ones are his, whatever the look.
+    QHash<QString, int> v;
+    static const QStringList fromBase = { "flow", "fxspeed", "size", "scale" };
+    foreach (const QString &r, fromBase)
+        v.insert(r, m_labBase.value(r, 0));
+    static const QStringList nought = { "graphic", "pattern", "fx", "spin", "wave", "draw" };
+    foreach (const QString &r, nought)
+        v.insert(r, 0);
+    const EngineLabKey k = engineLabParse(key);
+    if (k.ok)
+    {
+        if (k.fx)
+            v.insert(QStringLiteral("fx"), k.a);
+        else
+        {
+            v.insert(QStringLiteral("graphic"), k.a);
+            v.insert(QStringLiteral("pattern"), qMax(0, k.b));
+        }
+        const int s = qMax(0, step);
+        if (k.kind == QStringLiteral("spin"))
+            v.insert(QStringLiteral("spin"), 200);
+        else if (k.kind == QStringLiteral("turn"))
+            v.insert(QStringLiteral("spin"), (s % 4) * 32);
+        else if (k.kind == QStringLiteral("pump"))
+            v.insert(QStringLiteral("size"), (s % 2) == 0 ? 0 : 120);
+        else if (k.kind == QStringLiteral("wave"))
+            v.insert(QStringLiteral("wave"), 101);
+        else if (k.kind == QStringLiteral("draw"))
+            v.insert(QStringLiteral("draw"), (s % 4) * 64);
+    }
+    foreach (const QString &r, engineLabLocked())
+        v.insert(r, m_labBase.value(r, 0));
+    return v;
+}
+
+QList<SceneValue> TrackEngine::labSceneValues(const QString &key, const QString &colour, int step, int lamps) const
+{
+    QList<SceneValue> out;
+    const EngineLabKey k = engineLabParse(key);
+    const QHash<QString, int> v = labValues(key, step);
+    const int n = int(m_labFixtures.count());
+    for (int i = 0; i < n; i++)
+    {
+        const quint32 fx = m_labFixtures.at(i);
+        bool lit = true;
+        if (lamps == 1 && i != 0)
+            lit = false;                     // LEFT: the first by address
+        if (lamps == 2 && i != n - 1)
+            lit = false;                     // RIGHT: the last
+        if (k.kind == QStringLiteral("swap") && n >= 2)
+            lit = lit && (i % 2) == (qMax(0, step) % 2);
+        const QHash<QString, quint32> roles = m_labChan.value(fx);
+        for (QHash<QString, quint32>::const_iterator it = roles.constBegin(); it != roles.constEnd(); ++it)
+        {
+            int val;
+            if (it.key() == QStringLiteral("dimmer"))
+                val = lit ? 255 : 0;
+            else if (it.key() == QStringLiteral("colour"))
+                val = m_labColourValue.value(colour, m_labColourValue.value(QStringLiteral("white"), 0));
+            else
+                val = v.value(it.key(), 0);
+            out.append(SceneValue(fx, it.value(), uchar(qBound(0, val, 255))));
+        }
+    }
+    return out;
+}
+
+/* ---------------------------------------------------------------------
+ *  the lists: ATLAS, VARIANTS, APPROVED
+ * --------------------------------------------------------------------- */
+
+QStringList TrackEngine::labList(int pass) const
+{
+    QStringList out;
+    if (pass == 0)
+    {
+        for (int g = 0; g <= 255; g += ENGINE_LAB_G_STEP)
+            out.append(QStringLiteral("G") + QString::number(g));
+        for (int f = ENGINE_LAB_F_STEP; f <= 255; f += ENGINE_LAB_F_STEP)
+            out.append(QStringLiteral("F") + QString::number(f));
+        // a group he kept: its patterns, after the first walk
+        for (int g = 0; g <= 255; g += ENGINE_LAB_G_STEP)
+        {
+            const QString gk = QStringLiteral("G") + QString::number(g);
+            if (labVerdictOf(gk) != 1)
+                continue;
+            for (int p = ENGINE_LAB_P_STEP; p <= 255; p += ENGINE_LAB_P_STEP)
+                out.append(gk + QStringLiteral("P") + QString::number(p));
+        }
+        return out;
+    }
+    const QStringList atlas = labList(0);
+    foreach (const QString &key, atlas)
+    {
+        const bool kept = labVerdictOf(key) == 1;
+        if (pass == 2 && kept)
+            out.append(key);
+        if (kept == false && pass == 1)
+            continue;
+        foreach (const QString &kind, engineLabKinds())
+        {
+            if (kind == QStringLiteral("swap") && m_labFixtures.count() < 2)
+                continue;
+            const QString vk = key + QLatin1Char('/') + kind;
+            if (pass == 1 || labVerdictOf(vk) == 1)
+                out.append(vk);
+        }
+    }
+    return out;
+}
+
+QString TrackEngine::labCurrentKey() const
+{
+    if (m_labIndex < 0 || m_labIndex >= m_labList.count())
+        return QString();
+    return m_labList.at(m_labIndex);
+}
+
+void TrackEngine::labRefresh()
+{
+    const QString cur = labCurrentKey();
+    m_labList = labList(m_labPass);
+    const int at = cur.isEmpty() ? -1 : int(m_labList.indexOf(cur));
+    if (at >= 0)
+        m_labIndex = at;
+    m_labIndex = m_labList.isEmpty() ? 0 : qBound(0, m_labIndex, int(m_labList.count()) - 1);
+}
+
+int TrackEngine::labOrdinal(const QString &key) const
+{
+    // the atlas's own count: a value marked SAME is the picture before it,
+    // so "G3" is the third DIFFERENT graphic group, whatever its value
+    const EngineLabKey k = engineLabParse(key);
+    if (k.ok == false)
+        return 0;
+    int n = 0;
+    if (k.fx || k.b < 0)
+    {
+        const int first = k.fx ? ENGINE_LAB_F_STEP : 0;
+        const int step = k.fx ? ENGINE_LAB_F_STEP : ENGINE_LAB_G_STEP;
+        for (int v = first; v <= 255; v += step)
+        {
+            const QString e = (k.fx ? QStringLiteral("F") : QStringLiteral("G")) + QString::number(v);
+            if (n == 0 || labVerdictOf(e) != 2)
+                n++;
+            if (v >= k.a)
+                break;
+        }
+        return n;
+    }
+    n = 1;                                   // P0 is the group itself
+    const QString gk = QStringLiteral("G") + QString::number(k.a);
+    for (int p = ENGINE_LAB_P_STEP; p <= 255 && p <= k.b; p += ENGINE_LAB_P_STEP)
+    {
+        if (labVerdictOf(gk + QStringLiteral("P") + QString::number(p)) != 2)
+            n++;
+    }
+    return n;
+}
+
+QString TrackEngine::labRange(const QString &key) const
+{
+    // the DMX values this picture covers: its own step, and every SAME after it
+    const EngineLabKey k = engineLabParse(key);
+    if (k.ok == false)
+        return QString();
+    const bool pat = k.fx == false && k.b >= 0;
+    const int step = k.fx ? ENGINE_LAB_F_STEP : (pat ? ENGINE_LAB_P_STEP : ENGINE_LAB_G_STEP);
+    const int from = pat ? k.b : k.a;
+    int to = qMin(255, from + step - 1);
+    for (int v = from + step; v <= 255; v += step)
+    {
+        const QString e = k.fx ? QStringLiteral("F") + QString::number(v)
+                        : pat ? QStringLiteral("G") + QString::number(k.a) + QStringLiteral("P") + QString::number(v)
+                              : QStringLiteral("G") + QString::number(v);
+        if (labVerdictOf(e) != 2)
+            break;
+        to = qMin(255, v + step - 1);
+    }
+    return QString::number(from) + QChar(0x2013) + QString::number(to);
+}
+
+QString TrackEngine::labTitleOf(const QString &key) const
+{
+    const EngineLabKey k = engineLabParse(key);
+    if (k.ok == false)
+        return key;
+    const QString base = key.section(QLatin1Char('/'), 0, 0);
+    QString t;
+    if (k.fx)
+        t = QStringLiteral("FX") + QString::number(labOrdinal(base));
+    else if (k.b < 0)
+        t = QStringLiteral("G") + QString::number(labOrdinal(base));
+    else
+        t = QStringLiteral("G") + QString::number(labOrdinal(QStringLiteral("G") + QString::number(k.a)))
+            + QStringLiteral(" · P") + QString::number(labOrdinal(base));
+    if (k.kind.isEmpty() == false)
+        t += QStringLiteral("  ·  ") + engineLabKindText(k.kind);
+    return t;
+}
+
+QString TrackEngine::labDetailOf(const QString &key) const
+{
+    const EngineLabKey k = engineLabParse(key);
+    if (k.ok == false)
+        return QString();
+    const QString base = key.section(QLatin1Char('/'), 0, 0);
+    QString d;
+    if (k.fx)
+        d = tr("Built-in effect %1  ·  effect speed %2  ·  graphic group 0")
+                .arg(labRange(base)).arg(m_labBase.value(QStringLiteral("fxspeed"), 0));
+    else if (k.b < 0)
+        d = tr("Graphic group %1  ·  pattern 0  ·  built-in effect off").arg(labRange(base));
+    else
+        d = tr("Graphic group %1  ·  pattern %2  ·  built-in effect off").arg(k.a).arg(labRange(base));
+    if (k.kind == QStringLiteral("pump"))
+        d += tr("  ·  size 0 → 120 → 0 every beat");
+    else if (k.kind == QStringLiteral("turn"))
+        d += tr("  ·  centre rotation 0 / 32 / 64 / 96 a beat each");
+    else if (k.kind == QStringLiteral("spin"))
+        d += tr("  ·  centre rotation 200");
+    else if (k.kind == QStringLiteral("wave"))
+        d += tr("  ·  wave 101");
+    else if (k.kind == QStringLiteral("draw"))
+        d += tr("  ·  drawing 0 / 64 / 128 / 192 a beat each");
+    else if (k.kind == QStringLiteral("swap"))
+        d += tr("  ·  one lamp a beat");
+    if (m_labStore.value(key).toObject().value(QStringLiteral("slow")).toBool())
+        d += tr("  ·  half pace");
+    return d;
+}
+
+QString TrackEngine::labTagKey() const
+{
+    // WHERE IT BELONGS is for the look just kept (the strip has moved on by
+    // then), or for the one playing when it is a kept one
+    const QString cur = labCurrentKey();
+    if (cur.isEmpty() == false && labVerdictOf(cur) == 1)
+        return cur;
+    if (m_labLastGood.isEmpty() == false && labVerdictOf(m_labLastGood) == 1)
+        return m_labLastGood;
+    return QString();
+}
+
+/* ---------------------------------------------------------------------
+ *  on stage
+ * --------------------------------------------------------------------- */
+
+void TrackEngine::labShow()
+{
+    if (m_labActive == false || m_doc == nullptr || m_labGroup.isEmpty())
+        return;
+    const QString slot = QStringLiteral("lab:") + m_labGroup;
+    const QString key = labCurrentKey();
+    if (key.isEmpty() || m_labDark)
+    {
+        stopSlot(slot, true);
+        return;
+    }
+    // A/B, as the colour chase does (chaseColourFunction): the scene on stage
+    // keeps its values, the other is written and shown next
+    const int other = 1 - m_labSide;
+    const QString name = QStringLiteral("TRACK Lab: %1 %2").arg(m_labGroup, other == 0 ? QStringLiteral("A") : QStringLiteral("B"));
+    Scene *scene = qobject_cast<Scene *>(m_doc->function(m_labScene[other]));
+    if (scene != nullptr && scene->name() != name)
+        scene = nullptr;                     // an id of another show
+    if (scene == nullptr)
+    {
+        foreach (Function *func, m_doc->functions())
+        {
+            if (func != nullptr && func->name() == name)
+                scene = qobject_cast<Scene *>(func);
+        }
+    }
+    const QList<SceneValue> values = labSceneValues(key, m_labColour, m_labBeat, m_labLamps);
+    if (scene != nullptr)
+    {
+        foreach (SceneValue old, scene->values())
+            scene->unsetValue(old.fxi, old.channel);
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+    }
+    else
+    {
+        scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setVisible(false);
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+        if (m_doc->addFunction(scene) == false)
+        {
+            delete scene;
+            return;
+        }
+    }
+    m_labScene[other] = scene->id();
+    m_labSide = other;
+    run(slot, scene->id(), 1.0, 0, true);
+}
+
+void TrackEngine::labShowCandidate()
+{
+    m_labBeat = 0;
+    m_labBeatsShown = 0;
+    labRestartTimers();
+    labShow();
+    emit labChanged();
+}
+
+void TrackEngine::labRestartTimers()
+{
+    m_labAutoTimer.stop();
+    if (m_labActive == false)
+    {
+        m_labStepTimer.stop();
+        return;
+    }
+    const qreal beat = (m_beatMs > 200.0 && m_beatMs < 2000.0) ? m_beatMs : 500.0;
+    const bool slow = m_labTrySlow || m_labStore.value(labCurrentKey()).toObject().value(QStringLiteral("slow")).toBool();
+    m_labStepTimer.start(int(beat * (slow ? 2.0 : 1.0)));
+    if (m_labDark == false && m_labHold == false && (m_labAuto == 1 || m_labAuto == 2))
+        m_labAutoTimer.start(m_labAuto == 1 ? 2000 : 4000);
+}
+
+void TrackEngine::labStepTick()
+{
+    if (m_labActive == false)
+    {
+        m_labStepTimer.stop();
+        return;
+    }
+    m_labBeat++;
+    if (m_labDark)
+        return;
+    if (engineLabSteps(labCurrentKey().section(QLatin1Char('/'), 1, 1)) > 1)
+        labShow();
+    if (m_labAuto == 3 && m_labHold == false && ++m_labBeatsShown >= 8)
+        labNext();
+}
+
+void TrackEngine::labAutoTick()
+{
+    if (m_labActive && m_labDark == false && m_labHold == false)
+        labNext();
+}
+
+bool TrackEngine::labOpen()
+{
+    if (m_labActive)
+        return true;
+    if (m_doc == nullptr || m_docTimer.isActive())
+        return false;
+    ensureTable();
+    labLoad();
+    labScan();
+    m_labMessage.clear();
+    QString refuse;
+    if (m_labFixtures.isEmpty())
+        refuse = tr("laser lab: no animation laser in this show");
+    else if (labReady() == false)
+        refuse = tr("laser lab: no height of yours to hold - make one scene with the laser where it belongs");
+    else if (m_blackout)
+        refuse = tr("laser lab: BLACKOUT is on");
+    else if (m_groupOff.contains(m_labGroup))
+        refuse = tr("laser lab: %1 is switched OFF").arg(m_labGroup);
+    if (refuse.isEmpty() == false)
+    {
+        m_report = refuse;
+        m_labMessage = refuse;
+        emit liveChanged();
+        emit labChanged();
+        return false;
+    }
+    if (m_labWired == false)
+    {
+        m_labWired = true;
+        m_labAutoTimer.setSingleShot(true);
+        connect(&m_labAutoTimer, &QTimer::timeout, this, [this]() { labAutoTick(); });
+        connect(&m_labStepTimer, &QTimer::timeout, this, [this]() { labStepTick(); });
+    }
+    if (m_testTimer.isActive())
+        selfTest();
+    if (m_startScene)
+        setStartScene(false);
+    // the laser is the lab's: whatever the engine still holds on it goes
+    // (a position left running after SHOW OFF, a part, the start look)
+    foreach (const QString &slot, m_active.keys())
+    {
+        if (slotGroup(slot) == m_labGroup || slot.startsWith(QStringLiteral("idle:")))
+            stopSlot(slot, true);
+    }
+    m_cast.remove(m_labGroup);
+    m_position.remove(m_labGroup);
+    m_labActive = true;
+    m_labDark = false;
+    m_labHold = false;
+    m_labTrySlow = false;
+    if (m_labColours.contains(m_labColour) == false)
+        m_labColour = QStringLiteral("white");
+    m_labIndex = 0;
+    m_labList = labList(m_labPass);
+    // where he stopped last time, or the first one not looked at yet
+    int at = m_labResumeKey.isEmpty() ? -1 : int(m_labList.indexOf(m_labResumeKey));
+    if (at < 0)
+    {
+        for (int i = 0; i < m_labList.count(); i++)
+        {
+            if (labVerdictOf(m_labList.at(i)) == 0)
+            {
+                at = i;
+                break;
+            }
+        }
+    }
+    m_labIndex = qMax(0, at);
+    m_report = tr("LASER LAB");
+    logSignal(QStringLiteral("sig:lab-open"));
+    emit liveChanged();
+    labShowCandidate();
+    return true;
+}
+
+void TrackEngine::labClose()
+{
+    labShutdown(true);
+}
+
+void TrackEngine::labShutdown(bool rebuildNow)
+{
+    if (m_labActive == false)
+        return;
+    m_labActive = false;
+    m_labAutoTimer.stop();
+    m_labStepTimer.stop();
+    if (m_labGroup.isEmpty() == false)
+        stopSlot(QStringLiteral("lab:") + m_labGroup, true);
+    m_labResumeKey = labCurrentKey();
+    labSave();
+    logSignal(QStringLiteral("sig:lab-close"));
+    if (m_labShowDirty)
+    {
+        // the kept looks into the show: the next table build writes them
+        m_labShowDirty = false;
+        if (rebuildNow)
+            rebuild();
+        else
+        {
+            saveRoles();
+            m_dirty = true;
+        }
+    }
+    m_labMessage.clear();
+    emit labChanged();
+}
+
+void TrackEngine::labSetPass(int pass)
+{
+    if (m_labActive == false)
+        return;
+    pass = qBound(0, pass, 2);
+    if (pass != m_labPass)
+    {
+        m_labPass = pass;
+        m_labList = labList(pass);
+        m_labIndex = 0;
+        if (pass != 2)
+        {
+            for (int i = 0; i < m_labList.count(); i++)
+            {
+                if (labVerdictOf(m_labList.at(i)) == 0)
+                {
+                    m_labIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+    m_labDark = false;
+    m_labTrySlow = false;
+    m_labMessage = m_labList.isEmpty()
+                       ? (pass == 1 ? tr("No kept looks yet - keep some in the ATLAS first")
+                                    : tr("Nothing kept yet"))
+                       : QString();
+    labShowCandidate();
+}
+
+void TrackEngine::labGoto(int index)
+{
+    if (m_labActive == false || m_labList.isEmpty())
+        return;
+    m_labIndex = qBound(0, index, int(m_labList.count()) - 1);
+    m_labDark = false;
+    m_labTrySlow = false;
+    m_labMessage.clear();
+    labShowCandidate();
+}
+
+void TrackEngine::labNext()
+{
+    if (m_labActive == false)
+        return;
+    if (m_labIndex + 1 >= m_labList.count())
+    {
+        m_labAutoTimer.stop();
+        m_labMessage = tr("The end of the list");
+        emit labChanged();
+        return;
+    }
+    labGoto(m_labIndex + 1);
+}
+
+void TrackEngine::labBack()
+{
+    if (m_labActive && m_labIndex > 0)
+        labGoto(m_labIndex - 1);
+}
+
+void TrackEngine::labDecide(int verdict)
+{
+    if (m_labActive == false)
+        return;
+    const QString key = labCurrentKey();
+    const EngineLabKey k = engineLabParse(key);
+    if (k.ok == false || (verdict != 1 && verdict != -1 && verdict != 2))
+        return;
+    if (verdict == 2)
+    {
+        // SAME AS LAST is the atlas's, and needs a picture before it
+        const bool first = k.kind.isEmpty() == false
+                           || (k.b < 0 && k.a == (k.fx ? ENGINE_LAB_F_STEP : 0));
+        if (first)
+            return;
+    }
+    QJsonObject o = m_labStore.value(key).toObject();
+    const bool wasKept = o.value(QStringLiteral("v")).toInt(0) == 1;
+    o.insert(QStringLiteral("v"), verdict);
+    o.insert(QStringLiteral("t"), QDateTime::currentDateTime().toString(Qt::ISODate));
+    if (verdict == 1)
+    {
+        o.remove(QStringLiteral("ban"));
+        if (m_labTrySlow && engineLabSteps(k.kind) > 1)
+            o.insert(QStringLiteral("slow"), true);
+        m_labLastGood = key;
+    }
+    m_labStore.insert(key, o);
+    if (wasKept || verdict == 1)
+        m_labShowDirty = true;
+    labSave();
+    logSignal(QStringLiteral("sig:lab:%1=%2").arg(key).arg(verdict));
+    labRefresh();
+    if (m_labPass == 2)
+    {
+        m_labDark = false;
+        m_labTrySlow = false;
+        labShowCandidate();
+        return;
+    }
+    labNext();
+}
+
+void TrackEngine::labToggleTag(const QString &kind, const QString &tag)
+{
+    const QString key = labTagKey();
+    if (m_labActive == false)
+        return;
+    if (key.isEmpty())
+    {
+        m_labMessage = tr("Keep a look first (✓ GOOD) - the tags are for it");
+        emit labChanged();
+        return;
+    }
+    static const QStringList kinds = { "sec", "en", "ch" };
+    if (kinds.contains(kind) == false || tag.isEmpty())
+        return;
+    QJsonObject o = m_labStore.value(key).toObject();
+    QJsonArray list = o.value(kind).toArray();
+    QJsonArray out;
+    bool had = false;
+    for (const QJsonValue &v : list)
+    {
+        if (v.toString() == tag)
+            had = true;
+        else if (kind != QStringLiteral("sec") || tag != QStringLiteral("any"))
+            out.append(v);
+    }
+    // ANYWHERE is no section at all
+    if (had == false && tag != QStringLiteral("any"))
+        out.append(tag);
+    o.insert(kind, out);
+    m_labStore.insert(key, o);
+    m_labShowDirty = true;
+    m_labMessage.clear();
+    labSave();
+    emit labChanged();
+}
+
+void TrackEngine::labSetStars(int stars)
+{
+    const QString key = labTagKey();
+    if (m_labActive == false || key.isEmpty())
+        return;
+    QJsonObject o = m_labStore.value(key).toObject();
+    const int now = o.value(QStringLiteral("st")).toInt(0);
+    o.insert(QStringLiteral("st"), now == stars ? 0 : qBound(1, stars, 3));
+    m_labStore.insert(key, o);
+    m_labShowDirty = true;
+    labSave();
+    emit labChanged();
+}
+
+void TrackEngine::labSetNote(const QString &note)
+{
+    const QString key = labTagKey();
+    if (m_labActive == false || key.isEmpty())
+        return;
+    QJsonObject o = m_labStore.value(key).toObject();
+    const QString text = note.trimmed().left(200);
+    if (o.value(QStringLiteral("note")).toString() == text)
+        return;
+    o.insert(QStringLiteral("note"), text);
+    m_labStore.insert(key, o);
+    labSave();
+    emit labChanged();
+}
+
+void TrackEngine::labSetAuto(int mode)
+{
+    m_labAuto = qBound(0, mode, 3);
+    m_labBeatsShown = 0;
+    labRestartTimers();
+    emit labChanged();
+}
+
+void TrackEngine::labSetColour(const QString &colour)
+{
+    if (m_labColours.contains(colour) == false)
+        return;
+    m_labColour = colour;
+    labShow();
+    emit labChanged();
+}
+
+void TrackEngine::labSetLamps(int lamps)
+{
+    m_labLamps = qBound(0, lamps, 2);
+    labShow();
+    emit labChanged();
+}
+
+void TrackEngine::labToggleHold()
+{
+    m_labHold = !m_labHold;
+    m_labBeatsShown = 0;
+    labRestartTimers();
+    emit labChanged();
+}
+
+void TrackEngine::labToggleSlower()
+{
+    if (m_labActive == false || m_labPass == 0)
+        return;
+    m_labTrySlow = !m_labTrySlow;
+    labRestartTimers();
+    emit labChanged();
+}
+
+void TrackEngine::labStop()
+{
+    if (m_labActive == false)
+        return;
+    m_labDark = !m_labDark;
+    m_labMessage = m_labDark ? tr("Stopped - the laser is dark") : QString();
+    labRestartTimers();
+    labShow();
+    emit labChanged();
+}
+
+void TrackEngine::labBan()
+{
+    // TOO LOW / AUDIENCE: dark first, then filed as never
+    if (m_labActive == false)
+        return;
+    m_labDark = true;
+    labShow();
+    m_labAutoTimer.stop();
+    const QString key = labCurrentKey();
+    if (key.isEmpty() == false)
+    {
+        QJsonObject o = m_labStore.value(key).toObject();
+        if (o.value(QStringLiteral("v")).toInt(0) == 1)
+            m_labShowDirty = true;
+        o.insert(QStringLiteral("v"), -1);
+        o.insert(QStringLiteral("ban"), true);
+        o.insert(QStringLiteral("t"), QDateTime::currentDateTime().toString(Qt::ISODate));
+        m_labStore.insert(key, o);
+        labSave();
+        logSignal(QStringLiteral("sig:lab-ban:") + key);
+    }
+    m_labMessage = tr("Never in the show. The laser is dark - NEXT goes on.");
+    emit labChanged();
+}
+
+void TrackEngine::labRemove(const QString &key)
+{
+    if (m_labStore.contains(key) == false)
+        return;
+    QJsonObject o = m_labStore.value(key).toObject();
+    if (o.value(QStringLiteral("v")).toInt(0) != 1)
+        return;
+    o.insert(QStringLiteral("v"), 0);
+    m_labStore.insert(key, o);
+    m_labShowDirty = true;
+    labSave();
+    if (m_labActive)
+    {
+        labRefresh();
+        if (m_labPass == 2)
+            labShowCandidate();
+    }
+    emit labChanged();
+}
+
+/* ---------------------------------------------------------------------
+ *  for QML
+ * --------------------------------------------------------------------- */
+
+bool TrackEngine::labAvailable() const
+{
+    // a lamp with a Graphic Group and a Group Selection channel - asked before
+    // the table is built too (the SETUP tile), so read off the fixtures
+    if (m_labFixtures.isEmpty() == false)
+        return true;
+    if (m_doc == nullptr)
+        return false;
+    foreach (Fixture *fxi, m_doc->fixtures())
+    {
+        if (fxi == nullptr)
+            continue;
+        bool graphic = false, pattern = false;
+        for (quint32 ch = 0; ch < fxi->channels(); ch++)
+        {
+            const QLCChannel *qch = fxi->channel(ch);
+            const QString r = qch != nullptr ? engineLabRole(qch->name()) : QString();
+            graphic = graphic || r == QStringLiteral("graphic");
+            pattern = pattern || r == QStringLiteral("pattern");
+        }
+        if (graphic && pattern)
+            return true;
+    }
+    return false;
+}
+
+QString TrackEngine::labTitle() const { return labTitleOf(labCurrentKey()); }
+QString TrackEngine::labDetail() const { return labDetailOf(labCurrentKey()); }
+
+QStringList TrackEngine::labLocked() const
+{
+    const EngineLabKey k = engineLabParse(labCurrentKey());
+    QStringList out;
+    out.append(m_labColour.toUpper());
+    if (m_labBase.contains(QStringLiteral("vpos")))
+        out.append(tr("HEIGHT %1 · LOCKED").arg(m_labBase.value(QStringLiteral("vpos"))));
+    out.append(tr("NO X/Y TILT"));
+    if (k.kind == QStringLiteral("spin") || k.kind == QStringLiteral("turn"))
+        out.append(tr("TURNS IN PLACE"));
+    else
+        out.append(tr("NO ROTATION"));
+    if (engineLabSteps(k.kind) > 1)
+        out.append(tr("ON THE BEAT"));
+    return out;
+}
+
+QVariantList TrackEngine::labStrip() const
+{
+    QVariantList out;
+    out.reserve(m_labList.count());
+    foreach (const QString &key, m_labList)
+        out.append(labVerdictOf(key));
+    return out;
+}
+
+int TrackEngine::labCountOf(int verdict) const
+{
+    int n = 0;
+    foreach (const QString &key, m_labList)
+        n += labVerdictOf(key) == verdict ? 1 : 0;
+    return n;
+}
+
+int TrackEngine::labApprovedCount() const
+{
+    int n = 0;
+    for (QJsonObject::const_iterator it = m_labStore.constBegin(); it != m_labStore.constEnd(); ++it)
+        n += (it.value().toObject().value(QStringLiteral("v")).toInt(0) == 1 && engineLabParse(it.key()).ok) ? 1 : 0;
+    return n;
+}
+
+QVariantList TrackEngine::labApprovedList() const
+{
+    QVariantList out;
+    foreach (const QString &key, labList(2))
+    {
+        const QJsonObject o = m_labStore.value(key).toObject();
+        QVariantMap m;
+        m.insert(QStringLiteral("key"), key);
+        m.insert(QStringLiteral("title"), labTitleOf(key));
+        m.insert(QStringLiteral("sections"), o.value(QStringLiteral("sec")).toArray().toVariantList());
+        m.insert(QStringLiteral("energy"), o.value(QStringLiteral("en")).toArray().toVariantList());
+        m.insert(QStringLiteral("character"), o.value(QStringLiteral("ch")).toArray().toVariantList());
+        m.insert(QStringLiteral("stars"), o.value(QStringLiteral("st")).toInt(0));
+        m.insert(QStringLiteral("note"), o.value(QStringLiteral("note")).toString());
+        out.append(m);
+    }
+    return out;
+}
+
+QString TrackEngine::labTagTitle() const
+{
+    const QString key = labTagKey();
+    return key.isEmpty() ? QString() : labTitleOf(key);
+}
+
+QStringList TrackEngine::labTagList(const QString &kind) const
+{
+    QStringList out;
+    const QJsonArray a = m_labStore.value(labTagKey()).toObject().value(kind).toArray();
+    for (const QJsonValue &v : a)
+        out.append(v.toString());
+    return out;
+}
+
+QStringList TrackEngine::labSections() const { return labTagList(QStringLiteral("sec")); }
+QStringList TrackEngine::labEnergy() const { return labTagList(QStringLiteral("en")); }
+QStringList TrackEngine::labCharacter() const { return labTagList(QStringLiteral("ch")); }
+
+int TrackEngine::labStars() const
+{
+    return m_labStore.value(labTagKey()).toObject().value(QStringLiteral("st")).toInt(0);
+}
+
+QString TrackEngine::labNote() const
+{
+    return m_labStore.value(labTagKey()).toObject().value(QStringLiteral("note")).toString();
+}
+
+bool TrackEngine::labSlower() const
+{
+    return m_labTrySlow || m_labStore.value(labCurrentKey()).toObject().value(QStringLiteral("slow")).toBool();
+}
+
+/* ---------------------------------------------------------------------
+ *  into the show: from ensureTable(), before the table reads the functions
+ * --------------------------------------------------------------------- */
+
+Scene *TrackEngine::labUpsertScene(QHash<QString, Function *> &mine, const QString &name,
+                                   const QString &path, const QList<SceneValue> &values)
+{
+    Scene *scene = qobject_cast<Scene *>(mine.value(name));
+    if (scene == nullptr)
+    {
+        scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setPath(path);
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+        if (m_doc->addFunction(scene) == false)
+        {
+            delete scene;
+            return nullptr;
+        }
+        mine.insert(name, scene);
+        return scene;
+    }
+    // written again only when it changed: an unchanged show stays unmodified
+    QMap<QPair<quint32, quint32>, uchar> want, have;
+    foreach (const SceneValue &sv, values)
+        want.insert(qMakePair(sv.fxi, sv.channel), sv.value);
+    foreach (const SceneValue &sv, scene->values())
+        have.insert(qMakePair(sv.fxi, sv.channel), sv.value);
+    if (want != have)
+    {
+        foreach (SceneValue old, scene->values())
+            scene->unsetValue(old.fxi, old.channel);
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+    }
+    if (scene->isVisible() == false)
+        scene->setVisible(true);
+    return scene;
+}
+
+void TrackEngine::labEnsureShow()
+{
+    // Every kept look, in each colour this laser has, as a visible AUTO
+    // programme in "AUTO Programs/Laser Lab" - a scene, or for a variant on
+    // the beat a Beats-tempo chaser of steps in the step folder (visible,
+    // like gen_programs' steps: QLC+ saves a hidden scene as noughts). Found
+    // again by name, rewritten from laser-lab.json on every build. A look no
+    // longer kept stays in the file and out of the table (m_labLive).
+    m_labLive.clear();
+    m_labFuncKey.clear();
+    m_labOnlyGroups.clear();
+    labLoad();
+    labScan();
+    if (m_doc == nullptr || labReady() == false)
+        return;
+    QHash<QString, Function *> mine;
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func == nullptr)
+            continue;
+        const QString path = func->path(true);
+        if (path == ENGINE_LAB_PATH || path == ENGINE_LAB_STEP_PATH)
+            mine.insert(func->name(), func);
+    }
+    QSet<QString> bases;
+    foreach (const QString &key, labList(2))
+    {
+        const EngineLabKey k = engineLabParse(key);
+        const QJsonObject o = m_labStore.value(key).toObject();
+        if (k.ok == false || o.value(QStringLiteral("ban")).toBool())
+            continue;
+        const int steps = engineLabSteps(k.kind);
+        const bool slow = o.value(QStringLiteral("slow")).toBool();
+        const QString look = key.section(QLatin1Char('/'), 0, 0) + QLatin1Char(' ') + engineLabKindWord(k.kind);
+        foreach (const QString &colour, m_labColours)
+        {
+            QString cap = colour;
+            cap[0] = cap.at(0).toUpper();
+            const QString name = QStringLiteral("AUTO ") + look + QLatin1Char(' ') + cap;
+            Function *made = nullptr;
+            if (steps == 1)
+                made = labUpsertScene(mine, name, ENGINE_LAB_PATH, labSceneValues(key, colour, 0, 0));
+            else
+            {
+                QList<quint32> fids;
+                for (int s = 0; s < steps; s++)
+                {
+                    Scene *st = labUpsertScene(mine, name + QLatin1Char(' ') + QString::number(s + 1),
+                                               ENGINE_LAB_STEP_PATH, labSceneValues(key, colour, s, 0));
+                    if (st != nullptr)
+                        fids.append(st->id());
+                }
+                if (fids.count() != steps)
+                    continue;
+                const uint dur = slow ? 2000 : 1000;     // beats x 1000: one beat a step, or two
+                Chaser *chaser = qobject_cast<Chaser *>(mine.value(name));
+                if (chaser == nullptr)
+                {
+                    chaser = new Chaser(m_doc);
+                    chaser->setName(name);
+                    chaser->setPath(ENGINE_LAB_PATH);
+                    chaser->setTempoType(Function::Beats);
+                    chaser->setRunOrder(Function::Loop);
+                    chaser->setFadeInMode(Chaser::Common);
+                    chaser->setFadeOutMode(Chaser::Common);
+                    chaser->setDurationMode(Chaser::Common);
+                    chaser->setFadeInSpeed(0);
+                    chaser->setFadeOutSpeed(0);
+                    chaser->setDuration(dur);
+                    foreach (quint32 fid, fids)
+                        chaser->addStep(ChaserStep(fid, 0, dur, 0));
+                    if (m_doc->addFunction(chaser) == false)
+                    {
+                        delete chaser;
+                        continue;
+                    }
+                    mine.insert(name, chaser);
+                }
+                else
+                {
+                    QList<quint32> have;
+                    foreach (const ChaserStep &cs, chaser->steps())
+                        have.append(cs.fid);
+                    if (have != fids)
+                    {
+                        while (chaser->stepsCount() > 0)
+                            chaser->removeStep(0);
+                        foreach (quint32 fid, fids)
+                            chaser->addStep(ChaserStep(fid, 0, dur, 0));
+                    }
+                    if (chaser->duration() != dur)
+                        chaser->setDuration(dur);
+                    if (chaser->isVisible() == false)
+                        chaser->setVisible(true);
+                }
+                made = chaser;
+            }
+            if (made != nullptr)
+            {
+                m_labLive.insert(made->id());
+                m_labFuncKey.insert(made->id(), key);
+                bases.insert(key.section(QLatin1Char('/'), 0, 0));
+            }
+        }
+    }
+    // R410_LAB_ONLY: with enough of his own, the laser plays his kept looks
+    // and no longer borrows the busking scenes (motionFor)
+    if (bases.count() >= ENGINE_LAB_ONLY)
+        m_labOnlyGroups.insert(m_labGroup);
+    emit labChanged();                   // the SETUP tile: there is a laser for the lab
+}
+
+void TrackEngine::labApplyTags()
+{
+    // after the roles: what he said, over what the names would say
+    for (QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.begin(); it != m_funcs.end(); ++it)
+    {
+        TrackFuncInfo &info = it.value();
+        QHash<quint32, QString>::const_iterator kc = m_labFuncKey.constFind(info.id);
+        if (kc == m_labFuncKey.constEnd())
+            continue;
+        const QJsonObject o = m_labStore.value(kc.value()).toObject();
+        info.lab = true;
+        info.guess = ENGINE_ROLE_MOTION;
+        info.role = ENGINE_ROLE_MOTION;
+        info.tier = engineLabTier(o.value(QStringLiteral("sec")).toArray());
+        const int st = o.value(QStringLiteral("st")).toInt(0);
+        info.stars = info.starsGuess = st > 0 ? qBound(1, st, 3) : 1;   // a plain GOOD: anywhere, one star
+        engineLabWindow(o.value(QStringLiteral("en")).toArray(), info.labMin, info.labMax);
+        info.labCalm = o.value(QStringLiteral("ch")).toArray().contains(QJsonValue(QStringLiteral("calm")));
+    }
 }
