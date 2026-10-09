@@ -19174,7 +19174,10 @@ bool TrackEngine::labOpen()
     m_cast.remove(m_labGroup);
     m_position.remove(m_labGroup);
     m_labActive = true;
-    m_labDark = false;
+    // R411_OPEN_DARK (Tobias 10-09: "Ja lav en play knap"): the lab opens with
+    // the laser dark - ▶ PLAY lights it, and nothing else does (STOP and TOO
+    // LOW put it back to dark the same way)
+    m_labDark = true;
     m_labHold = false;
     m_labTrySlow = false;
     if (m_labColours.contains(m_labColour) == false)
@@ -19196,6 +19199,7 @@ bool TrackEngine::labOpen()
     }
     m_labIndex = qMax(0, at);
     m_report = tr("LASER LAB");
+    m_labMessage = tr("The laser is dark - \u25b6 PLAY lights it");
     logSignal(QStringLiteral("sig:lab-open"));
     emit liveChanged();
     labShowCandidate();
@@ -19257,12 +19261,11 @@ void TrackEngine::labSetPass(int pass)
             }
         }
     }
-    m_labDark = false;
-    m_labTrySlow = false;
+    m_labTrySlow = false;              // R411_OPEN_DARK: the dark stays until PLAY
     m_labMessage = m_labList.isEmpty()
                        ? (pass == 1 ? tr("No kept looks yet - keep some in the ATLAS first")
                                     : tr("Nothing kept yet"))
-                       : QString();
+                       : (m_labDark ? tr("The laser is dark - \u25b6 PLAY lights it") : QString());
     labShowCandidate();
 }
 
@@ -19271,9 +19274,8 @@ void TrackEngine::labGoto(int index)
     if (m_labActive == false || m_labList.isEmpty())
         return;
     m_labIndex = qBound(0, index, int(m_labList.count()) - 1);
-    m_labDark = false;
-    m_labTrySlow = false;
-    m_labMessage.clear();
+    m_labTrySlow = false;              // R411_OPEN_DARK: the dark stays until PLAY
+    m_labMessage = m_labDark ? tr("The laser is dark - \u25b6 PLAY lights it") : QString();
     labShowCandidate();
 }
 
@@ -19332,7 +19334,6 @@ void TrackEngine::labDecide(int verdict)
     labRefresh();
     if (m_labPass == 2)
     {
-        m_labDark = false;
         m_labTrySlow = false;
         labShowCandidate();
         return;
@@ -19450,8 +19451,8 @@ void TrackEngine::labStop()
 {
     if (m_labActive == false)
         return;
-    m_labDark = !m_labDark;
-    m_labMessage = m_labDark ? tr("Stopped - the laser is dark") : QString();
+    m_labDark = !m_labDark;                // STOP, and R411_OPEN_DARK's PLAY
+    m_labMessage = m_labDark ? tr("Stopped - \u25b6 PLAY lights it again") : QString();
     labRestartTimers();
     labShow();
     emit labChanged();
@@ -19478,7 +19479,14 @@ void TrackEngine::labBan()
         labSave();
         logSignal(QStringLiteral("sig:lab-ban:") + key);
     }
-    m_labMessage = tr("Never in the show. The laser is dark - NEXT goes on.");
+    // R411_OPEN_DARK: on to the next one, still dark - PLAY lights it
+    labRefresh();
+    if (m_labIndex + 1 < m_labList.count())
+        m_labIndex++;
+    m_labBeat = 0;
+    m_labBeatsShown = 0;
+    labRestartTimers();
+    m_labMessage = tr("Never in the show. The laser is dark - \u25b6 PLAY goes on with the next.");
     emit labChanged();
 }
 
