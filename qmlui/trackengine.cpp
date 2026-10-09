@@ -16821,6 +16821,7 @@ void TrackEngine::setStartScene(bool on, bool keepTiles)
     if (on == m_startScene)
         return;
     m_startScene = on;
+    logSignal(on ? QStringLiteral("sig:start-scene-on") : QStringLiteral("sig:start-scene-off"));   // R412_LOG
     if (on)
     {
         m_startWatchCount = 0;               // runde 345: the watchdog is armed again
@@ -17544,6 +17545,31 @@ void TrackEngine::idle()
 
     QList<TrackFuncInfo *> list = candidates(ENGINE_ROLE_IDLE, QString());
     QString base = baseGroup();
+    // R412_NO_START_IN_SHOW (Tobias 10-09, live: "Start lyset gaar hele tiden i
+    // gang under showet, faa det fixet!!!"). idle() runs on every deck stop
+    // that lasts its grace, four seconds into a quiet link and when BLT
+    // leaves - and it put the START scene up, every time. The start scene is
+    // ENERGY 0's and its tile's (runde 379). With the show's base lit, the
+    // base holds - colour, dimmers and its figure - and nothing else comes on.
+    // Cold (nothing lit yet) the start scene as before: never a dark room.
+    bool showHold = false;
+    if (base.isEmpty() == false && m_groupOff.contains(base) == false && list.isEmpty() == false)
+    {
+        for (QMap<QString, quint32>::const_iterator it = m_active.constBegin(); it != m_active.constEnd(); ++it)
+        {
+            if (slotGroup(it.key()) == base && it.key().startsWith(QStringLiteral("idle:")) == false)
+            {
+                showHold = true;
+                break;
+            }
+        }
+    }
+    if (showHold)
+    {
+        if (m_lastState.isEmpty() == false)
+            logSignal(QStringLiteral("sig:idle-hold"));      // R412_LOG
+        list.clear();
+    }
     // no start scene: the base stands in its colour, still and dimmed - a
     // pause between tracks is not a blackout in a restaurant
     bool holdBase = list.isEmpty() && base.isEmpty() == false && m_groupOff.contains(base) == false;
@@ -17613,6 +17639,9 @@ void TrackEngine::idle()
             && m_funcs.value(m_active.value(slot)).generated)
             continue;
         if (holdBase && (slot == "col:" + base || slot.startsWith("dim:" + base + "#")))
+            continue;
+        // R412_NO_START_IN_SHOW: ... and in a show its colour layer and figure too
+        if (showHold && (slot == "colx:" + base || slot == "mot:" + base))
             continue;
         // an operator's aim stopped here is an aim nobody holds any more: the
         // tilt stays wherever the scene left it. Forgotten, so the first aim
