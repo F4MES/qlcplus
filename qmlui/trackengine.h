@@ -58,6 +58,7 @@
 #include <QByteArray>
 #include <QMap>
 #include <QSet>
+#include <QJsonObject>       // R410_LAB: the lab's store
 
 class Function;
 class Fixture;
@@ -186,6 +187,12 @@ struct TrackFuncInfo
     qreal beats = 0.0;        // ... or in beats, when the chaser runs in Beats tempo
     bool oneShot = false;     // runs once and stops: retriggered on the beat
     bool generated = false;   // made by the engine (a palette colour the group lacked)
+    // R410_LAB: a LASER LAB look (AUTO Programs/Laser Lab) and what the
+    // operator said about it - the ENERGY window it may run in, CALM
+    bool lab = false;
+    bool labCalm = false;
+    qreal labMin = 0.0;
+    qreal labMax = 1.0;
     int stars = 0;            // energy 1..3: when this may run (0 = not applicable)
     int starsGuess = 0;       // what the engine would say, from tempo and name
     int fixtureCount = 0;     // how many fixtures it touches - a full look beats a part
@@ -441,6 +448,41 @@ class TrackEngine : public QObject
     /** SETUP > SELF TEST is running: every group's colour scenes, 2 s each. */
     Q_PROPERTY(bool testing READ testing NOTIFY liveChanged)
 
+    /** R410_LAB: SETUP > LASER LAB (runde 410) - the animation laser's looks
+     *  one by one: ATLAS (pass 0), VARIANTS (1), APPROVED (2). */
+    Q_PROPERTY(bool labAvailable READ labAvailable NOTIFY labChanged)
+    Q_PROPERTY(bool labActive READ labActive NOTIFY labChanged)
+    Q_PROPERTY(QString labGroup READ labGroup NOTIFY labChanged)
+    Q_PROPERTY(int labLampCount READ labLampCount NOTIFY labChanged)
+    Q_PROPERTY(int labPass READ labPass NOTIFY labChanged)
+    Q_PROPERTY(int labIndex READ labIndex NOTIFY labChanged)
+    Q_PROPERTY(int labCount READ labCount NOTIFY labChanged)
+    Q_PROPERTY(QString labKey READ labKey NOTIFY labChanged)
+    Q_PROPERTY(QString labTitle READ labTitle NOTIFY labChanged)
+    Q_PROPERTY(QString labDetail READ labDetail NOTIFY labChanged)
+    Q_PROPERTY(QStringList labLocked READ labLocked NOTIFY labChanged)
+    Q_PROPERTY(QVariantList labStrip READ labStrip NOTIFY labChanged)
+    Q_PROPERTY(int labGood READ labGood NOTIFY labChanged)
+    Q_PROPERTY(int labNo READ labNo NOTIFY labChanged)
+    Q_PROPERTY(int labSame READ labSame NOTIFY labChanged)
+    Q_PROPERTY(int labVerdict READ labVerdict NOTIFY labChanged)
+    Q_PROPERTY(QString labTagTitle READ labTagTitle NOTIFY labChanged)
+    Q_PROPERTY(QStringList labSections READ labSections NOTIFY labChanged)
+    Q_PROPERTY(QStringList labEnergy READ labEnergy NOTIFY labChanged)
+    Q_PROPERTY(QStringList labCharacter READ labCharacter NOTIFY labChanged)
+    Q_PROPERTY(int labStars READ labStars NOTIFY labChanged)
+    Q_PROPERTY(QString labNote READ labNote NOTIFY labChanged)
+    Q_PROPERTY(int labAuto READ labAuto NOTIFY labChanged)
+    Q_PROPERTY(QString labColour READ labColour NOTIFY labChanged)
+    Q_PROPERTY(QStringList labColours READ labColours NOTIFY labChanged)
+    Q_PROPERTY(int labLamps READ labLamps NOTIFY labChanged)
+    Q_PROPERTY(bool labHold READ labHold NOTIFY labChanged)
+    Q_PROPERTY(bool labDark READ labDark NOTIFY labChanged)
+    Q_PROPERTY(bool labSlower READ labSlower NOTIFY labChanged)
+    Q_PROPERTY(int labApprovedCount READ labApprovedCount NOTIFY labChanged)
+    Q_PROPERTY(QVariantList labApprovedList READ labApprovedList NOTIFY labChanged)
+    Q_PROPERTY(QString labMessage READ labMessage NOTIFY labChanged)
+
     Q_PROPERTY(QStringList warnings READ warnings NOTIFY liveChanged)
     Q_PROPERTY(int calmBarsLeft READ calmBarsLeft NOTIFY liveChanged)
     Q_PROPERTY(bool logEnabled READ logEnabled WRITE setLogEnabled NOTIFY tableChanged)
@@ -495,6 +537,66 @@ public:
     Q_INVOKABLE void selfTest();
     bool testing() const;
     void testDark();
+
+    /* ---- R410_LAB: LASER LAB (track_runtime/tracklab.inc.cpp) ---- */
+    /** Opens with SHOW OFF only (the tile asks); false, and the reason in
+     *  the report line, when it cannot. */
+    Q_INVOKABLE bool labOpen();
+    Q_INVOKABLE void labClose();
+    Q_INVOKABLE void labSetPass(int pass);
+    Q_INVOKABLE void labNext();
+    Q_INVOKABLE void labBack();
+    Q_INVOKABLE void labGoto(int index);
+    /** 1 GOOD, -1 NO, 2 SAME AS LAST (the atlas only) */
+    Q_INVOKABLE void labDecide(int verdict);
+    /** kind "sec" (break groove build drop any), "en" (low mid high top),
+     *  "ch" (calm busy hard wide tight) - for the look just kept */
+    Q_INVOKABLE void labToggleTag(const QString &kind, const QString &tag);
+    Q_INVOKABLE void labSetStars(int stars);
+    Q_INVOKABLE void labSetNote(const QString &note);
+    /** 0 off, 1 two seconds, 2 four seconds, 3 eight beats */
+    Q_INVOKABLE void labSetAuto(int mode);
+    Q_INVOKABLE void labSetColour(const QString &colour);
+    /** 0 both, 1 the first by address, 2 the last */
+    Q_INVOKABLE void labSetLamps(int lamps);
+    Q_INVOKABLE void labToggleHold();
+    Q_INVOKABLE void labToggleSlower();
+    Q_INVOKABLE void labStop();
+    /** TOO LOW / AUDIENCE: dark at once, filed as never */
+    Q_INVOKABLE void labBan();
+    Q_INVOKABLE void labRemove(const QString &key);
+    bool labAvailable() const;
+    bool labActive() const { return m_labActive; }
+    QString labGroup() const { return m_labGroup; }
+    int labLampCount() const { return int(m_labFixtures.count()); }
+    int labPass() const { return m_labPass; }
+    int labIndex() const { return m_labIndex; }
+    int labCount() const { return int(m_labList.count()); }
+    QString labKey() const { return labCurrentKey(); }
+    QString labTitle() const;
+    QString labDetail() const;
+    QStringList labLocked() const;
+    QVariantList labStrip() const;
+    int labGood() const { return labCountOf(1); }
+    int labNo() const { return labCountOf(-1); }
+    int labSame() const { return labCountOf(2); }
+    int labVerdict() const { return labVerdictOf(labCurrentKey()); }
+    QString labTagTitle() const;
+    QStringList labSections() const;
+    QStringList labEnergy() const;
+    QStringList labCharacter() const;
+    int labStars() const;
+    QString labNote() const;
+    int labAuto() const { return m_labAuto; }
+    QString labColour() const { return m_labColour; }
+    QStringList labColours() const { return m_labColours; }
+    int labLamps() const { return m_labLamps; }
+    bool labHold() const { return m_labHold; }
+    bool labDark() const { return m_labDark; }
+    bool labSlower() const;
+    int labApprovedCount() const;
+    QVariantList labApprovedList() const;
+    QString labMessage() const { return m_labMessage; }
     /** kill a pending or running bar echo - AUTO off, blackout, a new track */
     void stopEcho();
 
@@ -753,6 +855,7 @@ public:
 signals:
     void tableChanged();
     void liveChanged();
+    void labChanged();                   // R410_LAB
     /** a colour tile was pressed but the colour cannot be used (not in the
      *  palette any more, banned): the tile blinks (runde 313, B27/Tobias) */
     void colourRejected(const QString &colour);
@@ -1354,6 +1457,66 @@ private:
     int m_dropGrowAt = -1;
     int m_dropLine = -1;                 // R367_GROW_TRACK: the TRACK beat the drop arrived on (never moved by a jump)
     int m_dropGrowLine = -1;             // ... and the track line the growth was last measured on
+    // ---- R410_LAB: LASER LAB (track_runtime/tracklab.inc.cpp) ----
+    void labLoad();
+    void labSave();
+    void labScan();
+    bool labReady() const;
+    QHash<QString, int> labValues(const QString &key, int step) const;
+    QList<SceneValue> labSceneValues(const QString &key, const QString &colour, int step, int lamps) const;
+    QStringList labList(int pass) const;
+    QString labCurrentKey() const;
+    void labRefresh();
+    int labOrdinal(const QString &key) const;
+    QString labRange(const QString &key) const;
+    QString labTitleOf(const QString &key) const;
+    QString labDetailOf(const QString &key) const;
+    QString labTagKey() const;
+    QStringList labTagList(const QString &kind) const;
+    int labVerdictOf(const QString &key) const;
+    int labCountOf(int verdict) const;
+    void labShow();
+    void labShowCandidate();
+    void labRestartTimers();
+    void labStepTick();
+    void labAutoTick();
+    void labShutdown(bool rebuildNow);
+    Scene *labUpsertScene(QHash<QString, Function *> &mine, const QString &name,
+                          const QString &path, const QList<SceneValue> &values);
+    void labEnsureShow();
+    void labApplyTags();
+    bool m_labActive = false;
+    bool m_labLoaded = false;
+    bool m_labWired = false;
+    bool m_labDark = false;              // STOP / TOO LOW: the lab holds the laser dark
+    bool m_labHold = false;              // HOLD: no auto-play
+    bool m_labTrySlow = false;           // TRY SLOWER on the variant playing
+    bool m_labShowDirty = false;         // a kept look changed: rebuild on close
+    int m_labPass = 0;
+    int m_labIndex = 0;
+    int m_labAuto = 0;
+    int m_labLamps = 0;
+    int m_labBeat = 0;
+    int m_labBeatsShown = 0;
+    int m_labSide = 0;
+    quint32 m_labScene[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu };   // the A/B preview scenes
+    QString m_labColour = QStringLiteral("white");
+    QString m_labGroup;
+    QString m_labMessage;
+    QString m_labResumeKey;
+    QString m_labLastGood;
+    QStringList m_labList;
+    QStringList m_labColours;
+    QList<quint32> m_labFixtures;        // in address order
+    QHash<quint32, QHash<QString, quint32> > m_labChan;   // fixture -> role -> channel
+    QHash<QString, int> m_labBase;       // role -> the operator's most common value
+    QHash<QString, int> m_labColourValue;
+    QJsonObject m_labStore;              // key -> { v, sec, en, ch, st, note, slow, ban, t }
+    QTimer m_labAutoTimer;
+    QTimer m_labStepTimer;
+    QSet<quint32> m_labLive;             // this build's kept looks
+    QHash<quint32, QString> m_labFuncKey;
+    QSet<QString> m_labOnlyGroups;       // R410_LAB_ONLY
     QTimer m_testTimer;                    // SELF TEST: one colour scene every 2 s
     QList<quint32> m_testSteps;            // the scenes it walks through
     QStringList m_testGroups;              // ... and the group each belongs to
