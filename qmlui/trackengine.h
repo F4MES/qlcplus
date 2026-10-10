@@ -1128,6 +1128,8 @@ private:
     qreal m_layerRate = 0.0;               // steps per beat, this beat
     int m_layerBeat = -1;
     int m_layerLeadAge = 0;                // beats since the lead (lasers, accent) last turned
+    bool m_layerFirst = false;             // R419_FIRST_STEP: a FADE/CHASE press not yet answered
+    qreal m_layerFirstFrom = -1.0;         // R419_FIRST_STEP: the step it was pressed on
     QString m_layerBaseKey;
     QSet<QString> m_layerOwned;            // groups the layer painted this beat
     QHash<QString, qreal> m_layerLevel;    // their colour scenes' level (a scene with a dimmer)
