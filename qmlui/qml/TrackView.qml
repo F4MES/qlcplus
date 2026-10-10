@@ -2279,6 +2279,8 @@ Rectangle
                 // BLACKOUT and FLASH WHITE share the last three rows: one and a half
                 // each - FLASH "lidt mindre" (runde 389), BLACKOUT a bigger target
                 readonly property real bigH: (3 * trackViewRoot.rowH + trackViewRoot.g) / 2
+                // R420_STUTTER_TILE: BLACKOUT | STUTTER share BLACKOUT's row
+                readonly property real halfW: (inW - trackViewRoot.g) / 2
 
                 Btn
                 {
@@ -2317,7 +2319,7 @@ Rectangle
                     objectName: "blackout"
                     property bool armed: false          // this press is the one holding it
                     property bool on: trackEngine ? trackEngine.blackout : false
-                    x: liveCard.inX; y: deck.rowY(3); width: liveCard.inW; height: liveCard.bigH
+                    x: liveCard.inX; y: deck.rowY(3); width: liveCard.halfW; height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#B03030" : (boIn.down ? "#1A1A1F" : "#0A0A0C")
                     Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 120 } }     // R402_FADE
@@ -2359,6 +2361,117 @@ Rectangle
                         {
                             if (blackoutTile.armed && trackEngine) trackEngine.blackout = false
                             blackoutTile.armed = false
+                        }
+                    }
+                }
+
+                // R420_STUTTER_TILE (Tobias 10-10, mockup A: "der skal vaere mulighed
+                // for at holde knappen nede ligesom blackout, hvor man slider fingeren
+                // vaek og den saa holder sig selv nede"): held = dark on every 1/4,
+                // 1/8 or 1/16; slid off = latched; a tap on a latched one lets it go.
+                // The chips choose the rate (it stays, also while it runs).
+                Rectangle
+                {
+                    id: stutterTile
+                    objectName: "stutter"
+                    property bool armed: false          // this press is the one holding it
+                    property bool on: trackEngine ? trackEngine.stutter : false
+                    readonly property int rate: trackEngine ? trackEngine.stutterRate : 2
+                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(3)
+                    width: liveCard.halfW; height: liveCard.bigH
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: on ? "#E0A030" : (stIn.down ? "#1A1A1F" : "#0A0A0C")
+                    Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 120 } }     // R402_FADE
+                    scale: stIn.down ? 0.975 : 1.0                                                           // R402_PRESS
+                    Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
+                    readonly property real chipH: Math.round(30 * trackViewRoot.ks)
+                    readonly property real pad: Math.round(8 * trackViewRoot.ks)
+                    Column
+                    {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.verticalCenterOffset: -(stutterTile.chipH + stutterTile.pad) / 2
+                        spacing: Math.round(4 * trackViewRoot.ks)
+                        Row
+                        {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: Math.round(4 * trackViewRoot.ks)
+                            Repeater
+                            {
+                                model: 4
+                                Rectangle
+                                {
+                                    width: Math.round(4 * trackViewRoot.ks); height: Math.round(16 * trackViewRoot.ks); radius: 1
+                                    color: stutterTile.on ? "#101010" : "#D6D6DC"
+                                    opacity: index % 2 ? 0.35 : 1
+                                }
+                            }
+                        }
+                        Text
+                        {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: qsTr("STUTTER")
+                            color: stutterTile.on ? "#101010" : "#D6D6DC"
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(14)
+                            font.letterSpacing: (trackViewRoot.fs(14)) * 0.1
+                        }
+                    }
+                    TouchInput
+                    {
+                        id: stIn
+                        onPressedAt: (x, y) =>
+                        {
+                            if (!trackEngine) return
+                            if (trackEngine.stutter) { trackEngine.stutter = false; stutterTile.armed = false }
+                            else { trackEngine.stutter = true; stutterTile.armed = true }
+                        }
+                        onReleasedAt: (x, y, inside) =>
+                        {
+                            if (!trackEngine || !stutterTile.armed) return
+                            stutterTile.armed = false
+                            // released ON the button: a momentary hold, let go; off it: latched
+                            if (inside) trackEngine.stutter = false
+                        }
+                        onCanceled:
+                        {
+                            if (stutterTile.armed && trackEngine) trackEngine.stutter = false
+                            stutterTile.armed = false
+                        }
+                    }
+                    // the rate: over the hold area, each chip its own finger
+                    Row
+                    {
+                        id: stutterChips
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: stutterTile.pad
+                        spacing: Math.round(6 * trackViewRoot.ks)
+                        Repeater
+                        {
+                            model: [ { r: 1, t: "1/4" }, { r: 2, t: "1/8" }, { r: 3, t: "1/16" } ]
+                            Rectangle
+                            {
+                                objectName: "stutterRate:" + modelData.r
+                                readonly property bool picked: stutterTile.rate === modelData.r
+                                width: Math.floor((stutterTile.width - 2 * stutterTile.pad - 2 * stutterChips.spacing) / 3)
+                                height: stutterTile.chipH
+                                radius: Math.round(6 * trackViewRoot.ks)
+                                color: picked ? (stutterTile.on ? "#101010" : "#E0A030")
+                                              : (stutterTile.on ? Qt.rgba(0, 0, 0, 0.18) : "#26262E")
+                                Text
+                                {
+                                    anchors.centerIn: parent
+                                    text: modelData.t
+                                    font.bold: true
+                                    font.pixelSize: trackViewRoot.fs(12)
+                                    color: parent.picked ? (stutterTile.on ? "#E0A030" : "#101010")
+                                                         : (stutterTile.on ? "#101010" : "#9A9AA4")
+                                }
+                                TouchInput
+                                {
+                                    onPressedAt: (x, y) => { if (trackEngine) trackEngine.stutterRate = modelData.r }
+                                }
+                            }
                         }
                     }
                 }
@@ -2666,7 +2779,7 @@ Rectangle
                 { y: 0, h: 1, b: "<b>NEXT LOOK</b> - a new look now." },
                 { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
                 { y: 2, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
-                { y: 3, h: 2, b: "<b>BLACKOUT</b> - dark while held. Slide off before letting go to lock it; tap to release." },
+                { y: 3, h: 2, b: "<b>BLACKOUT</b> - dark while held.  <b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 of the beat while held. Both: slide off before letting go to lock; tap to release." },
                 { y: 4, h: 2, b: "<b>FLASH WHITE</b> - white while held." }
             ]
             HelpText

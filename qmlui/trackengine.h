@@ -96,6 +96,7 @@ class QRandomGenerator;
 // runde 211 (Tobias): the closing sequence - the last five minutes to closing
 // time bring the room down to dark, and the hazer off - can be switched off
 #define SETTINGS_ENGINE_CLOSING   QStringLiteral("trackengine/closing")
+#define SETTINGS_ENGINE_STUTTER   QStringLiteral("trackengine/stutterRate")   // R420_STUTTER
 #define ENGINE_CLOSING_SECS       300
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 // The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
@@ -441,6 +442,9 @@ class TrackEngine : public QObject
      *  the engine keeps following the track underneath, so releasing it
      *  lands on the right look. A toggle, not a hold. */
     Q_PROPERTY(bool blackout READ blackout WRITE setBlackout NOTIFY liveChanged)
+    // R420_STUTTER: held = dark on every 1/4 (1), 1/8 (2) or 1/16 (3) of the beat
+    Q_PROPERTY(bool stutter READ stutter WRITE setStutter NOTIFY liveChanged)
+    Q_PROPERTY(int stutterRate READ stutterRate WRITE setStutterRate NOTIFY liveChanged)
     /** Two decks on air (from BLT): a transition. The colour holds and the
      *  engine stays at groove level until the outgoing track is gone. */
     Q_PROPERTY(bool mixing READ mixing NOTIFY liveChanged)
@@ -654,6 +658,10 @@ public:
     Q_INVOKABLE void setFlash(bool pressed);
     bool blackout() const;
     void setBlackout(bool on);
+    bool stutter() const { return m_stutter; }          // R420_STUTTER
+    void setStutter(bool on);
+    int stutterRate() const { return m_stutterRate; }
+    void setStutterRate(int rate);
     bool mixing() const;
     void setMixing(bool on);
     /** Every trackengine/ and trackmanager/ setting to and from
@@ -1365,6 +1373,11 @@ private:
     bool m_silenceDark = false;
     QTimer m_chopTimer;
     QVector<QPair<qint64, qint64> > m_chopPlan;
+    // R420_STUTTER: the operator's stutter - its own stabs beside the chop's
+    bool m_stutter = false;
+    int m_stutterRate = 2;                 // 1 = 1/4, 2 = 1/8, 3 = 1/16
+    QVector<QPair<qint64, qint64> > m_stutterPlan;
+    void planStutter();
     QString m_musicDarkEvent;
     // ---- runde 357 ----
     QVector<QPair<int, int> > m_fills;   // R357_FILLS

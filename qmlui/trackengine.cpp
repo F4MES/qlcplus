@@ -289,6 +289,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
     m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
+    m_stutterRate = qBound(1, settings.value(SETTINGS_ENGINE_STUTTER, 2).toInt(), 3);   // R420_STUTTER
     // runde 184: ENERGY by clock and the group faders come back after a
     // restart - the same night only. A new evening starts as it always has:
     // the clock on and every group at 100 % - the strobes at 50 % (R418_STROBE_HALF).
@@ -3770,6 +3771,7 @@ void TrackEngine::clearMusicDark()
     m_pumpNow = -1.0;                    // runde 359
     m_density = 0;
     m_chopPlan.clear();
+    m_stutterPlan.clear();               // R420_STUTTER
     m_chopTimer.stop();
     m_silenceDark = false;
     m_musicDarkEvent.clear();
@@ -3786,6 +3788,16 @@ void TrackEngine::slotChopTimer()
     bool inStab = false;
     qint64 next = -1;
     for (const QPair<qint64, qint64> &w : std::as_const(m_chopPlan))
+    {
+        if (now >= w.first && now < w.second)
+            inStab = true;
+        if (w.first > now && (next < 0 || w.first < next))
+            next = w.first;
+        if (w.second > now && (next < 0 || w.second < next))
+            next = w.second;
+    }
+    // R420_STUTTER: the operator's stabs, as the chop's
+    for (const QPair<qint64, qint64> &w : std::as_const(m_stutterPlan))
     {
         if (now >= w.first && now < w.second)
             inStab = true;
@@ -6194,6 +6206,58 @@ void TrackEngine::setBlackout(bool on)
             func->adjustAttribute(m_blackout ? 0.0 : m_fadeLevel.value(fid, 0.0), m_fadeAttr.value(fid));
     }
     emit liveChanged();
+}
+
+// R420_STUTTER (Tobias 10-10: "Lav stutter knap" - mockup A, held or latched as
+// BLACKOUT). On 9/10 he stuttered BLACKOUT by hand 2,761 times: mostly on the
+// eighths, then the beat and the sixteenths, 50-150 ms dark. Held, the room is
+// dark for a stab at the end of every 1/4, 1/8 or 1/16 of the beat - the build
+// chop's stabs (runde 356) - and lit between. BLACKOUT and FLASH win over it.
+void TrackEngine::setStutter(bool on)
+{
+    if (on == m_stutter)
+        return;
+    m_stutter = on;
+    logSignal(on ? QStringLiteral("sig:stutter:") + QString::number(m_stutterRate)
+                 : QStringLiteral("sig:stutter-off"));
+    planStutter();
+    slotChopTimer();                     // dark now if a stab is due, lit when it ends
+    emit liveChanged();
+}
+
+void TrackEngine::setStutterRate(int rate)
+{
+    rate = qBound(1, rate, 3);
+    if (rate == m_stutterRate)
+        return;
+    m_stutterRate = rate;
+    QSettings().setValue(SETTINGS_ENGINE_STUTTER, rate);
+    logSignal(QStringLiteral("sig:stutter-rate:") + QString::number(rate));
+    if (m_stutter)
+    {
+        planStutter();
+        slotChopTimer();
+    }
+    emit liveChanged();
+}
+
+void TrackEngine::planStutter()
+{
+    // this beat and the next: a beat that comes late leaves no gap, an early
+    // one plans again (tick())
+    m_stutterPlan.clear();
+    if (m_stutter == false || m_beatMs <= 0.0 || m_blackout || m_startScene)
+        return;
+    const qreal bm = m_beatMs;
+    const int parts = m_stutterRate == 3 ? 4 : m_stutterRate == 2 ? 2 : 1;
+    const qint64 stab = qint64(m_stutterRate == 3 ? qBound(35.0, 0.10 * bm, 55.0)
+                             : m_stutterRate == 2 ? qBound(50.0, 0.18 * bm, 90.0)
+                                                  : qBound(70.0, 0.25 * bm, 130.0));
+    for (int k = 1; k <= 2 * parts; k++)
+    {
+        const qint64 edge = m_beatStartMs + qint64(bm * k / parts);
+        m_stutterPlan.append(qMakePair(edge - stab, edge));
+    }
 }
 
 bool TrackEngine::mixing() const { return m_mixing; }
@@ -13322,6 +13386,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                  + (chop == 3 ? QStringLiteral("chop/16")
                                  : chop == 2 ? QStringLiteral("chop/8") : QStringLiteral("chop/4"));
         }
+        planStutter();                   // R420_STUTTER: on this beat's grid
         slotChopTimer();                 // and the dark for this beat, now
     }
     // R358_REPEAT: what the first drop / build looked like, over its first
@@ -17118,6 +17183,7 @@ QByteArray TrackEngine::logSettings() const
     live.insert("speed", m_speed);
     live.insert("hold", m_hold);
     live.insert("blackout", m_blackout);
+    live.insert("stutter", m_stutter);                                             // R420_STUTTER
     live.insert("accent", m_accent);
     live.insert("colourOverride", m_override);
     live.insert("colourOverrides", QJsonArray::fromStringList(m_overrideSet));   // runde 304
@@ -17349,6 +17415,7 @@ void TrackEngine::release()
     // and the flag with them, or the next tick() would put the masks straight
     // back and the Track page would still show BLACKOUT lit
     m_blackout = false;
+    m_stutter = false;                   // R420_STUTTER: and a latched STUTTER
     clearMusicDark();                    // runde 356
     m_pulseDepth.clear();
     m_breathe.clear();
