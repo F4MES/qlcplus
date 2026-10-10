@@ -291,7 +291,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
     // runde 184: ENERGY by clock and the group faders come back after a
     // restart - the same night only. A new evening starts as it always has:
-    // the clock on and every group at 100 %.
+    // the clock on and every group at 100 % - the strobes at 50 % (R418_STROBE_HALF).
     if (settings.value(SETTINGS_ENGINE_NIGHT).toString() == nightKey())
     {
         m_roomAuto = false;              // R378_ROOM_OFF (Tobias 10-06): off at every start-up - only its AUTO tile turns it on
@@ -1126,6 +1126,16 @@ void TrackEngine::ensureTable()
                 return fa->universe() < fb->universe();
             return fa->address() != fb->address() ? fa->address() < fb->address() : a < b;
         });
+    }
+
+    // R418_STROBE_HALF (Tobias 10-10): the strobe groups start the night at
+    // 50 % - on 9/10 their fader was pulled to about half 411 times. Only an
+    // untouched fader: a value he set (100 % too) stays, and the same night's
+    // faders come back after a restart (runde 184). It is a start, not a cap.
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_groups.value(key).strobes && m_groupTrim.contains(key) == false)
+            m_groupTrim.insert(key, 0.5);
     }
 
     // R410_LAB: the looks kept in LASER LAB, written into the show before the
