@@ -9866,6 +9866,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (m_lookActive.isEmpty() == false && (isDrop || isBuild) && effects < energyTop)
         effects++;                       // R358_REPEAT: the repeat is one step up - one group more
     effects = qBound(0, effects, isBreak ? 1 : (isDrop || preDrop ? 4 : 3));
+    // R422_MAX_THREE (Tobias 10-10: "der aldrig maa vaere mere end 3 typer lamper
+    // taendt samtidigt (inkl. basen)"): two groups beside the base at most
+    if (base.isEmpty() == false)
+        effects = qMin(effects, 2);
     if (base.isEmpty())
         effects = qMax(effects, 1);                 // no base: something must show
 
@@ -9877,7 +9881,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (beatInBar == 0 || sectionChanged)
     {
         m_strobesPooled = fader >= ENGINE_STROBE_ON;
-        m_oneLaser = fader < 0.85;
+        m_oneLaser = true;               // R422_ONE_LASER (Tobias 10-10): never both laser types - the line was 0.85
         m_aniPooled = fader >= ENGINE_ANI_ON;          // runde 344
     }
     QStringList pool;
@@ -10114,6 +10118,27 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 heldAni = heldAni || hg.patternDevice;
             }
         }
+    }
+
+    // R422_MAX_THREE: whatever put them there (HOLD's frozen cast, a break's
+    // other washes beside the budget), never more than three types: the base
+    // (or the bars alone) first, then the room's own order
+    if (castSet.count() > 3)
+    {
+        QStringList keep;
+        const QString anchor = m_barsAloneNow ? aloneBars : base;
+        if (anchor.isEmpty() == false && castSet.contains(anchor))
+            keep << anchor;
+        QStringList order = priority;
+        foreach (const QString &key, m_groupOrder)
+            if (order.contains(key) == false)
+                order << key;
+        foreach (const QString &key, order)
+            if (keep.count() < 3 && castSet.contains(key) && keep.contains(key) == false)
+                keep << key;
+        castSet.clear();
+        foreach (const QString &key, keep)
+            castSet.insert(key);
     }
 
     // R401_DROP_LEAD: does this drop show the strobes alone beside the base?
@@ -13163,6 +13188,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         break;
                     }
                 }
+                // R422_ECHO: out of the cast, the echo is a fourth type when
+                // three are already lit
+                if (echoKey.isEmpty() == false && castSet.contains(echoKey) == false && castSet.count() >= 3)
+                    echoKey.clear();
                 if (echoKey.isEmpty() == false)
                 {
                     // A CONTRAST THAT GOES WITH THE ROOM, not the opposite. The
