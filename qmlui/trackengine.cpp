@@ -5608,8 +5608,30 @@ void TrackEngine::setColourMode(int mode)
         m_colourMode = mode;
     logSignal(QStringLiteral("sig:colour-mode:")
               + (mode == 1 ? QStringLiteral("fade") : mode == 2 ? QStringLiteral("chase") : QStringLiteral("auto")));
+    // R419_FIRST_STEP (Tobias 10-10, the night 9/10: a press showed nothing for
+    // a whole step - 4-8 beats in a break, 8 s / 32 s on the start scene - and
+    // he pressed again): the press is answered at once, then the slider's pace
+    m_layerFirst = mode != 0;
+    m_layerFirstFrom = -1.0;
+    // ... from the colour showing most: a FADE no longer jumps into the middle
+    // of a blend the CHASE was hiding, and the beat that ends adds nothing
+    m_layerPos = std::floor(m_layerPos + (m_layerStyle == 1 ? 0.5 : 0.0));
+    m_layerRate = 0.0;
     if (m_startScene)
+    {
         startLook();                     // R378_START_LAYER
+        // R419_FIRST_STEP: on the opening picture a CHASE steps now
+        if (m_layerFirst && m_layerStyle == 2)
+        {
+            m_layerPos = std::floor(m_layerPos) + 1.0;
+            m_layerFirst = false;
+            foreach (const QString &key, m_layerOwned)
+            {
+                if (m_active.contains(QStringLiteral("col:") + key))
+                    applyColourLayer(key, true);
+            }
+        }
+    }
     emit liveChanged();
 }
 
@@ -5675,7 +5697,9 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
         m_layerPattern = fader < 0.30 ? 0 : fader < 0.60 ? 1 : 2;
         stepBeats = fader < 0.30 ? 16 : fader < 0.60 ? 4 : fader < 0.75 ? 2 : 1;
     }
-    if (isBreak)
+    // R419_NO_BREAK_HALF: a break halves the engine's own pace only - HIS
+    // FADE/CHASE runs at the slider's pace there too
+    if (isBreak && m_colourMode == 0)
         stepBeats *= 2.0;
     else if (isBuild && prog > 0.5)
         stepBeats = qMax(1.0, stepBeats / 2.0);
@@ -5689,8 +5713,15 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
     // R374_CHASE_KICK: from 60 % a chase steps on the kick - a beat with no
     // kick (a breakdown, a vocal) holds the colours where they are. Not in a
     // build: its chase is the climb, kick or no kick.
-    const bool kickHold = style == 2 && fader >= 0.60 && isBuild == false
+    // R419_HIS_CHASE (Tobias 10-10): ... the engine's own chase (AUTO). A break
+    // has next to no kick: HIS chase stood there 10-12 s until the drop
+    const bool kickHold = style == 2 && m_colourMode == 0 && fader >= 0.60 && isBuild == false
                        && kick >= 0.0 && kick < 0.20;
+    // R419_FIRST_STEP: where the press found the layer
+    if (style == 0)
+        m_layerFirst = false;
+    else if (m_layerFirst && m_layerFirstFrom < 0.0)
+        m_layerFirstFrom = std::floor(m_layerPos);
     if (beat != m_layerBeat)
     {
         // the beat that ended, at the pace it had (a slider move changes the
@@ -5705,8 +5736,20 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
             m_layerPos = std::floor(m_layerPos) + 1.0;
             m_layerLeadAge = 16;
         }
+        // R419_FIRST_STEP: a CHASE press cuts to the next colour on the next beat
+        else if (m_layerFirst && style == 2 && frozen == false)
+        {
+            m_layerPos = std::floor(m_layerPos) + 1.0;
+            m_layerLeadAge = 16;
+            m_layerFirst = false;
+        }
     }
+    if (m_layerFirst && m_layerFirstFrom >= 0.0 && std::floor(m_layerPos) > m_layerFirstFrom)
+        m_layerFirst = false;            // R419_FIRST_STEP: answered
     m_layerRate = frozen ? 0.0 : 1.0 / stepBeats;   // HOLD, CALM, ENERGY 0: the colour stands
+    // R419_FIRST_STEP: a FADE press - the first glide in one bar at most
+    if (m_layerFirst && style == 1 && frozen == false)
+        m_layerRate = qMax(m_layerRate, 0.25);
     if (m_layerPos >= 1000.0 * n)
         m_layerPos -= 1000.0 * n;
     // the lead - the lasers, the accent, the log - is the colour the base
@@ -6001,8 +6044,17 @@ void TrackEngine::slotLayerTimer()
             per *= 2.0;
         else if (m_speed > 0)
             per /= 2.0;
+        // R419_FIRST_STEP: a FADE press glides into the next colour in 4 s
+        if (m_layerFirst && m_layerStyle == 1)
+        {
+            if (m_layerFirstFrom < 0.0)
+                m_layerFirstFrom = std::floor(m_layerPos);
+            per = qMin(per, 4000.0);
+        }
         m_layerPos += qreal(now - m_startLayerMs) / per;
         m_startLayerMs = now;
+        if (m_layerFirst && m_layerFirstFrom >= 0.0 && std::floor(m_layerPos) > m_layerFirstFrom)
+            m_layerFirst = false;
         const int n = int(m_overrideSet.count());
         if (n > 0 && m_layerPos >= 1000.0 * n)
             m_layerPos -= 1000.0 * n;
