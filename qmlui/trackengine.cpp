@@ -5626,9 +5626,15 @@ void TrackEngine::setColourMode(int mode)
     m_layerFirst = mode != 0;
     m_layerFirstFrom = -1.0;
     // ... from the colour showing most: a FADE no longer jumps into the middle
-    // of a blend the CHASE was hiding, and the beat that ends adds nothing
-    m_layerPos = std::floor(m_layerPos + (m_layerStyle == 1 ? 0.5 : 0.0));
-    m_layerRate = 0.0;
+    // of a blend the CHASE was hiding, and the beat that ends adds nothing.
+    // R421_NO_SNAP: only to or from a CHASE - a FADE already gliding (AUTO
+    // with two tiles, the start scene) goes on from where it is, and AUTO
+    // never snaps
+    if (mode != 0 && m_layerStyle != 0 && (mode == 2 || m_layerStyle == 2))
+    {
+        m_layerPos = std::floor(m_layerPos + (m_layerStyle == 1 ? 0.5 : 0.0));
+        m_layerRate = 0.0;
+    }
     if (m_startScene)
     {
         startLook();                     // R378_START_LAYER
@@ -5747,6 +5753,7 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
         {
             m_layerPos = std::floor(m_layerPos) + 1.0;
             m_layerLeadAge = 16;
+            m_layerFirst = false;        // R421_JUMP_ANSWERS: the cut answers a press
         }
         // R419_FIRST_STEP: a CHASE press cuts to the next colour on the next beat
         else if (m_layerFirst && style == 2 && frozen == false)
