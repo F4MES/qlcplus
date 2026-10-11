@@ -48,6 +48,18 @@ void printVersion()
 
 int main(int argc, char *argv[])
 {
+    // R426_QML_GC_FULL: the QML garbage collector runs in one pass, as before
+    // Qt 6.8. Its incremental slices (Qt 6.8+) are the prime suspect for the
+    // rig's crashes in Qt6Qml.dll right after a look change (9 in 3 nights,
+    // same offset). Must be set before the first QML engine exists. An
+    // integer set from outside is kept (QV4_GC_TIMELIMIT=5 = Qt's default).
+    {
+        bool isInt = false;
+        qEnvironmentVariableIntValue("QV4_GC_TIMELIMIT", &isInt);
+        if (isInt == false)
+            qputenv("QV4_GC_TIMELIMIT", "0");
+    }
+
     QApplication app(argc, argv);
 
     // Since Qt6, the default rendering backend is Rhi.
