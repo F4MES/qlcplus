@@ -1675,6 +1675,15 @@ void TrackEngine::noteSectionOverride(const QString &state, const QString &analy
                               : QStringLiteral("sig:section:") + state + QStringLiteral(":was:") + was);
 }
 
+void TrackEngine::noteSectionRelease(const QString &held, const QString &now)
+{
+    // R429_SECTION_ONCE: "sig:section-release:<held>:now:<analysed>" - the music
+    // moved on and let his press go. Its own word, so a night's section-auto
+    // count stays the presses he made.
+    logSignal(QStringLiteral("sig:section-release:") + held + QStringLiteral(":now:")
+              + (now.isEmpty() ? QStringLiteral("-") : now));
+}
+
 void TrackEngine::rememberDropPunch(qreal kick, qreal low)
 {
     // runde 327 (review): the same drop again - a DJ loop over the build/drop

@@ -857,6 +857,9 @@ public:
      *  go: state empty) - a sig: line in the tracklog, so a night's presses
      *  can be read as corrections of the analysis. Log only. */
     void noteSectionOverride(const QString &state, const QString &analysed);
+    /** runde 429: a SECTION press let go by the analysis' next section
+     *  (R429_SECTION_ONCE) - a sig: line, not a press. Log only. */
+    void noteSectionRelease(const QString &held, const QString &now);
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** AUTO switched off: fade everything out over a bar, then let go. */
