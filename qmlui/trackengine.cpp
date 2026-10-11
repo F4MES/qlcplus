@@ -9866,10 +9866,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (m_lookActive.isEmpty() == false && (isDrop || isBuild) && effects < energyTop)
         effects++;                       // R358_REPEAT: the repeat is one step up - one group more
     effects = qBound(0, effects, isBreak ? 1 : (isDrop || preDrop ? 4 : 3));
-    // R422_MAX_THREE (Tobias 10-10: "der aldrig maa vaere mere end 3 typer lamper
-    // taendt samtidigt (inkl. basen)"): two groups beside the base at most
-    if (base.isEmpty() == false)
-        effects = qMin(effects, 2);
     if (base.isEmpty())
         effects = qMax(effects, 1);                 // no base: something must show
 
@@ -10120,26 +10116,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
-    // R422_MAX_THREE: whatever put them there (HOLD's frozen cast, a break's
-    // other washes beside the budget), never more than three types: the base
-    // (or the bars alone) first, then the room's own order
-    if (castSet.count() > 3)
-    {
-        QStringList keep;
-        const QString anchor = m_barsAloneNow ? aloneBars : base;
-        if (anchor.isEmpty() == false && castSet.contains(anchor))
-            keep << anchor;
-        QStringList order = priority;
-        foreach (const QString &key, m_groupOrder)
-            if (order.contains(key) == false)
-                order << key;
-        foreach (const QString &key, order)
-            if (keep.count() < 3 && castSet.contains(key) && keep.contains(key) == false)
-                keep << key;
-        castSet.clear();
-        foreach (const QString &key, keep)
-            castSet.insert(key);
-    }
+    // R424_THREE_BACK (Tobias 10-11): the three-type cap of runde 422 is gone
+    // again - "saet reglen om 3 lamper tilbage". One laser type stays (R422_ONE_LASER).
 
     // R401_DROP_LEAD: does this drop show the strobes alone beside the base?
     if (isDrop)
@@ -13188,10 +13166,6 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         break;
                     }
                 }
-                // R422_ECHO: out of the cast, the echo is a fourth type when
-                // three are already lit
-                if (echoKey.isEmpty() == false && castSet.contains(echoKey) == false && castSet.count() >= 3)
-                    echoKey.clear();
                 if (echoKey.isEmpty() == false)
                 {
                     // A CONTRAST THAT GOES WITH THE ROOM, not the opposite. The
@@ -15672,6 +15646,22 @@ void TrackEngine::calm(int bars)
 
 void TrackEngine::next()
 {
+    // R424_NEXT_RATES (Tobias 10-11: "Naar der bliver trykket next, giver det saa
+    // en lille rating paa looket? Det burde det."). 9/10 + 10/11: 0 thumbs; 10/11 alone 158
+    // NEXT. One small down vote on the look it skips - the unit a plain thumb
+    // down is, a third of an up - filed against the stage as the finger landed,
+    // before the look changes. Nothing between tracks (rate() skips it too).
+    if (m_lastState.isEmpty() == false)
+    {
+        markVerdictPoint();
+        creditVerdict(-1);
+        m_verdictMs = -1;
+    }
+    advanceLook();
+}
+
+void TrackEngine::advanceLook()
+{
     // The strongest free signal there is: whatever was on stage, he did not
     // want it. How long it had been up is in the log already - the beat lines
     // before this one say when funcs last changed.
@@ -16135,7 +16125,7 @@ void TrackEngine::rateGroup(int verdict, const QString &group)
     // for another thirty seconds. The counting above already happened, and it
     // used the snapshot, so changing the look now cannot corrupt the verdict.
     if (verdict < 0)
-        next();
+        advanceLook();           // R424_NEXT_RATES: the aimed verdict above is the one
     // The snapshot has been used. Left valid, a second verdict inside the
     // twenty seconds that did NOT come through onPressed - a script, a
     // future shortcut - would be filed against a stage that is gone.
@@ -16179,6 +16169,15 @@ void TrackEngine::rate(int verdict)
     if (m_lastState.isEmpty())
         return;
 
+    creditVerdict(verdict);
+    if (verdict < 0)
+        advanceLook();             // same reasoning as rateGroup() - its verdict is filed above
+    m_verdictMs = -1;              // used, see rateGroup()
+}
+
+bool TrackEngine::creditVerdict(int verdict)
+{
+    // R424_NEXT_RATES: rate()'s counting, shared with NEXT
     int b = verdictBucket();
     const QMap<QString, quint32> &stage = verdictStage();
     bool touched = rateAutoLook(verdict);
@@ -16209,9 +16208,7 @@ void TrackEngine::rate(int verdict)
         saveRoles();
         emit tableChanged();
     }
-    if (verdict < 0)
-        next();                    // same reasoning as rateGroup()
-    m_verdictMs = -1;              // used, see rateGroup()
+    return touched;
 }
 
 int TrackEngine::room() const { return m_room; }

@@ -695,6 +695,8 @@ public:
     int calmBarsLeft() const;
     /** New colour, new cast, new moves - now. */
     Q_INVOKABLE void next();
+    void advanceLook();                  // R424_NEXT_RATES: NEXT without its verdict (a thumb down's)
+    bool creditVerdict(int verdict);     // R424_NEXT_RATES: the counting rate() always did
 
     /** Called the moment a finger lands on a thumb: freezes what is on stage
      *  so the verdict that follows - however long it takes him to aim it -
