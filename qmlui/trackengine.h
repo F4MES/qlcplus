@@ -1377,7 +1377,7 @@ private:
     QVector<QPair<qint64, qint64> > m_chopPlan;
     // R420_STUTTER: the operator's stutter - its own stabs beside the chop's
     bool m_stutter = false;
-    int m_stutterRate = 2;                 // 1 = 1/4, 2 = 1/8, 3 = 1/16
+    int m_stutterRate = 3;                 // 1 = 1/4, 2 = 1/8, 3 = 1/16 (R427_STUTTER_16: 1/16 as standard)
     QVector<QPair<qint64, qint64> > m_stutterPlan;
     void planStutter();
     QString m_musicDarkEvent;
