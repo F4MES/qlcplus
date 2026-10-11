@@ -18621,9 +18621,8 @@ void TrackEngine::stopAll()
 
 #include <QFile>
 
-#define ENGINE_LAB_G_STEP     4       // Graphic Group: 64 values to look at
 #define ENGINE_LAB_P_STEP     4       // Group Selection under a kept group: 63
-#define ENGINE_LAB_F_STEP     8       // the built-in effects: 31
+#define ENGINE_LAB_F_FIRST    2       // R425_ATLAS: the first built-in effect (CH6 0-1 is nothing)
 #define ENGINE_LAB_ONLY       6       // kept looks before the lab's own replace the borrowed busking scenes
 
 namespace
@@ -18650,21 +18649,78 @@ EngineLabKey engineLabParse(const QString &key)
     k.kind = m.captured(4);
     if (k.a > 255 || k.b > 255 || (k.fx && k.b >= 0))
         return k;
-    static const QStringList kinds = { "", "spin", "turn", "pump", "wave", "draw", "swap" };
+    static const QStringList kinds = { "", "spin", "turn", "pump", "wave", "draw", "swap", "slow", "fast", "zoom" };   // R425_VARIANTS
     k.ok = kinds.contains(k.kind);
     return k;
 }
 
 const QStringList &engineLabKinds()
 {
-    static const QStringList kinds = { "spin", "turn", "pump", "wave", "draw", "swap" };
+    static const QStringList kinds = { "spin", "turn", "pump", "wave", "draw", "swap", "slow", "fast", "zoom" };   // R425_VARIANTS
     return kinds;
+}
+
+// R425_ATLAS: the manual's CH4 groups (175-255 are "reserved for now": empty)
+const QList<int> &engineLabGroups()
+{
+    static const QList<int> g = { 0, 25, 50, 75, 100, 125, 150 };
+    return g;
+}
+
+QString engineLabGroupName(int v)
+{
+    if (v < 25) return QStringLiteral("basic geometric 1");
+    if (v < 50) return QStringLiteral("basic geometric 2");
+    if (v < 75) return QStringLiteral("edge highlight");
+    if (v < 100) return QStringLiteral("punched");
+    if (v < 125) return QStringLiteral("Christmas");
+    if (v < 150) return QStringLiteral("ILDA animation 1");
+    if (v < 175) return QStringLiteral("ILDA animation 2");
+    return QStringLiteral("reserved");
+}
+
+bool engineLabAnimated(bool fx, int a)
+{
+    // the pictures that move by themselves: the built-in effects and the ILDA
+    // animation groups - the ones CH7's speed is for
+    return fx || a >= 125;
+}
+
+// R425_ATLAS: the manual's CH6 - one effect per two values over 2-206, then the
+// random modes (207 line, 217 animation, 227 Christmas, 237 outdoor, 247 all)
+const QList<int> &engineLabEffects()
+{
+    static const QList<int> f = [] {
+        QList<int> out;
+        for (int v = ENGINE_LAB_F_FIRST; v <= 206; v += 2)
+            out << v;
+        out << 207 << 217 << 227 << 237 << 247;
+        return out;
+    }();
+    return f;
+}
+
+int engineLabEffectEnd(int v)
+{
+    if (v <= 206) return qMin(206, v + 1);
+    if (v < 247) return v + 9;
+    return 253;
+}
+
+QString engineLabEffectName(int v)
+{
+    if (v <= 206) return QStringLiteral("effect %1").arg((v - ENGINE_LAB_F_FIRST) / 2 + 1);
+    if (v < 217) return QStringLiteral("line effects, random");
+    if (v < 227) return QStringLiteral("animation effects, random");
+    if (v < 237) return QStringLiteral("Christmas effects, random");
+    if (v < 247) return QStringLiteral("outdoor effects, random");
+    return QStringLiteral("all effects, random");
 }
 
 int engineLabSteps(const QString &kind)
 {
-    if (kind == QStringLiteral("turn") || kind == QStringLiteral("draw"))
-        return 4;
+    if (kind == QStringLiteral("turn"))
+        return 4;                    // R425_VARIANTS: draw is the laser's own drawing now - one scene
     if (kind == QStringLiteral("pump") || kind == QStringLiteral("swap"))
         return 2;
     return 1;
@@ -18681,6 +18737,9 @@ QString engineLabKindWord(const QString &kind)
     if (kind == QStringLiteral("wave")) return QStringLiteral("Ripple");
     if (kind == QStringLiteral("draw")) return QStringLiteral("Draw");
     if (kind == QStringLiteral("swap")) return QStringLiteral("Swap");
+    if (kind == QStringLiteral("slow")) return QStringLiteral("Slow");
+    if (kind == QStringLiteral("fast")) return QStringLiteral("Fast");
+    if (kind == QStringLiteral("zoom")) return QStringLiteral("Zoom");
     return QStringLiteral("Look");
 }
 
@@ -18690,8 +18749,11 @@ QString engineLabKindText(const QString &kind)
     if (kind == QStringLiteral("turn")) return QStringLiteral("a quarter turn on every beat");
     if (kind == QStringLiteral("pump")) return QStringLiteral("size pump on the beat");
     if (kind == QStringLiteral("wave")) return QStringLiteral("with the wave on");
-    if (kind == QStringLiteral("draw")) return QStringLiteral("drawn in, a quarter a beat");
+    if (kind == QStringLiteral("draw")) return QStringLiteral("drawing itself in and out");
     if (kind == QStringLiteral("swap")) return QStringLiteral("the lamps take turns, a beat each");
+    if (kind == QStringLiteral("slow")) return QStringLiteral("slow");
+    if (kind == QStringLiteral("fast")) return QStringLiteral("fast");
+    if (kind == QStringLiteral("zoom")) return QStringLiteral("zooming small to large");
     return QString();
 }
 
@@ -18933,13 +18995,15 @@ void TrackEngine::labScan()
         m_labBase.insert(it.key(), mode(it.value()));
     // the colours: his where his scenes say, else what this laser is known to
     // answer (white 0, red 15, blue 20, cyan 40 - read off PSMAIN 2026-10-09)
-    static const QList<QPair<QString, int> > known = { { "white", 0 }, { "red", 15 }, { "blue", 20 }, { "cyan", 40 } };
+    // R425_GREEN: and green - the manual's CH2 0-69 is white, red, blue, pink,
+    // cyan, yellow, green, ten values each
+    static const QList<QPair<QString, int> > known = { { "white", 0 }, { "red", 15 }, { "blue", 20 }, { "cyan", 40 }, { "green", 65 } };
     for (const QPair<QString, int> &k : known)
     {
         m_labColours.append(k.first);
         m_labColourValue.insert(k.first, colours.contains(k.first) ? mode(colours.value(k.first)) : k.second);
     }
-    static const QStringList others = { "green", "magenta", "yellow", "orange" };
+    static const QStringList others = { "magenta", "yellow", "orange" };
     for (const QString &c : others)
     {
         if (colours.contains(c))
@@ -18995,11 +19059,20 @@ QHash<QString, int> TrackEngine::labValues(const QString &key, int step) const
         else if (k.kind == QStringLiteral("turn"))
             v.insert(QStringLiteral("spin"), (s % 4) * 32);
         else if (k.kind == QStringLiteral("pump"))
+        {
             v.insert(QStringLiteral("size"), (s % 2) == 0 ? 0 : 120);
+            v.insert(QStringLiteral("scale"), 0);        // R425: CH9 0-15 = the size is CH8's
+        }
         else if (k.kind == QStringLiteral("wave"))
             v.insert(QStringLiteral("wave"), 101);
         else if (k.kind == QStringLiteral("draw"))
-            v.insert(QStringLiteral("draw"), (s % 4) * 64);
+            v.insert(QStringLiteral("draw"), 140);       // R425: CH16 128-153 auto drawing (up)
+        else if (k.kind == QStringLiteral("slow"))
+            v.insert(QStringLiteral("fxspeed"), 40);     // R425: CH7 2-255 slow -> fast
+        else if (k.kind == QStringLiteral("fast"))
+            v.insert(QStringLiteral("fxspeed"), 220);
+        else if (k.kind == QStringLiteral("zoom"))
+            v.insert(QStringLiteral("scale"), 40);       // R425: CH9 16-55 small -> large
     }
     foreach (const QString &r, engineLabLocked())
         v.insert(r, m_labBase.value(r, 0));
@@ -19047,12 +19120,13 @@ QStringList TrackEngine::labList(int pass) const
     QStringList out;
     if (pass == 0)
     {
-        for (int g = 0; g <= 255; g += ENGINE_LAB_G_STEP)
+        // R425_ATLAS: the manual's 7 groups and every built-in effect
+        foreach (int g, engineLabGroups())
             out.append(QStringLiteral("G") + QString::number(g));
-        for (int f = ENGINE_LAB_F_STEP; f <= 255; f += ENGINE_LAB_F_STEP)
+        foreach (int f, engineLabEffects())
             out.append(QStringLiteral("F") + QString::number(f));
         // a group he kept: its patterns, after the first walk
-        for (int g = 0; g <= 255; g += ENGINE_LAB_G_STEP)
+        foreach (int g, engineLabGroups())
         {
             const QString gk = QStringLiteral("G") + QString::number(g);
             if (labVerdictOf(gk) != 1)
@@ -19070,9 +19144,14 @@ QStringList TrackEngine::labList(int pass) const
             out.append(key);
         if (kept == false && pass == 1)
             continue;
+        const EngineLabKey ak = engineLabParse(key);
         foreach (const QString &kind, engineLabKinds())
         {
             if (kind == QStringLiteral("swap") && m_labFixtures.count() < 2)
+                continue;
+            // R425_VARIANTS: CH7's speed moves only what moves by itself
+            if ((kind == QStringLiteral("slow") || kind == QStringLiteral("fast"))
+                && engineLabAnimated(ak.fx, ak.a) == false)
                 continue;
             const QString vk = key + QLatin1Char('/') + kind;
             if (pass == 1 || labVerdictOf(vk) == 1)
@@ -19109,9 +19188,7 @@ int TrackEngine::labOrdinal(const QString &key) const
     int n = 0;
     if (k.fx || k.b < 0)
     {
-        const int first = k.fx ? ENGINE_LAB_F_STEP : 0;
-        const int step = k.fx ? ENGINE_LAB_F_STEP : ENGINE_LAB_G_STEP;
-        for (int v = first; v <= 255; v += step)
+        foreach (int v, k.fx ? engineLabEffects() : engineLabGroups())   // R425_ATLAS
         {
             const QString e = (k.fx ? QStringLiteral("F") : QStringLiteral("G")) + QString::number(v);
             if (n == 0 || labVerdictOf(e) != 2)
@@ -19138,17 +19215,33 @@ QString TrackEngine::labRange(const QString &key) const
     if (k.ok == false)
         return QString();
     const bool pat = k.fx == false && k.b >= 0;
-    const int step = k.fx ? ENGINE_LAB_F_STEP : (pat ? ENGINE_LAB_P_STEP : ENGINE_LAB_G_STEP);
     const int from = pat ? k.b : k.a;
-    int to = qMin(255, from + step - 1);
-    for (int v = from + step; v <= 255; v += step)
+    if (pat)
     {
-        const QString e = k.fx ? QStringLiteral("F") + QString::number(v)
-                        : pat ? QStringLiteral("G") + QString::number(k.a) + QStringLiteral("P") + QString::number(v)
-                              : QStringLiteral("G") + QString::number(v);
-        if (labVerdictOf(e) != 2)
+        int to = qMin(255, from + ENGINE_LAB_P_STEP - 1);
+        for (int v = from + ENGINE_LAB_P_STEP; v <= 255; v += ENGINE_LAB_P_STEP)
+        {
+            if (labVerdictOf(QStringLiteral("G") + QString::number(k.a) + QStringLiteral("P") + QString::number(v)) != 2)
+                break;
+            to = qMin(255, v + ENGINE_LAB_P_STEP - 1);
+        }
+        return QString::number(from) + QChar(0x2013) + QString::number(to);
+    }
+    // R425_ATLAS: the manual's widths - a group is 25 values, an effect 2, a
+    // random mode 10 - and every SAME after it
+    const QList<int> &vals = k.fx ? engineLabEffects() : engineLabGroups();
+    auto endOf = [&k, &vals](int v) {
+        if (k.fx)
+            return engineLabEffectEnd(v);
+        const int i = int(vals.indexOf(v));
+        return (i >= 0 && i + 1 < vals.count()) ? vals.at(i + 1) - 1 : 174;
+    };
+    int to = endOf(from);
+    for (int i = int(vals.indexOf(from)) + 1; i > 0 && i < vals.count(); i++)
+    {
+        if (labVerdictOf((k.fx ? QStringLiteral("F") : QStringLiteral("G")) + QString::number(vals.at(i))) != 2)
             break;
-        to = qMin(255, v + step - 1);
+        to = endOf(vals.at(i));
     }
     return QString::number(from) + QChar(0x2013) + QString::number(to);
 }
@@ -19179,13 +19272,15 @@ QString TrackEngine::labDetailOf(const QString &key) const
         return QString();
     const QString base = key.section(QLatin1Char('/'), 0, 0);
     QString d;
+    // R425_ATLAS: the manual's names
     if (k.fx)
-        d = tr("Built-in effect %1  ·  effect speed %2  ·  graphic group 0")
-                .arg(labRange(base)).arg(m_labBase.value(QStringLiteral("fxspeed"), 0));
+        d = tr("Built-in %1 (CH6 %2)  ·  speed %3")
+                .arg(engineLabEffectName(k.a)).arg(labRange(base))
+                .arg(labValues(key, 0).value(QStringLiteral("fxspeed"), 0));
     else if (k.b < 0)
-        d = tr("Graphic group %1  ·  pattern 0  ·  built-in effect off").arg(labRange(base));
+        d = tr("Graphic group: %1 (CH4 %2)  ·  pattern 0").arg(engineLabGroupName(k.a)).arg(labRange(base));
     else
-        d = tr("Graphic group %1  ·  pattern %2  ·  built-in effect off").arg(k.a).arg(labRange(base));
+        d = tr("Graphic group: %1 (CH4 %2)  ·  pattern CH5 %3").arg(engineLabGroupName(k.a)).arg(k.a).arg(labRange(base));
     if (k.kind == QStringLiteral("pump"))
         d += tr("  ·  size 0 → 120 → 0 every beat");
     else if (k.kind == QStringLiteral("turn"))
@@ -19195,7 +19290,11 @@ QString TrackEngine::labDetailOf(const QString &key) const
     else if (k.kind == QStringLiteral("wave"))
         d += tr("  ·  wave 101");
     else if (k.kind == QStringLiteral("draw"))
-        d += tr("  ·  drawing 0 / 64 / 128 / 192 a beat each");
+        d += tr("  ·  auto drawing (CH16 140)");
+    else if (k.kind == QStringLiteral("slow") || k.kind == QStringLiteral("fast"))
+        d += tr("  ·  effect speed CH7 %1").arg(k.kind == QStringLiteral("slow") ? 40 : 220);
+    else if (k.kind == QStringLiteral("zoom"))
+        d += tr("  ·  auto scaling small → large (CH9 40)");
     else if (k.kind == QStringLiteral("swap"))
         d += tr("  ·  one lamp a beat");
     if (m_labStore.value(key).toObject().value(QStringLiteral("slow")).toBool())
@@ -19502,7 +19601,7 @@ void TrackEngine::labDecide(int verdict)
     {
         // SAME AS LAST is the atlas's, and needs a picture before it
         const bool first = k.kind.isEmpty() == false
-                           || (k.b < 0 && k.a == (k.fx ? ENGINE_LAB_F_STEP : 0));
+                           || (k.b < 0 && k.a == (k.fx ? ENGINE_LAB_F_FIRST : 0));
         if (first)
             return;
     }
