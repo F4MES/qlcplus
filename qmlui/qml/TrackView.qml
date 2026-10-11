@@ -2747,7 +2747,7 @@ Rectangle
         {
             model: [
                 { l: "ENERGY",       b: "How hard the show plays - your hand takes over. <b>AUTO</b>: the clock moves it through the night. <b>ALL AUTO</b> (above, when one is off) puts all four back." },
-                { l: "SECTION",      b: "Force a section; the one the music is in is filled. Tap it again or <b>AUTO</b> to follow the music." },
+                { l: "SECTION",      b: "Force a section until the music reaches its next one - then it follows the music again. The one the music is in is filled. Tap it again or <b>AUTO</b> to let go now." },   // R429_SECTION_ONCE
                 { l: "POSITION",     b: "Hold the heads in one position. <b>AUTO</b>: the engine moves them." },
                 { l: "COLOUR",       b: "Tap colours to make your own mix. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },
                 { l: "COLOUR MODE",  b: "<b>FADE</b>: the mix glides over. <b>CHASE</b>: it steps on the kick. <b>SPEED</b>: the pace of moves and chases." },

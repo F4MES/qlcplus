@@ -570,7 +570,21 @@ void TrackManager::updateState()
         return;
 
     m_analysedState = state;
+    // R429_SECTION_ONCE (Tobias 10-11, after Soltauw: "automatisk gaar tilbage til
+    // 'auto' naeste gang den rammer en aendring"): a SECTION press holds until
+    // the analysis moves to its next section - then the page follows the
+    // music again. Pressed what the music now became (DROP early, the drop
+    // flag comes): let go without a second landing.
+    const QString held = m_overrideState;
+    if (held.isEmpty() == false)
+    {
+        if (m_engine != nullptr)
+            m_engine->noteSectionRelease(held, state);
+        m_overrideState.clear();
+    }
     emit stateChanged();
+    if (held.isEmpty() == false && held == state)
+        return;                                  // already on stage
 
     if (m_autoRun && m_overrideState.isEmpty() && m_loopTop <= 0)   // R235_DJ_LOOP_LOOK
         applyLook();
