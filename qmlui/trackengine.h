@@ -616,6 +616,9 @@ public:
     Q_INVOKABLE qreal groupTrim(QString key) const;
     Q_INVOKABLE void setGroupTrim(QString key, qreal level);
     Q_INVOKABLE QString baseGroup() const;
+    /** R430: a small LED wash - not the base, no movement, strobe, laser or
+     *  pattern (the Mini 4 Eyes). Never the lead, never a budget place. */
+    bool smallWash(const QString &key) const;
 
     QVariantList palette();
     bool showAll() const;

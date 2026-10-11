@@ -5305,6 +5305,16 @@ QString TrackEngine::baseGroup() const
     return QString();
 }
 
+bool TrackEngine::smallWash(const QString &key) const
+{
+    // R430_SMALL_WASH (Tobias 10-11: the Mini 4 Eyes "er saa smaa og ubetydelige"):
+    // read from what the lamps can do, not from their name
+    if (m_groups.contains(key) == false || key == baseGroup())
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    return g.heads == false && g.strobes == false && g.lasers == false && g.patternDevice == false;
+}
+
 void TrackEngine::cycleGroup(QString key)
 {
     // Runde 234: a TAP is ON <-> OFF, nothing else. It used to cycle
@@ -10062,8 +10072,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         castSet.insert(base);
     if (silent == false && m_barsAloneNow == false)
     {
-        for (int i = 0; i < qMin(effects, int(priority.count())); i++)
+        // R430_MINI_FREE (Tobias 10-11, "b"): a small wash (the Minis) comes
+        // along where the order reaches it, but uses no place - the budget is
+        // spent on the real groups
+        int used = 0;
+        for (int i = 0; i < priority.count() && used < effects; i++)
+        {
             castSet.insert(priority.at(i));
+            if (smallWash(priority.at(i)) == false)
+                used++;
+        }
         // Runde 235: the other WASH groups stand in every break beside the
         // base, outside the budget - the Minis with the heads, or the heads
         // with the Minis when those are the base ("jeg forventer at minis er
@@ -10512,14 +10530,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         QStringList leads;
         foreach (const QString &key, priority)
-            if (castSet.contains(key) && m_groups.value(key).strobes == false) leads << key;
+            if (castSet.contains(key) && m_groups.value(key).strobes == false
+                && smallWash(key) == false) leads << key;   // R430_MINI_NO_LEAD
         if (leads.isEmpty())
         {
             foreach (const QString &key, castSorted)
             {
                 // "A strobe group is never the rhythm lead" - this fallback
                 // made it one whenever the cast was base + strobes (runde 172)
-                if (key != base && m_groups.value(key).strobes == false) leads << key;
+                if (key != base && m_groups.value(key).strobes == false
+                    && smallWash(key) == false) leads << key;   // R430_MINI_NO_LEAD
             }
         }
         // RUNDE 340 (Tobias, 10-03: "ensformigt"): the lead was the first in
