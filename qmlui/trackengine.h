@@ -133,6 +133,7 @@ class QRandomGenerator;
  *  thumb up is a deliberate detour. Counting them one for one would read the
  *  rare deliberate act as the weaker signal, which is backwards. */
 #define ENGINE_RATE_UPVOTE 3.0
+#define ENGINE_NEXT_SALVO_MS 2000        // R428_NEXT_SALVO: a NEXT this soon after the last is a search, no verdict
 
 /** What an AIMED verdict is worth against a spread one.
  *
@@ -1253,6 +1254,7 @@ private:
     QMap<QString, quint32> m_verdictActive;
     int m_verdictBucket = -1;
     qint64 m_verdictMs = -1;
+    qint64 m_lastNextMs = -1;            // R428_NEXT_SALVO: when NEXT was last pressed (m_clock)
     int   m_logBeatNo = 0;
     qreal m_logLevel = 0.0;
     qreal m_logEnergy = 0.0;

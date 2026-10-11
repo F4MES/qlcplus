@@ -15651,7 +15651,13 @@ void TrackEngine::next()
     // NEXT. One small down vote on the look it skips - the unit a plain thumb
     // down is, a third of an up - filed against the stage as the finger landed,
     // before the look changes. Nothing between tracks (rate() skips it too).
-    if (m_lastState.isEmpty() == false)
+    // R428_NEXT_SALVO (10/10: 174 of 285 NEXT within 4 s of the one before, median
+    // 1.2 s): a NEXT under 2 s after the last is him searching through looks he
+    // hardly saw - it moves on, but files no verdict. The salvo's first press does.
+    const qint64 nowMs = m_clock.elapsed();
+    const bool salvo = m_lastNextMs >= 0 && nowMs - m_lastNextMs < ENGINE_NEXT_SALVO_MS;
+    m_lastNextMs = nowMs;
+    if (m_lastState.isEmpty() == false && salvo == false)
     {
         markVerdictPoint();
         creditVerdict(-1);
