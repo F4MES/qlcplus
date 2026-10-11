@@ -2369,14 +2369,17 @@ Rectangle
                 // for at holde knappen nede ligesom blackout, hvor man slider fingeren
                 // vaek og den saa holder sig selv nede"): held = dark on every 1/4,
                 // 1/8 or 1/16; slid off = latched; a tap on a latched one lets it go.
+                // R427_STUTTER_TAP (Tobias 10-11): a quick tap (< 250 ms) locks it too.
                 // The chips choose the rate (it stays, also while it runs).
                 Rectangle
                 {
                     id: stutterTile
                     objectName: "stutter"
                     property bool armed: false          // this press is the one holding it
+                    property double pressedAt: 0        // R427_STUTTER_TAP: when that finger landed
+                    readonly property int tapMs: 250    // shorter than this = a tap, it locks
                     property bool on: trackEngine ? trackEngine.stutter : false
-                    readonly property int rate: trackEngine ? trackEngine.stutterRate : 2
+                    readonly property int rate: trackEngine ? trackEngine.stutterRate : 3
                     x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(3)
                     width: liveCard.halfW; height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
@@ -2424,14 +2427,16 @@ Rectangle
                         {
                             if (!trackEngine) return
                             if (trackEngine.stutter) { trackEngine.stutter = false; stutterTile.armed = false }
-                            else { trackEngine.stutter = true; stutterTile.armed = true }
+                            else { trackEngine.stutter = true; stutterTile.armed = true; stutterTile.pressedAt = Date.now() }
                         }
                         onReleasedAt: (x, y, inside) =>
                         {
                             if (!trackEngine || !stutterTile.armed) return
                             stutterTile.armed = false
-                            // released ON the button: a momentary hold, let go; off it: latched
-                            if (inside) trackEngine.stutter = false
+                            // released ON the button after a hold: momentary, let go; off it: latched.
+                            // R427_STUTTER_TAP: a quick tap on it locks it (10/10: two taps of
+                            // 83-98 ms did nothing) - the next tap lets it go
+                            if (inside && Date.now() - stutterTile.pressedAt >= stutterTile.tapMs) trackEngine.stutter = false
                         }
                         onCanceled:
                         {
@@ -2779,7 +2784,7 @@ Rectangle
                 { y: 0, h: 1, b: "<b>NEXT LOOK</b> - a new look now." },
                 { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
                 { y: 2, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
-                { y: 3, h: 2, b: "<b>BLACKOUT</b> - dark while held.  <b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 of the beat while held. Both: slide off before letting go to lock; tap to release." },
+                { y: 3, h: 2, b: "<b>BLACKOUT</b> - dark while held.  <b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 of the beat while held; a quick tap locks it. Both: slide off before letting go to lock; tap to release." },
                 { y: 4, h: 2, b: "<b>FLASH WHITE</b> - white while held." }
             ]
             HelpText

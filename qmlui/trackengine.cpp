@@ -289,7 +289,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
     m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
-    m_stutterRate = qBound(1, settings.value(SETTINGS_ENGINE_STUTTER, 2).toInt(), 3);   // R420_STUTTER
+    m_stutterRate = qBound(1, settings.value(SETTINGS_ENGINE_STUTTER, 3).toInt(), 3);   // R420_STUTTER, R427_STUTTER_16
     // runde 184: ENERGY by clock and the group faders come back after a
     // restart - the same night only. A new evening starts as it always has:
     // the clock on and every group at 100 % - the strobes at 50 % (R418_STROBE_HALF).
