@@ -398,6 +398,8 @@ class TrackEngine : public QObject
     /** R431_DROP_PICK: the groups of the next drop (dropMode 1) or this one (2) */
     Q_PROPERTY(QStringList dropSet READ dropSet NOTIFY dropSetChanged)
     Q_PROPERTY(int dropMode READ dropMode NOTIFY dropSetChanged)
+    /** R432_NEXT_SECTION: the section the plan (dropSet) is for */
+    Q_PROPERTY(QString planSection READ planSection NOTIFY dropSetChanged)
     Q_PROPERTY(QVariantList palette READ palette NOTIFY tableChanged)
     Q_PROPERTY(bool showAll READ showAll WRITE setShowAll NOTIFY tableChanged)
     /** The engine makes everything itself from the fixtures' channels -
@@ -616,6 +618,7 @@ public:
     Q_INVOKABLE void cycleGroup(QString key);
     Q_INVOKABLE void toggleDropGroup(QString key);   // R431_DROP_PICK: a name in RIG
     QStringList planDropCast(qreal fader) const;     // R431_DROP_PICK: the engine's plan
+    QStringList planCast(const QString &section, qreal fader) const;   // R432_NEXT_SECTION
     Q_INVOKABLE void toggleBase(QString key);
     QVariantMap trims() const;
     Q_INVOKABLE qreal groupTrim(QString key) const;
@@ -1416,6 +1419,10 @@ public:
     // R431_DROP_PICK
     QStringList dropSet() const { return m_dropSet; }
     int dropMode() const { return m_dropMode; }
+    QString planSection() const { return m_planSection; }   // R432_NEXT_SECTION
+    QString m_planSection;               // the next section the plan is for
+    bool m_forceOn = false;              // this section runs on his set
+    QStringList m_forceSet;
     QStringList m_dropSet;               // the drop's groups, in the room's order
     int m_dropMode = 0;                  // 0 none, 1 the next drop (plan), 2 this drop
     bool m_dropTouched = false;          // he tapped: the set is his until the drop ends
