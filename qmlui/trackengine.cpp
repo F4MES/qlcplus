@@ -1661,8 +1661,82 @@ void TrackEngine::ensureTable()
 
     invalidateCandidates();          // (belt and braces: nothing is cached while building)
     m_building = false;
+    // R436_SHOW_CHECK / R436_STROBE_LAB: what the new table says - told on the
+    // next turn of the event loop, never from inside a getter that built it
+    updateShowCheck();
+    QTimer::singleShot(0, this, [this]() { emit showCheckChanged(); emit slabChanged(); });
     qDebug() << "[TrackEngine]" << m_groups.count() << "groups," << m_funcs.count()
              << "functions, palette" << m_palette;
+}
+
+void TrackEngine::updateShowCheck()
+{
+    // R436_SHOW_CHECK (Tobias 10-12, forslag 7: "men med mulighed for stadig at
+    // gaa videre"): the generated families this build counts on, by content -
+    // nothing has to be written into the show file for it. A family only
+    // counts on a rig that has the lamps for it. Add a row when a runde makes
+    // gen_programs.py write something the engine relies on.
+    struct Need { const char *prefix; int want; int round; bool strobes; const char *what; };
+    static const Need needs[] = {
+        { "AUTO Strobes Break ", 48, 433, true,
+          "no calm break programmes - in a break the strobes walk the engine's own figure" },
+    };
+    QString strobeGroup;
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_groups.value(key).strobes && m_groups.value(key).fixtures.isEmpty() == false)
+        {
+            strobeGroup = key;
+            break;
+        }
+    }
+    QVariantList out;
+    int wants = 0;
+    for (const Need &n : needs)
+    {
+        if (n.strobes && strobeGroup.isEmpty())
+            continue;
+        const QString prefix = QString::fromLatin1(n.prefix);
+        int have = 0;
+        for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+            have += it.value().name.startsWith(prefix) ? 1 : 0;
+        if (have >= n.want)
+            continue;
+        QVariantMap m;
+        m.insert(QStringLiteral("group"), n.strobes ? strobeGroup : QString());
+        m.insert(QStringLiteral("text"), tr(n.what));
+        m.insert(QStringLiteral("family"), prefix.trimmed());
+        m.insert(QStringLiteral("have"), have);
+        m.insert(QStringLiteral("want"), n.want);
+        m.insert(QStringLiteral("round"), n.round);
+        out << m;
+        wants = qMax(wants, n.round);
+    }
+    if (out != m_showMissing && out.isEmpty() == false)
+        logSignal(QStringLiteral("sig:old-show:r%1").arg(wants));
+    m_showMissing = out;
+    m_showWants = wants;
+}
+
+QString TrackEngine::showKey() const
+{
+    QStringList parts;
+    for (const QVariant &v : m_showMissing)
+        parts << v.toMap().value(QStringLiteral("family")).toString() + QLatin1Char(':')
+                 + QString::number(v.toMap().value(QStringLiteral("have")).toInt());
+    return parts.join(QLatin1Char(';'));
+}
+
+bool TrackEngine::showAcked() const
+{
+    return m_showMissing.isEmpty() == false && m_showAckKey == showKey();
+}
+
+void TrackEngine::showContinue()
+{
+    m_showAckKey = showKey();
+    logSignal(QStringLiteral("sig:old-show-continue:r%1").arg(m_showWants));
+    emit showCheckChanged();
 }
 
 int TrackEngine::guessStars(const TrackFuncInfo &info) const
@@ -3807,6 +3881,56 @@ void TrackEngine::decaySectionTaste()
     }
     settings.setValue(QStringLiteral("trackengine/section-taste"), out);
     logSignal(QStringLiteral("sig:section-taste-decay:") + night);
+    emit tasteChanged();                 // R436_LEARNED
+}
+
+QVariantList TrackEngine::sectionTasteTable() const
+{
+    // R436_LEARNED (Tobias 10-12, forslag 1): what the engine learned, per group
+    // and section kind - the groups in the room's order, the base last
+    sectionTaste(QString(), QString());  // loaded
+    static const QStringList kinds = { "break", "build", "normal", "drop" };
+    const QString base = baseGroup();
+    QVariantList rows, last;
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_groups.value(key).fixtures.isEmpty())
+            continue;
+        QVariantMap row;
+        row.insert(QStringLiteral("key"), key);
+        row.insert(QStringLiteral("base"), key == base);
+        QVariantList cells;
+        for (const QString &k : kinds)
+            cells << m_sectionTaste.value(k + QLatin1Char('/') + key, 1.0);
+        row.insert(QStringLiteral("cells"), cells);
+        if (key == base)
+            last << row;
+        else
+            rows << row;
+    }
+    return rows + last;
+}
+
+QString TrackEngine::tasteNight() const
+{
+    return QSettings().value(QStringLiteral("trackengine/section-taste-night")).toString();
+}
+
+void TrackEngine::resetSectionTaste(const QString &section, const QString &key)
+{
+    // R436_LEARNED: a box back to neutral, or (both empty) all of it
+    sectionTaste(QString(), QString());  // loaded
+    if (section.isEmpty() && key.isEmpty())
+        m_sectionTaste.clear();
+    else if (m_sectionTaste.remove(section + QLatin1Char('/') + key) == 0)
+        return;
+    QVariantMap out;
+    for (auto it = m_sectionTaste.constBegin(); it != m_sectionTaste.constEnd(); ++it)
+        out.insert(it.key(), QString::number(it.value(), 'f', 3).toDouble());
+    QSettings().setValue(QStringLiteral("trackengine/section-taste"), out);
+    logSignal(QStringLiteral("sig:section-taste-reset:")
+              + (section.isEmpty() && key.isEmpty() ? QStringLiteral("all") : section + QLatin1Char(':') + key));
+    emit tasteChanged();
 }
 
 void TrackEngine::learnSection(const QString &section, const QStringList &plan, const QStringList &his)
@@ -3841,6 +3965,7 @@ void TrackEngine::learnSection(const QString &section, const QStringList &plan, 
     for (auto it = m_sectionTaste.constBegin(); it != m_sectionTaste.constEnd(); ++it)
         out.insert(it.key(), QString::number(it.value(), 'f', 3).toDouble());
     QSettings().setValue(QStringLiteral("trackengine/section-taste"), out);
+    emit tasteChanged();                 // R436_LEARNED
     foreach (const QString &key, changed)
         logSignal(QStringLiteral("sig:section-taste:") + section + QLatin1Char(':') + key + QLatin1Char('=')
                   + QString::number(sectionTaste(section, key), 'f', 2));
@@ -18238,7 +18363,7 @@ void TrackEngine::idle()
         return;
     if (m_testTimer.isActive())   // SELF TEST owns the stage until it is done
         return;
-    if (m_labActive)              // R410_LAB: and so does LASER LAB
+    if (m_labActive || m_slabActive)   // R410_LAB: and so does LASER LAB (and R436_STROBE_LAB)
         return;
     // the opening picture is up: nothing else runs - as in tick(). A stopped
     // deck (and the 30 s watchdog) called this and replaced the picture with
@@ -19992,6 +20117,7 @@ bool TrackEngine::labOpen()
 {
     if (m_labActive)
         return true;
+    slabShutdown();                      // R436_STROBE_LAB: one lab at a time
     if (m_doc == nullptr || m_docTimer.isActive())
         return false;
     ensureTable();
@@ -20075,6 +20201,7 @@ void TrackEngine::labClose()
 
 void TrackEngine::labShutdown(bool rebuildNow)
 {
+    slabShutdown();                      // R436_STROBE_LAB: every way this lab closes closes that one too
     if (m_labActive == false)
         return;
     m_labActive = false;
@@ -20672,4 +20799,549 @@ void TrackEngine::labApplyTags()
         engineLabWindow(o.value(QStringLiteral("en")).toArray(), info.labMin, info.labMax);
         info.labCalm = o.value(QStringLiteral("ch")).toArray().contains(QJsonValue(QStringLiteral("calm")));
     }
+}
+/* =====================================================================
+ *  STROBE LAB (runde 436) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/strobelab.inc.cpp.
+ *
+ *  Tobias, 2026-10-12: "lav laser-lab om til at hedde LAB og under lab kan
+ *  man vaelge laser-lab og strobe-lab" (forslag 10, mockup 10b approved).
+ *  The strobes' own AUTO programmes, one at a time, with SHOW OFF: BREAK,
+ *  GROOVE and DROP as the engine files them (tierOf). What the engine can
+ *  never draw is left out - a bank at full (fullBank, runde 338), a chase
+ *  that lights nothing.
+ *
+ *  ✕ NO bans it in the show (setBanned: the engine never draws it again).
+ *  ✓ GOOD files ENGINE_SLAB_VOTES up-votes for its kind of section - with
+ *  RATINGS on it comes up more often. NOT a star: the stars are an energy
+ *  ceiling (a break draws one star), so "a star up" would have taken a break
+ *  programme out of the breaks. The same tile again takes the verdict back.
+ *  Nothing is deleted from PSMAIN.
+ *
+ *  The lab opens dark - PLAY lights it (as LASER LAB, R411_OPEN_DARK). A
+ *  colourless programme runs over the group's own colour scene (ROOM / RED /
+ *  BLUE / WHITE) exactly as in a show; that scene writes the shutter shut,
+ *  so the lab never fires the hardware strobe. Every way LASER LAB closes
+ *  (a beat, SHOW ON, BLACKOUT, STOP ALL, a project load) closes this one too
+ *  (labShutdown calls slabShutdown).
+ * ===================================================================== */
+
+#define ENGINE_SLAB_VOTES     2       // GOOD: two up-votes in its section kind
+
+bool TrackEngine::slabAvailable() const
+{
+    return slabPickGroup().isEmpty() == false || m_slabActive;
+}
+
+QString TrackEngine::slabPickGroup() const
+{
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.strobes && g.fixtures.isEmpty() == false && m_groupOff.contains(key) == false)
+            return key;
+    }
+    return QString();
+}
+
+void TrackEngine::slabLoad() const
+{
+    if (m_slabLoaded)
+        return;
+    m_slabLoaded = true;
+    const QVariantMap raw = QSettings().value(QStringLiteral("trackengine/strobe-lab")).toMap();
+    for (auto it = raw.constBegin(); it != raw.constEnd(); ++it)
+    {
+        const int v = it.value().toInt();
+        if (v == 1 || v == -1)
+            m_slabVerdict.insert(it.key().toUInt(), v);
+    }
+}
+
+void TrackEngine::slabSave() const
+{
+    QVariantMap out;
+    for (auto it = m_slabVerdict.constBegin(); it != m_slabVerdict.constEnd(); ++it)
+        out.insert(QString::number(it.key()), it.value());
+    QSettings().setValue(QStringLiteral("trackengine/strobe-lab"), out);
+}
+
+int TrackEngine::slabTabOf(const TrackFuncInfo &info) const
+{
+    return info.tier == 0 ? 0 : (info.tier == 2 ? 2 : 1);
+}
+
+QList<quint32> TrackEngine::slabListOf(const QString &group, int tab) const
+{
+    QList<QPair<QString, quint32> > rows;
+    if (group.isEmpty())
+        return QList<quint32>();
+    for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &info = it.value();
+        if (info.role != ENGINE_ROLE_MOTION || info.step || info.frozen || info.junk || info.generated || info.aims)
+            continue;
+        if (info.groups.count() != 1 || info.groups.contains(group) == false)
+            continue;
+        // the show's generated programmes - what FULL AUTO draws
+        if (info.name.startsWith(QStringLiteral("AUTO ")) == false && info.path.startsWith(QStringLiteral("AUTO Programs")) == false)
+            continue;
+        // what the engine can never draw is not shown
+        if (info.fullBank || (info.type != int(Function::SceneType) && info.litShare <= 0.0))
+            continue;
+        if (slabTabOf(info) != tab)
+            continue;
+        rows.append(qMakePair(info.name, info.id));
+    }
+    std::sort(rows.begin(), rows.end());
+    QList<quint32> out;
+    for (const QPair<QString, quint32> &r : rows)
+        out.append(r.second);
+    return out;
+}
+
+quint32 TrackEngine::slabCurrent() const
+{
+    if (m_slabIndex < 0 || m_slabIndex >= m_slabList.count())
+        return Function::invalidId();
+    const quint32 fid = m_slabList.at(m_slabIndex);
+    return m_funcs.contains(fid) ? fid : Function::invalidId();
+}
+
+QString TrackEngine::slabColourNow() const
+{
+    if (m_slabColour != QStringLiteral("room"))
+        return m_slabColour;
+    return m_colour.isEmpty() ? QStringLiteral("blue") : m_colour;
+}
+
+int TrackEngine::slabDivision(const TrackFuncInfo &info) const
+{
+    if (m_slabSpeed == 0)
+        return 0;                        // AS MADE: its own time
+    const qreal beat = (m_beatMs > 200.0 && m_beatMs < 2000.0) ? m_beatMs : 500.0;
+    const qreal own = info.durationMs > 0 ? qreal(info.durationMs) : info.beats * beat;
+    if (own <= 0.0)
+        return 0;
+    return qMax(125, int(m_slabSpeed == 1 ? own * 2.0 : own / 2.0));
+}
+
+void TrackEngine::slabDarkParts()
+{
+    const TrackGroup &g = m_groups.value(m_slabGroup);
+    for (int i = 0; i < g.parts.count(); i++)
+        stopSlot(partSlot(m_slabGroup, i), true);
+}
+
+void TrackEngine::slabShow()
+{
+    if (m_slabActive == false || m_doc == nullptr || m_slabGroup.isEmpty())
+        return;
+    const QString slot = QStringLiteral("slab:") + m_slabGroup;
+    const QString cslot = QStringLiteral("slabc:") + m_slabGroup;
+    const quint32 fid = slabCurrent();
+    if (m_slabDark || (fid == Function::invalidId() && m_slabTest == false))
+    {
+        stopSlot(slot, true);
+        stopSlot(cslot, true);
+        slabDarkParts();
+        return;
+    }
+    const quint32 cf = colourFunction(m_slabGroup, slabColourNow());
+    if (m_slabTest)
+    {
+        // ALL LAMPS ON - TEST: the colour scene and every dimmer part at 60 %
+        stopSlot(slot, true);
+        run(cslot, cf, 1.0, 0, true);
+        if (m_groups.value(m_slabGroup).hasDimmer)
+            setDimmer(m_slabGroup, 0.60);
+        return;
+    }
+    slabDarkParts();
+    const TrackFuncInfo info = m_funcs.value(fid);
+    if (info.coversColour)
+        stopSlot(cslot, true);           // it paints its own colour on every lamp
+    else
+        run(cslot, cf, 1.0, 0, true);    // the shutter shut, the colour under it
+    run(slot, fid, 1.0, slabDivision(info), true);
+}
+
+void TrackEngine::slabRestartTimer()
+{
+    m_slabAutoTimer.stop();
+    if (m_slabActive == false || m_slabDark || m_slabHold || m_slabTest || m_slabAuto == 0)
+        return;
+    const qreal beat = (m_beatMs > 200.0 && m_beatMs < 2000.0) ? m_beatMs : 500.0;
+    m_slabAutoTimer.start(m_slabAuto == 1 ? 2000 : (m_slabAuto == 2 ? 4000 : int(8.0 * beat)));
+}
+
+void TrackEngine::slabShowCandidate()
+{
+    slabRestartTimer();
+    slabShow();
+    emit slabChanged();
+}
+
+bool TrackEngine::slabOpen()
+{
+    if (m_slabActive)
+        return true;
+    if (m_doc == nullptr || m_docTimer.isActive())
+        return false;
+    ensureTable();
+    slabLoad();
+    labShutdown(false);                  // one lab at a time
+    m_slabGroup = slabPickGroup();
+    m_slabMessage.clear();
+    QString refuse;
+    if (m_slabGroup.isEmpty())
+        refuse = tr("strobe lab: no strobes in this show (or they are switched OFF)");
+    else if (m_blackout)
+        refuse = tr("strobe lab: BLACKOUT is on");
+    if (refuse.isEmpty() == false)
+    {
+        m_report = refuse;
+        m_slabMessage = refuse;
+        emit liveChanged();
+        emit slabChanged();
+        return false;
+    }
+    if (m_slabWired == false)
+    {
+        m_slabWired = true;
+        m_slabAutoTimer.setSingleShot(true);
+        connect(&m_slabAutoTimer, &QTimer::timeout, this, [this]() {
+            if (m_slabActive && m_slabDark == false && m_slabHold == false && m_slabTest == false)
+                slabNext();
+        });
+    }
+    if (m_testTimer.isActive())
+        selfTest();
+    if (m_startScene)
+        setStartScene(false);
+    // the strobes are the lab's: whatever the engine still holds on them goes
+    foreach (const QString &slot, m_active.keys())
+    {
+        if (slotGroup(slot) == m_slabGroup || slot.startsWith(QStringLiteral("idle:")))
+            stopSlot(slot, true);
+    }
+    m_cast.remove(m_slabGroup);
+    m_slabActive = true;
+    m_slabDark = true;                   // PLAY lights it, nothing else does
+    m_slabHold = false;
+    m_slabTest = false;
+    m_slabList = slabListOf(m_slabGroup, m_slabTab);
+    int at = int(m_slabList.indexOf(m_slabResume.value(m_slabTab, Function::invalidId())));
+    if (at < 0)
+    {
+        for (int i = 0; i < m_slabList.count(); i++)
+        {
+            if (m_slabVerdict.contains(m_slabList.at(i)) == false)
+            {
+                at = i;
+                break;
+            }
+        }
+    }
+    m_slabIndex = qMax(0, at);
+    m_report = tr("STROBE LAB");
+    m_slabMessage = tr("The strobes are dark - ▶ PLAY lights them");
+    logSignal(QStringLiteral("sig:strobe-lab-open"));
+    emit liveChanged();
+    slabShowCandidate();
+    return true;
+}
+
+void TrackEngine::slabClose()
+{
+    slabShutdown();
+}
+
+void TrackEngine::slabShutdown()
+{
+    if (m_slabActive == false)
+        return;
+    m_slabActive = false;
+    m_slabAutoTimer.stop();
+    if (m_slabGroup.isEmpty() == false)
+    {
+        stopSlot(QStringLiteral("slab:") + m_slabGroup, true);
+        stopSlot(QStringLiteral("slabc:") + m_slabGroup, true);
+        slabDarkParts();
+    }
+    m_slabResume.insert(m_slabTab, slabCurrent());
+    m_slabTest = false;
+    logSignal(QStringLiteral("sig:strobe-lab-close"));
+    m_slabMessage.clear();
+    emit slabChanged();
+}
+
+void TrackEngine::slabSetTab(int tab)
+{
+    if (m_slabActive == false)
+        return;
+    tab = qBound(0, tab, 2);
+    if (tab != m_slabTab)
+    {
+        m_slabResume.insert(m_slabTab, slabCurrent());
+        m_slabTab = tab;
+        m_slabList = slabListOf(m_slabGroup, tab);
+        int at = int(m_slabList.indexOf(m_slabResume.value(tab, Function::invalidId())));
+        if (at < 0)
+        {
+            for (int i = 0; i < m_slabList.count(); i++)
+            {
+                if (m_slabVerdict.contains(m_slabList.at(i)) == false)
+                {
+                    at = i;
+                    break;
+                }
+            }
+        }
+        m_slabIndex = qMax(0, at);
+    }
+    m_slabTest = false;
+    m_slabMessage = m_slabList.isEmpty() ? tr("No programmes of this kind for %1").arg(m_slabGroup)
+                                         : (m_slabDark ? tr("The strobes are dark - ▶ PLAY lights them") : QString());
+    slabShowCandidate();
+}
+
+void TrackEngine::slabGoto(int index)
+{
+    if (m_slabActive == false || m_slabList.isEmpty())
+        return;
+    m_slabIndex = qBound(0, index, int(m_slabList.count()) - 1);
+    m_slabTest = false;
+    m_slabMessage = m_slabDark ? tr("The strobes are dark - ▶ PLAY lights them") : QString();
+    slabShowCandidate();
+}
+
+void TrackEngine::slabNext()
+{
+    if (m_slabActive == false)
+        return;
+    if (m_slabIndex + 1 >= m_slabList.count())
+    {
+        m_slabAutoTimer.stop();
+        m_slabMessage = tr("The end of the list");
+        emit slabChanged();
+        return;
+    }
+    slabGoto(m_slabIndex + 1);
+}
+
+void TrackEngine::slabBack()
+{
+    if (m_slabActive && m_slabIndex > 0)
+        slabGoto(m_slabIndex - 1);
+}
+
+void TrackEngine::slabDecide(int verdict)
+{
+    if (m_slabActive == false)
+        return;
+    if (verdict == 0)
+    {
+        slabNext();                      // SKIP: decide later
+        return;
+    }
+    const quint32 fid = slabCurrent();
+    if (fid == Function::invalidId() || (verdict != 1 && verdict != -1))
+        return;
+    const int was = m_slabVerdict.value(fid, 0);
+    const int now = was == verdict ? 0 : verdict;    // the same tile again takes it back
+    TrackFuncInfo &info = m_funcs[fid];
+    const int b = slabTabOf(info) == 0 ? 0 : (slabTabOf(info) == 2 ? 2 : 3);   // break / drop / normal
+    if (was == 1)
+        info.up[b] = qMax(0, info.up[b] - ENGINE_SLAB_VOTES);
+    if (now == 1)
+        info.up[b] += ENGINE_SLAB_VOTES;
+    if (was == -1 && now != -1)
+        setBanned(fid, false);
+    if (now == -1)
+        setBanned(fid, true);
+    if (now == 0)
+        m_slabVerdict.remove(fid);
+    else
+        m_slabVerdict.insert(fid, now);
+    slabSave();
+    saveRoles();
+    invalidateCandidates();
+    logSignal(QStringLiteral("sig:strobe-lab:%1=%2").arg(fid).arg(now));
+    if (now == 0)
+    {
+        emit slabChanged();
+        return;
+    }
+    slabNext();
+    emit slabChanged();
+}
+
+void TrackEngine::slabSetAuto(int mode)
+{
+    m_slabAuto = qBound(0, mode, 3);
+    slabRestartTimer();
+    emit slabChanged();
+}
+
+void TrackEngine::slabSetColour(const QString &colour)
+{
+    static const QStringList ok = { "room", "red", "blue", "white" };
+    if (ok.contains(colour) == false)
+        return;
+    m_slabColour = colour;
+    slabShow();
+    emit slabChanged();
+}
+
+void TrackEngine::slabSetSpeed(int speed)
+{
+    m_slabSpeed = qBound(0, speed, 2);
+    slabShow();
+    emit slabChanged();
+}
+
+void TrackEngine::slabToggleHold()
+{
+    if (m_slabActive == false)
+        return;
+    m_slabHold = !m_slabHold;
+    slabRestartTimer();
+    emit slabChanged();
+}
+
+void TrackEngine::slabStop()
+{
+    if (m_slabActive == false)
+        return;
+    m_slabDark = !m_slabDark;           // STOP, and PLAY
+    m_slabMessage = m_slabDark ? tr("Stopped - ▶ PLAY lights them again") : QString();
+    slabRestartTimer();
+    slabShow();
+    emit slabChanged();
+}
+
+void TrackEngine::slabToggleTest()
+{
+    if (m_slabActive == false)
+        return;
+    m_slabTest = !m_slabTest;
+    if (m_slabTest)
+        m_slabDark = false;
+    m_slabMessage = m_slabTest ? tr("Every lamp at 60 % - tap again for the programme") : QString();
+    slabRestartTimer();
+    slabShow();
+    emit slabChanged();
+}
+
+int TrackEngine::slabLampCount() const
+{
+    return int(m_groups.value(m_slabActive ? m_slabGroup : slabPickGroup()).fixtures.count());
+}
+
+QString TrackEngine::slabGroup() const
+{
+    return m_slabActive ? m_slabGroup : slabPickGroup();
+}
+
+QString TrackEngine::slabTitle() const
+{
+    const quint32 fid = slabCurrent();
+    if (fid == Function::invalidId())
+        return QString();
+    QStringList w = m_funcs.value(fid).name.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (w.isEmpty() == false && w.first() == QStringLiteral("AUTO"))
+        w.removeFirst();
+    if (w.isEmpty() == false && w.first().startsWith(QStringLiteral("Strobe"), Qt::CaseInsensitive))
+        w.removeFirst();
+    static const QStringList kinds = { "Break", "Groove", "Drop" };
+    if (w.count() > 1 && kinds.contains(w.first()))
+        w.removeFirst();
+    return w.join(QLatin1Char(' '));
+}
+
+QString TrackEngine::slabDetail() const
+{
+    const quint32 fid = slabCurrent();
+    if (fid == Function::invalidId())
+        return QString();
+    const TrackFuncInfo info = m_funcs.value(fid);
+    QStringList out;
+    out << info.name;
+    if (info.beats > 0.0)
+        out << tr("%1 beats a step").arg(info.beats, 0, 'g', 3);
+    else if (info.durationMs > 0)
+        out << tr("%1 s a step").arg(info.durationMs / 1000.0, 0, 'g', 3);
+    out << tr("%1 % of the lamps lit").arg(qRound(info.litShare * 100.0));
+    return out.join(QStringLiteral("  ·  "));
+}
+
+QStringList TrackEngine::slabChips() const
+{
+    const quint32 fid = slabCurrent();
+    if (fid == Function::invalidId())
+        return QStringList();
+    const TrackFuncInfo info = m_funcs.value(fid);
+    QStringList out;
+    out << (info.coversColour && info.colour.isEmpty() == false ? info.colour.toUpper() + tr(" - ITS OWN") : tr("ROOM COLOUR"));
+    out << tr("NEVER THE WHOLE BANK");
+    out << QString(qBound(1, info.stars, 3), QChar(0x2605)) + (info.stars <= 1 ? tr(" 1 STAR") : tr(" %1 STARS").arg(info.stars));
+    if (info.banned)
+        out << tr("BANNED");
+    return out;
+}
+
+int TrackEngine::slabVerdict() const
+{
+    slabLoad();
+    return m_slabVerdict.value(slabCurrent(), 0);
+}
+
+QVariantList TrackEngine::slabStrip() const
+{
+    QVariantList out;
+    for (quint32 fid : m_slabList)
+        out << m_slabVerdict.value(fid, 0);
+    return out;
+}
+
+int TrackEngine::slabCountOf(int verdict) const
+{
+    int n = 0;
+    for (quint32 fid : m_slabList)
+        n += m_slabVerdict.value(fid, 0) == verdict ? 1 : 0;
+    return n;
+}
+
+QVariantList TrackEngine::slabTabCounts() const
+{
+    const QString group = slabGroup();
+    QVariantList out;
+    for (int tab = 0; tab < 3; tab++)
+        out << int(slabListOf(group, tab).count());
+    return out;
+}
+
+int TrackEngine::slabAllOf(int verdict) const
+{
+    slabLoad();
+    int n = 0;
+    for (auto it = m_slabVerdict.constBegin(); it != m_slabVerdict.constEnd(); ++it)
+        n += (it.value() == verdict && m_funcs.contains(it.key())) ? 1 : 0;
+    return n;
+}
+
+bool TrackEngine::slabOwnColour() const
+{
+    const quint32 fid = slabCurrent();
+    return fid != Function::invalidId() && m_funcs.value(fid).coversColour;
+}
+
+bool TrackEngine::slabCanSpeed() const
+{
+    const quint32 fid = slabCurrent();
+    if (fid == Function::invalidId())
+        return false;
+    const TrackFuncInfo info = m_funcs.value(fid);
+    return info.type != int(Function::SceneType) && (info.durationMs > 0 || info.beats > 0.0);
 }

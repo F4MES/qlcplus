@@ -78,6 +78,10 @@ Rectangle
 
     property bool setupOpen: false
     property bool helpOpen: false
+    // R436_SHOW_CHECK: the show file lacks what this build counts on
+    readonly property bool oldShow: trackEngine && trackEngine.showMissing ? trackEngine.showMissing.length > 0 : false
+    property bool oldShowOpen: false     // the chip asked for the dialog again
+    property bool oldShowMore: false
     // R402_MOTION (runde 402): the page's motion - presses, fades, the beat, the
     // faders' glide. The Qt check turns it off to read every end state at once
     property bool animate: true
@@ -696,7 +700,7 @@ Rectangle
             {
                 anchors.left: sectionPill.right
                 anchors.leftMargin: Math.round(22 * trackViewRoot.ks)
-                anchors.right: statusRight.left
+                anchors.right: oldShowChip.visible ? oldShowChip.left : statusRight.left
                 anchors.rightMargin: Math.round(22 * trackViewRoot.ks)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 3
@@ -726,6 +730,34 @@ Rectangle
                     color: nm === null ? trackViewRoot.cDim : trackViewRoot.markerColor(nm.type)
                     font.pixelSize: trackViewRoot.fs(15)
                 }
+            }
+
+            // R436_SHOW_CHECK (mock 7b): after CONTINUE ANYWAY, until the show file
+            // is replaced - a tap shows what is missing again
+            Rectangle
+            {
+                id: oldShowChip
+                objectName: "oldShowChip"
+                visible: trackViewRoot.oldShow && trackEngine && trackEngine.showAcked
+                anchors.right: statusRight.left
+                anchors.rightMargin: Math.round(22 * trackViewRoot.ks)
+                anchors.verticalCenter: parent.verticalCenter
+                width: chipText.implicitWidth + Math.round(36 * trackViewRoot.ks)
+                height: Math.round(trackViewRoot.topH * 0.66)
+                radius: Math.round(8 * trackViewRoot.ks)
+                color: "#3C2E12"
+                border.width: 2
+                border.color: trackViewRoot.cGold
+                Text
+                {
+                    id: chipText
+                    anchors.centerIn: parent
+                    text: "⚠  " + qsTr("OLD SHOW FILE") + "  ·  " + qsTr("before r%1").arg(trackEngine ? trackEngine.showWants : 0)
+                    color: trackViewRoot.cGold
+                    font.bold: true
+                    font.pixelSize: trackViewRoot.fs(15)
+                }
+                TouchInput { onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.oldShowOpen = true } }
             }
 
             Row
@@ -2670,6 +2702,116 @@ Rectangle
                     return ""
                 var c = Qt.createComponent("qrc:/TrackSetup.qml")
                 return "TrackSetup.qml failed to load:\n\n" + (c.status === Component.Error ? c.errorString() : "(no detail)")
+            }
+        }
+    }
+
+    // =====================================================================
+    //  R436_SHOW_CHECK (forslag 7, mock 7a - Tobias: "men med mulighed for
+    //  stadig at gaa videre"): the show file is older than this build. What is
+    //  missing, how to fix it, and CONTINUE ANYWAY - the show runs as it is.
+    // =====================================================================
+    Rectangle
+    {
+        id: oldShowDialog
+        objectName: "oldShowDialog"
+        z: 300
+        anchors.fill: parent
+        visible: trackViewRoot.oldShow && trackEngine && (!trackEngine.showAcked || trackViewRoot.oldShowOpen)
+        color: Qt.rgba(0, 0, 0, 0.62)
+        TouchInput { }                   // nothing under it takes a finger
+        Rectangle
+        {
+            id: oldCard
+            readonly property real p: Math.round(40 * trackViewRoot.ks)
+            width: Math.min(parent.width - 2 * trackViewRoot.mx, Math.round(1100 * trackViewRoot.ks))
+            height: oldCol.implicitHeight + 2 * p + Math.round(110 * trackViewRoot.ks)
+            anchors.centerIn: parent
+            radius: Math.round(14 * trackViewRoot.ks)
+            color: trackViewRoot.cCard
+            border.width: 3
+            border.color: trackViewRoot.cGold
+            Column
+            {
+                id: oldCol
+                x: oldCard.p; y: oldCard.p
+                width: oldCard.width - 2 * oldCard.p
+                spacing: Math.round(16 * trackViewRoot.ks)
+                Row
+                {
+                    spacing: Math.round(24 * trackViewRoot.ks)
+                    Rectangle
+                    {
+                        width: Math.round(210 * trackViewRoot.ks); height: Math.round(48 * trackViewRoot.ks)
+                        radius: Math.round(8 * trackViewRoot.ks); color: trackViewRoot.cGold
+                        Text { anchors.centerIn: parent; text: qsTr("SHOW FILE"); color: "#1A1205"; font.bold: true; font.pixelSize: trackViewRoot.fs(20) }
+                    }
+                    Text
+                    {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("The show file is older than this build")
+                        color: trackViewRoot.cText; font.bold: true; font.pixelSize: trackViewRoot.fs(26)
+                    }
+                }
+                Text
+                {
+                    width: parent.width; wrapMode: Text.WordWrap
+                    text: qsTr("Made before runde %1 - this build expects runde %1 or newer.").arg(trackEngine ? trackEngine.showWants : 0)
+                    color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(18)
+                }
+                Text { text: qsTr("MISSING"); color: trackViewRoot.cMute; font.bold: true; font.pixelSize: trackViewRoot.fs(14) }
+                Repeater
+                {
+                    model: trackEngine && trackEngine.showMissing ? trackEngine.showMissing : []
+                    Row
+                    {
+                        spacing: Math.round(16 * trackViewRoot.ks)
+                        readonly property var md: modelData ? modelData : ({ group: "", text: "", family: "", have: 0, want: 0 })
+                        Rectangle { width: Math.round(6 * trackViewRoot.ks); height: Math.round(44 * trackViewRoot.ks); color: trackViewRoot.cGold }
+                        Column
+                        {
+                            spacing: Math.round(4 * trackViewRoot.ks)
+                            Text { text: parent.parent.md.group !== "" ? parent.parent.md.group : parent.parent.md.family; color: trackViewRoot.cText; font.bold: true; font.pixelSize: trackViewRoot.fs(18) }
+                            Text
+                            {
+                                width: oldCol.width - Math.round(30 * trackViewRoot.ks); wrapMode: Text.WordWrap
+                                text: parent.parent.md.text
+                                      + (trackViewRoot.oldShowMore ? "\n" + qsTr("%1 of %2 \"%3 …\" programmes in this file").arg(parent.parent.md.have).arg(parent.parent.md.want).arg(parent.parent.md.family) : "")
+                                color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(15)
+                            }
+                        }
+                    }
+                }
+                Text
+                {
+                    width: parent.width; wrapMode: Text.WordWrap
+                    text: qsTr("Everything else works. The show can run as it is.")
+                    color: trackViewRoot.cText; font.pixelSize: trackViewRoot.fs(17)
+                }
+                Text
+                {
+                    width: parent.width; wrapMode: Text.WordWrap
+                    text: qsTr("Fix: copy the new PSMAIN.qxw from qlcplus-pr to this PC and open it again.")
+                    color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(16)
+                }
+            }
+            Btn
+            {
+                objectName: "oldShowMore"
+                x: oldCard.p; y: oldCard.height - oldCard.p - height
+                width: (oldCard.width - 2 * oldCard.p) * 0.45; height: Math.round(70 * trackViewRoot.ks)
+                text: trackViewRoot.oldShowMore ? qsTr("SHOW LESS") : qsTr("SHOW ME WHAT IS MISSING")
+                fontPx: trackViewRoot.fs(17)
+                onTapped: trackViewRoot.oldShowMore = !trackViewRoot.oldShowMore
+            }
+            Btn
+            {
+                objectName: "oldShowContinue"
+                x: oldCard.width - oldCard.p - width; y: oldCard.height - oldCard.p - height
+                width: (oldCard.width - 2 * oldCard.p) * 0.52; height: Math.round(70 * trackViewRoot.ks)
+                text: qsTr("CONTINUE ANYWAY"); active: true; tone: trackViewRoot.cGold
+                fontPx: trackViewRoot.fs(21)
+                onTapped: { trackViewRoot.oldShowOpen = false; if (trackEngine) trackEngine.showContinue() }
             }
         }
     }

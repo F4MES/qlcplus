@@ -492,6 +492,40 @@ class TrackEngine : public QObject
     Q_PROPERTY(int labApprovedCount READ labApprovedCount NOTIFY labChanged)
     Q_PROPERTY(QVariantList labApprovedList READ labApprovedList NOTIFY labChanged)
     Q_PROPERTY(QString labMessage READ labMessage NOTIFY labChanged)
+    /** R436_LEARNED: SETUP > LEARNED - per group { key, base, cells[break, build, normal, drop] } */
+    Q_PROPERTY(QVariantList tasteTable READ sectionTasteTable NOTIFY tasteChanged)
+    Q_PROPERTY(QString tasteNight READ tasteNight NOTIFY tasteChanged)
+    /** R436_SHOW_CHECK: what the build counts on and the show file lacks */
+    Q_PROPERTY(QVariantList showMissing READ showMissing NOTIFY showCheckChanged)
+    Q_PROPERTY(int showWants READ showWants NOTIFY showCheckChanged)
+    Q_PROPERTY(bool showAcked READ showAcked NOTIFY showCheckChanged)
+    /** R436_STROBE_LAB: SETUP > LAB > STROBE LAB */
+    Q_PROPERTY(bool slabAvailable READ slabAvailable NOTIFY slabChanged)
+    Q_PROPERTY(bool slabActive READ slabActive NOTIFY slabChanged)
+    Q_PROPERTY(QString slabGroup READ slabGroup NOTIFY slabChanged)
+    Q_PROPERTY(int slabLampCount READ slabLampCount NOTIFY slabChanged)
+    Q_PROPERTY(int slabTab READ slabTab NOTIFY slabChanged)
+    Q_PROPERTY(int slabIndex READ slabIndex NOTIFY slabChanged)
+    Q_PROPERTY(int slabCount READ slabCount NOTIFY slabChanged)
+    Q_PROPERTY(QString slabTitle READ slabTitle NOTIFY slabChanged)
+    Q_PROPERTY(QString slabDetail READ slabDetail NOTIFY slabChanged)
+    Q_PROPERTY(QStringList slabChips READ slabChips NOTIFY slabChanged)
+    Q_PROPERTY(int slabVerdict READ slabVerdict NOTIFY slabChanged)
+    Q_PROPERTY(QVariantList slabStrip READ slabStrip NOTIFY slabChanged)
+    Q_PROPERTY(int slabGood READ slabGood NOTIFY slabChanged)
+    Q_PROPERTY(int slabNo READ slabNo NOTIFY slabChanged)
+    Q_PROPERTY(QVariantList slabTabCounts READ slabTabCounts NOTIFY slabChanged)
+    Q_PROPERTY(int slabGoodAll READ slabGoodAll NOTIFY slabChanged)
+    Q_PROPERTY(int slabNoAll READ slabNoAll NOTIFY slabChanged)
+    Q_PROPERTY(int slabAuto READ slabAuto NOTIFY slabChanged)
+    Q_PROPERTY(QString slabColour READ slabColour NOTIFY slabChanged)
+    Q_PROPERTY(bool slabOwnColour READ slabOwnColour NOTIFY slabChanged)
+    Q_PROPERTY(int slabSpeed READ slabSpeed NOTIFY slabChanged)
+    Q_PROPERTY(bool slabCanSpeed READ slabCanSpeed NOTIFY slabChanged)
+    Q_PROPERTY(bool slabHold READ slabHold NOTIFY slabChanged)
+    Q_PROPERTY(bool slabDark READ slabDark NOTIFY slabChanged)
+    Q_PROPERTY(bool slabTest READ slabTest NOTIFY slabChanged)
+    Q_PROPERTY(QString slabMessage READ slabMessage NOTIFY slabChanged)
 
     Q_PROPERTY(QStringList warnings READ warnings NOTIFY liveChanged)
     Q_PROPERTY(int calmBarsLeft READ calmBarsLeft NOTIFY liveChanged)
@@ -607,6 +641,63 @@ public:
     int labApprovedCount() const;
     QVariantList labApprovedList() const;
     QString labMessage() const { return m_labMessage; }
+    /* ---- R436_LEARNED ---- */
+    QVariantList sectionTasteTable() const;
+    QString tasteNight() const;
+    /** one box back to neutral; both empty = all of it */
+    Q_INVOKABLE void resetSectionTaste(const QString &section, const QString &key);
+    /* ---- R436_SHOW_CHECK ---- */
+    QVariantList showMissing() const { return m_showMissing; }
+    int showWants() const { return m_showWants; }
+    bool showAcked() const;
+    /** CONTINUE ANYWAY: this show file, as it is, for this run */
+    Q_INVOKABLE void showContinue();
+    /* ---- R436_STROBE_LAB (track_runtime/strobelab.inc.cpp) ---- */
+    Q_INVOKABLE bool slabOpen();
+    Q_INVOKABLE void slabClose();
+    Q_INVOKABLE void slabSetTab(int tab);
+    Q_INVOKABLE void slabNext();
+    Q_INVOKABLE void slabBack();
+    Q_INVOKABLE void slabGoto(int index);
+    /** -1 NO (ban), 0 SKIP, 1 GOOD (up-votes) - the same verdict again takes it back */
+    Q_INVOKABLE void slabDecide(int verdict);
+    /** 0 off, 1 two seconds, 2 four seconds, 3 eight beats */
+    Q_INVOKABLE void slabSetAuto(int mode);
+    /** room, red, blue, white - under a colourless programme */
+    Q_INVOKABLE void slabSetColour(const QString &colour);
+    /** 0 as made, 1 half the pace, 2 double */
+    Q_INVOKABLE void slabSetSpeed(int speed);
+    Q_INVOKABLE void slabToggleHold();
+    /** STOP, and PLAY: the lab opens dark */
+    Q_INVOKABLE void slabStop();
+    /** ALL LAMPS ON - TEST */
+    Q_INVOKABLE void slabToggleTest();
+    bool slabAvailable() const;
+    bool slabActive() const { return m_slabActive; }
+    QString slabGroup() const;
+    int slabLampCount() const;
+    int slabTab() const { return m_slabTab; }
+    int slabIndex() const { return m_slabIndex; }
+    int slabCount() const { return int(m_slabList.count()); }
+    QString slabTitle() const;
+    QString slabDetail() const;
+    QStringList slabChips() const;
+    int slabVerdict() const;
+    QVariantList slabStrip() const;
+    int slabGood() const { return slabCountOf(1); }
+    int slabNo() const { return slabCountOf(-1); }
+    QVariantList slabTabCounts() const;
+    int slabGoodAll() const { return slabAllOf(1); }
+    int slabNoAll() const { return slabAllOf(-1); }
+    int slabAuto() const { return m_slabAuto; }
+    QString slabColour() const { return m_slabColour; }
+    bool slabOwnColour() const;
+    int slabSpeed() const { return m_slabSpeed; }
+    bool slabCanSpeed() const;
+    bool slabHold() const { return m_slabHold; }
+    bool slabDark() const { return m_slabDark; }
+    bool slabTest() const { return m_slabTest; }
+    QString slabMessage() const { return m_slabMessage; }
     /** kill a pending or running bar echo - AUTO off, blackout, a new track */
     void stopEcho();
 
@@ -882,6 +973,9 @@ signals:
     void dropSetChanged();               // R431_DROP_PICK
     void liveChanged();
     void labChanged();                   // R410_LAB
+    void tasteChanged();                 // R436_LEARNED
+    void showCheckChanged();             // R436_SHOW_CHECK
+    void slabChanged();                  // R436_STROBE_LAB
     /** a colour tile was pressed but the colour cannot be used (not in the
      *  palette any more, banned): the tile blinks (runde 313, B27/Tobias) */
     void colourRejected(const QString &colour);
@@ -1452,6 +1546,45 @@ private:
     void crumbsOpen();
     void crumb(const QString &what);
     void crumbsEnd();
+    // R436_SHOW_CHECK
+    QVariantList m_showMissing;
+    int m_showWants = 0;
+    QString m_showAckKey;
+    void updateShowCheck();
+    QString showKey() const;
+    // R436_STROBE_LAB
+    bool m_slabActive = false;
+    mutable bool m_slabLoaded = false;
+    bool m_slabWired = false;
+    bool m_slabDark = true;
+    bool m_slabHold = false;
+    bool m_slabTest = false;
+    int m_slabTab = 0;
+    int m_slabIndex = 0;
+    int m_slabAuto = 0;
+    int m_slabSpeed = 0;
+    QString m_slabGroup;
+    QString m_slabColour = QStringLiteral("room");
+    QString m_slabMessage;
+    QList<quint32> m_slabList;
+    QHash<int, quint32> m_slabResume;    // where he was, per tab
+    mutable QHash<quint32, int> m_slabVerdict;
+    QTimer m_slabAutoTimer;
+    QString slabPickGroup() const;
+    void slabLoad() const;
+    void slabSave() const;
+    int slabTabOf(const TrackFuncInfo &info) const;
+    QList<quint32> slabListOf(const QString &group, int tab) const;
+    quint32 slabCurrent() const;
+    QString slabColourNow() const;
+    int slabDivision(const TrackFuncInfo &info) const;
+    void slabDarkParts();
+    void slabShow();
+    void slabRestartTimer();
+    void slabShowCandidate();
+    int slabCountOf(int verdict) const;
+    int slabAllOf(int verdict) const;
+    void slabShutdown();                 // every way LASER LAB closes (labShutdown)
     qreal colourTaste(const QString &colour) const;
     void learnColour(const QString &picked, const QString &shown);
     // ---- runde 358 ----
