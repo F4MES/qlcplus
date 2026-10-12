@@ -1436,6 +1436,15 @@ private:
     int m_kickBackLast = -100;
     mutable QHash<QString, qreal> m_colourTaste;   // R357_TASTE: learned from the colour tiles
     mutable bool m_tasteLoaded = false;
+    // R433_SECTION_TASTE: learned from his picks in RIG, "section/group" -> weight
+    mutable QHash<QString, qreal> m_sectionTaste;
+    mutable bool m_sectionTasteLoaded = false;
+    QStringList m_planOriginal;          // the engine's plan as it stood at his first tap
+    qreal sectionTaste(const QString &section, const QString &key) const;
+    bool tasteOut(const QString &section, const QString &key) const;
+    int tasteWeight(const QString &section, const QString &key, int weight) const;
+    void tasteLast(const QString &section, QStringList &order) const;
+    void learnSection(const QString &section, const QStringList &plan, const QStringList &his);
     qreal colourTaste(const QString &colour) const;
     void learnColour(const QString &picked, const QString &shown);
     // ---- runde 358 ----

@@ -117,6 +117,7 @@ static quint32 nameScatter(const QString &name)
 // så hurtigere derfra." They come on at 30 %, two beats a step or slower;
 // from 50 % a beat a step; from 75 % in a drop an eighth. strobePaceFloor().
 #define ENGINE_STROBE_ON      0.30
+#define ENGINE_TASTE_OUT      0.60   // R433_SECTION_TASTE: under this he has taken it out
 #define ENGINE_BARS_AMOK      0.995   // runde 348: the laser bars go wild at 100 % only
 #define ENGINE_HWSTROBE_ON    0.55    // the hardware shutter's own line (runde 313)
 // runde 344, Tobias 10-03: "animationslaseren skal foerst komme i spil ved 70%"
@@ -3663,6 +3664,89 @@ qreal TrackEngine::colourTaste(const QString &colour) const
     return m_colourTaste.value(colour, 1.0);
 }
 
+qreal TrackEngine::sectionTaste(const QString &section, const QString &key) const
+{
+    // R433_SECTION_TASTE
+    if (m_sectionTasteLoaded == false)
+    {
+        m_sectionTasteLoaded = true;
+        const QVariantMap raw = QSettings().value(QStringLiteral("trackengine/section-taste")).toMap();
+        for (auto it = raw.constBegin(); it != raw.constEnd(); ++it)
+            m_sectionTaste.insert(it.key(), qBound(0.4, it.value().toDouble(), 2.5));
+    }
+    return m_sectionTaste.value(section + QLatin1Char('/') + key, 1.0);
+}
+
+bool TrackEngine::tasteOut(const QString &section, const QString &key) const
+{
+    return sectionTaste(section, key) < ENGINE_TASTE_OUT;
+}
+
+int TrackEngine::tasteWeight(const QString &section, const QString &key, int weight) const
+{
+    // the rested-groups draw (runde 401) in eighths, so a lean of 15 % shows;
+    // untouched (no taste for this kind of section) it is the old draw exactly
+    sectionTaste(section, key);          // loaded
+    bool any = false;
+    const QString pre = section + QLatin1Char('/');
+    for (auto it = m_sectionTaste.constBegin(); it != m_sectionTaste.constEnd() && any == false; ++it)
+        any = it.key().startsWith(pre) && qAbs(it.value() - 1.0) > 0.001;
+    if (any == false)
+        return weight;
+    return qMax(1, qRound(qreal(weight) * 8.0 * sectionTaste(section, key)));
+}
+
+void TrackEngine::tasteLast(const QString &section, QStringList &order) const
+{
+    // a group he keeps taking out of this kind of section goes to the back
+    QStringList out;
+    for (int i = 0; i < order.count(); )
+    {
+        if (tasteOut(section, order.at(i)))
+            out << order.takeAt(i);
+        else
+            i++;
+    }
+    order << out;
+}
+
+void TrackEngine::learnSection(const QString &section, const QStringList &plan, const QStringList &his)
+{
+    // R433_SECTION_TASTE: what he put in that the engine had not planned weighs
+    // more for this kind of section, what he took out weighs less. The base is
+    // not learned - it is in every section unless he switches it off.
+    if (section.isEmpty())
+        return;
+    sectionTaste(section, QString());    // loaded
+    const QString base = baseGroup();
+    QStringList changed;
+    foreach (const QString &key, his)
+    {
+        if (key == base || plan.contains(key))
+            continue;
+        const QString k = section + QLatin1Char('/') + key;
+        m_sectionTaste.insert(k, qMin(2.5, m_sectionTaste.value(k, 1.0) * 1.15));
+        changed << key;
+    }
+    foreach (const QString &key, plan)
+    {
+        if (key == base || his.contains(key))
+            continue;
+        const QString k = section + QLatin1Char('/') + key;
+        m_sectionTaste.insert(k, qMax(0.4, m_sectionTaste.value(k, 1.0) * 0.87));
+        changed << key;
+    }
+    if (changed.isEmpty())
+        return;
+    QVariantMap out;
+    for (auto it = m_sectionTaste.constBegin(); it != m_sectionTaste.constEnd(); ++it)
+        out.insert(it.key(), QString::number(it.value(), 'f', 3).toDouble());
+    QSettings().setValue(QStringLiteral("trackengine/section-taste"), out);
+    foreach (const QString &key, changed)
+        logSignal(QStringLiteral("sig:section-taste:") + section + QLatin1Char(':') + key + QLatin1Char('=')
+                  + QString::number(sectionTaste(section, key), 'f', 2));
+}
+
 void TrackEngine::learnColour(const QString &picked, const QString &shown)
 {
     colourTaste(picked);                 // loaded
@@ -5331,6 +5415,8 @@ void TrackEngine::toggleDropGroup(QString key)
     if (m_dropMode == 0 || m_groups.contains(key) == false || m_groupOff.contains(key))
         return;
     const bool in = m_dropSet.contains(key) == false;
+    if (m_dropTouched == false)
+        m_planOriginal = m_dropSet;      // R433_SECTION_TASTE: the engine's plan, as it stood
     if (in)
     {
         QStringList out;
@@ -5364,6 +5450,7 @@ QStringList TrackEngine::planCast(const QString &section, qreal fader) const
     if (section == QStringLiteral("intro") || section == QStringLiteral("outro"))
         return inRoomOrder(set);
     QRandomGenerator dice(m_dropPlanSeed);
+    const QString tasteKind = section;          // R433_SECTION_TASTE
     // the pool, drawn by rest (runde 401)
     QList<QPair<QString, int> > bag;
     foreach (const QString &key, m_groupOrder)
@@ -5378,7 +5465,7 @@ QStringList TrackEngine::planCast(const QString &section, qreal fader) const
         if (g.patternDevice && fader < ENGINE_ANI_ON)
             continue;
         const int rest = m_cast.contains(key) ? 0 : qMin(6, m_castRest.value(key, 3) + 1);
-        bag.append(qMakePair(key, 1 + rest));
+        bag.append(qMakePair(key, tasteWeight(tasteKind, key, 1 + rest)));   // R433_SECTION_TASTE
     }
     QStringList order;
     while (bag.isEmpty() == false)
@@ -5392,13 +5479,16 @@ QStringList TrackEngine::planCast(const QString &section, qreal fader) const
             roll -= bag.at(pick++).second;
         order.append(bag.takeAt(pick).first);
     }
+    tasteLast(section, order);                  // R433_SECTION_TASTE
     if (section == QStringLiteral("break"))
     {
-        // the washes beside the base in every break (runde 235) ...
+        // the washes beside the base in every break (runde 235) - but not one
+        // he keeps taking out of breaks (R433_SECTION_TASTE) ...
         foreach (const QString &key, order)
         {
             const TrackGroup &g = m_groups.value(key);
-            if (g.strobes == false && g.lasers == false && g.patternDevice == false)
+            if (g.strobes == false && g.lasers == false && g.patternDevice == false
+                && tasteOut(section, key) == false)
                 set.insert(key);
         }
         // ... and one special now and then: one break in five at the bottom of
@@ -5421,7 +5511,8 @@ QStringList TrackEngine::planCast(const QString &section, qreal fader) const
     if (build)                                  // the build's top: the strobes in front
     {
         for (int i = 0; i < order.count(); i++)
-            if (m_groups.value(order.at(i)).strobes) { order.move(i, 0); break; }
+            if (m_groups.value(order.at(i)).strobes && tasteOut(section, order.at(i)) == false)
+            { order.move(i, 0); break; }
     }
     const qreal pLead = 0.10 + 0.50 * qBound(0.0, (fader - 0.25) / 0.70, 1.0);
     if (dice.bounded(1000) < int(pLead * 1000.0))
@@ -5466,6 +5557,7 @@ QStringList TrackEngine::planDropCast(qreal fader) const
     // dice (m_dropPlanSeed), so the night's draw is not moved by a plan.
     QRandomGenerator dice(m_dropPlanSeed);
     const QString base = baseGroup();
+    const QString tasteKind = QStringLiteral("drop");   // R433_SECTION_TASTE
     QList<QPair<QString, int> > bag;
     foreach (const QString &key, m_groupOrder)
     {
@@ -5479,7 +5571,7 @@ QStringList TrackEngine::planDropCast(qreal fader) const
         if (g.patternDevice && fader < ENGINE_ANI_ON)
             continue;
         const int rest = m_cast.contains(key) ? 0 : qMin(6, m_castRest.value(key, 3) + 1);
-        bag.append(qMakePair(key, 1 + rest));
+        bag.append(qMakePair(key, tasteWeight(tasteKind, key, 1 + rest)));   // R433_SECTION_TASTE
     }
     QStringList order;
     while (bag.isEmpty() == false)
@@ -5493,9 +5585,11 @@ QStringList TrackEngine::planDropCast(qreal fader) const
             roll -= bag.at(pick++).second;
         order.append(bag.takeAt(pick).first);
     }
+    tasteLast(tasteKind, order);                // R433_SECTION_TASTE
     int front = 0;
     for (int i = 0; i < order.count(); i++)
-        if (m_groups.value(order.at(i)).strobes) { order.move(i, 0); front = 1; break; }
+        if (m_groups.value(order.at(i)).strobes && tasteOut(tasteKind, order.at(i)) == false)
+        { order.move(i, 0); front = 1; break; }
     const qreal pLead = 0.15 + 0.80 * qBound(0.0, (fader - 0.25) / 0.70, 1.0);
     if (dice.bounded(1000) < int(pLead * 1000.0))
     {
@@ -9636,7 +9730,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             {
                 const int rest = m_cast.contains(key) ? 0 : qMin(6, m_castRest.value(key, 3) + 1);
                 m_castRest.insert(key, rest);
-                bag.append(qMakePair(key, 1 + rest));
+                bag.append(qMakePair(key, tasteWeight(state, key, 1 + rest)));   // R433_SECTION_TASTE
             }
             m_castOrder.clear();
             while (bag.isEmpty() == false)
@@ -9650,6 +9744,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     roll -= bag.at(pick++).second;
                 m_castOrder.append(bag.takeAt(pick).first);
             }
+            tasteLast(state, m_castOrder);       // R433_SECTION_TASTE
             // R401_SPECIAL_DRAW: each special a draw of its own, on its own
             // occasions, the odds growing with every one it missed
             m_drawAlone = isBreak && fader >= 0.90 && varietyDraw(m_aloneWait, rng);
@@ -10198,7 +10293,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         for (int i = 0; i < priority.count(); i++)
         {
-            if (m_groups.value(priority.at(i)).strobes)
+            if (m_groups.value(priority.at(i)).strobes
+                && tasteOut(state, priority.at(i)) == false)   // R433_SECTION_TASTE
             {
                 priority.prepend(priority.takeAt(i));
                 break;
@@ -10311,7 +10407,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             foreach (const QString &key, eligible)
             {
                 const TrackGroup &wg = m_groups.value(key);
-                if (key != base && wg.strobes == false && wg.lasers == false && wg.patternDevice == false)
+                if (key != base && wg.strobes == false && wg.lasers == false && wg.patternDevice == false
+                    && tasteOut(state, key) == false)    // R433_SECTION_TASTE: not one he keeps taking out
                     castSet.insert(key);
             }
         }
@@ -10381,6 +10478,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_planSection.clear();
             m_forceOn = false;
             m_forceSet.clear();
+            m_planOriginal.clear();              // R433_SECTION_TASTE
         }
         // the boundary the plan was for: his set takes the section (or, untouched,
         // the engine's own section starts and whatever he held before ends)
@@ -10391,6 +10489,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (m_forceOn)
                 logSignal(QStringLiteral("sig:section-pick:") + m_planSection + QStringLiteral(":")
                           + m_forceSet.join(QLatin1Char('+')));
+            // R433_SECTION_TASTE: the verdicts' switch (SETUP) is the learning's too
+            if (m_forceOn && m_ratingOn)
+                learnSection(m_planSection, m_planOriginal, m_forceSet);
+            m_planOriginal.clear();
             m_dropTouched = false;
             m_dropMode = 0;
             m_dropSet.clear();
@@ -12637,8 +12739,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // break programmes - the Minis have 48 (runde 234)
         bool breakWash = isBreak && key != base && isCalm == false && still == false
                       && g.strobes == false && g.lasers == false && g.patternDevice == false;
+        // R433_STROBE_BREAK: ... and the strobes their calm break chase
+        bool breakStrobes = isBreak && g.strobes && mv.ownChaser && isCalm == false && still == false;
         bool moving = still == false
-                   && (breakLasers || breakBase || breakWash
+                   && (breakLasers || breakBase || breakWash || breakStrobes
                        || (mv.ownChaser && isBreak == false
                            && (isBuild == false || barProg >= 0.5
                                // a group with build programmes starts one on
@@ -14184,6 +14288,12 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
         // third of the grooves; the pace is the slider's (strobePaceFloor).
         mv.ownChaser = fNow >= ENGINE_STROBE_ON && ((tier == 2 && chance(0.50))
                                                   || (tier == 1 && build == false && chance(0.35)));
+        // R433_STROBE_BREAK (Tobias 10-12: "generer nogle break-programmer til
+        // stroberne saa de har noget roligt at koere"): a break the strobes are
+        // in - his pick, since runde 432 - runs one of the calm break chases
+        // seven times in ten, at any slider; the other three are the walk below
+        if (tier == 0)
+            mv.ownChaser = chance(0.70);
         // ... and ALL the way down between the hits, at every energy. It was
         // 0.85 + 0.15 * e, so at the bottom of the fader the room sat at
         // fifteen per cent of a very bright lamp between the blinks: lit, on a
