@@ -1734,6 +1734,20 @@ Rectangle
                 // and cast() are not cheap either (runde 142, 204)
                 property var allTrims: trackEngine ? trackEngine.trims : ({})
                 property var litNow: trackEngine ? trackEngine.cast : []
+                // R432_RIG_NEXT: the section the marks are for, and what a tap does
+                readonly property string planName: trackEngine && trackEngine.planSection ? trackEngine.planSection.toUpperCase() : ""
+                Text
+                {
+                    objectName: "rigPlanHint"
+                    visible: trackEngine ? trackEngine.dropMode > 0 && rigCard.planName !== "" : false
+                    x: rigCard.inX + Math.round(48 * trackViewRoot.ks)
+                    y: trackViewRoot.cardPad
+                    width: rigCard.inW - Math.round(48 * trackViewRoot.ks)
+                    elide: Text.ElideRight
+                    text: "·  " + qsTr("tap a name = in / out of the NEXT") + " " + rigCard.planName
+                    color: "#F05050"
+                    font.pixelSize: trackViewRoot.fs(12)
+                }
                 // MASTER DIMMER has the top row; five groups fill the other five,
                 // a bigger rig shares them
                 readonly property int rows: castRep.count
@@ -1853,10 +1867,12 @@ Rectangle
                                     function onCurrentBeatChanged() { if (grp.lit && trackViewRoot.animate && trackManager && trackManager.playing) stagePulse.restart() }
                                 }
                                 color: grp.off ? "#5E5E68" : (grp.lit ? trackViewRoot.cGreen : "#6E6E78")
-                                // R431_RIG_NAMES: the drop's groups say so
+                                // R432_RIG_NEXT (mockup C): the dot is NOW, the red words the
+                                // plan for the next section
                                 text: (grp.md.base ? "<font color='#4FA3E3'><b>BASE</b></font> · " : "")
-                                      + (grp.inDrop ? "<font color='#F05050'><b>▶ " + (grp.md.base ? qsTr("DROP")
-                                                       : trackEngine.dropMode === 2 ? qsTr("IN DROP") : qsTr("NEXT DROP")) + "</b></font>"
+                                      + (grp.inDrop ? "<font color='" + (grp.lit ? "#6ECD82" : "#6E6E78") + "'>" + (grp.lit ? "●" : "○")
+                                                      + "</font> <font color='#F05050'><b>▶ " + (grp.md.base ? "" : qsTr("NEXT") + " ")
+                                                      + rigCard.planName + "</b></font>"
                                          : (grp.off ? qsTr("off") : (grp.lit ? "● " + qsTr("on stage") : "○ " + qsTr("waiting"))))
                             }
                         }
@@ -2753,7 +2769,7 @@ Rectangle
             x: rigCard.inX; y: helpOverlay.rowY(1); width: rigCard.inW
             height: 5 * trackViewRoot.rowH + 4 * trackViewRoot.g
             verticalAlignment: Text.AlignTop
-            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling.<br><br><font color='#6ECD82'>● on stage</font> - lit now. ○ <b>waiting</b> - in the show, not used right now.<br><br><b>Tap a name</b> - in or out of the drop: <font color='#F05050'>▶ NEXT DROP</font> is the engine's plan, your taps on top. The base has a toggle too.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
+            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling.<br><br><font color='#6ECD82'>● on stage</font> - lit now. ○ <b>waiting</b> - in the show, not used right now.<br><br><b>Tap a name</b> - in or out of the next section: <font color='#F05050'>▶ NEXT BREAK</font> (BUILD, DROP ...) is the engine's plan; a tap makes it yours for that whole section. The dot: lit now or waiting. The base has a toggle too.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
         }
 
         // ---- LOOK: the explanation on each row, after its label
