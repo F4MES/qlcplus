@@ -27,6 +27,7 @@
 #include <QTextStream>
 #include <QPair>
 #include <QDir>
+#include <QFileInfo>                     // R435_CRUMBS
 #include <QSaveFile>
 #include <cmath>
 
@@ -118,6 +119,8 @@ static quint32 nameScatter(const QString &name)
 // from 50 % a beat a step; from 75 % in a drop an eighth. strobePaceFloor().
 #define ENGINE_STROBE_ON      0.30
 #define ENGINE_TASTE_OUT      0.60   // R433_SECTION_TASTE: under this he has taken it out
+#define ENGINE_TASTE_KEEP     0.90   // R435_TASTE_DECAY: what a night keeps of the lean
+#define ENGINE_CRUMBS_MAX     (2 * 1024 * 1024)   // R435_CRUMBS: rotate here
 #define ENGINE_BARS_AMOK      0.995   // runde 348: the laser bars go wild at 100 % only
 #define ENGINE_HWSTROBE_ON    0.55    // the hardware shutter's own line (runde 313)
 // runde 344, Tobias 10-03: "animationslaseren skal foerst komme i spil ved 70%"
@@ -336,11 +339,74 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
         connect(m_doc, SIGNAL(fixtureGroupRemoved(quint32)), this, SLOT(slotDocChanged()));
         connect(m_doc, SIGNAL(fixtureGroupChanged(quint32)), this, SLOT(slotDocChanged()));
     }
+    crumbsOpen();                        // R435_CRUMBS
 }
 
 TrackEngine::~TrackEngine()
 {
     stopAll();
+    crumbsEnd();                         // R435_CRUMBS
+}
+
+void TrackEngine::crumbsOpen()
+{
+    // R435_CRUMBS (Tobias 10-12, forslag 9): the crash trail. A run that did
+    // not end with "END clean" crashed - its trail is kept beside the tracklog.
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                      + QDir::separator() + "QLC+";
+    QDir().mkpath(dir);
+    const QString path = dir + QDir::separator() + "crumbs-current.txt";
+    QFile old(path);
+    if (old.exists() && old.size() > 0 && old.open(QIODevice::ReadOnly))
+    {
+        old.seek(qMax<qint64>(0, old.size() - 64));
+        const bool clean = old.readAll().contains("END clean");
+        old.close();
+        if (clean == false)
+        {
+            const QString kept = "crash-crumbs-"
+                + QFileInfo(path).lastModified().toString("yyyyMMdd-HHmmss") + ".txt";
+            QFile::remove(dir + QDir::separator() + kept);
+            if (QFile::rename(path, dir + QDir::separator() + kept))
+                m_crashNote = kept;
+        }
+    }
+    m_crumbs.setFileName(path);
+    if (m_crumbs.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text) == false)
+        return;
+    crumb(QStringLiteral("START TRACK-r435 QV4_GC_TIMELIMIT=")
+          + QString::fromLocal8Bit(qgetenv("QV4_GC_TIMELIMIT"))
+          + (m_crashNote.isEmpty() ? QString() : QStringLiteral(" (last run crashed: ") + m_crashNote + ')'));
+    if (QCoreApplication::instance() != nullptr)
+        connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this]() { crumbsEnd(); });
+}
+
+void TrackEngine::crumb(const QString &what)
+{
+    if (m_crumbs.isOpen() == false)
+        return;
+    m_crumbs.write((QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")) + QLatin1Char(' ')
+                    + what + QLatin1Char('\n')).toUtf8());
+    m_crumbs.flush();                    // in the OS the moment it is written: a crash cannot lose it
+    if (m_crumbs.size() > ENGINE_CRUMBS_MAX)
+    {
+        const QString path = m_crumbs.fileName();
+        const QString prev = QFileInfo(path).absolutePath() + QDir::separator() + "crumbs-prev.txt";
+        m_crumbs.close();
+        QFile::remove(prev);
+        QFile::rename(path, prev);
+        m_crumbs.setFileName(path);
+        if (m_crumbs.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+            crumb(QStringLiteral("(rotated - the earlier trail is crumbs-prev.txt)"));
+    }
+}
+
+void TrackEngine::crumbsEnd()
+{
+    if (m_crumbs.isOpen() == false)
+        return;
+    crumb(QStringLiteral("END clean"));
+    m_crumbs.close();
 }
 
 void TrackEngine::slotFadeTimer()
@@ -3708,6 +3774,39 @@ void TrackEngine::tasteLast(const QString &section, QStringList &order) const
             i++;
     }
     order << out;
+}
+
+void TrackEngine::decaySectionTaste()
+{
+    // R435_TASTE_DECAY (Tobias 10-12, forslag 3): the lean glides back toward
+    // neutral, 10 % a night, so one night's picks do not lock a group out for
+    // good. A night runs to noon (02:00 is still the evening before).
+    const QString night = QDateTime::currentDateTime().addSecs(-12 * 3600).date().toString(Qt::ISODate);
+    QSettings settings;
+    const QString last = settings.value(QStringLiteral("trackengine/section-taste-night")).toString();
+    if (last == night)
+        return;
+    settings.setValue(QStringLiteral("trackengine/section-taste-night"), night);
+    if (last.isEmpty())
+        return;                          // the first night: nothing was learned before it
+    sectionTaste(QString(), QString());  // loaded
+    if (m_sectionTaste.isEmpty())
+        return;
+    QVariantMap out;
+    for (auto it = m_sectionTaste.begin(); it != m_sectionTaste.end(); )
+    {
+        const qreal v = 1.0 + (it.value() - 1.0) * ENGINE_TASTE_KEEP;
+        if (qAbs(v - 1.0) < 0.01)
+        {
+            it = m_sectionTaste.erase(it);   // nearly neutral: forgotten
+            continue;
+        }
+        it.value() = v;
+        out.insert(it.key(), QString::number(v, 'f', 3).toDouble());
+        ++it;
+    }
+    settings.setValue(QStringLiteral("trackengine/section-taste"), out);
+    logSignal(QStringLiteral("sig:section-taste-decay:") + night);
 }
 
 void TrackEngine::learnSection(const QString &section, const QStringList &plan, const QStringList &his)
@@ -8489,6 +8588,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_sectionOwed = m_sectionOwed || sectionChanged;
         return;
     }
+    crumb(QStringLiteral("beat ") + QString::number(beat) + QLatin1Char(' ') + state);   // R435_CRUMBS
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
     labShutdown(false);          // R410_LAB: so does the lab (the table rebuilds below)
@@ -16138,6 +16238,7 @@ void TrackEngine::logSignal(const QString &tag)
     // reached, so this holds for the sig: lines too.
     QString sect = m_lookState.isEmpty() ? m_lastState : m_lookState;
     QString mark = QString(tag).replace(',', ' ');
+    crumb(mark);                         // R435_CRUMBS: his presses, in the trail too
 
     // A verdict is filed against the snapshot markVerdictPoint() took when
     // the finger landed - rate() and rateGroup() both read verdictStage()
@@ -18395,9 +18496,17 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_forceNext = false;
     clearMusicDark();                    // runde 356
     newTrackMemory(title);               // runde 358: no loop; the drops of another track are forgotten
+    // R435_CRUMBS: the trail names the track; the last run's crash goes in the log
+    crumb(QStringLiteral("track ") + title);
+    if (m_crashNote.isEmpty() == false)
+    {
+        logSignal(QStringLiteral("sig:crashed-last-run:") + m_crashNote);
+        m_crashNote.clear();
+    }
     // R434_TRACK_RESET: another track - the plan and his section were the old one's
     if (title != m_trackTitle)
     {
+        decaySectionTaste();             // R435_TASTE_DECAY: the night's first new track
         const bool had = m_dropMode != 0 || m_dropSet.isEmpty() == false || m_planSection.isEmpty() == false;
         m_dropMode = 0;
         m_dropTouched = false;
@@ -18729,6 +18838,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     m_activeLevel.insert(slot, level);
     m_activeOut.insert(slot, out);
     m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
+    crumb(QStringLiteral("run ") + slot + QLatin1Char(' ') + QString::number(fid) + QLatin1Char(' ') + func->name());   // R435_CRUMBS
 }
 
 int TrackEngine::figureBeats(quint32 fid) const
@@ -18803,6 +18913,7 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
 
     int attr = m_activeAttr.value(slot, -1);
     m_active.remove(slot);
+    crumb(QStringLiteral("stop ") + slot + QLatin1Char(' ') + QString::number(fid) + (hard ? QStringLiteral(" hard") : QString()));   // R435_CRUMBS
     m_activeAttr.remove(slot);
     m_activeLevel.remove(slot);
     // the fade starts from what the light actually showed - trim, master,
