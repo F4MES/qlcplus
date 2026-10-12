@@ -1445,6 +1445,13 @@ private:
     int tasteWeight(const QString &section, const QString &key, int weight) const;
     void tasteLast(const QString &section, QStringList &order) const;
     void learnSection(const QString &section, const QStringList &plan, const QStringList &his);
+    void decaySectionTaste();            // R435_TASTE_DECAY: once a night, toward neutral
+    // R435_CRUMBS: the crash trail (Documents/QLC+/crumbs-current.txt)
+    QFile m_crumbs;
+    QString m_crashNote;                 // the last run's crash file, for the tracklog
+    void crumbsOpen();
+    void crumb(const QString &what);
+    void crumbsEnd();
     qreal colourTaste(const QString &colour) const;
     void learnColour(const QString &picked, const QString &shown);
     // ---- runde 358 ----
