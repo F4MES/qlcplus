@@ -395,6 +395,9 @@ class TrackEngine : public QObject
 
     Q_PROPERTY(int roleCount READ roleCount CONSTANT)
     Q_PROPERTY(QVariantList groups READ groups NOTIFY tableChanged)
+    /** R431_DROP_PICK: the groups of the next drop (dropMode 1) or this one (2) */
+    Q_PROPERTY(QStringList dropSet READ dropSet NOTIFY dropSetChanged)
+    Q_PROPERTY(int dropMode READ dropMode NOTIFY dropSetChanged)
     Q_PROPERTY(QVariantList palette READ palette NOTIFY tableChanged)
     Q_PROPERTY(bool showAll READ showAll WRITE setShowAll NOTIFY tableChanged)
     /** The engine makes everything itself from the fixtures' channels -
@@ -611,6 +614,8 @@ public:
     /** ON -> BASE -> OFF -> ON. The base group is always lit; the others
      *  are effects added on top as the evening's energy rises. */
     Q_INVOKABLE void cycleGroup(QString key);
+    Q_INVOKABLE void toggleDropGroup(QString key);   // R431_DROP_PICK: a name in RIG
+    QStringList planDropCast(qreal fader) const;     // R431_DROP_PICK: the engine's plan
     Q_INVOKABLE void toggleBase(QString key);
     QVariantMap trims() const;
     Q_INVOKABLE qreal groupTrim(QString key) const;
@@ -871,6 +876,7 @@ public:
 
 signals:
     void tableChanged();
+    void dropSetChanged();               // R431_DROP_PICK
     void liveChanged();
     void labChanged();                   // R410_LAB
     /** a colour tile was pressed but the colour cannot be used (not in the
@@ -1407,6 +1413,17 @@ private:
     int m_landBurstFrom = -1;            // R363_LOOP_LAND: the beat the landing burst began
 public:
     void setNextDropBeat(int beat) { m_nextDropBeat = beat; }
+    // R431_DROP_PICK
+    QStringList dropSet() const { return m_dropSet; }
+    int dropMode() const { return m_dropMode; }
+    QStringList m_dropSet;               // the drop's groups, in the room's order
+    int m_dropMode = 0;                  // 0 none, 1 the next drop (plan), 2 this drop
+    bool m_dropTouched = false;          // he tapped: the set is his until the drop ends
+    int m_dropPlanFor = -1;              // the drop flag the plan was drawn for
+    int m_dropPlanBeat = -1;             // the beat the block last ran on
+    qreal m_dropPlanFader = -1.0;        // the slider the plan was sized at
+    quint32 m_dropPlanSeed = 431u;       // the plan's own dice
+    quint32 m_dropPlanCount = 0;
 private:
     bool m_bigDrop = false;              // R357_KICK_BACK: this drop arrived big
     int m_kickBackLast = -100;

@@ -1778,6 +1778,8 @@ Rectangle
                         property bool off: !md.enabled
                         property bool switchOnly: md.switchOnly === true
                         property real trim: rigCard.allTrims[md.key] !== undefined ? rigCard.allTrims[md.key] : 1.0
+                        // R431_DROP_PICK: in the next drop (or this one)
+                        property bool inDrop: trackEngine ? (!off && trackEngine.dropMode > 0 && trackEngine.dropSet.indexOf(md.key) >= 0) : false   // R431B_DROP_OFF
                         x: rigCard.inX
                         y: deck.rowY(1) + index * (rigCard.rowH + trackViewRoot.g)
                         width: rigCard.inW
@@ -1786,6 +1788,30 @@ Rectangle
                         readonly property real swW: Math.round(58 * trackViewRoot.ks)
                         readonly property color ink: off ? "#4E4E56" : (lit ? "#E6E6EC" : "#8C8C96")
 
+                        // R431_RIG_NAMES: the drop's groups carry a red line
+                        Rectangle
+                        {
+                            visible: grp.inDrop
+                            x: -Math.round(10 * trackViewRoot.ks)
+                            width: Math.round(4 * trackViewRoot.ks); height: parent.height
+                            radius: width / 2
+                            color: "#E03030"
+                        }
+                        // R431_RIG_NAMES (Tobias 10-11: B3): a tap on the name = in or out
+                        // of the drop - only while a drop is ahead or on
+                        Item
+                        {
+                            objectName: "groupName:" + grp.md.key
+                            anchors.left: parent.left
+                            anchors.right: grpSwitchCell.left
+                            anchors.rightMargin: Math.round(30 * trackViewRoot.ks)
+                            height: parent.height
+                            TouchInput
+                            {
+                                enabled: trackEngine ? trackEngine.dropMode > 0 && !grp.off : false
+                                onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.toggleDropGroup(grp.md.key) }
+                            }
+                        }
                         ControlIcon
                         {
                             id: grpIcon
@@ -1827,8 +1853,11 @@ Rectangle
                                     function onCurrentBeatChanged() { if (grp.lit && trackViewRoot.animate && trackManager && trackManager.playing) stagePulse.restart() }
                                 }
                                 color: grp.off ? "#5E5E68" : (grp.lit ? trackViewRoot.cGreen : "#6E6E78")
+                                // R431_RIG_NAMES: the drop's groups say so
                                 text: (grp.md.base ? "<font color='#4FA3E3'><b>BASE</b></font> · " : "")
-                                      + (grp.off ? qsTr("off") : (grp.lit ? "● " + qsTr("on stage") : "○ " + qsTr("waiting")))
+                                      + (grp.inDrop ? "<font color='#F05050'><b>▶ " + (grp.md.base ? qsTr("DROP")
+                                                       : trackEngine.dropMode === 2 ? qsTr("IN DROP") : qsTr("NEXT DROP")) + "</b></font>"
+                                         : (grp.off ? qsTr("off") : (grp.lit ? "● " + qsTr("on stage") : "○ " + qsTr("waiting"))))
                             }
                         }
 
@@ -1841,20 +1870,13 @@ Rectangle
                             width: grp.swW
                             height: parent.height
 
-                            // the base is always in the show: a lock, not a switch
-                            ControlIcon
-                            {
-                                visible: grp.md.base === true
-                                anchors.centerIn: parent
-                                width: Math.round(20 * trackViewRoot.ks); height: width
-                                kind: "lock"; ink: trackViewRoot.cBlue
-                            }
+                            // R431_BASE_SWITCH (Tobias 10-11: "muligt at slukke for basen
+                            // med toggle"): the base has the toggle the others have
                             // A TOGGLE (runde 139): in or out of tonight's show
                             Rectangle
                             {
                                 id: grpSwitch
                                 objectName: "groupSwitch:" + grp.md.key
-                                visible: !grp.md.base
                                 anchors.centerIn: parent
                                 width: Math.round(52 * trackViewRoot.ks)
                                 height: Math.round(28 * trackViewRoot.ks)
@@ -1934,10 +1956,10 @@ Rectangle
                                 font.pixelSize: trackViewRoot.fs(12)
                                 font.letterSpacing: (trackViewRoot.fs(12)) * 0.12
                             }
-                            // the base is always in the show, switch-only or not
+                            // R431_BASE_SWITCH: the base too
                             TouchInput
                             {
-                                enabled: grp.switchOnly && !grp.md.base
+                                enabled: grp.switchOnly
                                 onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.setGroupEnabled(grp.md.key, grp.off) }
                             }
                         }
@@ -2731,7 +2753,7 @@ Rectangle
             x: rigCard.inX; y: helpOverlay.rowY(1); width: rigCard.inW
             height: 5 * trackViewRoot.rowH + 4 * trackViewRoot.g
             verticalAlignment: Text.AlignTop
-            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling.<br><br><font color='#6ECD82'>● on stage</font> - lit now. ○ <b>waiting</b> - in the show, not used right now.<br><br><b>Lock</b> - the base group, always in.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
+            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling.<br><br><font color='#6ECD82'>● on stage</font> - lit now. ○ <b>waiting</b> - in the show, not used right now.<br><br><b>Tap a name</b> - in or out of the drop: <font color='#F05050'>▶ NEXT DROP</font> is the engine's plan, your taps on top. The base has a toggle too.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
         }
 
         // ---- LOOK: the explanation on each row, after its label

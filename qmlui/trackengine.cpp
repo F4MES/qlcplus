@@ -5211,6 +5211,15 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
     if (enable) m_groupOff.remove(key); else m_groupOff.insert(key);
     if (enable == false && key == m_echoKey)
         stopEcho();
+    // R431B_DROP_OFF: off for the night = out of the drop's set at once; an
+    // untouched plan is redrawn on the next bar line (off or back on)
+    if (changed)
+    {
+        if (m_dropTouched == false)
+            m_dropPlanFader = -1.0;
+        if (enable == false && m_dropSet.removeAll(key) > 0)
+            emit dropSetChanged();
+    }
     if (changed)
         logSignal((enable ? QStringLiteral("sig:group-on:") : QStringLiteral("sig:group-off:")) + key);
     // right now, not on the next beat - and stop whatever of ours is on it
@@ -5313,6 +5322,103 @@ bool TrackEngine::smallWash(const QString &key) const
         return false;
     const TrackGroup &g = m_groups.value(key);
     return g.heads == false && g.strobes == false && g.lasers == false && g.patternDevice == false;
+}
+
+void TrackEngine::toggleDropGroup(QString key)
+{
+    // R431_DROP_PICK: a tap on a group's name in RIG - out of the drop, or in.
+    // From the first tap the set is his until the drop is over.
+    if (m_dropMode == 0 || m_groups.contains(key) == false || m_groupOff.contains(key))
+        return;
+    const bool in = m_dropSet.contains(key) == false;
+    if (in)
+    {
+        QStringList out;
+        foreach (const QString &k, m_groupOrder)
+            if (k == key || m_dropSet.contains(k)) out << k;
+        m_dropSet = out;
+    }
+    else
+        m_dropSet.removeAll(key);
+    m_dropTouched = true;
+    logSignal(QStringLiteral("sig:drop-pick:") + (in ? QStringLiteral("+") : QStringLiteral("-")) + key);
+    emit dropSetChanged();
+}
+
+QStringList TrackEngine::planDropCast(qreal fader) const
+{
+    // R431_DROP_PICK: the engine's plan for the coming drop, by the drop rules
+    // it lands with - the base, the pool at the slider, the rested groups
+    // first (runde 401), the strobes in front, the bars' lead, the budget of a
+    // drop at this slider, one laser type, the Minis free (runde 430). Its own
+    // dice (m_dropPlanSeed), so the night's draw is not moved by a plan.
+    QRandomGenerator dice(m_dropPlanSeed);
+    const QString base = baseGroup();
+    QList<QPair<QString, int> > bag;
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (key == base || m_groupOff.contains(key) || m_groups.contains(key) == false)
+            continue;
+        const TrackGroup &g = m_groups.value(key);
+        if (g.fixtures.isEmpty())
+            continue;
+        if (g.strobes && fader < ENGINE_STROBE_ON)
+            continue;
+        if (g.patternDevice && fader < ENGINE_ANI_ON)
+            continue;
+        const int rest = m_cast.contains(key) ? 0 : qMin(6, m_castRest.value(key, 3) + 1);
+        bag.append(qMakePair(key, 1 + rest));
+    }
+    QStringList order;
+    while (bag.isEmpty() == false)
+    {
+        int total = 0;
+        for (int i = 0; i < bag.count(); i++)
+            total += bag.at(i).second;
+        int roll = int(dice.bounded(qMax(1, total)));
+        int pick = 0;
+        while (pick < bag.count() - 1 && roll >= bag.at(pick).second)
+            roll -= bag.at(pick++).second;
+        order.append(bag.takeAt(pick).first);
+    }
+    int front = 0;
+    for (int i = 0; i < order.count(); i++)
+        if (m_groups.value(order.at(i)).strobes) { order.move(i, 0); front = 1; break; }
+    const qreal pLead = 0.15 + 0.80 * qBound(0.0, (fader - 0.25) / 0.70, 1.0);
+    if (dice.bounded(1000) < int(pLead * 1000.0))
+    {
+        for (int i = front; i < order.count(); i++)
+        {
+            const TrackGroup &g = m_groups.value(order.at(i));
+            if (g.lasers && g.patternDevice == false) { order.move(i, front); break; }
+        }
+    }
+    const qreal want = 3.0 * qBound(0.0, (fader - 0.05) / 0.80, 1.0) + qBound(0.0, (fader - 0.90) / 0.10, 1.0);
+    const int whole = int(want);
+    const int budget = qBound(0, whole + (dice.bounded(1000) < int((want - whole) * 1000.0) ? 1 : 0), 4);
+    QSet<QString> set;
+    if (base.isEmpty() == false)
+        set.insert(base);
+    bool bars = false, ani = false;
+    int used = 0;
+    foreach (const QString &key, order)
+    {
+        if (used >= budget)
+            break;
+        const TrackGroup &g = m_groups.value(key);
+        const bool isBars = g.lasers && g.patternDevice == false;
+        if ((isBars && ani) || (g.patternDevice && bars))
+            continue;                           // one laser type - the engine's own rule
+        set.insert(key);
+        bars = bars || isBars;
+        ani = ani || g.patternDevice;
+        if (smallWash(key) == false)
+            used++;
+    }
+    QStringList out;
+    foreach (const QString &key, m_groupOrder)
+        if (set.contains(key)) out << key;
+    return out;
 }
 
 void TrackEngine::cycleGroup(QString key)
@@ -10145,6 +10251,85 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     // R424_THREE_BACK (Tobias 10-11): the three-type cap of runde 422 is gone
     // again - "saet reglen om 3 lamper tilbage". One laser type stays (R422_ONE_LASER).
+
+    // R431_DROP_PICK (Tobias 10-11/12: "motoren skal bare saette dem den har taenkt
+    // sig at saette i droppet, og saa kan man 'override' ved at de-selecte dem og
+    // vaelge noget andet"). Before a drop: the engine's plan, his taps on top.
+    // In the drop: his set, if he touched it - else the cast that landed.
+    {
+        const int oldMode = m_dropMode;
+        const QStringList oldSet = m_dropSet;
+        auto inRoomOrder = [this](const QSet<QString> &set) {
+            QStringList out;
+            foreach (const QString &key, m_groupOrder)
+                if (set.contains(key)) out << key;
+            return out;
+        };
+        if (m_dropPlanBeat >= 0 && beat < m_dropPlanBeat)   // a new track, or a jump back
+        {
+            m_dropMode = 0;
+            m_dropTouched = false;
+            m_dropSet.clear();
+            m_dropPlanFor = -1;
+        }
+        if (isDrop)
+        {
+            if (m_dropMode != 2)                  // the landing
+            {
+                m_dropMode = 2;
+                if (m_dropTouched == false)
+                    m_dropSet.clear();
+            }
+            if (m_dropTouched)
+            {
+                if (hold == false && isCalm == false)
+                {
+                    // his set, as it is: both laser types, the animation laser
+                    // under 70 %, no base - only a group off for the night stays out
+                    castSet.clear();
+                    foreach (const QString &key, m_dropSet)
+                        if (m_groups.contains(key) && m_groupOff.contains(key) == false)
+                            castSet.insert(key);
+                }
+            }
+            else
+                m_dropSet = inRoomOrder(castSet);
+        }
+        else
+        {
+            if (m_dropMode == 2)                  // the drop is over: AUTO again
+            {
+                m_dropMode = 0;
+                m_dropTouched = false;
+                m_dropSet.clear();
+                m_dropPlanFor = -1;
+            }
+            const bool ahead = m_nextDropBeat > beat;
+            if (ahead == false)
+            {
+                if (m_dropMode != 0 && m_dropTouched == false)
+                {
+                    m_dropMode = 0;
+                    m_dropSet.clear();
+                    m_dropPlanFor = -1;
+                }
+            }
+            else if (m_dropTouched == false
+                     && (m_dropMode == 0 || m_dropPlanFor != m_nextDropBeat
+                         || (beatInBar == 0 && qAbs(fader - m_dropPlanFader) >= 0.05)))
+            {
+                if (m_dropPlanFor != m_nextDropBeat)
+                    m_dropPlanSeed = 431u + 2654435761u * quint32(++m_dropPlanCount);
+                m_dropSet = planDropCast(fader);
+                m_dropPlanFader = fader;
+                m_dropPlanFor = m_nextDropBeat;
+                m_dropMode = 1;
+            }
+        }
+        m_dropPlanBeat = beat;
+        if (m_dropMode != oldMode || m_dropSet != oldSet)
+            emit dropSetChanged();
+    }
 
     // R401_DROP_LEAD: does this drop show the strobes alone beside the base?
     if (isDrop)
