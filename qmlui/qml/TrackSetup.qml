@@ -32,6 +32,41 @@ Rectangle
     // section flag (runde 176).
     MouseArea { anchors.fill: parent }
 
+    // R436_LAB_MENU: one lab in the LAB menu
+    component LabCard: Rectangle
+    {
+        id: card
+        property bool showOn: false
+        property string title: ""
+        property string sub: ""
+        property string line1: ""
+        property string line2: ""
+        property bool live: true
+        property bool can: true
+        property string openName: ""
+        signal open()
+        height: 190; radius: 10
+        color: live ? "#2A2A31" : "#232327"
+        border.width: live ? 0 : 1
+        border.color: "#34343A"
+        Rectangle { visible: card.live; x: 18; y: 18; width: 5; height: 40; color: "#E3B44F" }
+        Text { x: card.live ? 34 : 18; y: 14; text: card.title; color: card.live ? "#EEEEEE" : "#5E5E68"; font.bold: true; font.pixelSize: 20 }
+        Text { x: card.live ? 34 : 18; y: 42; width: card.width - 50; elide: Text.ElideRight; text: card.sub; color: card.live ? "#9A9AA4" : "#55555E"; font.pixelSize: 13 }
+        Text { x: 22; y: 78; width: card.width - 44; elide: Text.ElideRight; text: card.line1; color: "#E0E0E6"; font.pixelSize: 13 }
+        Text { x: 22; y: 100; width: card.width - 44; elide: Text.ElideRight; text: card.line2; color: "#E0E0E6"; font.pixelSize: 13 }
+        Text { visible: !card.live; x: 18; y: card.height - 34; text: qsTr("proposal - not built"); color: "#55555E"; font.pixelSize: 13 }
+        TrackTile
+        {
+            objectName: card.openName
+            visible: card.live
+            x: 22; y: card.height - 56; width: card.width - 44; height: 40
+            label: !card.can ? qsTr("NOT IN THIS SHOW") : (card.showOn ? qsTr("SHOW OFF FIRST") : qsTr("OPEN"))
+            active: card.can && !card.showOn
+            activeColor: "#E3B44F"
+            onTapped: if (card.can && !card.showOn) card.open()
+        }
+    }
+
     // The TrackView page. Set by the Loader that brings this panel up - an id
     // from the other file is not in scope here, see the note at the Loader.
     property var host: null
@@ -43,6 +78,8 @@ Rectangle
     property string filter: ""
     property bool advancedOpen: false
     property bool cacheOpen: false
+    property bool learnedOpen: false     // R436_LEARNED
+    property bool labMenuOpen: false     // R436_LAB_MENU
     property string ioMessage: ""
 
     function roleColor(role)
@@ -260,20 +297,39 @@ Rectangle
                 onTapped: if (trackEngine) trackEngine.selfTest()
             }
 
-            // R410_LAB: LASER LAB - the animation laser's looks one by one, kept
-            // or not, and the kept ones into the show as AUTO programmes. SHOW
-            // OFF only: the rig is the operator's while it is open.
+            // R436_LAB_MENU (Tobias 10-12: "lav laser-lab om til at hedde LAB"):
+            // the tile opens the LAB menu - LASER LAB, STROBE LAB, more later.
+            // A lab still opens with SHOW OFF only (the menu's OPEN says so).
             TrackTile
             {
                 objectName: "labTile"
-                Layout.preferredWidth: 120
+                Layout.preferredWidth: 80
                 Layout.preferredHeight: 34
-                visible: trackEngine ? trackEngine.labAvailable : false
-                readonly property bool showOn: trackManager ? trackManager.autoRun : false
-                label: showOn ? qsTr("LAB: SHOW OFF") : qsTr("LASER LAB")
-                active: trackEngine ? trackEngine.labActive : false
+                visible: trackEngine ? (trackEngine.labAvailable || trackEngine.slabAvailable) : false
+                label: qsTr("LAB")
+                active: setupRoot.labMenuOpen
                 activeColor: "#E3B44F"
-                onTapped: if (trackEngine && !showOn) trackEngine.labOpen()
+                onTapped:
+                {
+                    setupRoot.labMenuOpen = !setupRoot.labMenuOpen
+                    if (setupRoot.labMenuOpen) setupRoot.learnedOpen = false
+                }
+            }
+
+            // R436_LEARNED: what the engine learned from the taps in RIG
+            TrackTile
+            {
+                objectName: "learnedTile"
+                Layout.preferredWidth: 100
+                Layout.preferredHeight: 34
+                label: qsTr("LEARNED")
+                active: setupRoot.learnedOpen
+                activeColor: "#E3B44F"
+                onTapped:
+                {
+                    setupRoot.learnedOpen = !setupRoot.learnedOpen
+                    if (setupRoot.learnedOpen) setupRoot.labMenuOpen = false
+                }
             }
 
             TrackTile
@@ -309,6 +365,192 @@ Rectangle
                 activeColor: "#E36B6B"
                 active: true
                 onTapped: if (host) host.setupOpen = false
+            }
+        }
+
+        // ------------------------------------------------- R436_LEARNED (fold-out)
+        Rectangle
+        {
+            id: learnedPanel
+            objectName: "learnedPanel"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            readonly property var rows: trackEngine ? trackEngine.tasteTable : []
+            readonly property real wantH: 170 + rows.length * 54
+            Layout.preferredHeight: visible ? wantH : 0
+            Layout.maximumHeight: visible ? wantH : 0
+            visible: setupRoot.learnedOpen
+            color: "#1E1E21"
+            radius: 6
+            readonly property var kinds: [ "break", "build", "normal", "drop" ]
+            readonly property real nameW: 250
+            readonly property real cellW: Math.max(120, Math.min(300, (width - nameW - 40 - 3 * 16) / 4))
+
+            Text { x: 20; y: 14; text: qsTr("LEARNED FROM YOUR TAPS IN RIG"); color: setupRoot.cText; font.bold: true; font.pixelSize: 16 }
+            Text
+            {
+                x: 20; y: 38; width: parent.width - 40; elide: Text.ElideRight
+                text: qsTr("Each tap on a name in RIG teaches the engine what that kind of section should hold. It glides 10 % back to neutral every night.")
+                color: setupRoot.cDim; font.pixelSize: 13
+            }
+            Repeater
+            {
+                model: learnedPanel.kinds
+                Text
+                {
+                    x: 20 + learnedPanel.nameW + index * (learnedPanel.cellW + 16); y: 66
+                    width: learnedPanel.cellW; horizontalAlignment: Text.AlignHCenter
+                    text: modelData.toUpperCase(); color: setupRoot.cDim; font.bold: true; font.pixelSize: 13
+                }
+            }
+            Repeater
+            {
+                model: learnedPanel.rows
+                Item
+                {
+                    id: lrow
+                    x: 20; y: 92 + index * 54
+                    width: learnedPanel.width - 40; height: 46
+                    readonly property var md: modelData ? modelData : ({ key: "", base: false, cells: [] })
+                    Text
+                    {
+                        width: learnedPanel.nameW - 12; y: lrow.md.base ? 4 : 12; elide: Text.ElideRight
+                        text: lrow.md.key; color: lrow.md.base ? "#4FA3E3" : setupRoot.cText; font.bold: true; font.pixelSize: 15
+                    }
+                    Text { visible: lrow.md.base === true; y: 26; text: qsTr("the base is never learned"); color: "#6A6A74"; font.pixelSize: 11 }
+                    Repeater
+                    {
+                        model: 4
+                        Rectangle
+                        {
+                            id: cell
+                            objectName: "taste:" + learnedPanel.kinds[index] + ":" + lrow.md.key
+                            readonly property real v: lrow.md.cells && lrow.md.cells.length > index ? lrow.md.cells[index] : 1.0
+                            // 0 more often, 1 less often, 2 left out, 3 the base, 4 neutral
+                            readonly property int kind: lrow.md.base === true ? 3 : (v < 0.60 ? 2 : (v < 0.995 ? 1 : (v > 1.005 ? 0 : 4)))
+                            readonly property string label: cell.kind === 0 ? "▲  " + qsTr("more often") + "  " + cell.v.toFixed(2)
+                                                          : cell.kind === 1 ? "▼  " + qsTr("less often") + "  " + cell.v.toFixed(2)
+                                                          : cell.kind === 2 ? "✕  " + qsTr("LEFT OUT") + "  " + cell.v.toFixed(2)
+                                                          : cell.kind === 3 ? qsTr("BASE") : "—  " + qsTr("neutral")
+                            x: learnedPanel.nameW + index * (learnedPanel.cellW + 16)
+                            width: learnedPanel.cellW; height: 46; radius: 6
+                            color: cell.kind === 0 ? "#18341F" : cell.kind === 1 ? "#2E2416" : cell.kind === 2 ? "#3A1416"
+                                 : cell.kind === 3 ? "#1E1E21" : "#28282E"
+                            border.width: cell.kind === 3 ? 1 : 0
+                            border.color: "#3A3A42"
+                            Rectangle
+                            {
+                                visible: cell.kind < 3
+                                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                                height: 4
+                                color: cell.kind === 0 ? "#6ECD82" : cell.kind === 1 ? "#E3B44F" : "#E03030"
+                            }
+                            Text
+                            {
+                                anchors.centerIn: parent
+                                width: parent.width - 10; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                                text: cell.label
+                                color: cell.kind === 0 ? "#6ECD82" : cell.kind === 1 ? "#E3B44F" : cell.kind === 2 ? "#F05050"
+                                     : cell.kind === 3 ? "#45698C" : "#6A6A74"
+                                font.bold: cell.kind !== 4; font.pixelSize: 14
+                            }
+                            MouseArea
+                            {
+                                anchors.fill: parent
+                                enabled: cell.kind < 3
+                                onClicked: if (trackEngine) trackEngine.resetSectionTaste(learnedPanel.kinds[index], lrow.md.key)
+                            }
+                        }
+                    }
+                }
+            }
+            Text
+            {
+                x: 20; y: learnedPanel.height - 62; width: parent.width - 280; elide: Text.ElideRight
+                text: qsTr("Tap a box = back to neutral (that box only).   ▲ above 1.0 = drawn more often.   ▼ under 1.0 = less often.   ✕ under 0.60 = left out (a wash out of breaks, the strobes not in front).")
+                color: setupRoot.cDim; font.pixelSize: 12
+            }
+            Text
+            {
+                x: 20; y: learnedPanel.height - 38; width: parent.width - 280; elide: Text.ElideRight
+                text: qsTr("Learns only with RATINGS on (now %1).").arg(trackEngine && trackEngine.ratingEnabled ? qsTr("ON") : qsTr("OFF"))
+                      + "   " + ((trackEngine && trackEngine.tasteNight !== "") ? qsTr("Last glided back: %1.").arg(trackEngine.tasteNight) : "")
+                      + "   " + qsTr("Your tap in RIG always wins over what it learned.")
+                color: setupRoot.cDim; font.pixelSize: 12
+            }
+            TrackTile
+            {
+                id: tasteResetTile
+                objectName: "tasteResetAll"
+                property bool armed: false
+                x: parent.width - 240; y: parent.height - 56; width: 220; height: 40
+                label: armed ? qsTr("SURE? TAP AGAIN") : qsTr("RESET ALL")
+                active: armed
+                activeColor: "#E36B6B"
+                onTapped:
+                {
+                    if (armed === false) { armed = true; tasteResetArm.restart(); return }
+                    armed = false
+                    if (trackEngine) trackEngine.resetSectionTaste("", "")
+                }
+                Timer { id: tasteResetArm; interval: 4000; onTriggered: tasteResetTile.armed = false }
+            }
+        }
+
+        // ------------------------------------------------- R436_LAB_MENU (fold-out)
+        Rectangle
+        {
+            id: labMenu
+            objectName: "labMenu"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: visible ? 470 : 0
+            Layout.maximumHeight: visible ? 470 : 0
+            visible: setupRoot.labMenuOpen
+            color: "#1E1E21"
+            radius: 6
+            readonly property bool showOn: trackManager ? trackManager.autoRun : false
+            readonly property real cw: Math.max(220, Math.min(340, (width - 40 - 2 * 24) / 3))
+            readonly property var counts: trackEngine ? trackEngine.slabTabCounts : [0, 0, 0]
+
+            Text { x: 20; y: 14; text: "LAB"; color: "#E3B44F"; font.bold: true; font.pixelSize: 18 }
+            Text
+            {
+                x: 70; y: 17; width: parent.width - 90; elide: Text.ElideRight
+                text: qsTr("one lamp type at a time - see every look on the rig, keep it or not.  SHOW OFF only.")
+                color: setupRoot.cDim; font.pixelSize: 13
+            }
+            Grid
+            {
+                x: 20; y: 52
+                columns: 3
+                spacing: 24
+                LabCard
+                {
+                    title: qsTr("LASER LAB")
+                    width: labMenu.cw; showOn: labMenu.showOn
+                    sub: qsTr("the animation laser")
+                    can: trackEngine ? trackEngine.labAvailable : false
+                    line1: qsTr("%1 approved looks").arg(trackEngine ? trackEngine.labApprovedCount : 0)
+                    line2: qsTr("height held at yours · no tilt toward the room")
+                    openName: "labOpen:laser"
+                    onOpen: if (trackEngine) trackEngine.labOpen()
+                }
+                LabCard
+                {
+                    title: qsTr("STROBE LAB")
+                    width: labMenu.cw; showOn: labMenu.showOn
+                    sub: trackEngine && trackEngine.slabGroup !== ""
+                         ? trackEngine.slabGroup + "  ·  " + trackEngine.slabLampCount + " " + qsTr("lamps") : qsTr("the strobes")
+                    can: trackEngine ? trackEngine.slabAvailable : false
+                    line1: qsTr("%1 calm break  ·  %2 groove  ·  %3 drop").arg(labMenu.counts[0] || 0).arg(labMenu.counts[1] || 0).arg(labMenu.counts[2] || 0)
+                    line2: qsTr("✕ %1 banned  ·  ✓ %2 kept").arg(trackEngine ? trackEngine.slabNoAll : 0).arg(trackEngine ? trackEngine.slabGoodAll : 0)
+                    openName: "labOpen:strobe"
+                    onOpen: if (trackEngine) trackEngine.slabOpen()
+                }
+                LabCard { width: labMenu.cw; title: qsTr("WASH LAB"); sub: qsTr("the moving heads"); live: false }
+                LabCard { width: labMenu.cw; title: qsTr("BARS LAB"); sub: qsTr("the laser bars"); live: false }
+                LabCard { width: labMenu.cw; title: qsTr("COLOUR LAB"); sub: qsTr("every lamp type"); live: false }
             }
         }
 
@@ -1057,5 +1299,18 @@ Rectangle
         active: trackEngine ? trackEngine.labActive : false
         visible: active
         source: "qrc:/LaserLab.qml"
+    }
+
+    // R436_STROBE_LAB: the same, for STROBE LAB
+    Loader
+    {
+        id: slabLoader
+        objectName: "slabLoader"
+        parent: setupRoot.host ? setupRoot.host : setupRoot
+        anchors.fill: parent
+        z: 1000
+        active: trackEngine ? trackEngine.slabActive : false
+        visible: active
+        source: "qrc:/StrobeLab.qml"
     }
 }
