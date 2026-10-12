@@ -3722,7 +3722,7 @@ void TrackEngine::learnSection(const QString &section, const QStringList &plan, 
     QStringList changed;
     foreach (const QString &key, his)
     {
-        if (key == base || plan.contains(key))
+        if (key == base || plan.contains(key) || m_groupOff.contains(key))   // R434_OFF_NOT_LEARNED
             continue;
         const QString k = section + QLatin1Char('/') + key;
         m_sectionTaste.insert(k, qMin(2.5, m_sectionTaste.value(k, 1.0) * 1.15));
@@ -3730,7 +3730,7 @@ void TrackEngine::learnSection(const QString &section, const QStringList &plan, 
     }
     foreach (const QString &key, plan)
     {
-        if (key == base || his.contains(key))
+        if (key == base || his.contains(key) || m_groupOff.contains(key))   // R434_OFF_NOT_LEARNED
             continue;
         const QString k = section + QLatin1Char('/') + key;
         m_sectionTaste.insert(k, qMax(0.4, m_sectionTaste.value(k, 1.0) * 0.87));
@@ -10469,7 +10469,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         const int oldMode = m_dropMode;
         const QStringList oldSet = m_dropSet;
         const QString oldSection = m_planSection;
-        if (m_dropPlanBeat >= 0 && beat < m_dropPlanBeat)   // a new track, or a jump back
+        // a jump back - but not a DJ loop (m_loopPasses, set above this beat):
+        // a loop keeps the plan and his section (R434_LOOP_KEEPS); a new
+        // track resets them in trackLoaded (R434_TRACK_RESET)
+        if (m_dropPlanBeat >= 0 && beat < m_dropPlanBeat
+            && (m_loopPasses == 0 || m_dropPlanBeat - beat > 32))
         {
             m_dropMode = 0;
             m_dropTouched = false;
@@ -18391,6 +18395,22 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_forceNext = false;
     clearMusicDark();                    // runde 356
     newTrackMemory(title);               // runde 358: no loop; the drops of another track are forgotten
+    // R434_TRACK_RESET: another track - the plan and his section were the old one's
+    if (title != m_trackTitle)
+    {
+        const bool had = m_dropMode != 0 || m_dropSet.isEmpty() == false || m_planSection.isEmpty() == false;
+        m_dropMode = 0;
+        m_dropTouched = false;
+        m_dropSet.clear();
+        m_dropPlanFor = -1;
+        m_dropPlanBeat = -1;
+        m_planSection.clear();
+        m_forceOn = false;
+        m_forceSet.clear();
+        m_planOriginal.clear();
+        if (had)
+            emit dropSetChanged();
+    }
     // Stage time is counted every beat but only written when something else
     // triggers a save, and a whole night can pass without one. Once per track
     // bounds the loss to the track that was playing when the power went, and
