@@ -527,6 +527,25 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool slabDark READ slabDark NOTIFY slabChanged)
     Q_PROPERTY(bool slabTest READ slabTest NOTIFY slabChanged)
     Q_PROPERTY(QString slabMessage READ slabMessage NOTIFY slabChanged)
+    /** R440_BARS_LAB: 0 STROBE LAB, 1 BARS LAB - one page, one engine half */
+    Q_PROPERTY(int slabKind READ slabKind NOTIFY slabChanged)
+    Q_PROPERTY(int slabOrder READ slabOrder NOTIFY slabChanged)
+    Q_PROPERTY(QStringList slabColours READ slabColours NOTIFY slabChanged)
+    Q_PROPERTY(QVariantList slabSummaries READ slabSummaries NOTIFY slabChanged)
+    /** R440_COLOUR_LAB: SETUP > LAB > COLOUR LAB */
+    Q_PROPERTY(bool clabActive READ clabActive NOTIFY clabChanged)
+    Q_PROPERTY(QString clabColour READ clabColour NOTIFY clabChanged)
+    Q_PROPERTY(QStringList clabColours READ clabColours NOTIFY clabChanged)
+    Q_PROPERTY(QVariantList clabRows READ clabRows NOTIFY clabChanged)
+    Q_PROPERTY(QVariantList clabMatrix READ clabMatrix NOTIFY clabChanged)
+    Q_PROPERTY(QString clabSolo READ clabSolo NOTIFY clabChanged)
+    Q_PROPERTY(bool clabDark READ clabDark NOTIFY clabChanged)
+    Q_PROPERTY(qreal clabTest READ clabTest NOTIFY clabChanged)
+    Q_PROPERTY(QString clabMessage READ clabMessage NOTIFY clabChanged)
+    Q_PROPERTY(int clabChanges READ clabChanges NOTIFY clabChanged)
+    /** R440_SEND: SETUP > ADVANCED > SEND TO CLAUDE */
+    Q_PROPERTY(int sendState READ sendState NOTIFY sendChanged)
+    Q_PROPERTY(QString sendResult READ sendResult NOTIFY sendChanged)
 
     Q_PROPERTY(QStringList warnings READ warnings NOTIFY liveChanged)
     Q_PROPERTY(int calmBarsLeft READ calmBarsLeft NOTIFY liveChanged)
@@ -673,6 +692,29 @@ public:
     Q_INVOKABLE void slabStop();
     /** ALL LAMPS ON - TEST */
     Q_INVOKABLE void slabToggleTest();
+    /** R440_BARS_LAB: open STROBE LAB (0) or BARS LAB (1) */
+    Q_INVOKABLE bool slabOpenKind(int kind);
+    /** R440_ORDER: 0 ALL (A-Z), 1 MOST SEEN, 2 NOT JUDGED */
+    Q_INVOKABLE void slabSetOrder(int order);
+    /* ---- R440_COLOUR_LAB (track_runtime/colourlab.inc.cpp) ---- */
+    Q_INVOKABLE bool clabOpen();
+    Q_INVOKABLE void clabClose();
+    Q_INVOKABLE void clabSetColour(const QString &colour);
+    /** how bright this group is IN the lab's colour, 0.10-1.00 (1 = as made) */
+    Q_INVOKABLE void clabSetLevel(const QString &key, qreal level);
+    Q_INVOKABLE void clabResetColour(const QString &key);
+    Q_INVOKABLE void clabCopyToAll(const QString &key);
+    Q_INVOKABLE void clabSetTest(qreal level);
+    /** tap a name: only that group lit - again: all of them */
+    Q_INVOKABLE void clabSoloGroup(const QString &key);
+    /** 0 ALL SIDE BY SIDE, 1 ONE BY ONE */
+    Q_INVOKABLE void clabCompare(int mode);
+    /** ALL ON / ALL OFF: the lab opens dark */
+    Q_INVOKABLE void clabToggleDark();
+    /* ---- R440_SEND (track_runtime/sendclaude.inc.cpp) ---- */
+    Q_INVOKABLE QVariantList sendItems();
+    Q_INVOKABLE bool sendMake(const QStringList &ids);
+    Q_INVOKABLE void sendReset();
     bool slabAvailable() const;
     bool slabActive() const { return m_slabActive; }
     QString slabGroup() const;
@@ -699,6 +741,22 @@ public:
     bool slabDark() const { return m_slabDark; }
     bool slabTest() const { return m_slabTest; }
     QString slabMessage() const { return m_slabMessage; }
+    int slabKind() const { return m_slabKind; }               // R440_BARS_LAB
+    int slabOrder() const { return m_slabOrder; }
+    QStringList slabColours() const;
+    QVariantList slabSummaries() const;
+    bool clabActive() const { return m_clabActive; }           // R440_COLOUR_LAB
+    QString clabColour() const { return m_clabColour; }
+    QStringList clabColours() const;
+    QVariantList clabRows() const;
+    QVariantList clabMatrix() const;
+    QString clabSolo() const { return m_clabSolo; }
+    bool clabDark() const { return m_clabDark; }
+    qreal clabTest() const { return m_clabTest; }
+    QString clabMessage() const { return m_clabMessage; }
+    int clabChanges() const { clabLoad(); return int(m_colourLevel.count()); }
+    int sendState() const { return m_sendState; }              // R440_SEND
+    QString sendResult() const { return m_sendResult; }
     /** kill a pending or running bar echo - AUTO off, blackout, a new track */
     void stopEcho();
 
@@ -980,6 +1038,8 @@ signals:
     void tasteChanged();                 // R436_LEARNED
     void showCheckChanged();             // R436_SHOW_CHECK
     void slabChanged();                  // R436_STROBE_LAB
+    void clabChanged();                  // R440_COLOUR_LAB
+    void sendChanged();                  // R440_SEND
     /** a colour tile was pressed but the colour cannot be used (not in the
      *  palette any more, banned): the tile blinks (runde 313, B27/Tobias) */
     void colourRejected(const QString &colour);
@@ -1590,7 +1650,7 @@ private:
     void slabLoad() const;
     void slabSave() const;
     int slabTabOf(const TrackFuncInfo &info) const;
-    QList<quint32> slabListOf(const QString &group, int tab) const;
+    QList<quint32> slabListOf(const QString &group, int tab, int order = 0) const;
     quint32 slabCurrent() const;
     QString slabColourNow() const;
     int slabDivision(const TrackFuncInfo &info) const;
@@ -1601,6 +1661,46 @@ private:
     int slabCountOf(int verdict) const;
     int slabAllOf(int verdict) const;
     void slabShutdown();                 // every way LASER LAB closes (labShutdown)
+    // R440_BARS_LAB
+    int m_slabKind = 0;                  // 0 the strobes, 1 the laser bars
+    int m_slabOrder = 0;
+    QHash<int, int> m_slabOrderOf;       // the order each lab was last left in
+    QHash<int, int> m_slabTabOf;         // ... and the tab
+    qint64 m_slabAimMs = 0;              // when the bars were last sent to their aim
+    static bool slabKindOf(const TrackGroup &g, int kind);
+    QString slabPickGroupOf(int kind) const;
+    void slabAim();
+    QString slabDarkText() const;
+    int slabAllOfGroup(int verdict, const QString &group) const;
+    // R440_COLOUR_LAB / R440_COLOUR_LEVEL
+    bool m_clabActive = false;
+    bool m_clabDark = true;
+    QString m_clabColour;
+    QString m_clabSolo;
+    qreal m_clabTest = 0.60;
+    QString m_clabMessage;
+    mutable QHash<QString, qreal> m_colourLevel;   // "group/colour" -> level, 1.0 not stored
+    mutable bool m_colourLevelLoaded = false;
+    void clabLoad() const;
+    void clabSave() const;
+    bool clabGroupCan(const QString &key) const;
+    QString colourShown(const QString &group) const;
+    qreal colourLevel(const QString &group) const;
+    /** the night's group fader x the group's level in the colour it shows */
+    qreal trimOf(const QString &group) const;
+    QStringList clabGroups() const;
+    void clabStopAll();
+    void clabShow();
+    void clabShutdown();
+    void clabSetLevelIn(const QString &key, const QString &colour, qreal level);
+    // R440_SEND
+    int m_sendState = 0;                 // 0 idle, 1 packing, 2 zip done, 3 folder only
+    QString m_sendResult;
+    QString m_sendFolder;
+    QString m_sendZip;
+    QStringList sendFilesOf(const QString &id) const;
+    bool sendSnapshot(const QString &path);
+    void sendDone(bool ok);
     qreal colourTaste(const QString &colour) const;
     void learnColour(const QString &picked, const QString &shown);
     // ---- runde 358 ----
