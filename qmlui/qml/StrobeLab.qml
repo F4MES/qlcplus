@@ -8,6 +8,9 @@
   later. Nothing is deleted. The engine half is track_runtime/strobelab.inc.cpp
   (trackEngine.slab*). Loaded by TrackSetup.qml over the whole Track page, from
   SETUP > LAB. Flat (the r403 tones): no gradients, no glow, no shadows.
+  R440_BARS_LAB: the same page is BARS LAB (trackEngine.slabKind 1) - the
+  laser bars on their home aim, the laser rules in a box, ORDER (MOST SEEN /
+  NOT JUDGED / ALL) and a strip in pages of 48 for the long lists.
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -41,6 +44,7 @@ Rectangle
     readonly property color cBlue: "#4FA3E3"
     readonly property real pad: 18
     readonly property var tabNames: [ qsTr("BREAK"), qsTr("GROOVE"), qsTr("DROP") ]
+    readonly property bool bars: eng ? eng.slabKind === 1 : false      // R440_BARS_LAB
 
     function swatch(c)
     {
@@ -49,6 +53,7 @@ Rectangle
         case "white": return "#F2F2F5"
         case "red":   return slabRoot.cRed
         case "blue":  return "#3E6FE8"
+        case "green": return slabRoot.cGreen
         }
         return "#B8B8C4"
     }
@@ -130,7 +135,7 @@ Rectangle
             Rectangle
             {
                 width: 210; height: 56; radius: 10; color: slabRoot.cGold
-                Text { anchors.centerIn: parent; text: "STROBE LAB"; color: "#1A1205"; font.bold: true; font.pixelSize: 22; font.letterSpacing: 2 }
+                Text { anchors.centerIn: parent; text: slabRoot.bars ? "BARS LAB" : "STROBE LAB"; color: "#1A1205"; font.bold: true; font.pixelSize: 22; font.letterSpacing: 2 }
             }
             LabTile
             {
@@ -144,7 +149,8 @@ Rectangle
                 x: 340; anchors.verticalCenter: parent.verticalCenter; spacing: 4
                 Text
                 {
-                    text: (eng ? eng.slabGroup : "") + "  ·  " + (eng ? eng.slabLampCount : 0) + ((eng && eng.slabLampCount === 1) ? " lamp" : " lamps")
+                    text: (eng ? eng.slabGroup : "") + "  ·  " + (eng ? eng.slabLampCount : 0)
+                          + (slabRoot.bars ? ((eng && eng.slabLampCount === 1) ? " bar" : " bars") : ((eng && eng.slabLampCount === 1) ? " lamp" : " lamps"))
                     color: slabRoot.cText; font.pixelSize: 26
                 }
                 Text { text: qsTr("SHOW OFF  ·  the rig is yours  ·  everything is saved as you go"); color: slabRoot.cMute; font.pixelSize: 15 }
@@ -260,6 +266,7 @@ Rectangle
             }
 
             // the strip: every programme of the kind, where you are - tap to jump
+            // (R440_STRIP_PAGES: more than 100, and it shows the 48 around you)
             Label
             {
                 x: 40; y: 522
@@ -267,15 +274,37 @@ Rectangle
                       + (eng && eng.slabCount > 0 ? (eng.slabIndex + 1) : 0) + " " + qsTr("OF") + " " + (eng ? eng.slabCount : 0)
                       + "  ·  ✓ " + (eng ? eng.slabGood : 0) + "   ✕ " + qsTr("BANNED") + " " + (eng ? eng.slabNo : 0)
             }
+            // R440_ORDER: MOST SEEN / NOT JUDGED / ALL
+            Row
+            {
+                x: 700; y: 512; spacing: 10
+                Label { anchors.verticalCenter: parent.verticalCenter; text: qsTr("ORDER") }
+                Repeater
+                {
+                    model: [ [ qsTr("MOST SEEN"), 1 ], [ qsTr("NOT JUDGED"), 2 ], [ qsTr("ALL"), 0 ] ]
+                    LabTile
+                    {
+                        objectName: "slabOrder:" + modelData[1]
+                        width: 150; height: 32; text: modelData[0]; fontPx: 12
+                        on: eng ? eng.slabOrder === modelData[1] : modelData[1] === 0; tone: slabRoot.cBlue
+                        onTapped: if (eng) eng.slabSetOrder(modelData[1])
+                    }
+                }
+            }
             Item
             {
                 id: strip
                 objectName: "slabStrip"
                 x: 40; y: 550; width: 1160; height: 46
-                readonly property var marks: eng ? eng.slabStrip : []
+                readonly property var all: eng ? eng.slabStrip : []
+                readonly property bool paged: all.length > 100
+                readonly property int page: paged && eng ? Math.floor(eng.slabIndex / 48) : 0
+                readonly property int from: paged ? page * 48 : 0
+                readonly property var marks: paged ? all.slice(from, from + 48) : all
                 readonly property int n: marks.length
+                readonly property int more: paged ? Math.max(0, all.length - (from + n)) : 0
                 readonly property real gap: n > 0 && width / n >= 6 ? 3 : (n > 0 && width / n >= 3 ? 1 : 0)
-                readonly property real w: n > 0 ? Math.min(14, width / n - gap) : 9
+                readonly property real w: n > 0 ? Math.min(14, (paged ? 860 : width) / n - gap) : 9
                 Row
                 {
                     spacing: strip.gap
@@ -286,7 +315,7 @@ Rectangle
                         {
                             width: Math.max(1, strip.w); height: 46; radius: strip.w >= 4 ? 2 : 0
                             readonly property int v: strip.marks[index]
-                            color: eng && index === eng.slabIndex ? "#FFFFFF"
+                            color: eng && index + strip.from === eng.slabIndex ? "#FFFFFF"
                                  : v === 1 ? slabRoot.cGreen
                                  : v === -1 ? slabRoot.cRed : "#26262E"
                         }
@@ -297,8 +326,18 @@ Rectangle
                     anchors.fill: parent
                     onClicked: (mouse) => {
                         if (!eng || strip.n === 0) return
-                        eng.slabGoto(Math.floor(mouse.x / Math.max(1, strip.w + strip.gap)))
+                        var i = Math.floor(mouse.x / Math.max(1, strip.w + strip.gap))
+                        if (i < strip.n) eng.slabGoto(strip.from + i)
+                        else if (strip.more > 0) eng.slabGoto(strip.from + strip.n)     // "+ N more": the next page
                     }
+                }
+                Text
+                {
+                    objectName: "slabMore"
+                    visible: strip.more > 0 || strip.from > 0
+                    x: strip.n * (strip.w + strip.gap) + 18; anchors.verticalCenter: parent.verticalCenter
+                    text: (strip.from > 0 ? qsTr("%1 before  ·  ").arg(strip.from) : "") + (strip.more > 0 ? qsTr("+ %1 more  →").arg(strip.more) : "")
+                    color: slabRoot.cDim; font.pixelSize: 15
                 }
             }
         }
@@ -370,7 +409,7 @@ Rectangle
                 enabled: eng ? !eng.slabOwnColour : true
                 Repeater
                 {
-                    model: [ "room", "red", "blue", "white" ]
+                    model: eng ? eng.slabColours : [ "room", "red", "blue", "white" ]
                     LabTile
                     {
                         objectName: "slabColour:" + modelData
@@ -417,9 +456,13 @@ Rectangle
                 x: 30; y: 62; spacing: 18
                 Repeater
                 {
-                    model: [ [ qsTr("BREAK"), qsTr("a break the strobes are in runs one of these 7 times in 10 (runde 433)") ],
-                             [ qsTr("GROOVE"), qsTr("drawn about one groove section in three, from 30 % on the slider") ],
-                             [ qsTr("DROP"), qsTr("drawn about half the drops; never the whole bank on full (runde 338)") ] ]
+                    model: slabRoot.bars
+                           ? [ [ qsTr("BREAK"), qsTr("drawn in breaks above 45 % as the one extra beside the base (runde 235)") ],
+                               [ qsTr("GROOVE"), qsTr("they lead the rhythm from 40 %; a figure is drawn every 8 bars (runde 219)") ],
+                               [ qsTr("DROP"), qsTr("lead about 95 % of the drops at high ENERGY - BAN here is how you thin that out") ] ]
+                           : [ [ qsTr("BREAK"), qsTr("a break the strobes are in runs one of these 7 times in 10 (runde 433)") ],
+                               [ qsTr("GROOVE"), qsTr("drawn about one groove section in three, from 30 % on the slider") ],
+                               [ qsTr("DROP"), qsTr("drawn about half the drops; never the whole bank on full (runde 338)") ] ]
                     Row
                     {
                         spacing: 20
@@ -436,8 +479,30 @@ Rectangle
             {
                 x: 30; y: 282; width: factCard.width - 60
                 elide: Text.ElideRight
+                visible: !slabRoot.bars
                 text: qsTr("The lab never fires the strobes' hardware strobe - the programmes blink on the dimmer, and the colour scene under them keeps the shutter shut.")
                 color: slabRoot.cDim; font.pixelSize: 15
+            }
+            // R440_BARS_LAB: the laser rules, in plain sight
+            Rectangle
+            {
+                objectName: "barsSafety"
+                visible: slabRoot.bars
+                x: factCard.width - 740; y: 40; width: 710; height: 210; radius: 10
+                color: "#1E1A12"; border.width: 2; border.color: slabRoot.cGold
+                Column
+                {
+                    x: 22; y: 16; spacing: 12
+                    Text { text: qsTr("LASER SAFETY - SAME RULES AS THE SHOW"); color: slabRoot.cGold; font.bold: true; font.pixelSize: 15; font.letterSpacing: 1.2 }
+                    Repeater
+                    {
+                        model: [ qsTr("the bars only move while they are dark - never a swing while lit"),
+                                 qsTr("they play on their home aim; no programme here writes pan or tilt"),
+                                 qsTr("their own effect/macro channel stays at 0 (no built-in show)"),
+                                 qsTr("never together with the animation laser - the lab lights one type") ]
+                        Text { text: "·  " + modelData; color: slabRoot.cText; font.pixelSize: 16 }
+                    }
+                }
             }
         }
     }

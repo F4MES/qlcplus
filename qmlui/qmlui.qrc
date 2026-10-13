@@ -54,6 +54,7 @@
     <file alias="SingleAxisTool.qml">qml/SingleAxisTool.qml</file>
     <file alias="TimeEditTool.qml">qml/TimeEditTool.qml</file>
     <file alias="TrackView.qml">qml/TrackView.qml</file>
+    <file alias="ColourLab.qml">qml/ColourLab.qml</file>
     <file alias="StrobeLab.qml">qml/StrobeLab.qml</file>
     <file alias="LaserLab.qml">qml/LaserLab.qml</file>
     <file alias="TrackSetup.qml">qml/TrackSetup.qml</file>

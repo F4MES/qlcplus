@@ -781,7 +781,7 @@ void TrackEngine::slotPulseTimer()
             Function *func = m_doc->function(m_active.value(slot));
             if (func != nullptr)
             {
-                const qreal scaleNow = (g.strobes && landBurstNow()) ? 1.0 : m_groupTrim.value(key, 1.0) * masterOut();   // runde 357
+                const qreal scaleNow = (g.strobes && landBurstNow()) ? 1.0 : trimOf(key) * masterOut();   // runde 357, R440_COLOUR_LEVEL
                 qreal out = lightsOut() ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * scaleNow, 1.0);
                 // the same on/off squaring setPart() does: an animation
                 // laser's dimmer is a switch, and 0.7 written to it 20 ms
@@ -1665,7 +1665,7 @@ void TrackEngine::ensureTable()
     // R436_SHOW_CHECK / R436_STROBE_LAB: what the new table says - told on the
     // next turn of the event loop, never from inside a getter that built it
     updateShowCheck();
-    QTimer::singleShot(0, this, [this]() { emit showCheckChanged(); emit slabChanged(); emit tasteChanged(); });   // R437_TASTE_REFRESH
+    QTimer::singleShot(0, this, [this]() { emit showCheckChanged(); emit slabChanged(); emit tasteChanged(); emit clabChanged(); });   // R437_TASTE_REFRESH, R440_COLOUR_LAB
     qDebug() << "[TrackEngine]" << m_groups.count() << "groups," << m_funcs.count()
              << "functions, palette" << m_palette;
 }
@@ -15356,7 +15356,7 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         if (canOwnDimmers(mfi, slotGroup(slot) == m_compositionBase) == false)   // see motionOwns (runde 231)
             return 1.0;
         const QString group = slotGroup(slot);
-        return masterOut() * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
+        return masterOut() * (group.isEmpty() ? 1.0 : trimOf(group));   // R440_COLOUR_LEVEL
     }
     // the flashes. The HELD FLASH button is always full strength - no MASTER,
     // no group trim - under its own ceiling (white at 70 % on a strobe, in
@@ -15372,7 +15372,7 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         // the night stays down through the drop (runde 201)
         qreal ftrim = 0.0;
         foreach (const QString &fg, m_funcs.value(fid).groups)
-            ftrim = qMax(ftrim, m_groupTrim.value(fg, 1.0));
+            ftrim = qMax(ftrim, trimOf(fg));   // R440_COLOUR_LEVEL
         return masterOut() * (m_funcs.value(fid).groups.isEmpty() ? 1.0 : ftrim);
     }
     if (slot.startsWith(QStringLiteral("flash:")))
@@ -15380,7 +15380,7 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         const QString fg = slotGroup(slot);
         if (m_flash && m_flashHeld.contains(fg))
             return 1.0;
-        return masterOut() * m_groupTrim.value(fg, 1.0);
+        return masterOut() * trimOf(fg);   // R440_COLOUR_LEVEL
     }
     if (slot.startsWith(QStringLiteral("col:")) == false
         && slot.startsWith(QStringLiteral("colx:")) == false   // runde 370
@@ -15392,7 +15392,7 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
     bool carries = m_funcs.value(fid).dimmer || g.hasDimmer == false || g.parts.isEmpty();
     if (carries == false)
         return 1.0;
-    return masterOut() * (group.isEmpty() ? 1.0 : m_groupTrim.value(group, 1.0));
+    return masterOut() * (group.isEmpty() ? 1.0 : trimOf(group));   // R440_COLOUR_LEVEL
 }
 
 void TrackEngine::reapplyLevels()
@@ -15418,7 +15418,7 @@ void TrackEngine::reapplyLevels()
             // Nor MASTER: the held button is always full (Tobias, 2026-09-24).
             const bool held = m_flashHeld.contains(group);
             const bool landFree = m_groups.value(group).strobes && landBurstNow();   // runde 357
-            const qreal trim = ((m_flash && held) || landFree) ? 1.0 : m_groupTrim.value(group, 1.0);
+            const qreal trim = ((m_flash && held) || landFree) ? 1.0 : trimOf(group);   // R440_COLOUR_LEVEL
             out *= (held ? 1.0 : pulseFactor(group)) * trim * (((m_flash && held) || landFree) ? 1.0 : masterOut());
             // and the same on/off squaring setPart() does: an animation
             // laser's dimmer is a switch, and a fraction written to it is
@@ -18501,7 +18501,7 @@ void TrackEngine::idle()
         return;
     if (m_testTimer.isActive())   // SELF TEST owns the stage until it is done
         return;
-    if (m_labActive || m_slabActive)   // R410_LAB: and so does LASER LAB (and R436_STROBE_LAB)
+    if (m_labActive || m_slabActive || m_clabActive)   // R410_LAB: and so does LASER LAB (and R436_STROBE_LAB, R440_COLOUR_LAB)
         return;
     // the opening picture is up: nothing else runs - as in tick(). A stopped
     // deck (and the 30 s watchdog) called this and replaced the picture with
@@ -19294,7 +19294,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // runde 357: the strobes in the drop's landing burst pass MASTER and the
     // trim, as the held FLASH does - the one moment Tobias allows it
     const bool landFree = g.strobes && landBurstNow();
-    qreal trim = (heldFlash || landFree) ? 1.0 : m_groupTrim.value(group, 1.0);
+    qreal trim = (heldFlash || landFree) ? 1.0 : trimOf(group);   // R440_COLOUR_LEVEL
     qreal applied = qBound(0.0, level * pulseFactor(group) * trim * ((heldFlash || landFree) ? 1.0 : masterOut()), 1.0);
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
@@ -20964,9 +20964,20 @@ void TrackEngine::labApplyTags()
  *  so the lab never fires the hardware strobe. Every way LASER LAB closes
  *  (a beat, SHOW ON, BLACKOUT, STOP ALL, a project load) closes this one too
  *  (labShutdown calls slabShutdown).
+ *
+ *  R440_BARS_LAB (runde 440, Tobias 10-13: N1, mockup approved): the same
+ *  page for the laser bars - m_slabKind 1. Laser safety first: the bars are
+ *  sent to their home aim (a still scene) the moment the lab opens, dark, so
+ *  nothing ever moves while they are lit; only programmes that write no pan
+ *  or tilt (the table's "aims" flag) and leave the bars' own effect engine
+ *  at 0 (ownEffectOf) are in the list. One lamp type is lit, never the
+ *  animation laser with them. ORDER: MOST SEEN (how often the engine showed
+ *  it - the bars' default), NOT JUDGED, ALL (A-Z, the strobes' default).
  * ===================================================================== */
 
+#include <QProcess>              // R440_SEND: in sendclaude.inc.cpp
 #define ENGINE_SLAB_VOTES     2       // GOOD: two up-votes in its section kind
+#define ENGINE_SLAB_AIM_MS    1500    // R440_BARS_LAB: the bars dark this long after they were sent to their aim
 
 bool TrackEngine::slabAvailable() const
 {
@@ -20975,13 +20986,25 @@ bool TrackEngine::slabAvailable() const
 
 QString TrackEngine::slabPickGroup() const
 {
-    // a strobe group that is on - or, R437_STROBES_OFF, one switched OFF for the
+    return slabPickGroupOf(m_slabKind);
+}
+
+bool TrackEngine::slabKindOf(const TrackGroup &g, int kind)
+{
+    if (kind == 1)
+        return g.lasers && g.patternDevice == false;   // R440_BARS_LAB: the laser bars
+    return g.strobes;
+}
+
+QString TrackEngine::slabPickGroupOf(int kind) const
+{
+    // a group of the kind that is on - or, R437_STROBES_OFF, one switched OFF for the
     // night (slabOpen says so; "not in this show" was wrong)
     QString off;
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        if (g.strobes == false || g.fixtures.isEmpty())
+        if (slabKindOf(g, kind) == false || g.fixtures.isEmpty())
             continue;
         if (m_groupOff.contains(key) == false)
             return key;
@@ -21018,9 +21041,10 @@ int TrackEngine::slabTabOf(const TrackFuncInfo &info) const
     return info.tier == 0 ? 0 : (info.tier == 2 ? 2 : 1);
 }
 
-QList<quint32> TrackEngine::slabListOf(const QString &group, int tab) const
+QList<quint32> TrackEngine::slabListOf(const QString &group, int tab, int order) const
 {
     QList<QPair<QString, quint32> > rows;
+    const bool bars = m_groups.value(group).lasers && m_groups.value(group).patternDevice == false;
     if (group.isEmpty())
         return QList<quint32>();
     for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
@@ -21038,7 +21062,24 @@ QList<quint32> TrackEngine::slabListOf(const QString &group, int tab) const
             continue;
         if (slabTabOf(info) != tab)
             continue;
-        rows.append(qMakePair(info.name, info.id));
+        // R440_BARS_LAB: a bar programme that starts the bars' own effect engine
+        // is not lit here - the engine's own laser rules never let one run either
+        if (bars && ownEffectOf(info.id, group))
+            continue;
+        // R440_ORDER: NOT JUDGED leaves out what has a verdict
+        if (order == 2 && m_slabVerdict.contains(info.id))
+            continue;
+        QString sortKey = info.name;
+        if (order == 1)
+        {
+            // MOST SEEN first: how often the engine has shown it (every kind of
+            // section), then the name
+            int seen = 0;
+            for (int b = 0; b < ENGINE_RATE_BUCKETS; b++)
+                seen += info.seen[b];
+            sortKey = QString::number(99999999 - qMin(99999999, seen)).rightJustified(8, QLatin1Char('0')) + info.name;
+        }
+        rows.append(qMakePair(sortKey, info.id));
     }
     std::sort(rows.begin(), rows.end());
     QList<quint32> out;
@@ -21080,6 +21121,21 @@ void TrackEngine::slabDarkParts()
         stopSlot(partSlot(m_slabGroup, i), true);
 }
 
+void TrackEngine::slabAim()
+{
+    // R440_BARS_LAB: the bars stand on their home aim - a still scene, sent
+    // while they are dark - before anything lights them, and stay there
+    if (m_slabKind != 1 || m_slabGroup.isEmpty())
+        return;
+    const QString pslot = QStringLiteral("slabp:") + m_slabGroup;
+    const quint32 home = homePosition(m_slabGroup);
+    if (home != Function::invalidId() && m_active.value(pslot, Function::invalidId()) != home)
+    {
+        run(pslot, home, 1.0, 0, true);
+        m_slabAimMs = QDateTime::currentMSecsSinceEpoch();   // the motors need a moment
+    }
+}
+
 void TrackEngine::slabShow()
 {
     if (m_slabActive == false || m_doc == nullptr || m_slabGroup.isEmpty())
@@ -21093,6 +21149,21 @@ void TrackEngine::slabShow()
         stopSlot(cslot, true);
         slabDarkParts();
         return;
+    }
+    slabAim();                           // R440_BARS_LAB: on the aim before the light
+    // ... and lit only once the motors have had time to get there: a PLAY
+    // right after the lab opened waits, dark, never a swing while lit
+    if (m_slabKind == 1)
+    {
+        const qint64 left = ENGINE_SLAB_AIM_MS - (QDateTime::currentMSecsSinceEpoch() - m_slabAimMs);
+        if (left > 0)
+        {
+            stopSlot(slot, true);
+            stopSlot(cslot, true);
+            slabDarkParts();
+            QTimer::singleShot(int(left) + 20, this, [this]() { slabShow(); });
+            return;
+        }
     }
     const quint32 cf = colourFunction(m_slabGroup, slabColourNow());
     if (m_slabTest)
@@ -21131,22 +21202,33 @@ void TrackEngine::slabShowCandidate()
 
 bool TrackEngine::slabOpen()
 {
-    if (m_slabActive)
+    return slabOpenKind(0);
+}
+
+bool TrackEngine::slabOpenKind(int kind)
+{
+    kind = qBound(0, kind, 1);
+    if (m_slabActive && kind == m_slabKind)
         return true;
     if (m_doc == nullptr || m_docTimer.isActive())
         return false;
     ensureTable();
     slabLoad();
-    labShutdown(false);                  // one lab at a time
+    labShutdown(false);                  // one lab at a time (this one too, if the other kind was open)
+    m_slabTabOf.insert(m_slabKind, m_slabTab);
+    m_slabKind = kind;
+    m_slabTab = m_slabTabOf.value(kind, 0);
+    m_slabOrder = m_slabOrderOf.value(kind, kind == 1 ? 1 : 0);
     m_slabGroup = slabPickGroup();
     m_slabMessage.clear();
+    const QString lab = kind == 1 ? tr("bars lab") : tr("strobe lab");
     QString refuse;
     if (m_slabGroup.isEmpty())
-        refuse = tr("strobe lab: no strobes in this show");
+        refuse = kind == 1 ? tr("bars lab: no laser bars in this show") : tr("strobe lab: no strobes in this show");
     else if (m_groupOff.contains(m_slabGroup))   // R437_STROBES_OFF
-        refuse = tr("strobe lab: %1 is switched OFF").arg(m_slabGroup);
+        refuse = tr("%1: %2 is switched OFF").arg(lab, m_slabGroup);
     else if (m_blackout)
-        refuse = tr("strobe lab: BLACKOUT is on");
+        refuse = tr("%1: BLACKOUT is on").arg(lab);
     if (refuse.isEmpty() == false)
     {
         m_report = refuse;
@@ -21179,8 +21261,11 @@ bool TrackEngine::slabOpen()
     m_slabDark = true;                   // PLAY lights it, nothing else does
     m_slabHold = false;
     m_slabTest = false;
-    m_slabList = slabListOf(m_slabGroup, m_slabTab);
-    int at = int(m_slabList.indexOf(m_slabResume.value(m_slabTab, Function::invalidId())));
+    if (slabColours().contains(m_slabColour) == false)
+        m_slabColour = QStringLiteral("room");
+    slabAim();                           // R440_BARS_LAB: dark, onto the home aim at once
+    m_slabList = slabListOf(m_slabGroup, m_slabTab, m_slabOrder);
+    int at = int(m_slabList.indexOf(m_slabResume.value(m_slabTab + 3 * m_slabKind, Function::invalidId())));
     if (at < 0)
     {
         for (int i = 0; i < m_slabList.count(); i++)
@@ -21193,11 +21278,11 @@ bool TrackEngine::slabOpen()
         }
     }
     m_slabIndex = qMax(0, at);
-    m_report = tr("STROBE LAB");
+    m_report = kind == 1 ? tr("BARS LAB") : tr("STROBE LAB");
     m_slabMessage = m_slabList.isEmpty()           // R437_EMPTY_TAB
                         ? tr("No programmes of this kind for %1").arg(m_slabGroup)
-                        : tr("The strobes are dark - ▶ PLAY lights them");
-    logSignal(QStringLiteral("sig:strobe-lab-open"));
+                        : slabDarkText();
+    logSignal(kind == 1 ? QStringLiteral("sig:bars-lab-open") : QStringLiteral("sig:strobe-lab-open"));
     emit liveChanged();
     slabShowCandidate();
     return true;
@@ -21210,6 +21295,7 @@ void TrackEngine::slabClose()
 
 void TrackEngine::slabShutdown()
 {
+    clabShutdown();                      // R440_COLOUR_LAB: every way a lab closes closes COLOUR LAB too
     if (m_slabActive == false)
         return;
     m_slabActive = false;
@@ -21219,10 +21305,12 @@ void TrackEngine::slabShutdown()
         stopSlot(QStringLiteral("slab:") + m_slabGroup, true);
         stopSlot(QStringLiteral("slabc:") + m_slabGroup, true);
         slabDarkParts();
+        // R440_BARS_LAB: the aim goes last, once the bars are dark
+        stopSlot(QStringLiteral("slabp:") + m_slabGroup, true);
     }
-    m_slabResume.insert(m_slabTab, slabCurrent());
+    m_slabResume.insert(m_slabTab + 3 * m_slabKind, slabCurrent());
     m_slabTest = false;
-    logSignal(QStringLiteral("sig:strobe-lab-close"));
+    logSignal(m_slabKind == 1 ? QStringLiteral("sig:bars-lab-close") : QStringLiteral("sig:strobe-lab-close"));
     m_slabMessage.clear();
     emit slabChanged();
 }
@@ -21234,10 +21322,10 @@ void TrackEngine::slabSetTab(int tab)
     tab = qBound(0, tab, 2);
     if (tab != m_slabTab)
     {
-        m_slabResume.insert(m_slabTab, slabCurrent());
+        m_slabResume.insert(m_slabTab + 3 * m_slabKind, slabCurrent());
         m_slabTab = tab;
-        m_slabList = slabListOf(m_slabGroup, tab);
-        int at = int(m_slabList.indexOf(m_slabResume.value(tab, Function::invalidId())));
+        m_slabList = slabListOf(m_slabGroup, tab, m_slabOrder);
+        int at = int(m_slabList.indexOf(m_slabResume.value(tab + 3 * m_slabKind, Function::invalidId())));
         if (at < 0)
         {
             for (int i = 0; i < m_slabList.count(); i++)
@@ -21253,8 +21341,31 @@ void TrackEngine::slabSetTab(int tab)
     }
     m_slabTest = false;
     m_slabMessage = m_slabList.isEmpty() ? tr("No programmes of this kind for %1").arg(m_slabGroup)
-                                         : (m_slabDark ? tr("The strobes are dark - ▶ PLAY lights them") : QString());
+                                         : (m_slabDark ? slabDarkText() : QString());
     slabShowCandidate();
+}
+
+void TrackEngine::slabSetOrder(int order)
+{
+    // R440_ORDER: 0 ALL (A-Z), 1 MOST SEEN, 2 NOT JUDGED - kept per lab
+    if (m_slabActive == false)
+        return;
+    order = qBound(0, order, 2);
+    m_slabOrderOf.insert(m_slabKind, order);
+    if (order == m_slabOrder)
+        return;
+    const quint32 was = slabCurrent();
+    m_slabOrder = order;
+    m_slabList = slabListOf(m_slabGroup, m_slabTab, m_slabOrder);
+    m_slabIndex = qMax(0, int(m_slabList.indexOf(was)));
+    m_slabTest = false;
+    m_slabMessage = m_slabList.isEmpty() ? tr("Nothing left to judge here") : (m_slabDark ? slabDarkText() : QString());
+    slabShowCandidate();
+}
+
+QString TrackEngine::slabDarkText() const
+{
+    return m_slabKind == 1 ? tr("The bars are dark - ▶ PLAY lights them") : tr("The strobes are dark - ▶ PLAY lights them");
 }
 
 void TrackEngine::slabGoto(int index)
@@ -21263,7 +21374,7 @@ void TrackEngine::slabGoto(int index)
         return;
     m_slabIndex = qBound(0, index, int(m_slabList.count()) - 1);
     m_slabTest = false;
-    m_slabMessage = m_slabDark ? tr("The strobes are dark - ▶ PLAY lights them") : QString();
+    m_slabMessage = m_slabDark ? slabDarkText() : QString();
     slabShowCandidate();
 }
 
@@ -21318,7 +21429,7 @@ void TrackEngine::slabDecide(int verdict)
     slabSave();
     saveRoles();
     invalidateCandidates();
-    logSignal(QStringLiteral("sig:strobe-lab:%1=%2").arg(fid).arg(now));
+    logSignal((m_slabKind == 1 ? QStringLiteral("sig:bars-lab:%1=%2") : QStringLiteral("sig:strobe-lab:%1=%2")).arg(fid).arg(now));
     if (now == 0)
     {
         emit slabChanged();
@@ -21335,10 +21446,17 @@ void TrackEngine::slabSetAuto(int mode)
     emit slabChanged();
 }
 
+QStringList TrackEngine::slabColours() const
+{
+    // R440_BARS_LAB: the bars have no white of their own worth judging by
+    if (m_slabKind == 1)
+        return { "room", "red", "green", "blue" };
+    return { "room", "red", "blue", "white" };
+}
+
 void TrackEngine::slabSetColour(const QString &colour)
 {
-    static const QStringList ok = { "room", "red", "blue", "white" };
-    if (ok.contains(colour) == false)
+    if (slabColours().contains(colour) == false)
         return;
     m_slabColour = colour;
     slabShow();
@@ -21366,7 +21484,8 @@ void TrackEngine::slabStop()
     if (m_slabActive == false)
         return;
     m_slabDark = !m_slabDark;           // STOP, and PLAY
-    m_slabMessage = m_slabDark ? tr("Stopped - ▶ PLAY lights them again") : QString();
+    m_slabMessage = m_slabDark ? (m_slabKind == 1 ? tr("Stopped - the bars stay on their aim, dark - ▶ PLAY lights them again")
+                                                   : tr("Stopped - ▶ PLAY lights them again")) : QString();
     slabRestartTimer();
     slabShow();
     emit slabChanged();
@@ -21403,7 +21522,8 @@ QString TrackEngine::slabTitle() const
     QStringList w = m_funcs.value(fid).name.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (w.isEmpty() == false && w.first() == QStringLiteral("AUTO"))
         w.removeFirst();
-    if (w.isEmpty() == false && w.first().startsWith(QStringLiteral("Strobe"), Qt::CaseInsensitive))
+    if (w.isEmpty() == false && (w.first().startsWith(QStringLiteral("Strobe"), Qt::CaseInsensitive)
+                                 || w.first() == QStringLiteral("Bars") || w.first() == QStringLiteral("Laserbars")))
         w.removeFirst();
     static const QStringList kinds = { "Break", "Groove", "Drop" };
     if (w.count() > 1 && kinds.contains(w.first()))
@@ -21435,7 +21555,13 @@ QStringList TrackEngine::slabChips() const
     const TrackFuncInfo info = m_funcs.value(fid);
     QStringList out;
     out << (info.coversColour && info.colour.isEmpty() == false ? info.colour.toUpper() + tr(" - ITS OWN") : tr("ROOM COLOUR"));
-    out << tr("NEVER THE WHOLE BANK");
+    if (m_slabKind == 1)
+    {
+        out << tr("HOME AIM · NO TILT");          // R440_BARS_LAB
+        out << tr("NO SWING WHILE LIT");
+    }
+    else
+        out << tr("NEVER THE WHOLE BANK");
     out << QString(qBound(1, info.stars, 3), QChar(0x2605)) + (info.stars <= 1 ? tr(" 1 STAR") : tr(" %1 STARS").arg(info.stars));
     if (info.banned)
         out << tr("BANNED");
@@ -21469,17 +21595,47 @@ QVariantList TrackEngine::slabTabCounts() const
     const QString group = slabGroup();
     QVariantList out;
     for (int tab = 0; tab < 3; tab++)
-        out << int(slabListOf(group, tab).count());
+        out << int(slabListOf(group, tab, 0).count());
     return out;
 }
 
 int TrackEngine::slabAllOf(int verdict) const
 {
+    return slabAllOfGroup(verdict, slabGroup());
+}
+
+int TrackEngine::slabAllOfGroup(int verdict, const QString &group) const
+{
+    // R440_BARS_LAB: one verdict store for both labs (keyed on the programme),
+    // counted per lab - by the group the programme lights
     slabLoad();
     int n = 0;
     for (auto it = m_slabVerdict.constBegin(); it != m_slabVerdict.constEnd(); ++it)
-        n += (it.value() == verdict && m_funcs.contains(it.key())) ? 1 : 0;
+        n += (it.value() == verdict && m_funcs.contains(it.key())
+              && m_funcs.value(it.key()).groups.contains(group)) ? 1 : 0;
     return n;
+}
+
+QVariantList TrackEngine::slabSummaries() const
+{
+    // R440_BARS_LAB: what the LAB menu shows on each card, strobes [0] and bars [1]
+    QVariantList out;
+    for (int kind = 0; kind < 2; kind++)
+    {
+        const QString group = (m_slabActive && kind == m_slabKind) ? m_slabGroup : slabPickGroupOf(kind);
+        QVariantMap m;
+        m.insert(QStringLiteral("available"), group.isEmpty() == false);
+        m.insert(QStringLiteral("group"), group);
+        m.insert(QStringLiteral("lamps"), int(m_groups.value(group).fixtures.count()));
+        QVariantList counts;
+        for (int tab = 0; tab < 3; tab++)
+            counts << (group.isEmpty() ? 0 : int(slabListOf(group, tab, 0).count()));
+        m.insert(QStringLiteral("counts"), counts);
+        m.insert(QStringLiteral("good"), group.isEmpty() ? 0 : slabAllOfGroup(1, group));
+        m.insert(QStringLiteral("banned"), group.isEmpty() ? 0 : slabAllOfGroup(-1, group));
+        out << m;
+    }
+    return out;
 }
 
 bool TrackEngine::slabOwnColour() const
@@ -21495,4 +21651,658 @@ bool TrackEngine::slabCanSpeed() const
         return false;
     const TrackFuncInfo info = m_funcs.value(fid);
     return info.type != int(Function::SceneType) && (info.durationMs > 0 || info.beats > 0.0);
+}
+/* =====================================================================
+ *  COLOUR LAB (runde 440) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/colourlab.inc.cpp.
+ *
+ *  Tobias, 2026-10-13 (N2, mockup approved): "også med mulighed for at
+ *  skrue på lysniveau pr. gruppe, da nogle lamper lyser f.eks. CYAN meget
+ *  lysere end andre grupper". One colour at a time, every group that can
+ *  show it lit side by side (or one by one), and a level per group IN that
+ *  colour. 100 % = as the show file made it.
+ *
+ *  R440_COLOUR_LEVEL: the level is used in the show - trimOf(group) is the
+ *  night's group fader x colourLevel(group), on every intensity path that
+ *  used the group fader alone (the dimmer parts, an owning chase, a colour
+ *  scene that carries the light, the startscene, the engine's own hits).
+ *  The colour is the one the group shows now (colourShown: its colour
+ *  scene, else a programme that paints its own, else the room's). The
+ *  lasers (bars, animation laser) are left out: their colours are lasers,
+ *  not a mix to balance. The held FLASH and the landing burst pass it, as
+ *  they pass the group fader.
+ *
+ *  SHOW OFF only, like the other labs; opens dark (ALL ON lights it). The
+ *  strobes run their colour scene, which keeps the shutter shut - the lab
+ *  never fires a hardware strobe. Haze is never touched. Stored in
+ *  QSettings trackengine/colour-level ("group/colour" -> level).
+ * ===================================================================== */
+
+#define ENGINE_CLAB_MIN       0.10    // the lowest level a group can be set to in a colour
+
+void TrackEngine::clabLoad() const
+{
+    if (m_colourLevelLoaded)
+        return;
+    m_colourLevelLoaded = true;
+    const QVariantMap raw = QSettings().value(QStringLiteral("trackengine/colour-level")).toMap();
+    for (auto it = raw.constBegin(); it != raw.constEnd(); ++it)
+    {
+        const qreal v = it.value().toDouble();
+        if (v >= ENGINE_CLAB_MIN && v < 0.995)
+            m_colourLevel.insert(it.key(), v);
+    }
+}
+
+void TrackEngine::clabSave() const
+{
+    QVariantMap out;
+    for (auto it = m_colourLevel.constBegin(); it != m_colourLevel.constEnd(); ++it)
+        out.insert(it.key(), QString::number(it.value(), 'f', 2).toDouble());
+    QSettings().setValue(QStringLiteral("trackengine/colour-level"), out);
+}
+
+bool TrackEngine::clabGroupCan(const QString &key) const
+{
+    const TrackGroup &g = m_groups.value(key);
+    return g.fixtures.isEmpty() == false && g.lasers == false && g.patternDevice == false;
+}
+
+QString TrackEngine::colourShown(const QString &group) const
+{
+    if (m_clabActive)
+        return m_clabColour;
+    const quint32 cf = m_active.value(QStringLiteral("col:") + group, Function::invalidId());
+    if (cf != Function::invalidId() && m_funcs.value(cf).colour.isEmpty() == false)
+        return m_funcs.value(cf).colour;
+    const quint32 mf = m_active.value(QStringLiteral("mot:") + group, Function::invalidId());
+    if (mf != Function::invalidId() && m_funcs.value(mf).coversColour && m_funcs.value(mf).colour.isEmpty() == false)
+        return m_funcs.value(mf).colour;
+    return m_colour;
+}
+
+qreal TrackEngine::colourLevel(const QString &group) const
+{
+    clabLoad();
+    if (m_colourLevel.isEmpty() || group.isEmpty())
+        return 1.0;
+    const QString colour = colourShown(group);
+    if (colour.isEmpty())
+        return 1.0;
+    return m_colourLevel.value(group + QLatin1Char('/') + colour, 1.0);
+}
+
+qreal TrackEngine::trimOf(const QString &group) const
+{
+    // R440_COLOUR_LEVEL: the night's group fader x the group's level in the
+    // colour it shows. In COLOUR LAB the night's fader is left out - the lab
+    // compares the groups as the show file made them.
+    const qreal night = m_clabActive ? 1.0 : m_groupTrim.value(group, 1.0);
+    return night * colourLevel(group);
+}
+
+QStringList TrackEngine::clabColours() const
+{
+    QStringList out;
+    static const QStringList order = { "red", "orange", "yellow", "green", "cyan", "blue", "magenta", "white" };
+    foreach (const QString &c, order)
+    {
+        if (m_palette.contains(c) || c == QStringLiteral("white"))
+            out << c;
+    }
+    foreach (const QString &c, m_palette)
+    {
+        if (out.contains(c) == false)
+            out << c;
+    }
+    return out;
+}
+
+QStringList TrackEngine::clabGroups() const
+{
+    QStringList out;
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_groups.value(key).fixtures.isEmpty() == false)
+            out << key;
+    }
+    return out;
+}
+
+QVariantList TrackEngine::clabRows() const
+{
+    clabLoad();
+    QVariantList out;
+    const QString base = baseGroup();
+    foreach (const QString &key, clabGroups())
+    {
+        const TrackGroup &g = m_groups.value(key);
+        QVariantMap m;
+        m.insert(QStringLiteral("key"), key);
+        m.insert(QStringLiteral("base"), key == base);
+        QString note;
+        bool can = clabGroupCan(key);
+        if (g.patternDevice)
+            note = tr("its own patterns - not here");
+        else if (g.lasers)
+            note = tr("lasers - left out of COLOUR LAB");
+        else if (colourFunction(key, m_clabColour) == Function::invalidId())
+        {
+            note = tr("no %1 in this group").arg(m_clabColour);
+            can = false;
+        }
+        m.insert(QStringLiteral("can"), can);
+        m.insert(QStringLiteral("note"), note);
+        m.insert(QStringLiteral("level"), m_colourLevel.value(key + QLatin1Char('/') + m_clabColour, 1.0));
+        m.insert(QStringLiteral("lit"), can && m_clabDark == false && (m_clabSolo.isEmpty() || m_clabSolo == key));
+        out << m;
+    }
+    return out;
+}
+
+QVariantList TrackEngine::clabMatrix() const
+{
+    clabLoad();
+    QVariantList out;
+    const QStringList colours = clabColours();
+    foreach (const QString &key, clabGroups())
+    {
+        if (clabGroupCan(key) == false)
+            continue;
+        QVariantMap m;
+        m.insert(QStringLiteral("key"), key);
+        QVariantList levels;
+        foreach (const QString &c, colours)
+        {
+            // -1: the group has no scene in that colour
+            if (colourFunction(key, c) == Function::invalidId())
+                levels << -1.0;
+            else
+                levels << m_colourLevel.value(key + QLatin1Char('/') + c, 1.0);
+        }
+        m.insert(QStringLiteral("levels"), levels);
+        out << m;
+    }
+    return out;
+}
+
+void TrackEngine::clabStopAll()
+{
+    foreach (const QString &key, clabGroups())
+    {
+        stopSlot(QStringLiteral("clab:") + key, true);
+        const TrackGroup &g = m_groups.value(key);
+        for (int i = 0; i < g.parts.count(); i++)
+            stopSlot(partSlot(key, i), true);
+    }
+}
+
+void TrackEngine::clabShow()
+{
+    if (m_clabActive == false || m_doc == nullptr)
+        return;
+    clabStopAll();
+    if (m_clabDark)
+        return;
+    foreach (const QString &key, clabGroups())
+    {
+        if (clabGroupCan(key) == false || (m_clabSolo.isEmpty() == false && m_clabSolo != key))
+            continue;
+        const quint32 cf = colourFunction(key, m_clabColour);
+        if (cf == Function::invalidId())
+            continue;
+        const TrackGroup &g = m_groups.value(key);
+        const qreal lvl = qBound(0.0, m_clabTest * colourLevel(key) * masterOut(), 1.0);
+        if (g.hasDimmer && g.parts.isEmpty() == false && m_funcs.value(cf).dimmer == false)
+        {
+            // the colour scene paints, the dimmer parts carry the light -
+            // setPart() puts trimOf() (the colour's level here) and MASTER on
+            run(QStringLiteral("clab:") + key, cf, 1.0, 0, true);
+            setDimmer(key, m_clabTest);
+        }
+        else
+            run(QStringLiteral("clab:") + key, cf, lvl, 0, true);   // the scene carries it
+    }
+}
+
+bool TrackEngine::clabOpen()
+{
+    if (m_clabActive)
+        return true;
+    if (m_doc == nullptr || m_docTimer.isActive())
+        return false;
+    ensureTable();
+    clabLoad();
+    labShutdown(false);                  // one lab at a time
+    QString refuse;
+    if (m_blackout)
+        refuse = tr("colour lab: BLACKOUT is on");
+    else if (clabColours().isEmpty())
+        refuse = tr("colour lab: the show has no colours");
+    if (refuse.isEmpty() == false)
+    {
+        m_report = refuse;
+        m_clabMessage = refuse;
+        emit liveChanged();
+        emit clabChanged();
+        return false;
+    }
+    if (m_testTimer.isActive())
+        selfTest();
+    if (m_startScene)
+        setStartScene(false);
+    // every lamp is the lab's: whatever the engine still holds goes
+    foreach (const QString &slot, m_active.keys())
+    {
+        const QString g = slotGroup(slot);
+        if ((g.isEmpty() == false && clabGroupCan(g)) || slot.startsWith(QStringLiteral("idle:")))
+            stopSlot(slot, true);
+    }
+    if (clabColours().contains(m_clabColour) == false)
+        m_clabColour = clabColours().contains(m_colour) ? m_colour : clabColours().first();
+    m_clabActive = true;
+    m_clabDark = true;                   // ALL ON lights it, nothing else does
+    m_clabSolo.clear();
+    m_report = tr("COLOUR LAB");
+    m_clabMessage = tr("Dark - ALL ON lights every group in %1").arg(m_clabColour.toUpper());
+    logSignal(QStringLiteral("sig:colour-lab-open"));
+    emit liveChanged();
+    clabShow();
+    emit clabChanged();
+    return true;
+}
+
+void TrackEngine::clabClose()
+{
+    clabShutdown();
+}
+
+void TrackEngine::clabShutdown()
+{
+    if (m_clabActive == false)
+        return;
+    clabStopAll();
+    m_clabActive = false;                // the night's faders count again from here
+    m_clabMessage.clear();
+    logSignal(QStringLiteral("sig:colour-lab-close"));
+    emit clabChanged();
+}
+
+void TrackEngine::clabSetColour(const QString &colour)
+{
+    if (m_clabActive == false || clabColours().contains(colour) == false)
+        return;
+    m_clabColour = colour;
+    m_clabMessage = m_clabDark ? tr("Dark - ALL ON lights every group in %1").arg(colour.toUpper()) : QString();
+    clabShow();
+    emit clabChanged();
+}
+
+void TrackEngine::clabSetLevelIn(const QString &key, const QString &colour, qreal level)
+{
+    if (clabGroupCan(key) == false || colour.isEmpty())
+        return;
+    clabLoad();
+    level = qBound(ENGINE_CLAB_MIN, level, 1.0);
+    const QString k = key + QLatin1Char('/') + colour;
+    if (level >= 0.995)
+        m_colourLevel.remove(k);
+    else
+        m_colourLevel.insert(k, level);
+}
+
+void TrackEngine::clabSetLevel(const QString &key, qreal level)
+{
+    if (m_clabActive == false)
+        return;
+    clabSetLevelIn(key, m_clabColour, level);
+    clabSave();
+    logSignal(QStringLiteral("sig:colour-level:%1/%2=%3").arg(key, m_clabColour)
+              .arg(m_colourLevel.value(key + QLatin1Char('/') + m_clabColour, 1.0), 0, 'f', 2));
+    clabShow();
+    emit clabChanged();
+}
+
+void TrackEngine::clabResetColour(const QString &key)
+{
+    clabSetLevel(key, 1.0);
+}
+
+void TrackEngine::clabCopyToAll(const QString &key)
+{
+    if (m_clabActive == false || clabGroupCan(key) == false)
+        return;
+    const qreal level = m_colourLevel.value(key + QLatin1Char('/') + m_clabColour, 1.0);
+    foreach (const QString &c, clabColours())
+    {
+        if (colourFunction(key, c) != Function::invalidId())
+            clabSetLevelIn(key, c, level);
+    }
+    clabSave();
+    logSignal(QStringLiteral("sig:colour-level-all:%1=%2").arg(key).arg(level, 0, 'f', 2));
+    clabShow();
+    emit clabChanged();
+}
+
+void TrackEngine::clabSetTest(qreal level)
+{
+    if (m_clabActive == false)
+        return;
+    m_clabTest = qBound(0.10, level, 1.0);
+    clabShow();
+    emit clabChanged();
+}
+
+void TrackEngine::clabSoloGroup(const QString &key)
+{
+    if (m_clabActive == false)
+        return;
+    // tap a name = only that group, tap it again = all of them
+    m_clabSolo = (m_clabSolo == key || clabGroupCan(key) == false) ? QString() : key;
+    clabShow();
+    emit clabChanged();
+}
+
+void TrackEngine::clabCompare(int mode)
+{
+    if (m_clabActive == false)
+        return;
+    if (mode == 0)
+        m_clabSolo.clear();              // ALL SIDE BY SIDE
+    else if (m_clabSolo.isEmpty())
+    {
+        // ONE BY ONE: the first group that can show the colour, then a tap on a name
+        foreach (const QString &key, clabGroups())
+        {
+            if (clabGroupCan(key) && colourFunction(key, m_clabColour) != Function::invalidId())
+            {
+                m_clabSolo = key;
+                break;
+            }
+        }
+    }
+    clabShow();
+    emit clabChanged();
+}
+
+void TrackEngine::clabToggleDark()
+{
+    if (m_clabActive == false)
+        return;
+    m_clabDark = !m_clabDark;
+    m_clabMessage = m_clabDark ? tr("Dark - ALL ON lights every group in %1").arg(m_clabColour.toUpper()) : QString();
+    clabShow();
+    emit clabChanged();
+}
+/* =====================================================================
+ *  SEND TO CLAUDE (runde 440) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/sendclaude.inc.cpp.
+ *
+ *  Tobias, 2026-10-13 (N8, mockup approved): one zip with everything from
+ *  the night, from SETUP > ADVANCED. Nothing leaves the PC: the files are
+ *  copied into Documents/QLC+/to-claude-<date-time>/ and packed beside it
+ *  as a .zip (Windows' own tar.exe, zip elsewhere). If no packer is there
+ *  the folder is the delivery. The originals are never moved or changed.
+ *
+ *  What it can take (sendItems): tonight's tracklog, the crash trail
+ *  (crumbs + crash-crumbs), Windows' crash reports for QLC+ (Report.wer),
+ *  crash dumps (CrashDumps), the settings + what was learned (the EXPORT
+ *  file, laser-lab.json), last night's tracklog, and BLT's cache when BLT
+ *  runs on this PC.
+ * ===================================================================== */
+
+static QString sendDocsDir()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QDir::separator() + "QLC+";
+}
+
+static qint64 sendBytesOf(const QStringList &files)
+{
+    qint64 n = 0;
+    foreach (const QString &f, files)
+        n += QFileInfo(f).size();
+    return n;
+}
+
+static QString sendSize(qint64 bytes)
+{
+    if (bytes >= 1024 * 1024)
+        return QString::number(bytes / (1024.0 * 1024.0), 'f', 1) + " MB";
+    if (bytes >= 1024)
+        return QString::number(qMax<qint64>(1, bytes / 1024)) + " KB";
+    return QString::number(bytes) + " B";
+}
+
+QStringList TrackEngine::sendFilesOf(const QString &id) const
+{
+    QStringList out;
+    const QDir docs(sendDocsDir());
+    if (id == QStringLiteral("tracklog") || id == QStringLiteral("lastnight"))
+    {
+        // tonight = the newest tracklog; last night = the one before it
+        const QFileInfoList logs = docs.entryInfoList(QStringList() << "tracklog-*.csv", QDir::Files, QDir::Name | QDir::Reversed);
+        const int at = id == QStringLiteral("tracklog") ? 0 : 1;
+        if (logs.count() > at)
+            out << logs.at(at).absoluteFilePath();
+    }
+    else if (id == QStringLiteral("crumbs"))
+    {
+        foreach (const QFileInfo &fi, docs.entryInfoList(QStringList() << "crumbs-current.txt" << "crumbs-prev.txt"
+                                                          << "crash-crumbs-*.txt", QDir::Files, QDir::Time))
+            out << fi.absoluteFilePath();
+    }
+    else if (id == QStringLiteral("wer"))
+    {
+        // Windows Error Reporting keeps one folder per crash, per user and machine-wide
+        QStringList roots;
+        const QString local = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+        roots << local + "/Microsoft/Windows/WER/ReportArchive" << local + "/Microsoft/Windows/WER/ReportQueue";
+        const QString pd = QString::fromLocal8Bit(qgetenv("ProgramData"));
+        if (pd.isEmpty() == false)
+            roots << pd + "/Microsoft/Windows/WER/ReportArchive" << pd + "/Microsoft/Windows/WER/ReportQueue";
+        foreach (const QString &root, roots)
+        {
+            const QDir d(root);
+            foreach (const QFileInfo &sub, d.entryInfoList(QStringList() << "AppCrash_qlcplus*", QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time))
+            {
+                const QString wer = sub.absoluteFilePath() + "/Report.wer";
+                if (QFileInfo::exists(wer))
+                    out << wer;
+                if (out.count() >= 20)
+                    break;
+            }
+        }
+    }
+    else if (id == QStringLiteral("dumps"))
+    {
+        const QDir d(QDir::homePath() + "/CrashDumps");
+        foreach (const QFileInfo &fi, d.entryInfoList(QStringList() << "qlcplus*.dmp", QDir::Files, QDir::Time))
+        {
+            out << fi.absoluteFilePath();
+            if (out.count() >= 3)        // the newest three - a dump is tens of MB
+                break;
+        }
+    }
+    else if (id == QStringLiteral("settings"))
+    {
+        foreach (const QString &name, QStringList() << "track-settings.json" << "laser-lab.json")
+        {
+            if (docs.exists(name))
+                out << docs.absoluteFilePath(name);
+        }
+    }
+    else if (id == QStringLiteral("blt"))
+    {
+        const QString cache = QDir::homePath() + "/.qlc-track-cache.edn";
+        if (QFileInfo::exists(cache))
+            out << cache;
+    }
+    return out;
+}
+
+QVariantList TrackEngine::sendItems()
+{
+    // NB: never exportSettings() here - its file is the only backup IMPORT
+    // reads, and a dialog opening must not overwrite it. The zip gets its own
+    // snapshot (sendSnapshot) instead.
+    struct Item { const char *id; const char *title; bool on; };
+    static const Item items[] = {
+        { "tracklog",  QT_TR_NOOP("Tonight's tracklog"), true },
+        { "crumbs",    QT_TR_NOOP("Crash trail"), true },
+        { "wer",       QT_TR_NOOP("Windows crash reports"), true },
+        { "dumps",     QT_TR_NOOP("Crash dumps"), true },
+        { "settings",  QT_TR_NOOP("Settings + what was learned"), true },
+        { "lastnight", QT_TR_NOOP("Last night too"), false },
+        { "blt",       QT_TR_NOOP("BLT cache"), false },
+    };
+    QVariantList out;
+    for (const Item &it : items)
+    {
+        const QString id = QString::fromLatin1(it.id);
+        const QStringList files = sendFilesOf(id);
+        QStringList names;
+        foreach (const QString &f, files)
+            names << QFileInfo(f).fileName();
+        QString detail;
+        if (id == QStringLiteral("settings"))
+            detail = tr("a snapshot of every Track setting") + (names.isEmpty() ? QString() : "  ·  " + names.join("  ·  "));
+        else if (files.isEmpty())
+            detail = id == QStringLiteral("blt") ? tr("not on this PC") : tr("nothing found");
+        else if (id == QStringLiteral("wer"))
+            detail = tr("%1 crash report(s)").arg(files.count()) + "  ·  " + sendSize(sendBytesOf(files));
+        else if (names.count() > 3)
+            detail = names.mid(0, 2).join("  ·  ") + tr("  + %1 more").arg(names.count() - 2) + "  ·  " + sendSize(sendBytesOf(files));
+        else
+            detail = names.join("  ·  ") + "  ·  " + sendSize(sendBytesOf(files));
+        QVariantMap m;
+        m.insert("id", id);
+        m.insert("title", tr(it.title));
+        m.insert("detail", detail);
+        const bool have = files.isEmpty() == false || id == QStringLiteral("settings");
+        m.insert("available", have);
+        m.insert("on", it.on && have);
+        m.insert("bytes", sendBytesOf(files));
+        out << m;
+    }
+    return out;
+}
+
+bool TrackEngine::sendMake(const QStringList &ids)
+{
+    if (m_sendState == 1)
+        return false;                    // one at a time
+    const QString stamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmm");
+    const QString folder = sendDocsDir() + "/to-claude-" + stamp;
+    QDir().mkpath(folder);
+    int copied = 0;
+    if (ids.contains(QStringLiteral("settings")) && sendSnapshot(folder + "/settings-snapshot.json"))
+        copied++;
+    foreach (const QString &id, ids)
+    {
+        const QStringList files = sendFilesOf(id);
+        foreach (const QString &f, files)
+        {
+            // the crash reports all share one name - their folder names them
+            QString name = QFileInfo(f).fileName();
+            if (id == QStringLiteral("wer"))
+                name = QFileInfo(f).dir().dirName() + "-Report.wer";
+            const QString to = folder + "/" + name;
+            QFile::remove(to);
+            if (QFile::copy(f, to))
+                copied++;
+        }
+    }
+    // a short note: what this is, which build, when
+    QFile note(folder + "/README.txt");
+    if (note.open(QIODevice::WriteOnly | QIODevice::Text))
+    {
+        QTextStream ts(&note);
+        ts << "SEND TO CLAUDE - " << QDateTime::currentDateTime().toString(Qt::ISODate) << "\n"
+           << "build: " << QCoreApplication::applicationVersion() << " / TRACK-r440 / " << __DATE__ << "\n"
+           << "items: " << ids.join(", ") << "\n"
+           << "files: " << copied << "\n";
+        note.close();
+    }
+    logSignal(QStringLiteral("sig:send-to-claude:%1:%2").arg(stamp).arg(copied));
+    // pack it: Windows 10+ has bsdtar as tar.exe (-a picks zip from the name),
+    // macOS and Linux have zip; without either the folder is the delivery
+    const QString zip = folder + ".zip";
+    QFile::remove(zip);
+    m_sendFolder = folder;
+    m_sendZip = zip;
+    m_sendState = 1;
+    m_sendResult = tr("Packing %1 files ...").arg(copied);
+    emit sendChanged();
+    QProcess *p = new QProcess(this);
+    p->setWorkingDirectory(folder);
+    connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [this, p](int code, QProcess::ExitStatus status) {
+        const bool ok = status == QProcess::NormalExit && code == 0 && QFileInfo::exists(m_sendZip);
+        sendDone(ok);
+        p->deleteLater();
+    });
+    connect(p, &QProcess::errorOccurred, this, [this, p](QProcess::ProcessError err) {
+        if (err == QProcess::FailedToStart)
+        {
+            sendDone(false);
+            p->deleteLater();
+        }
+    });
+#ifdef Q_OS_WIN
+    p->start(QStringLiteral("tar"), QStringList() << "-a" << "-c" << "-f" << QDir::toNativeSeparators(zip) << ".");
+#else
+    p->start(QStringLiteral("zip"), QStringList() << "-r" << "-q" << zip << ".");
+#endif
+    return true;
+}
+
+bool TrackEngine::sendSnapshot(const QString &path)
+{
+    // every trackengine/ and trackmanager/ key as it is now - maps and lists
+    // too (fromVariant), tonight's state included: this is for reading, not
+    // for IMPORT
+    saveRoles();
+    QSettings settings;
+    QJsonObject obj;
+    foreach (const QString &key, settings.allKeys())
+    {
+        if (key.startsWith(QStringLiteral("trackengine/")) || key.startsWith(QStringLiteral("trackmanager/")))
+            obj.insert(key, QJsonValue::fromVariant(settings.value(key)));
+    }
+    QSaveFile file(path);
+    if (file.open(QIODevice::WriteOnly) == false)
+        return false;
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+    return file.commit();
+}
+
+void TrackEngine::sendDone(bool ok)
+{
+    if (m_sendState != 1)
+        return;
+    if (ok)
+    {
+        // the zip is the delivery: the copies it was packed from go (only the
+        // folder this made a minute ago - the originals are never touched)
+        if (m_sendFolder.contains(QStringLiteral("to-claude-")))
+            QDir(m_sendFolder).removeRecursively();
+        m_sendState = 2;
+        m_sendResult = tr("Saved as %1  (%2)").arg(QDir::toNativeSeparators(m_sendZip), sendSize(QFileInfo(m_sendZip).size()));
+    }
+    else
+    {
+        m_sendState = 3;
+        m_sendResult = tr("Could not pack a zip - the files are in the folder %1").arg(QDir::toNativeSeparators(m_sendFolder));
+    }
+    logSignal(QStringLiteral("sig:send-to-claude-%1").arg(ok ? "zip" : "folder"));
+    emit sendChanged();
+}
+
+void TrackEngine::sendReset()
+{
+    if (m_sendState == 1)
+        return;
+    m_sendState = 0;
+    m_sendResult.clear();
+    emit sendChanged();
 }

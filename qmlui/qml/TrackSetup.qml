@@ -512,7 +512,9 @@ Rectangle
             radius: 6
             readonly property bool showOn: trackManager ? trackManager.autoRun : false
             readonly property real cw: Math.max(220, Math.min(340, (width - 40 - 2 * 24) / 3))
-            readonly property var counts: trackEngine ? trackEngine.slabTabCounts : [0, 0, 0]
+            // R440_BARS_LAB: each card from its own summary (strobes [0], bars [1])
+            readonly property var sums: trackEngine ? trackEngine.slabSummaries : []
+            function sum(kind, field, dflt) { return (sums.length > kind && sums[kind][field] !== undefined) ? sums[kind][field] : dflt }
 
             Text { x: 20; y: 14; text: "LAB"; color: "#E3B44F"; font.bold: true; font.pixelSize: 18 }
             Text
@@ -541,17 +543,41 @@ Rectangle
                 {
                     title: qsTr("STROBE LAB")
                     width: labMenu.cw; showOn: labMenu.showOn
-                    sub: trackEngine && trackEngine.slabGroup !== ""
-                         ? trackEngine.slabGroup + "  ·  " + trackEngine.slabLampCount + " " + qsTr("lamps") : qsTr("the strobes")
-                    can: trackEngine ? trackEngine.slabAvailable : false
-                    line1: qsTr("%1 calm break  ·  %2 groove  ·  %3 drop").arg(labMenu.counts[0] || 0).arg(labMenu.counts[1] || 0).arg(labMenu.counts[2] || 0)
-                    line2: qsTr("✕ %1 banned  ·  ✓ %2 kept").arg(trackEngine ? trackEngine.slabNoAll : 0).arg(trackEngine ? trackEngine.slabGoodAll : 0)
+                    sub: labMenu.sum(0, "group", "") !== ""
+                         ? labMenu.sum(0, "group", "") + "  ·  " + labMenu.sum(0, "lamps", 0) + " " + qsTr("lamps") : qsTr("the strobes")
+                    can: labMenu.sum(0, "available", false)
+                    line1: qsTr("%1 calm break  ·  %2 groove  ·  %3 drop").arg(labMenu.sum(0, "counts", [0, 0, 0])[0]).arg(labMenu.sum(0, "counts", [0, 0, 0])[1]).arg(labMenu.sum(0, "counts", [0, 0, 0])[2])
+                    line2: qsTr("✕ %1 banned  ·  ✓ %2 kept").arg(labMenu.sum(0, "banned", 0)).arg(labMenu.sum(0, "good", 0))
                     openName: "labOpen:strobe"
-                    onOpen: if (trackEngine) trackEngine.slabOpen()
+                    onOpen: if (trackEngine) trackEngine.slabOpenKind(0)
+                }
+                // R440_BARS_LAB
+                LabCard
+                {
+                    title: qsTr("BARS LAB")
+                    width: labMenu.cw; showOn: labMenu.showOn
+                    sub: labMenu.sum(1, "group", "") !== ""
+                         ? labMenu.sum(1, "group", "") + "  ·  " + labMenu.sum(1, "lamps", 0) + " " + qsTr("bars") : qsTr("the laser bars")
+                    can: labMenu.sum(1, "available", false)
+                    line1: qsTr("%1 break  ·  %2 groove  ·  %3 drop").arg(labMenu.sum(1, "counts", [0, 0, 0])[0]).arg(labMenu.sum(1, "counts", [0, 0, 0])[1]).arg(labMenu.sum(1, "counts", [0, 0, 0])[2])
+                    line2: qsTr("✕ %1 banned  ·  ✓ %2 kept").arg(labMenu.sum(1, "banned", 0)).arg(labMenu.sum(1, "good", 0))
+                    openName: "labOpen:bars"
+                    onOpen: if (trackEngine) trackEngine.slabOpenKind(1)
+                }
+                // R440_COLOUR_LAB
+                LabCard
+                {
+                    title: qsTr("COLOUR LAB")
+                    width: labMenu.cw; showOn: labMenu.showOn
+                    sub: qsTr("every lamp type  ·  one colour at a time")
+                    can: trackEngine ? trackEngine.clabColours.length > 0 : false
+                    line1: qsTr("how bright each group is IN each colour")
+                    line2: trackEngine && trackEngine.clabChanges > 0 ? qsTr("%1 levels changed from the show file").arg(trackEngine.clabChanges)
+                                                                     : qsTr("every level as the show file made it")
+                    openName: "labOpen:colour"
+                    onOpen: if (trackEngine) trackEngine.clabOpen()
                 }
                 LabCard { width: labMenu.cw; title: qsTr("WASH LAB"); sub: qsTr("the moving heads"); live: false }
-                LabCard { width: labMenu.cw; title: qsTr("BARS LAB"); sub: qsTr("the laser bars"); live: false }
-                LabCard { width: labMenu.cw; title: qsTr("COLOUR LAB"); sub: qsTr("every lamp type"); live: false }
             }
         }
 
@@ -1198,6 +1224,18 @@ Rectangle
 
             // the clock curve's points are in their own rows below (runde 211)
 
+            // R440_SEND: everything from tonight in one zip, for Claude
+            TrackTile
+            {
+                objectName: "sendOpen"
+                Layout.preferredWidth: 150
+                Layout.preferredHeight: 34
+                label: qsTr("SEND TO CLAUDE")
+                active: true
+                activeColor: "#4FA3E3"
+                onTapped: setupRoot.openSend()
+            }
+
             // every Track setting to / from Documents/QLC+/track-settings.json
             // two taps each (runde 209): IMPORT replaces every role, star
             // and ban with the file's, and EXPORT overwrites the only backup
@@ -1313,5 +1351,156 @@ Rectangle
         active: trackEngine ? trackEngine.slabActive : false
         visible: active
         source: "qrc:/StrobeLab.qml"
+    }
+
+    // R440_COLOUR_LAB: the same, for COLOUR LAB
+    Loader
+    {
+        id: clabLoader
+        objectName: "clabLoader"
+        parent: setupRoot.host ? setupRoot.host : setupRoot
+        anchors.fill: parent
+        z: 1000
+        active: trackEngine ? trackEngine.clabActive : false
+        visible: active
+        source: "qrc:/ColourLab.qml"
+    }
+
+    // R440_SEND: SEND TO CLAUDE - over the whole page, from ADVANCED
+    property bool sendOpen: false
+    property var sendList: []
+    property var sendOn: ({})
+    function openSend()
+    {
+        if (!trackEngine) return
+        trackEngine.sendReset()
+        var items = trackEngine.sendItems()
+        var on = {}
+        for (var i = 0; i < items.length; i++)
+            on[items[i].id] = items[i].on === true
+        sendList = items
+        sendOn = on
+        sendOpen = true
+    }
+    Rectangle
+    {
+        id: sendVeil
+        objectName: "sendDialog"
+        parent: setupRoot.host ? setupRoot.host : setupRoot
+        anchors.fill: parent
+        z: 1100
+        visible: setupRoot.sendOpen
+        color: "#B0000000"
+        MouseArea { anchors.fill: parent }
+        Rectangle
+        {
+            id: sendBox
+            readonly property real ks: Math.min(1.0, Math.min(parent.width / 1180, parent.height / 900))
+            width: 1100 * ks; height: 860 * ks
+            anchors.centerIn: parent
+            radius: 14 * ks; color: "#141418"; border.width: 3; border.color: "#4FA3E3"
+            readonly property bool busy: trackEngine ? trackEngine.sendState === 1 : false
+            readonly property bool done: trackEngine ? trackEngine.sendState >= 2 : false
+            Rectangle
+            {
+                x: 40 * sendBox.ks; y: 36 * sendBox.ks; width: 260 * sendBox.ks; height: 50 * sendBox.ks; radius: 8 * sendBox.ks; color: "#4FA3E3"
+                Text { anchors.centerIn: parent; text: qsTr("SEND TO CLAUDE"); color: "#0A1622"; font.bold: true; font.pixelSize: 18 * sendBox.ks }
+            }
+            Text
+            {
+                x: 320 * sendBox.ks; y: 44 * sendBox.ks; width: sendBox.width - 360 * sendBox.ks; elide: Text.ElideRight
+                text: qsTr("one zip with everything from tonight"); color: "#E9E9EE"; font.bold: true; font.pixelSize: 24 * sendBox.ks
+            }
+            Text
+            {
+                x: 40 * sendBox.ks; y: 104 * sendBox.ks; width: sendBox.width - 80 * sendBox.ks; elide: Text.ElideRight
+                text: qsTr("Nothing leaves the PC - the zip lands in Documents\\QLC+, and you move it from there.")
+                color: "#8C8C96"; font.pixelSize: 15 * sendBox.ks
+            }
+            Column
+            {
+                x: 40 * sendBox.ks; y: 146 * sendBox.ks; spacing: 8 * sendBox.ks
+                Repeater
+                {
+                    model: setupRoot.sendList
+                    Rectangle
+                    {
+                        objectName: "sendItem:" + modelData.id
+                        readonly property bool can: modelData.available === true
+                        readonly property bool on: can && setupRoot.sendOn[modelData.id] === true
+                        width: sendBox.width - 80 * sendBox.ks; height: 64 * sendBox.ks; radius: 8 * sendBox.ks
+                        color: on ? "#22222A" : "#1A1A1E"
+                        Rectangle
+                        {
+                            x: 18 * sendBox.ks; anchors.verticalCenter: parent.verticalCenter
+                            width: 32 * sendBox.ks; height: width; radius: 4 * sendBox.ks
+                            color: parent.on ? "#4FA3E3" : "transparent"; border.width: 2; border.color: parent.on ? "#4FA3E3" : "#5E5E68"
+                            Text { anchors.centerIn: parent; visible: parent.parent.on; text: "✓"; color: "#0A1622"; font.bold: true; font.pixelSize: 18 * sendBox.ks }
+                        }
+                        Text
+                        {
+                            x: 70 * sendBox.ks; y: 8 * sendBox.ks; width: parent.width - 90 * sendBox.ks; elide: Text.ElideRight
+                            text: modelData.title; color: parent.can ? (parent.on ? "#E9E9EE" : "#B8B8C4") : "#5E5E68"; font.bold: true; font.pixelSize: 17 * sendBox.ks
+                        }
+                        Text
+                        {
+                            x: 70 * sendBox.ks; y: 34 * sendBox.ks; width: parent.width - 90 * sendBox.ks; elide: Text.ElideRight
+                            text: modelData.detail; color: "#8C8C96"; font.pixelSize: 13 * sendBox.ks
+                        }
+                        MouseArea
+                        {
+                            anchors.fill: parent
+                            enabled: parent.can && !sendBox.busy
+                            onClicked:
+                            {
+                                var on = Object.assign({}, setupRoot.sendOn)
+                                on[modelData.id] = !(on[modelData.id] === true)
+                                setupRoot.sendOn = on
+                            }
+                        }
+                    }
+                }
+            }
+            Text
+            {
+                objectName: "sendResult"
+                x: 40 * sendBox.ks; y: sendBox.height - 160 * sendBox.ks; width: sendBox.width - 80 * sendBox.ks
+                wrapMode: Text.WordWrap
+                text: trackEngine && trackEngine.sendResult !== "" ? trackEngine.sendResult
+                      : qsTr("Saved as Documents\\QLC+\\to-claude-<date-time>.zip")
+                color: trackEngine && trackEngine.sendState === 3 ? "#E3B44F" : "#E9E9EE"
+                font.bold: true; font.pixelSize: 16 * sendBox.ks
+            }
+            Text
+            {
+                x: 40 * sendBox.ks; y: sendBox.height - 124 * sendBox.ks; width: sendBox.width - 80 * sendBox.ks; elide: Text.ElideRight
+                text: qsTr("Then: put it in qlcplus-pr on the Mac (USB stick / AirDrop / OneDrive) and tell me.")
+                color: "#8C8C96"; font.pixelSize: 14 * sendBox.ks
+            }
+            TrackTile
+            {
+                objectName: "sendCancel"
+                x: 40 * sendBox.ks; y: sendBox.height - 92 * sendBox.ks; width: 340 * sendBox.ks; height: 64 * sendBox.ks
+                label: sendBox.done ? qsTr("CLOSE") : qsTr("CANCEL")
+                enabled: !sendBox.busy
+                onTapped: setupRoot.sendOpen = false
+            }
+            TrackTile
+            {
+                objectName: "sendMake"
+                x: 400 * sendBox.ks; y: sendBox.height - 92 * sendBox.ks; width: sendBox.width - 440 * sendBox.ks; height: 64 * sendBox.ks
+                label: sendBox.busy ? qsTr("PACKING ...") : (sendBox.done ? qsTr("MAKE ANOTHER") : qsTr("MAKE THE ZIP"))
+                active: !sendBox.busy
+                activeColor: "#4FA3E3"
+                onTapped:
+                {
+                    if (!trackEngine || sendBox.busy) return
+                    var ids = []
+                    for (var k in setupRoot.sendOn)
+                        if (setupRoot.sendOn[k] === true) ids.push(k)
+                    if (ids.length > 0) trackEngine.sendMake(ids)
+                }
+            }
+        }
     }
 }
