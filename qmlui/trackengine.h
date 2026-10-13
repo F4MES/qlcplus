@@ -1520,6 +1520,8 @@ public:
     QString m_planSection;               // the next section the plan is for
     bool m_forceOn = false;              // this section runs on his set
     QStringList m_forceSet;
+    int m_forceFrom = -1;                // R438_LOOP_ACROSS: the beat his section began
+    QString m_forceSection;              // ... and what kind it is
     QStringList m_dropSet;               // the drop's groups, in the room's order
     int m_dropMode = 0;                  // 0 none, 1 the next drop (plan), 2 this drop
     bool m_dropTouched = false;          // he tapped: the set is his until the drop ends

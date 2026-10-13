@@ -10714,6 +10714,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_forceOn = false;
             m_forceSet.clear();
             m_planOriginal.clear();              // R433_SECTION_TASTE
+            m_forceFrom = -1;                    // R438_LOOP_ACROSS
+        }
+        // R438_LOOP_ACROSS: a DJ loop back over the start of his section - his set
+        // is the plan for that boundary again (and taught nothing a second time);
+        // the beats before it are the engine's
+        // (only when the music reads as the section before again - a loop the
+        // page holds as his section, R235's DJ-loop look, stays his)
+        else if (m_forceOn && m_forceFrom > 0 && beat < m_forceFrom && m_dropPlanBeat >= m_forceFrom
+                 && state != m_forceSection)
+        {
+            m_forceOn = false;
+            m_dropSet = m_forceSet;
+            m_planOriginal = m_forceSet;
+            m_dropTouched = true;
+            m_dropMode = 1;
+            m_planSection = m_forceSection;
+            m_dropPlanFor = m_forceFrom;
         }
         // the boundary the plan was for: his set takes the section (or, untouched,
         // the engine's own section starts and whatever he held before ends)
@@ -10721,6 +10738,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             m_forceOn = m_dropTouched;
             m_forceSet = m_dropSet;
+            m_forceFrom = m_forceOn ? m_dropPlanFor : -1;   // R438_LOOP_ACROSS
+            m_forceSection = m_planSection;
             if (m_forceOn)
                 logSignal(QStringLiteral("sig:section-pick:") + m_planSection + QStringLiteral(":")
                           + m_forceSet.join(QLatin1Char('+')));
@@ -18648,6 +18667,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
         m_forceOn = false;
         m_forceSet.clear();
         m_planOriginal.clear();
+        m_forceFrom = -1;                // R438_LOOP_ACROSS
         if (had)
             emit dropSetChanged();
     }
