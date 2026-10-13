@@ -118,6 +118,7 @@ static quint32 nameScatter(const QString &name)
 // så hurtigere derfra." They come on at 30 %, two beats a step or slower;
 // from 50 % a beat a step; from 75 % in a drop an eighth. strobePaceFloor().
 #define ENGINE_STROBE_ON      0.30
+#define ENGINE_ANI_MASTER_MIN 0.15   // R442_ANI_MASTER: the animation laser goes out under this MASTER x closing
 #define ENGINE_STROBE_START   0.50   // R418_STROBE_HALF / R437_STROBE_START: the strobes' fader at a new night
 #define ENGINE_TASTE_OUT      0.60   // R433_SECTION_TASTE: under this he has taken it out
 #define ENGINE_TASTE_KEEP     0.90   // R435_TASTE_DECAY: what a night keeps of the lean
@@ -787,7 +788,7 @@ void TrackEngine::slotPulseTimer()
                 // laser's dimmer is a switch, and 0.7 written to it 20 ms
                 // after the beat is whatever the fixture makes of it
                 if (g.patternDevice)
-                    out = out > 0.10 ? 1.0 : 0.0;
+                    out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
                 m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
                 m_activeOut.insert(slot, out);
             }
@@ -6822,6 +6823,7 @@ qreal TrackEngine::master() const { return m_master; }
 // MASTER as it reaches the light: the operator's fader times the closing lid
 // (runde 211). The held FLASH button stays at full - it is the operator's hand.
 qreal TrackEngine::masterOut() const { return m_master * m_closingDim * brakeDim(); }   // runde 358: and a brake
+bool TrackEngine::aniMasterOn() const { return m_master * m_closingDim >= ENGINE_ANI_MASTER_MIN; }   // R442_ANI_MASTER (not the brake)
 
 void TrackEngine::setMaster(qreal level)
 {
@@ -15424,7 +15426,7 @@ void TrackEngine::reapplyLevels()
             // laser's dimmer is a switch, and a fraction written to it is
             // rounded by the fixture in a way nobody can predict
             if (m_groups.value(group).patternDevice)
-                out = out > 0.10 ? 1.0 : 0.0;
+                out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
         }
         else
         {
@@ -19298,7 +19300,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     qreal applied = qBound(0.0, level * pulseFactor(group) * trim * ((heldFlash || landFree) ? 1.0 : masterOut()), 1.0);
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
-        applied = applied > 0.10 ? 1.0 : 0.0;
+        applied = (applied > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
     if (lightsOut())
         applied = 0.0;
 
@@ -21121,19 +21123,24 @@ void TrackEngine::slabDarkParts()
         stopSlot(partSlot(m_slabGroup, i), true);
 }
 
-void TrackEngine::slabAim()
+bool TrackEngine::slabAim()
 {
     // R440_BARS_LAB: the bars stand on their home aim - a still scene, sent
-    // while they are dark - before anything lights them, and stay there
+    // while they are dark - before anything lights them, and stay there.
+    // R442_BARS_NO_HOME: no home aim in the show = no known safe aim - false,
+    // and the bars stay dark
     if (m_slabKind != 1 || m_slabGroup.isEmpty())
-        return;
+        return true;
     const QString pslot = QStringLiteral("slabp:") + m_slabGroup;
     const quint32 home = homePosition(m_slabGroup);
-    if (home != Function::invalidId() && m_active.value(pslot, Function::invalidId()) != home)
+    if (home == Function::invalidId())
+        return false;
+    if (m_active.value(pslot, Function::invalidId()) != home)
     {
         run(pslot, home, 1.0, 0, true);
         m_slabAimMs = QDateTime::currentMSecsSinceEpoch();   // the motors need a moment
     }
+    return true;
 }
 
 void TrackEngine::slabShow()
@@ -21150,7 +21157,14 @@ void TrackEngine::slabShow()
         slabDarkParts();
         return;
     }
-    slabAim();                           // R440_BARS_LAB: on the aim before the light
+    if (slabAim() == false)              // R440_BARS_LAB: on the aim before the light
+    {
+        stopSlot(slot, true);            // R442_BARS_NO_HOME: no safe aim known - dark
+        stopSlot(cslot, true);
+        slabDarkParts();
+        m_slabMessage = tr("No home aim for %1 in the show - the bars stay dark").arg(m_slabGroup);
+        return;
+    }
     // ... and lit only once the motors have had time to get there: a PLAY
     // right after the lab opened waits, dark, never a swing while lit
     if (m_slabKind == 1)
@@ -21712,6 +21726,9 @@ QString TrackEngine::colourShown(const QString &group) const
 {
     if (m_clabActive)
         return m_clabColour;
+    // R442_LAB_COLOUR: STROBE/BARS LAB - the colour the lab shows the group in
+    if (m_slabActive && group == m_slabGroup)
+        return slabColourNow();
     const quint32 cf = m_active.value(QStringLiteral("col:") + group, Function::invalidId());
     if (cf != Function::invalidId() && m_funcs.value(cf).colour.isEmpty() == false)
         return m_funcs.value(cf).colour;
@@ -22079,11 +22096,20 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
     const QDir docs(sendDocsDir());
     if (id == QStringLiteral("tracklog") || id == QStringLiteral("lastnight"))
     {
-        // tonight = the newest tracklog; last night = the one before it
-        const QFileInfoList logs = docs.entryInfoList(QStringList() << "tracklog-*.csv", QDir::Files, QDir::Name | QDir::Reversed);
-        const int at = id == QStringLiteral("tracklog") ? 0 : 1;
-        if (logs.count() > at)
-            out << logs.at(at).absoluteFilePath();
+        // R442_SEND_NIGHT: a night runs past midnight and writes two dated files.
+        // Tonight = every tracklog written in the last 16 hours (the newest if
+        // none); last night = those written 16-40 hours ago.
+        const QFileInfoList logs = docs.entryInfoList(QStringList() << "tracklog-*.csv", QDir::Files, QDir::Time);
+        const QDateTime now = QDateTime::currentDateTime();
+        const bool tonight = id == QStringLiteral("tracklog");
+        foreach (const QFileInfo &fi, logs)
+        {
+            const qint64 h = fi.lastModified().secsTo(now) / 3600;
+            if ((tonight && h < 16) || (tonight == false && h >= 16 && h < 40))
+                out << fi.absoluteFilePath();
+        }
+        if (out.isEmpty() && tonight && logs.isEmpty() == false)
+            out << logs.first().absoluteFilePath();
     }
     else if (id == QStringLiteral("crumbs"))
     {

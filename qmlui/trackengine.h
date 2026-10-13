@@ -1669,7 +1669,7 @@ private:
     qint64 m_slabAimMs = 0;              // when the bars were last sent to their aim
     static bool slabKindOf(const TrackGroup &g, int kind);
     QString slabPickGroupOf(int kind) const;
-    void slabAim();
+    bool slabAim();                      // R442_BARS_NO_HOME: false = no safe aim known
     QString slabDarkText() const;
     int slabAllOfGroup(int verdict, const QString &group) const;
     // R440_COLOUR_LAB / R440_COLOUR_LEVEL
@@ -1688,6 +1688,9 @@ private:
     qreal colourLevel(const QString &group) const;
     /** the night's group fader x the group's level in the colour it shows */
     qreal trimOf(const QString &group) const;
+    /** R442_ANI_MASTER: the animation laser is lit only while MASTER x the
+     *  closing is at least ENGINE_ANI_MASTER_MIN - its dimmer is a switch */
+    bool aniMasterOn() const;
     QStringList clabGroups() const;
     void clabStopAll();
     void clabShow();
