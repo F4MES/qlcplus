@@ -176,6 +176,7 @@ Rectangle
 
             Text
             {
+                visible: setupRoot.width >= 1640    // R437_SETUP_FITS
                 text: qsTr("WHAT DOES EACH LOOK DO?")
                 color: setupRoot.cText
                 font.bold: true
@@ -184,7 +185,7 @@ Rectangle
 
             Rectangle
             {
-                Layout.preferredWidth: 200
+                Layout.preferredWidth: setupRoot.width >= 1640 ? 200 : 120
                 Layout.preferredHeight: 34
                 color: "#1B1B1B"
                 radius: 3

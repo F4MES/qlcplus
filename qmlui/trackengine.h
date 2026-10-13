@@ -713,6 +713,9 @@ public:
     Q_INVOKABLE void toggleBase(QString key);
     QVariantMap trims() const;
     Q_INVOKABLE qreal groupTrim(QString key) const;
+    /** R437_STROBE_START: where a new night starts this group's fader - the
+     *  strobes at ENGINE_STROBE_START (R418_STROBE_HALF), the rest at 100 % */
+    qreal startTrim(const QString &key) const;
     Q_INVOKABLE void setGroupTrim(QString key, qreal level);
     Q_INVOKABLE QString baseGroup() const;
     /** R430: a small LED wash - not the base, no movement, strobe, laser or
