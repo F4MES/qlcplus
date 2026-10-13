@@ -149,6 +149,17 @@ Rectangle
         if (planCardOpen)
             planCardRows = trackEngine.planRows()
     }
+    // R445_DROP_HIT: the next DROP flag ahead of the track (-1: none)
+    function nextDropBeat()
+    {
+        var mk = trackManager ? trackManager.markers : []
+        var cur = trackManager ? trackManager.currentBeat : 0
+        var best = -1
+        for (var i = 0; i < mk.length; i++)
+            if (mk[i].type === "drop" && mk[i].beat > cur && (best < 0 || mk[i].beat < best)) best = mk[i].beat
+        return best
+    }
+    function hitName(kind) { return kind === 1 ? qsTr("FLASH") : (kind === 2 ? qsTr("STROBE") : (kind === 3 ? qsTr("DARK \u2192 BANG") : "")) }
     function planNext()
     {
         for (var j = 0; j < planModel.length; j++)
@@ -437,6 +448,7 @@ Rectangle
                 circle(12,12,2)
                 for(var k=0;k<4;k++){c.save();c.translate(12,12);c.rotate(k*Math.PI/2);c.beginPath();c.moveTo(0,-3);c.bezierCurveTo(-7,-13,6,-13,3,-3);c.stroke();c.restore()}
             }
+            else if (kind === "bolt") { c.beginPath(); c.moveTo(14,2); c.lineTo(5,13.5); c.lineTo(11,13.5); c.lineTo(9,22); c.lineTo(19,9.5); c.lineTo(13,9.5); c.lineTo(15.5,2); c.closePath(); c.fill() }   // R445_DROP_HIT
             else if (kind === "plan") { c.fillRect(3,5,17,3); c.fillRect(3,11,11,3); c.fillRect(3,17,14,3) }   // R443_PLAN_LANE
             else if (kind === "pencil") { c.beginPath(); c.moveTo(4,20); c.lineTo(5,15); c.lineTo(15.5,4.5); c.lineTo(19.5,8.5); c.lineTo(9,19); c.closePath(); c.stroke(); line(13,7,17,11) }
             else if (kind === "check") { c.beginPath(); c.moveTo(4,12.5); c.lineTo(9.5,18); c.lineTo(20,6.5); c.stroke() }
@@ -1556,6 +1568,41 @@ Rectangle
                 }
             }
 
+            // R445_DROP_HIT: the armed hit on the next DROP flag
+            Rectangle
+            {
+                id: hitTag
+                objectName: "hitTag"
+                z: 3
+                readonly property int at: trackViewRoot.nextDropBeat()
+                readonly property int vf: trackViewRoot.viewFirst()
+                readonly property int vc: Math.max(1, trackViewRoot.viewCount())
+                visible: !!trackEngine && trackEngine.hitKind > 0 && at > 0 && at >= vf && at < vf + vc && !trackViewRoot.markerEdit
+                x: Math.min(wfCanvas.x + (at - vf) * wfCanvas.width / vc + 2, waveCard.width - width - Math.round(8 * trackViewRoot.ks))
+                y: wfCanvas.stripH + (trackViewRoot.planShown ? trackViewRoot.laneH : 0) + Math.round(6 * trackViewRoot.ks)
+                width: hitRow.implicitWidth + Math.round(18 * trackViewRoot.ks)
+                height: Math.max(22, Math.round(26 * trackViewRoot.ks))
+                radius: Math.round(5 * trackViewRoot.ks)
+                color: "#3A1416"
+                border.width: 1
+                border.color: "#E23B3B"
+                Row
+                {
+                    id: hitRow
+                    anchors.centerIn: parent
+                    spacing: Math.round(6 * trackViewRoot.ks)
+                    ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(14 * trackViewRoot.ks); height: width; kind: "bolt"; ink: "#F05A5A" }
+                    Text
+                    {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("HIT") + "  \u00B7  " + trackViewRoot.hitName(trackEngine ? trackEngine.hitKind : 0)
+                        color: "#F05A5A"
+                        font.bold: true
+                        font.pixelSize: trackViewRoot.fs(13)
+                    }
+                }
+            }
+
             Text
             {
                 anchors.centerIn: wfCanvas
@@ -1670,6 +1717,59 @@ Rectangle
                         onTapped: if (trackEngine) trackEngine.planLane = !active
                     }
 
+                    // R445_DROP_HIT: a hit on the next drop - armed by a tap, the kind
+                    // while armed, off by a tap or by itself once it has landed
+                    Btn
+                    {
+                        id: hitBtn
+                        objectName: "dropHit"
+                        visible: !trackViewRoot.markerEdit && !!trackEngine
+                        readonly property bool armed: trackEngine ? trackEngine.hitKind > 0 : false
+                        width: Math.round(200 * trackViewRoot.ks)
+                        height: rail.bh
+                        icon: "bolt"
+                        active: armed
+                        tone: "#E23B3B"
+                        text: armed ? qsTr("HIT ARMED") : qsTr("DROP HIT")
+                        onTapped: if (trackEngine) trackEngine.hitKind = armed ? 0 : trackEngine.hitLast
+                    }
+                    Repeater
+                    {
+                        model: [ { k: 1, w: 98 }, { k: 2, w: 108 }, { k: 3, w: 150 } ]
+                        Btn
+                        {
+                            objectName: "hitKind:" + modelData.k
+                            visible: hitBtn.visible && hitBtn.armed
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.round(modelData.w * trackViewRoot.ks)
+                            height: rail.bh - Math.round(8 * trackViewRoot.ks)
+                            fontPx: trackViewRoot.fs(13)
+                            text: trackViewRoot.hitName(modelData.k)
+                            active: trackEngine ? trackEngine.hitKind === modelData.k : false
+                            tone: trackViewRoot.cGold
+                            onTapped: if (trackEngine) trackEngine.hitKind = modelData.k
+                        }
+                    }
+                    Text
+                    {
+                        objectName: "hitHint"
+                        visible: hitBtn.visible && warnText.text.length === 0
+                        anchors.verticalCenter: parent.verticalCenter
+                        leftPadding: Math.round(6 * trackViewRoot.ks)
+                        width: Math.max(0, rail.width - x - verdictTools.width - Math.round(40 * trackViewRoot.ks))
+                        elide: Text.ElideRight
+                        color: hitBtn.armed ? trackViewRoot.cMute : trackViewRoot.cDim
+                        font.pixelSize: trackViewRoot.fs(15)
+                        text:
+                        {
+                            if (!hitBtn.armed) return qsTr("tap: arm a hit on the next drop")
+                            var at = trackViewRoot.nextDropBeat()
+                            var cur = trackManager ? trackManager.currentBeat : 0
+                            var when = at > 0 ? qsTr("on the DROP in %1 bars").arg(Math.max(1, Math.ceil((at - cur) / 4))) : qsTr("on the next drop")
+                            return when + "  \u00B7  " + qsTr("tap HIT ARMED again = off")
+                        }
+                    }
+
                     // ---- the flag tools: a flag on the bar the track is at, the
                     //      selected flag retyped or deleted. What the operator sets
                     //      is the truth - it goes to BLT's cache as manual.
@@ -1770,17 +1870,23 @@ Rectangle
                 // a warning that stands all night sits here, where it covers nothing
                 Row
                 {
-                    anchors.centerIn: parent
+                    // R445_DROP_HIT: right of MARKERS / PLAN / DROP HIT (it lay over them,
+                    // centred), centred only when the rail has no buttons
+                    readonly property real leftEdge: railLeft.visible ? railLeft.x + railLeft.width + Math.round(16 * trackViewRoot.ks) : 0
+                    readonly property real room: railLeft.visible ? verdictTools.x - Math.round(16 * trackViewRoot.ks) - leftEdge
+                                                                  : rail.width - Math.round(760 * trackViewRoot.ks)
+                    x: railLeft.visible ? leftEdge : (rail.width - width) / 2
+                    anchors.verticalCenter: parent.verticalCenter
                     spacing: 10
                     visible: trackManager && trackManager.roleMode && !trackViewRoot.setupOpen
                              && !trackViewRoot.markerEdit && verdictTools.blaming === 0 && warnText.text.length > 0
-                    width: Math.min(implicitWidth, rail.width - Math.round(760 * trackViewRoot.ks))
+                    width: Math.max(0, Math.min(implicitWidth, room))
                     ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: 18; height: 18; kind: "warn"; ink: "#E3B44F" }
                     Text
                     {
                         id: warnText
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.min(implicitWidth, rail.width - Math.round(800 * trackViewRoot.ks))
+                        width: Math.max(0, Math.min(implicitWidth, parent.room - 28))
                         elide: Text.ElideRight
                         color: "#E3B44F"
                         font.pixelSize: trackViewRoot.fs(13)
@@ -3202,7 +3308,7 @@ Rectangle
                 model: [
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG." },
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG.<br><b>DROP HIT</b> arms a hit on the next drop: <b>FLASH</b> (a white beat), <b>STROBE</b> (the strobes flat out for the first bar) or <b>DARK \u2192 BANG</b> (black for two beats, then the flash). It lands once, on the drop's first beat, and switches itself off - tap <b>HIT ARMED</b> to take it back." },
                     { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column
