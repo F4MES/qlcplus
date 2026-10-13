@@ -551,7 +551,7 @@ jobs:
           else
             gh release create rig-latest --target "$GITHUB_SHA" --prerelease --title "Rig build (track-layout)" --notes "$NOTES"
           fi
-          gh release upload rig-latest QLC-rig-setup.exe rig-build.txt tools/update-qlc.ps1 tools/update-qlc.cmd --clobber
+          gh release upload rig-latest QLC-rig-setup.exe rig-build.txt tools/update-qlc.cmd --clobber
 
   build-macos:
     runs-on: macos-15
