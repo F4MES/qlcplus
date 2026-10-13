@@ -3934,6 +3934,99 @@ void TrackEngine::resetSectionTaste(const QString &section, const QString &key)
     emit tasteChanged();
 }
 
+/* ---- R439_TRACK_MEMORY: his picks, per track ---- */
+void TrackEngine::loadTrackMemory()
+{
+    if (m_trackMemLoaded)
+        return;
+    m_trackMemLoaded = true;
+    m_trackMem = QSettings().value(QStringLiteral("trackengine/track-memory")).toMap();
+}
+
+void TrackEngine::rememberPick(int boundary, const QString &section, const QStringList &set, qreal fader)
+{
+    if (m_trackTitle.isEmpty() || boundary < 0 || section.isEmpty() || set.isEmpty())
+        return;
+    loadTrackMemory();
+    QVariantMap t = m_trackMem.value(m_trackTitle).toMap();
+    // one pick per boundary: a moved flag (within 8 beats) replaces the old one
+    foreach (const QString &k, t.keys())
+    {
+        bool ok = false;
+        const int b = k.toInt(&ok);
+        if (ok && qAbs(b - boundary) <= 8
+            && t.value(k).toString().section(QLatin1Char('|'), 0, 0) == section)
+            t.remove(k);
+    }
+    t.insert(QString::number(boundary), section + QLatin1Char('|') + QString::number(fader, 'f', 2)
+             + QLatin1Char('|') + set.join(QLatin1Char('+')));
+    t.insert(QStringLiteral("_t"), QDateTime::currentSecsSinceEpoch());
+    m_trackMem.insert(m_trackTitle, t);
+    // 400 tracks; the one played longest ago goes
+    while (m_trackMem.count() > 400)
+    {
+        QString oldest;
+        qint64 at = 0;
+        for (auto it = m_trackMem.constBegin(); it != m_trackMem.constEnd(); ++it)
+        {
+            const qint64 tt = it.value().toMap().value(QStringLiteral("_t")).toLongLong();
+            if (oldest.isEmpty() || tt < at) { oldest = it.key(); at = tt; }
+        }
+        m_trackMem.remove(oldest);
+    }
+    QSettings().setValue(QStringLiteral("trackengine/track-memory"), m_trackMem);
+}
+
+QStringList TrackEngine::recallPick(int boundary, const QString &section, qreal fader)
+{
+    if (m_trackTitle.isEmpty() || boundary < 0 || section.isEmpty())
+        return QStringList();
+    loadTrackMemory();
+    const QVariantMap t = m_trackMem.value(m_trackTitle).toMap();
+    QString best;
+    int bestDist = 9;
+    for (auto it = t.constBegin(); it != t.constEnd(); ++it)
+    {
+        bool ok = false;
+        const int b = it.key().toInt(&ok);
+        if (ok == false || qAbs(b - boundary) >= bestDist)
+            continue;
+        const QString v = it.value().toString();
+        if (v.section(QLatin1Char('|'), 0, 0) != section)
+            continue;
+        // the slider then and now: a peak-hour pick is not the warm-up's
+        if (qAbs(v.section(QLatin1Char('|'), 1, 1).toDouble() - fader) > 0.25)
+            continue;
+        best = v;
+        bestDist = qAbs(b - boundary);
+    }
+    QStringList out;
+    if (best.isEmpty())
+        return out;
+    foreach (const QString &key, best.section(QLatin1Char('|'), 2).split(QLatin1Char('+'), Qt::SkipEmptyParts))
+        if (m_groups.contains(key) && m_groupOff.contains(key) == false && out.contains(key) == false)
+            out << key;
+    return out;
+}
+
+void TrackEngine::forgetTrackMemory(const QString &title)
+{
+    loadTrackMemory();
+    if (title.isEmpty())
+        m_trackMem.clear();
+    else if (m_trackMem.remove(title) == 0)
+        return;
+    QSettings().setValue(QStringLiteral("trackengine/track-memory"), m_trackMem);
+    logSignal(QStringLiteral("sig:track-memory-forget:") + (title.isEmpty() ? QStringLiteral("all") : title));
+}
+
+int TrackEngine::trackMemoryCount(const QString &title)
+{
+    loadTrackMemory();
+    const QVariantMap t = m_trackMem.value(title.isEmpty() ? m_trackTitle : title).toMap();
+    return qMax(0, t.count() - (t.contains(QStringLiteral("_t")) ? 1 : 0));
+}
+
 void TrackEngine::learnSection(const QString &section, const QStringList &plan, const QStringList &his)
 {
     // R433_SECTION_TASTE: what he put in that the engine had not planned weighs
@@ -5657,6 +5750,7 @@ void TrackEngine::toggleDropGroup(QString key)
     else
         m_dropSet.removeAll(key);
     m_dropTouched = true;
+    m_planRemembered = false;            // R439_TRACK_MEMORY: his pick now, not last time's
     logSignal(QStringLiteral("sig:drop-pick:") + (in ? QStringLiteral("+") : QStringLiteral("-")) + key);
     emit dropSetChanged();
 }
@@ -10715,6 +10809,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_forceSet.clear();
             m_planOriginal.clear();              // R433_SECTION_TASTE
             m_forceFrom = -1;                    // R438_LOOP_ACROSS
+            m_planRemembered = false;            // R439_TRACK_MEMORY
         }
         // R438_LOOP_ACROSS: a DJ loop back over the start of his section - his set
         // is the plan for that boundary again (and taught nothing a second time);
@@ -10743,6 +10838,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (m_forceOn)
                 logSignal(QStringLiteral("sig:section-pick:") + m_planSection + QStringLiteral(":")
                           + m_forceSet.join(QLatin1Char('+')));
+            if (m_forceOn)
+                rememberPick(m_dropPlanFor, m_planSection, m_forceSet, fader);   // R439_TRACK_MEMORY
+            m_planRemembered = false;
             // R433_SECTION_TASTE: the verdicts' switch (SETUP) is the learning's too
             if (m_forceOn && m_ratingOn)
                 learnSection(m_planSection, m_planOriginal, m_forceSet);
@@ -10782,7 +10880,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             const bool another = m_dropPlanFor < 0 || qAbs(boundary - m_dropPlanFor) > 8
                               || m_planSection != nextState;
-            if (another || m_dropMode == 0 || (beatInBar == 0 && qAbs(fader - m_dropPlanFader) >= 0.05))
+            // R439_TRACK_MEMORY: this track's boundary has a set he ran last time -
+            // it is his plan again (touched: the section runs it; learned nothing new)
+            const QStringList mem = another ? recallPick(boundary, nextState, fader) : QStringList();
+            if (mem.isEmpty() == false)
+            {
+                m_dropSet = mem;
+                m_planOriginal = mem;
+                m_dropTouched = true;
+                m_planRemembered = true;
+                m_dropPlanFader = fader;
+                m_planSection = nextState;
+                m_dropMode = 1;
+                logSignal(QStringLiteral("sig:section-remembered:") + nextState + QStringLiteral(":")
+                          + mem.join(QLatin1Char('+')));
+            }
+            else if (another || m_dropMode == 0 || (beatInBar == 0 && qAbs(fader - m_dropPlanFader) >= 0.05))
             {
                 if (another)
                     m_dropPlanSeed = 432u + 2654435761u * quint32(++m_dropPlanCount);
@@ -18668,6 +18781,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
         m_forceSet.clear();
         m_planOriginal.clear();
         m_forceFrom = -1;                // R438_LOOP_ACROSS
+        m_planRemembered = false;        // R439_TRACK_MEMORY
         if (had)
             emit dropSetChanged();
     }

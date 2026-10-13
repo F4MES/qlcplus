@@ -400,6 +400,7 @@ class TrackEngine : public QObject
     Q_PROPERTY(int dropMode READ dropMode NOTIFY dropSetChanged)
     /** R432_NEXT_SECTION: the section the plan (dropSet) is for */
     Q_PROPERTY(QString planSection READ planSection NOTIFY dropSetChanged)
+    Q_PROPERTY(bool planRemembered READ planRemembered NOTIFY dropSetChanged)   // R439_TRACK_MEMORY
     Q_PROPERTY(QVariantList palette READ palette NOTIFY tableChanged)
     Q_PROPERTY(bool showAll READ showAll WRITE setShowAll NOTIFY tableChanged)
     /** The engine makes everything itself from the fixtures' channels -
@@ -1517,6 +1518,9 @@ public:
     QStringList dropSet() const { return m_dropSet; }
     int dropMode() const { return m_dropMode; }
     QString planSection() const { return m_planSection; }   // R432_NEXT_SECTION
+    bool planRemembered() const { return m_planRemembered; }   // R439_TRACK_MEMORY
+    Q_INVOKABLE void forgetTrackMemory(const QString &title);  // R439_TRACK_MEMORY: empty = all
+    Q_INVOKABLE int trackMemoryCount(const QString &title);    // R439_TRACK_MEMORY: picks kept for a title
     QString m_planSection;               // the next section the plan is for
     bool m_forceOn = false;              // this section runs on his set
     QStringList m_forceSet;
@@ -1528,6 +1532,13 @@ public:
     int m_dropPlanFor = -1;              // the drop flag the plan was drawn for
     int m_dropPlanBeat = -1;             // the beat the block last ran on
     qreal m_dropPlanFader = -1.0;        // the slider the plan was sized at
+    // R439_TRACK_MEMORY: his picks per track - title -> { "<boundary beat>": "section|fader|a+b", "_t": secs }
+    QVariantMap m_trackMem;
+    bool m_trackMemLoaded = false;
+    bool m_planRemembered = false;       // the plan for the next section is his set from last time
+    void loadTrackMemory();
+    void rememberPick(int boundary, const QString &section, const QStringList &set, qreal fader);
+    QStringList recallPick(int boundary, const QString &section, qreal fader);
     quint32 m_dropPlanSeed = 431u;       // the plan's own dice
     quint32 m_dropPlanCount = 0;
 private:
