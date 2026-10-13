@@ -128,6 +128,60 @@ Rectangle
     property int zoomCenter: 1
     property int zoomSpan: 64
 
+    // R443_PLAN_LANE (N5 A): the plan of every section on the track - PLAN beside
+    // MARKERS turns it on (OFF until he does; the engine remembers it)
+    readonly property bool planShown: !!trackEngine && trackEngine.planLane === true && !markerEdit && beatCount > 0
+    readonly property real laneH: Math.max(30, Math.round(38 * ks))
+    property var planModel: []
+    property bool planCardOpen: false
+    property var planCardRows: []
+    function planRefresh()
+    {
+        if (!planShown || !trackEngine || !trackManager) { planModel = []; planCardOpen = false; return }
+        var mk = wfCanvas.sortedMarkers()
+        var secs = []
+        for (var i = 0; i < mk.length; i++)
+            secs.push({ beat: mk[i].beat, end: i + 1 < mk.length ? mk[i + 1].beat : beatCount + 1, type: mk[i].type })
+        planModel = trackEngine.planLaneOf(secs, trackManager.currentBeat)
+        var nx = planNext()
+        if (planCardOpen && (nx === null || !planEditable(nx)))
+            planCardOpen = false
+        if (planCardOpen)
+            planCardRows = trackEngine.planRows()
+    }
+    function planNext()
+    {
+        for (var j = 0; j < planModel.length; j++)
+            if (planModel[j].next) return planModel[j]
+        return null
+    }
+    // only the next section can be changed - it is the RIG's plan
+    function planEditable(sec) { return sec !== null && sec.next && (sec.mode === "next" || sec.mode === "his" || sec.mode === "mem") }
+    function planOpenCard()
+    {
+        if (!trackEngine || !planEditable(planNext())) return
+        planCardRows = trackEngine.planRows()
+        planCardOpen = true
+    }
+    function kindColour(kind)
+    {
+        if (kind === "bars")   return "#E64646"
+        if (kind === "strobe") return "#EBEBF0"
+        if (kind === "ani")    return "#3CC85A"
+        if (kind === "mini")   return "#C878E6"
+        if (kind === "head")   return "#E0921A"
+        return "#4F8CE3"
+    }
+    onPlanShownChanged: { planRefresh(); wfCanvas.requestPaint() }
+    Timer { interval: 1000; repeat: true; running: trackViewRoot.planShown; onTriggered: trackViewRoot.planRefresh() }
+    Connections
+    {
+        target: trackEngine
+        enabled: trackViewRoot.planShown
+        function onDropSetChanged() { trackViewRoot.planRefresh() }
+        function onPlanLaneChanged() { trackViewRoot.planRefresh() }
+    }
+
     onMarkerEditChanged: { if (!markerEdit) { wfArea.release(); wfCanvas.selected = -1 } wfCanvas.requestPaint() }
 
     function markerColor(type)
@@ -383,6 +437,7 @@ Rectangle
                 circle(12,12,2)
                 for(var k=0;k<4;k++){c.save();c.translate(12,12);c.rotate(k*Math.PI/2);c.beginPath();c.moveTo(0,-3);c.bezierCurveTo(-7,-13,6,-13,3,-3);c.stroke();c.restore()}
             }
+            else if (kind === "plan") { c.fillRect(3,5,17,3); c.fillRect(3,11,11,3); c.fillRect(3,17,14,3) }   // R443_PLAN_LANE
             else if (kind === "pencil") { c.beginPath(); c.moveTo(4,20); c.lineTo(5,15); c.lineTo(15.5,4.5); c.lineTo(19.5,8.5); c.lineTo(9,19); c.closePath(); c.stroke(); line(13,7,17,11) }
             else if (kind === "check") { c.beginPath(); c.moveTo(4,12.5); c.lineTo(9.5,18); c.lineTo(20,6.5); c.stroke() }
             else if (kind === "lock") { c.strokeRect(5,10.5,14,10); c.beginPath(); c.moveTo(8,10.5); c.lineTo(8,7.5); c.arc(12,7.5,4,Math.PI,0); c.lineTo(16,10.5); c.stroke() }
@@ -995,7 +1050,7 @@ Rectangle
                     function xOf(beat) { return (beat - vf) * px }
                     var strip = stripH
                     var base = h - 8
-                    var barTop = strip + 30
+                    var barTop = strip + 30 + (trackViewRoot.planShown ? trackViewRoot.laneH : 0)   // R443_PLAN_LANE
                     var ks = trackViewRoot.ks
                     var sorted = sortedMarkers()
                     var cur = trackManager.currentBeat
@@ -1393,6 +1448,114 @@ Rectangle
                 }
             }
 
+            // R443_PLAN_LANE: the lane under the section labels - each section's
+            // lamps: grey = ran, colour = on now, outlined = the engine's plan (thin:
+            // its guess), a red line = his, MEM = his from the last time. A tap on
+            // the NEXT section opens its card. After the flag input: it takes the taps.
+            Item
+            {
+                id: planLaneBox
+                objectName: "planLane"
+                z: 2
+                visible: trackViewRoot.planShown
+                x: wfCanvas.x
+                y: wfCanvas.stripH + 1
+                width: wfCanvas.width
+                height: trackViewRoot.laneH
+                clip: true
+                readonly property int vf: trackViewRoot.viewFirst()
+                readonly property int vc: Math.max(1, trackViewRoot.viewCount())
+                readonly property real px: width / vc
+                Rectangle { anchors.fill: parent; color: "#101014" }
+                Repeater
+                {
+                    model: trackViewRoot.planModel
+                    Item
+                    {
+                        id: sec
+                        property var md: modelData ? modelData : ({ beat: 0, end: 0, type: "", mode: "", next: false, chips: [] })
+                        objectName: "planSec:" + md.beat
+                        readonly property real x0: (md.beat - planLaneBox.vf) * planLaneBox.px
+                        readonly property real x1: (md.end - planLaneBox.vf) * planLaneBox.px
+                        readonly property bool his: md.mode === "his" || md.mode === "mem" || md.mode === "onhis"
+                        readonly property bool filled: his || md.mode === "on"
+                        readonly property string tag: md.mode === "mem" ? qsTr("MEM") : ((md.mode === "his" || md.mode === "onhis") ? qsTr("YOURS") : "")
+                        readonly property bool tappable: trackViewRoot.planEditable(md)
+                        readonly property real pad: Math.round(6 * trackViewRoot.ks)
+                        readonly property real tagW: tag !== "" ? Math.max(trackViewRoot.fs(10) * 4.2 + 14, Math.round(64 * trackViewRoot.ks)) : 0
+                        readonly property int n: Math.max(1, md.chips.length)
+                        readonly property real fitW: Math.floor((width - 2 * pad - tagW) / n) - Math.round(4 * trackViewRoot.ks)
+                        // a word needs this much (the type never goes under 10 px)
+                        readonly property real wordW: trackViewRoot.fs(10) * 3.4 + 8
+                        // a short section (or a far zoom): the chips are squares without words
+                        readonly property bool compact: fitW < wordW
+                        readonly property real chipW: compact ? Math.max(6, Math.min(Math.round(14 * trackViewRoot.ks), Math.floor((width - 2 * pad) / n) - 3))
+                                                              : Math.min(Math.max(wordW, Math.round(52 * trackViewRoot.ks)), fitW)
+                        visible: x1 > 0 && x0 < planLaneBox.width && width > 4
+                        x: Math.max(0, x0)
+                        width: Math.max(0, Math.min(planLaneBox.width, x1) - x)
+                        height: parent.height
+                        clip: true
+                        Rectangle { anchors.fill: parent; visible: sec.tappable; color: trackViewRoot.planCardOpen ? "#24242C" : "#18181E" }
+                        Rectangle { visible: sec.x0 >= 0; width: 2; height: parent.height; color: trackViewRoot.markerColor(sec.md.type) }
+                        Row
+                        {
+                            x: sec.pad + 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: sec.compact ? 3 : Math.round(4 * trackViewRoot.ks)
+                            Repeater
+                            {
+                                model: sec.md.chips
+                                Rectangle
+                                {
+                                    objectName: "planChip:" + sec.md.beat + ":" + modelData.key
+                                    readonly property color kc: trackViewRoot.kindColour(modelData.kind)
+                                    width: sec.chipW
+                                    height: sec.compact ? Math.round(12 * trackViewRoot.ks) : trackViewRoot.laneH - Math.round(16 * trackViewRoot.ks)
+                                    radius: Math.round(4 * trackViewRoot.ks)
+                                    color: sec.filled ? kc : (sec.md.mode === "ran" ? (sec.compact ? "#3A3A44" : "#1E1E24") : "#18181E")
+                                    border.width: (sec.md.mode === "next" || sec.md.mode === "guess") ? 1 : 0
+                                    border.color: sec.md.mode === "next" ? "#A0A0AA" : "#55555F"
+                                    Text
+                                    {
+                                        visible: !sec.compact
+                                        anchors.centerIn: parent
+                                        text: modelData.short
+                                        color: sec.filled ? "#0C0C10" : (sec.md.mode === "ran" ? "#62626C" : (sec.md.mode === "next" ? "#D0D0D8" : "#8C8C96"))
+                                        font.bold: true
+                                        font.pixelSize: trackViewRoot.fs(10)
+                                    }
+                                    Rectangle
+                                    {
+                                        visible: sec.his
+                                        anchors.top: parent.bottom; anchors.topMargin: 1
+                                        width: parent.width; height: Math.max(2, Math.round(3 * trackViewRoot.ks))
+                                        color: "#E03030"
+                                    }
+                                }
+                            }
+                            Rectangle
+                            {
+                                objectName: "planTag:" + sec.md.beat
+                                visible: sec.tag !== "" && !sec.compact
+                                width: sec.tagW - Math.round(6 * trackViewRoot.ks)
+                                height: trackViewRoot.laneH - Math.round(16 * trackViewRoot.ks)
+                                radius: Math.round(4 * trackViewRoot.ks)
+                                color: "#3A1416"
+                                border.width: 1
+                                border.color: "#E03030"
+                                Text { anchors.centerIn: parent; text: sec.tag; color: "#F05050"; font.bold: true; font.pixelSize: trackViewRoot.fs(10) }
+                            }
+                        }
+                        TouchInput
+                        {
+                            enabled: sec.tappable
+                            onReleasedAt: (x, y, inside) => { if (inside) { if (trackViewRoot.planCardOpen) trackViewRoot.planCardOpen = false; else trackViewRoot.planOpenCard() } }
+                        }
+                    }
+                }
+            }
+
             Text
             {
                 anchors.centerIn: wfCanvas
@@ -1411,7 +1574,7 @@ Rectangle
                 visible: nm !== null && trackManager && trackManager.playing && bars <= 32 && trackViewRoot.currentBeat > 0
                 anchors.right: parent.right
                 anchors.rightMargin: Math.round(16 * trackViewRoot.ks)
-                y: wfCanvas.stripH + Math.round(10 * trackViewRoot.ks)
+                y: wfCanvas.stripH + (trackViewRoot.planShown ? trackViewRoot.laneH : 0) + Math.round(10 * trackViewRoot.ks)   // R443_PLAN_LANE
                 width: cdCol.width + Math.round(28 * trackViewRoot.ks)
                 height: cdCol.height + Math.round(16 * trackViewRoot.ks)
                 radius: Math.round(10 * trackViewRoot.ks)
@@ -1490,6 +1653,21 @@ Rectangle
                         active: trackViewRoot.markerEdit
                         tone: trackViewRoot.cGold
                         onTapped: trackViewRoot.markerEdit = !trackViewRoot.markerEdit
+                    }
+
+                    // R443_PLAN_LANE: the plan on the track, on / off - no legend beside
+                    // it (Tobias: "dobbeltkonfekt da RIGGEN viser det")
+                    Btn
+                    {
+                        objectName: "planToggle"
+                        visible: !trackViewRoot.markerEdit && !!trackEngine
+                        width: Math.round(172 * trackViewRoot.ks)
+                        height: rail.bh
+                        icon: "plan"
+                        active: trackEngine ? trackEngine.planLane === true : false
+                        text: active ? qsTr("PLAN  ON") : qsTr("PLAN  OFF")
+                        tone: trackViewRoot.cGold
+                        onTapped: if (trackEngine) trackEngine.planLane = !active
                     }
 
                     // ---- the flag tools: a flag on the bar the track is at, the
@@ -1596,13 +1774,13 @@ Rectangle
                     spacing: 10
                     visible: trackManager && trackManager.roleMode && !trackViewRoot.setupOpen
                              && !trackViewRoot.markerEdit && verdictTools.blaming === 0 && warnText.text.length > 0
-                    width: Math.min(implicitWidth, rail.width - Math.round(520 * trackViewRoot.ks))
+                    width: Math.min(implicitWidth, rail.width - Math.round(760 * trackViewRoot.ks))
                     ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: 18; height: 18; kind: "warn"; ink: "#E3B44F" }
                     Text
                     {
                         id: warnText
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.min(implicitWidth, rail.width - Math.round(560 * trackViewRoot.ks))
+                        width: Math.min(implicitWidth, rail.width - Math.round(800 * trackViewRoot.ks))
                         elide: Text.ElideRight
                         color: "#E3B44F"
                         font.pixelSize: trackViewRoot.fs(13)
@@ -2653,6 +2831,145 @@ Rectangle
         }
     }
 
+    // R443_PLAN_LANE: the next section's card - tap a name = in / out (the
+    // RIG's plan), ENGINE DECIDES, FORGET FOR THIS TRACK. On the page, not in
+    // the track card: on a small screen it reaches down over RIG and LOOK.
+    Rectangle
+    {
+        id: planCard
+        objectName: "planCard"
+        visible: trackViewRoot.planShown && trackViewRoot.planCardOpen && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
+        z: 50
+        readonly property var nx: trackViewRoot.planNext()
+        readonly property real pad: Math.round(16 * trackViewRoot.ks)
+        width: Math.min(trackViewRoot.width - 2 * pad, Math.round(680 * trackViewRoot.ks))
+        // where the next section starts, under the lane (read again when the page moves)
+        readonly property real moved: trackViewRoot.width + trackViewRoot.height + waveCard.x + waveCard.y + waveCard.height + planLaneBox.px + planLaneBox.vf
+        x:
+        {
+            var dep = moved
+            if (!nx) return pad
+            var p = planLaneBox.mapToItem(trackViewRoot, (nx.beat - planLaneBox.vf) * planLaneBox.px, 0)
+            return Math.max(pad, Math.min(trackViewRoot.width - width - pad, p.x))
+        }
+        y:
+        {
+            var dep = moved
+            var p = planLaneBox.mapToItem(trackViewRoot, 0, planLaneBox.height)
+            return Math.max(pad, Math.min(trackViewRoot.height - height - pad, p.y + Math.round(6 * trackViewRoot.ks)))
+        }
+        height: cardCol.implicitHeight + 2 * pad
+        radius: Math.round(10 * trackViewRoot.ks)
+        color: trackViewRoot.cCard
+        border.width: 2
+        border.color: "#E03030"
+        // a press on the card reaches nothing under it (the page's one touch pattern)
+        TouchInput { }
+        Column
+        {
+            id: cardCol
+            x: planCard.pad; y: planCard.pad
+            width: planCard.width - 2 * planCard.pad
+            spacing: Math.round(4 * trackViewRoot.ks)
+            Text
+            {
+                objectName: "planCardTitle"
+                width: parent.width
+                elide: Text.ElideRight
+                bottomPadding: Math.round(6 * trackViewRoot.ks)
+                color: trackViewRoot.cMute
+                font.bold: true
+                font.pixelSize: trackViewRoot.fs(13)
+                font.letterSpacing: trackViewRoot.fs(13) * 0.08
+                text:
+                {
+                    var nx = planCard.nx
+                    if (!nx) return ""
+                    var who = nx.mode === "his" ? qsTr("YOURS") : (nx.mode === "mem" ? qsTr("REMEMBERED") : qsTr("ENGINE'S PLAN"))
+                    return qsTr("NEXT %1").arg(nx.type.toUpperCase()) + "  \u00B7  " + who + "  \u00B7  " + qsTr("tap a name = in / out")
+                }
+            }
+            Repeater
+            {
+                model: trackViewRoot.planCardRows
+                Rectangle
+                {
+                    objectName: "planRow:" + modelData.key
+                    width: cardCol.width
+                    height: Math.max(40, Math.round(40 * trackViewRoot.ks))
+                    radius: Math.round(6 * trackViewRoot.ks)
+                    color: modelData["in"] ? "#22222A" : "#1A1A1E"
+                    Rectangle { visible: modelData["in"] === true; width: Math.round(6 * trackViewRoot.ks); height: parent.height; color: "#E03030" }
+                    Text
+                    {
+                        x: Math.round(18 * trackViewRoot.ks)
+                        width: parent.width * 0.36
+                        anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
+                        text: modelData.key
+                        color: modelData["in"] ? "#E9E9EE" : trackViewRoot.cDim
+                        font.bold: true
+                        font.pixelSize: trackViewRoot.fs(15)
+                    }
+                    Text
+                    {
+                        x: parent.width * 0.38
+                        width: parent.width * 0.50
+                        anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
+                        text: modelData.note
+                        color: trackViewRoot.cMute
+                        font.pixelSize: trackViewRoot.fs(12)
+                    }
+                    Text
+                    {
+                        anchors.right: parent.right
+                        anchors.rightMargin: Math.round(16 * trackViewRoot.ks)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData["in"] ? qsTr("IN") : qsTr("OUT")
+                        color: modelData["in"] ? "#F05050" : trackViewRoot.cDim
+                        font.bold: true
+                        font.pixelSize: trackViewRoot.fs(13)
+                    }
+                    TouchInput
+                    {
+                        onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.toggleDropGroup(modelData.key) }
+                    }
+                }
+            }
+            Item { width: 1; height: Math.round(4 * trackViewRoot.ks) }
+            Row
+            {
+                spacing: Math.round(10 * trackViewRoot.ks)
+                Btn
+                {
+                    objectName: "planEngine"
+                    width: Math.round(230 * trackViewRoot.ks); height: Math.max(44, Math.round(44 * trackViewRoot.ks))
+                    fontPx: trackViewRoot.fs(12)
+                    text: qsTr("ENGINE DECIDES")
+                    enabled: planCard.nx !== null && (planCard.nx.mode === "his" || planCard.nx.mode === "mem")
+                    onTapped: if (trackEngine) trackEngine.planEngineDecides()
+                }
+                Btn
+                {
+                    objectName: "planForget"
+                    width: Math.round(270 * trackViewRoot.ks); height: Math.max(44, Math.round(44 * trackViewRoot.ks))
+                    fontPx: trackViewRoot.fs(12)
+                    text: qsTr("FORGET FOR THIS TRACK")
+                    onTapped: if (trackEngine) trackEngine.planForgetTrack()
+                }
+                Btn
+                {
+                    objectName: "planClose"
+                    width: Math.round(120 * trackViewRoot.ks); height: Math.max(44, Math.round(44 * trackViewRoot.ks))
+                    fontPx: trackViewRoot.fs(12)
+                    text: qsTr("CLOSE")
+                    onTapped: trackViewRoot.planCardOpen = false
+                }
+            }
+        }
+    }
+
     // =====================================================================
     //  SETUP: the whole page under the top bar - LIVE and the footer too
     //  (runde 393, Tobias 10-07: "setup og guide maa gerne daekke LIVE, de maa
@@ -2885,7 +3202,7 @@ Rectangle
                 model: [
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group." },
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG." },
                     { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column

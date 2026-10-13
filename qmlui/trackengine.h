@@ -401,6 +401,8 @@ class TrackEngine : public QObject
     /** R432_NEXT_SECTION: the section the plan (dropSet) is for */
     Q_PROPERTY(QString planSection READ planSection NOTIFY dropSetChanged)
     Q_PROPERTY(bool planRemembered READ planRemembered NOTIFY dropSetChanged)   // R439_TRACK_MEMORY
+    /** R443_PLAN_LANE: the plan lane on the track (PLAN beside MARKERS) */
+    Q_PROPERTY(bool planLane READ planLane WRITE setPlanLane NOTIFY planLaneChanged)
     Q_PROPERTY(QVariantList palette READ palette NOTIFY tableChanged)
     Q_PROPERTY(bool showAll READ showAll WRITE setShowAll NOTIFY tableChanged)
     /** The engine makes everything itself from the fixtures' channels -
@@ -711,6 +713,15 @@ public:
     Q_INVOKABLE void clabCompare(int mode);
     /** ALL ON / ALL OFF: the lab opens dark */
     Q_INVOKABLE void clabToggleDark();
+    /* ---- R443_PLAN_LANE (track_runtime/planlane.inc.cpp) ---- */
+    bool planLane() const;
+    void setPlanLane(bool on);
+    /** sections: [{beat, end, type}] - per section {beat, end, type, mode, next, chips} */
+    Q_INVOKABLE QVariantList planLaneOf(const QVariantList &sections, int cur);
+    /** the next section's card: {key, in, base, note} per group of the night */
+    Q_INVOKABLE QVariantList planRows();
+    Q_INVOKABLE void planEngineDecides();
+    Q_INVOKABLE void planForgetTrack();
     /* ---- R440_SEND (track_runtime/sendclaude.inc.cpp) ---- */
     Q_INVOKABLE QVariantList sendItems();
     Q_INVOKABLE bool sendMake(const QStringList &ids);
@@ -1040,6 +1051,7 @@ signals:
     void slabChanged();                  // R436_STROBE_LAB
     void clabChanged();                  // R440_COLOUR_LAB
     void sendChanged();                  // R440_SEND
+    void planLaneChanged();              // R443_PLAN_LANE
     /** a colour tile was pressed but the colour cannot be used (not in the
      *  palette any more, banned): the tile blinks (runde 313, B27/Tobias) */
     void colourRejected(const QString &colour);
@@ -1601,6 +1613,17 @@ public:
     QStringList recallPick(int boundary, const QString &section, qreal fader);
     quint32 m_dropPlanSeed = 431u;       // the plan's own dice
     quint32 m_dropPlanCount = 0;
+    // R443_PLAN_LANE
+    mutable bool m_planLane = false;
+    mutable bool m_planLaneLoaded = false;
+    qreal m_planFaderNow = 0.5;          // the slider the plan block last read
+    QMap<int, QStringList> m_planRan;    // section start -> what it lit (this track)
+    void planRecord(int secStart, const QSet<QString> &lit);
+    void planRanReset();
+    QString planKindOf(const QString &key) const;
+    QString planShortOf(const QString &key) const;
+    QVariantList planChips(const QStringList &keys) const;
+    QStringList planGuess(const QString &section, int boundary);
 private:
     bool m_bigDrop = false;              // R357_KICK_BACK: this drop arrived big
     int m_kickBackLast = -100;

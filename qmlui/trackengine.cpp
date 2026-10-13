@@ -10909,6 +10909,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_dropPlanFor = boundary;
         }
         m_dropPlanBeat = beat;
+        m_planFaderNow = fader;              // R443_PLAN_LANE: the guesses are sized at the slider now
         if (m_dropMode != oldMode || m_dropSet != oldSet || m_planSection != oldSection)
             emit dropSetChanged();
     }
@@ -13719,6 +13720,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // find the groups it has to hand back, and a beat-old cast left a group
     // that has just dropped out sitting at full for a beat
     m_cast = castSet;
+    planRecord(secStart, castSet);       // R443_PLAN_LANE: what this section lit
 
     applyGroupOff();
     // (driveStrobe moved below the hits, runde 220)
@@ -18784,6 +18786,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
         m_planOriginal.clear();
         m_forceFrom = -1;                // R438_LOOP_ACROSS
         m_planRemembered = false;        // R439_TRACK_MEMORY
+        planRanReset();                  // R443_PLAN_LANE: the old track's sections
         if (had)
             emit dropSetChanged();
     }
@@ -22331,4 +22334,276 @@ void TrackEngine::sendReset()
     m_sendState = 0;
     m_sendResult.clear();
     emit sendChanged();
+}
+/* =====================================================================
+ *  PLAN ON THE TRACK (runde 443, N5 A) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/planlane.inc.cpp.
+ *
+ *  Tobias, 2026-10-13: "byg N5, men med en toggle ved siden af markers
+ *  knappen hvor man kan toggle dem fra og til (default off)" - and on the
+ *  mockup: "uden de der knapper ved siden af Plan knappen, det er
+ *  dobbeltkonfekt da RIGGEN viser det" (no legend in the rail).
+ *
+ *  The page asks for a lane of chips under the section labels, one row per
+ *  section of the track:
+ *    ran      what was lit in a section that has played (this play of it)
+ *    on       what is lit now (his - red line - when the section is his set)
+ *    next     the engine's plan for the next section (the RIG's plan)
+ *    his      the next section is his set (tapped in RIG or in the lane)
+ *    mem      the next section is his set from the last time (R439)
+ *    guess    a later section: last time's pick if there is one ("mem"),
+ *             else what the engine would plan at the slider now - its own
+ *             dice per section, so the guess holds still; the real plan is
+ *             drawn when the section is next
+ *  Only the next section can be changed (the RIG's plan, toggleDropGroup);
+ *  nothing here changes how the engine plays.
+ * ===================================================================== */
+
+#define ENGINE_PLAN_NEAR 8                 // a flag and a plan within 8 beats are the same boundary
+
+bool TrackEngine::planLane() const
+{
+    // OFF until he turns it on; then it stays as he left it
+    if (m_planLaneLoaded == false)
+    {
+        m_planLaneLoaded = true;
+        m_planLane = QSettings().value(QStringLiteral("trackengine/plan-lane"), false).toBool();
+    }
+    return m_planLane;
+}
+
+void TrackEngine::setPlanLane(bool on)
+{
+    if (on == planLane())
+        return;
+    m_planLane = on;
+    QSettings().setValue(QStringLiteral("trackengine/plan-lane"), on);
+    logSignal(QStringLiteral("sig:plan-lane:") + (on ? QStringLiteral("on") : QStringLiteral("off")));
+    emit planLaneChanged();
+}
+
+void TrackEngine::planRecord(int secStart, const QSet<QString> &lit)
+{
+    // the groups a section has lit so far - one entry per section start
+    if (secStart < 0 || lit.isEmpty())
+        return;
+    QStringList &have = m_planRan[secStart];
+    bool grew = false;
+    foreach (const QString &key, lit)
+        if (have.contains(key) == false)
+        {
+            have << key;
+            grew = true;
+        }
+    if (grew && planLane())
+        emit planLaneChanged();
+}
+
+void TrackEngine::planRanReset()
+{
+    if (m_planRan.isEmpty())
+        return;
+    m_planRan.clear();
+    emit planLaneChanged();
+}
+
+QString TrackEngine::planKindOf(const QString &key) const
+{
+    const TrackGroup g = m_groups.value(key);
+    if (g.patternDevice)
+        return QStringLiteral("ani");
+    if (g.lasers)
+        return QStringLiteral("bars");
+    if (g.strobes)
+        return QStringLiteral("strobe");
+    if (smallWash(key))
+        return QStringLiteral("mini");
+    // a moving wash ("Shark Zoom Wash") is the room's WASH, as RIG names it
+    if (g.heads && key.contains(QStringLiteral("wash"), Qt::CaseInsensitive) == false)
+        return QStringLiteral("head");
+    return QStringLiteral("wash");
+}
+
+QString TrackEngine::planShortOf(const QString &key) const
+{
+    // a chip is a word: the kind - or, when two groups share a kind, the
+    // group's own first word (its name is what RIG shows)
+    static const QMap<QString, QString> label = {
+        { QStringLiteral("ani"), QStringLiteral("ANI") }, { QStringLiteral("bars"), QStringLiteral("BARS") },
+        { QStringLiteral("strobe"), QStringLiteral("STRB") }, { QStringLiteral("head"), QStringLiteral("HEAD") },
+        { QStringLiteral("mini"), QStringLiteral("MINI") }, { QStringLiteral("wash"), QStringLiteral("WASH") } };
+    const QString kind = planKindOf(key);
+    int same = 0;
+    foreach (const QString &k, m_groupOrder)
+        if (m_groups.contains(k) && planKindOf(k) == kind)
+            same++;
+    if (same <= 1)
+        return label.value(kind);
+    QString word = key.section(QLatin1Char(' '), 0, 0, QString::SectionSkipEmpty).toUpper();
+    if (word.length() > 6)
+        word = word.left(6);
+    return word.isEmpty() ? label.value(kind) : word;
+}
+
+QVariantList TrackEngine::planChips(const QStringList &keys) const
+{
+    QVariantList out;
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (keys.contains(key) == false || m_groups.contains(key) == false)
+            continue;
+        QVariantMap c;
+        c.insert(QStringLiteral("key"), key);
+        c.insert(QStringLiteral("short"), planShortOf(key));
+        c.insert(QStringLiteral("kind"), planKindOf(key));
+        out << c;
+    }
+    return out;
+}
+
+QStringList TrackEngine::planGuess(const QString &section, int boundary)
+{
+    // the engine's plan for a later section at the slider now, on dice of
+    // its own for that boundary (the night's plan dice are put back)
+    const quint32 keep = m_dropPlanSeed;
+    m_dropPlanSeed = 443u + 2654435761u * quint32(qMax(0, boundary));
+    const QStringList out = planCast(section, m_planFaderNow);
+    m_dropPlanSeed = keep;
+    return out;
+}
+
+QVariantList TrackEngine::planLaneOf(const QVariantList &sections, int cur)
+{
+    // sections: [{beat, end, type}] in the track's order (the page's flags)
+    QVariantList out;
+    int next = -1;
+    for (int i = 0; i < sections.count(); i++)
+        if (sections.at(i).toMap().value(QStringLiteral("beat")).toInt() > cur)
+        {
+            next = i;
+            break;
+        }
+    QStringList now = m_cast.values();
+    for (int i = 0; i < sections.count(); i++)
+    {
+        const QVariantMap sec = sections.at(i).toMap();
+        const int start = sec.value(QStringLiteral("beat")).toInt();
+        const int end = sec.value(QStringLiteral("end")).toInt();
+        const QString type = sec.value(QStringLiteral("type")).toString();
+        QString mode;
+        QStringList keys;
+        if (cur > 0 && end <= cur)
+        {
+            mode = QStringLiteral("ran");
+            for (auto it = m_planRan.constBegin(); it != m_planRan.constEnd(); ++it)
+            {
+                if (it.key() < start - ENGINE_PLAN_NEAR || it.key() >= end - ENGINE_PLAN_NEAR)
+                    continue;
+                foreach (const QString &k, it.value())
+                {
+                    if (keys.contains(k) == false)
+                        keys << k;
+                }
+            }
+        }
+        else if (cur > 0 && start <= cur)
+        {
+            mode = m_forceOn ? QStringLiteral("onhis") : QStringLiteral("on");
+            keys = now;
+        }
+        else if (i == next && m_dropMode != 0 && m_dropPlanFor > 0
+                 && qAbs(m_dropPlanFor - start) <= ENGINE_PLAN_NEAR)
+        {
+            mode = m_planRemembered ? QStringLiteral("mem")
+                                    : (m_dropTouched ? QStringLiteral("his") : QStringLiteral("next"));
+            keys = m_dropSet;
+        }
+        else
+        {
+            keys = recallPick(start, type, m_planFaderNow);
+            if (keys.isEmpty() == false)
+                mode = QStringLiteral("mem");
+            else
+            {
+                mode = QStringLiteral("guess");
+                keys = planGuess(type, start);
+            }
+        }
+        QVariantMap row;
+        row.insert(QStringLiteral("beat"), start);
+        row.insert(QStringLiteral("end"), end);
+        row.insert(QStringLiteral("type"), type);
+        row.insert(QStringLiteral("mode"), mode);
+        row.insert(QStringLiteral("next"), i == next);
+        row.insert(QStringLiteral("chips"), planChips(keys));
+        out << row;
+    }
+    return out;
+}
+
+QVariantList TrackEngine::planRows()
+{
+    // the popup over the next section: every group of the night, in or out,
+    // and the rule the engine itself would keep (his pick may break it)
+    QVariantList out;
+    if (m_dropMode == 0)
+        return out;
+    const QString base = baseGroup();
+    bool aniIn = false, barsIn = false;
+    foreach (const QString &key, m_dropSet)
+    {
+        const TrackGroup g = m_groups.value(key);
+        aniIn = aniIn || g.patternDevice;
+        barsIn = barsIn || (g.lasers && g.patternDevice == false);
+    }
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_groups.contains(key) == false || m_groupOff.contains(key))
+            continue;
+        const TrackGroup g = m_groups.value(key);
+        const bool in = m_dropSet.contains(key);
+        QString note;
+        if (key == base)
+            note = tr("BASE");
+        else if (g.patternDevice && barsIn)
+            note = tr("not with the laserbars (engine rule) - yours may");
+        else if (g.lasers && g.patternDevice == false && aniIn)
+            note = tr("not with the animation laser (engine rule) - yours may");
+        else if (g.patternDevice && m_planFaderNow < ENGINE_ANI_ON)
+            note = tr("under 70 % - ok, your pick");
+        else if (smallWash(key))
+            note = tr("on top - takes no place");
+        QVariantMap r;
+        r.insert(QStringLiteral("key"), key);
+        r.insert(QStringLiteral("in"), in);
+        r.insert(QStringLiteral("base"), key == base);
+        r.insert(QStringLiteral("note"), note);
+        out << r;
+    }
+    return out;
+}
+
+void TrackEngine::planEngineDecides()
+{
+    // ENGINE DECIDES: the next section is the engine's again
+    if (m_dropMode == 0 || (m_dropTouched == false && m_planRemembered == false))
+        return;
+    m_dropTouched = false;
+    m_planRemembered = false;
+    m_planOriginal.clear();
+    m_dropSet = planCast(m_planSection, m_planFaderNow);
+    m_dropPlanFader = m_planFaderNow;
+    logSignal(QStringLiteral("sig:plan-engine:") + m_planSection + QStringLiteral(":")
+              + m_dropSet.join(QLatin1Char('+')));
+    emit dropSetChanged();
+}
+
+void TrackEngine::planForgetTrack()
+{
+    // FORGET FOR THIS TRACK: what he ran last time is gone, and the next
+    // section is the engine's (a pick he made tonight is not undone in RIG)
+    forgetTrackMemory(m_trackTitle);
+    if (m_planRemembered)
+        planEngineDecides();
+    emit planLaneChanged();
 }
