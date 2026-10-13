@@ -1223,7 +1223,7 @@ void TrackManager::setAutoRun(bool enable)
         // R378_ROOM_OFF: ENERGY's clock stays off - only its AUTO tile turns it on (R201_NEW_NIGHT)
         const QStringList trimmed = m_engine->trims().keys();
         for (const QString &k : trimmed)
-            m_engine->setGroupTrim(k, 1.0);
+            m_engine->setGroupTrim(k, m_engine->startTrim(k));   // R437_STROBE_START: the strobes at 50 %
     }
     if (m_autoRun && m_engine != nullptr)
         m_engine->announceRoom();

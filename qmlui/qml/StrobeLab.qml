@@ -220,8 +220,8 @@ Rectangle
                 enabled: eng ? eng.slabCount > 0 : false
                 LabTile
                 {
-                    objectName: "slabNo"
-                    width: 330; height: 150; text: "✕  " + qsTr("NO"); sub: qsTr("banned - never drawn")
+                    objectName: "slabBan"            // R437_BAN: it bans the light
+                    width: 330; height: 150; text: "✕  " + qsTr("BAN"); sub: qsTr("out of the show - never drawn")
                     tone: slabRoot.cRed; bar: true; fontPx: 36
                     on: eng ? eng.slabVerdict === -1 : false
                     onTapped: if (eng) eng.slabDecide(-1)
@@ -246,7 +246,7 @@ Rectangle
             {
                 x: 44; y: 466; width: 1150
                 wrapMode: Text.WordWrap
-                text: qsTr("NO bans it in the show - the engine never draws it. GOOD has it drawn more often (with RATINGS on). The same tile again takes it back. Nothing is deleted from the show file.")
+                text: qsTr("BAN takes it out of the show - the engine never draws it. GOOD has it drawn more often (with RATINGS on). The same tile again takes it back. Nothing is deleted from the show file.")
                 color: slabRoot.cDim; font.pixelSize: 16
             }
             Text
@@ -265,7 +265,7 @@ Rectangle
                 x: 40; y: 522
                 text: slabRoot.tabNames[slabRoot.tab] + "  ·  "
                       + (eng && eng.slabCount > 0 ? (eng.slabIndex + 1) : 0) + " " + qsTr("OF") + " " + (eng ? eng.slabCount : 0)
-                      + "  ·  ✓ " + (eng ? eng.slabGood : 0) + "   ✕ " + (eng ? eng.slabNo : 0)
+                      + "  ·  ✓ " + (eng ? eng.slabGood : 0) + "   ✕ " + qsTr("BANNED") + " " + (eng ? eng.slabNo : 0)
             }
             Item
             {
@@ -353,7 +353,8 @@ Rectangle
                         objectName: "slabSpeed:" + index
                         width: (playCard.inW - 24) / 3; height: 62; text: modelData; fontPx: 16
                         enabled: index === 0 || (eng ? eng.slabCanSpeed : false)
-                        on: eng ? eng.slabSpeed === index : index === 0; tone: slabRoot.cBlue
+                        // R437_SPEED_ON: what plays - AS MADE, when it cannot change pace
+                        on: eng ? (eng.slabCanSpeed ? eng.slabSpeed === index : index === 0) : index === 0; tone: slabRoot.cBlue
                         onTapped: if (eng) eng.slabSetSpeed(index)
                     }
                 }

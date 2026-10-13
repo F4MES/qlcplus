@@ -118,6 +118,7 @@ static quint32 nameScatter(const QString &name)
 // så hurtigere derfra." They come on at 30 %, two beats a step or slower;
 // from 50 % a beat a step; from 75 % in a drop an eighth. strobePaceFloor().
 #define ENGINE_STROBE_ON      0.30
+#define ENGINE_STROBE_START   0.50   // R418_STROBE_HALF / R437_STROBE_START: the strobes' fader at a new night
 #define ENGINE_TASTE_OUT      0.60   // R433_SECTION_TASTE: under this he has taken it out
 #define ENGINE_TASTE_KEEP     0.90   // R435_TASTE_DECAY: what a night keeps of the lean
 #define ENGINE_CRUMBS_MAX     (2 * 1024 * 1024)   // R435_CRUMBS: rotate here
@@ -1203,7 +1204,7 @@ void TrackEngine::ensureTable()
     foreach (const QString &key, m_groupOrder)
     {
         if (m_groups.value(key).strobes && m_groupTrim.contains(key) == false)
-            m_groupTrim.insert(key, 0.5);
+            m_groupTrim.insert(key, startTrim(key));   // R437_STROBE_START: one number for both
     }
 
     // R410_LAB: the looks kept in LASER LAB, written into the show before the
@@ -1664,7 +1665,7 @@ void TrackEngine::ensureTable()
     // R436_SHOW_CHECK / R436_STROBE_LAB: what the new table says - told on the
     // next turn of the event loop, never from inside a getter that built it
     updateShowCheck();
-    QTimer::singleShot(0, this, [this]() { emit showCheckChanged(); emit slabChanged(); });
+    QTimer::singleShot(0, this, [this]() { emit showCheckChanged(); emit slabChanged(); emit tasteChanged(); });   // R437_TASTE_REFRESH
     qDebug() << "[TrackEngine]" << m_groups.count() << "groups," << m_funcs.count()
              << "functions, palette" << m_palette;
 }
@@ -5577,6 +5578,11 @@ QVariantMap TrackEngine::trims() const
 }
 
 qreal TrackEngine::groupTrim(QString key) const { return m_groupTrim.value(key, 1.0); }
+
+qreal TrackEngine::startTrim(const QString &key) const
+{
+    return m_groups.value(key).strobes ? ENGINE_STROBE_START : 1.0;   // R437_STROBE_START
+}
 
 void TrackEngine::setGroupTrim(QString key, qreal level)
 {
@@ -20835,13 +20841,20 @@ bool TrackEngine::slabAvailable() const
 
 QString TrackEngine::slabPickGroup() const
 {
+    // a strobe group that is on - or, R437_STROBES_OFF, one switched OFF for the
+    // night (slabOpen says so; "not in this show" was wrong)
+    QString off;
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
-        if (g.strobes && g.fixtures.isEmpty() == false && m_groupOff.contains(key) == false)
+        if (g.strobes == false || g.fixtures.isEmpty())
+            continue;
+        if (m_groupOff.contains(key) == false)
             return key;
+        if (off.isEmpty())
+            off = key;
     }
-    return QString();
+    return off;
 }
 
 void TrackEngine::slabLoad() const
@@ -20995,7 +21008,9 @@ bool TrackEngine::slabOpen()
     m_slabMessage.clear();
     QString refuse;
     if (m_slabGroup.isEmpty())
-        refuse = tr("strobe lab: no strobes in this show (or they are switched OFF)");
+        refuse = tr("strobe lab: no strobes in this show");
+    else if (m_groupOff.contains(m_slabGroup))   // R437_STROBES_OFF
+        refuse = tr("strobe lab: %1 is switched OFF").arg(m_slabGroup);
     else if (m_blackout)
         refuse = tr("strobe lab: BLACKOUT is on");
     if (refuse.isEmpty() == false)
@@ -21045,7 +21060,9 @@ bool TrackEngine::slabOpen()
     }
     m_slabIndex = qMax(0, at);
     m_report = tr("STROBE LAB");
-    m_slabMessage = tr("The strobes are dark - ▶ PLAY lights them");
+    m_slabMessage = m_slabList.isEmpty()           // R437_EMPTY_TAB
+                        ? tr("No programmes of this kind for %1").arg(m_slabGroup)
+                        : tr("The strobes are dark - ▶ PLAY lights them");
     logSignal(QStringLiteral("sig:strobe-lab-open"));
     emit liveChanged();
     slabShowCandidate();
