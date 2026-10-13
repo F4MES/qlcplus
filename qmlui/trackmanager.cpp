@@ -2832,6 +2832,8 @@ void TrackManager::requestCache()
 
 void TrackManager::forgetTrack(QString title)
 {
+    if (m_engine && title.isEmpty() == false)
+        m_engine->forgetTrackMemory(title);   // R439_TRACK_MEMORY
     QJsonObject obj;
     obj.insert(QStringLiteral("evt"), QStringLiteral("cache-forget"));
     obj.insert(QStringLiteral("title"), title);

@@ -515,6 +515,44 @@ jobs:
           name: QLC+-${{matrix.task}}-${{env.APPVERSION}}-${{env.BUILD_DATE}}-${{env.GIT_REV}}.exe
           path: ${{matrix.task}}-${{env.OUTFILE}}
 
+  # runde 439 (N9): the rig's build as the GitHub release "rig-latest" -
+  # tools/update-qlc.ps1 on the lys-pc fetches it (public repo, no login).
+  # track-layout only: the rig runs the v2 page.
+  release-rig:
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/track-layout' }}
+    needs: build-windows
+    runs-on: ubuntu-22.04
+    name: Rig release (track-layout)
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download the Windows v5 installer
+        uses: actions/download-artifact@v4
+        with:
+          pattern: QLC+-build-v5-*
+          path: dl
+
+      - name: Publish rig-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          EXE=$(find dl -type f -name '*.exe' | head -1)
+          test -n "$EXE"
+          REV=$(git rev-parse --short HEAD)
+          cp "$EXE" QLC-rig-setup.exe
+          echo "$REV" > rig-build.txt
+          NOTES="track-layout $REV, built $(date -u '+%Y-%m-%d %H:%M') UTC - $(git log -1 --format=%s)"
+          if gh release view rig-latest > /dev/null 2>&1; then
+            gh release edit rig-latest --prerelease --notes "$NOTES"
+          else
+            gh release create rig-latest --target "$GITHUB_SHA" --prerelease --title "Rig build (track-layout)" --notes "$NOTES"
+          fi
+          gh release upload rig-latest QLC-rig-setup.exe rig-build.txt tools/update-qlc.ps1 tools/update-qlc.cmd --clobber
+
   build-macos:
     runs-on: macos-15
     name: QLCplus macOS ${{matrix.task}}
