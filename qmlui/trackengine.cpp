@@ -4283,6 +4283,8 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
                  + int(qRound(w2 * qreal(ENGINE_STROBE_BUDGET_HIGH - ENGINE_STROBE_BUDGET_LOW)));   // w2: runde 346
     auto affordable = [this, budget](int beats) { return m_strobeSpent + beats <= budget; };
 
+    if (m_hitStrobeNow)
+        m_strobeUntil = -1;              // R445_DROP_HIT: his landing takes over a burst that runs
     if (quiet)
     {
         m_strobeUntil = -1;
@@ -4312,7 +4314,13 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // to the fastest rate at any fader, 60 % as well as the stop: at 80 %
         // it now tops out a rate under, at 60 % at the middle of the band)
         qreal riserFrom = 0.90 - 0.30 * w2;
-        if (isBuild && prog > riserFrom && e > 0.18)
+        if (m_hitStrobeNow)
+        {
+            want = rateCount - 1;        // R445_DROP_HIT: his STROBE - the fastest, the drop's first bar
+            beats = 4;
+            landing = true;
+        }
+        else if (isBuild && prog > riserFrom && e > 0.18)
         {
             qreal into = qBound(0.0, (prog - riserFrom) / qMax(0.02, 1.0 - riserFrom), 1.0);
             want = int(qRound(into * qreal(rateCount - 1) * (0.45 + 0.55 * w2)
@@ -4352,7 +4360,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // has always had in practice, 55 %: under it the strobes were out of
         // the cast, so no burst ever reached them. Tobias asked for the chase
         // pace, not for bursts at a bar's level.
-        if (want >= 0 && m_faderNow < ENGINE_HWSTROBE_ON)
+        if (want >= 0 && m_faderNow < ENGINE_HWSTROBE_ON && m_hitStrobeNow == false)   // R445: his hit is his
             want = -1;
         bool headsOnly = false;
         // THE HEADS' OWN (runde 346, Tobias: "Movingheads kunne godt strobe
@@ -10788,6 +10796,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // R424_THREE_BACK (Tobias 10-11): the three-type cap of runde 422 is gone
     // again - "saet reglen om 3 lamper tilbage". One laser type stays (R422_ONE_LASER).
 
+    hitStep(beat, isDrop, nextState, beatsToNext, bpm);   // R445_DROP_HIT: armed - the beats before and the landing
     // R432_NEXT_SECTION (Tobias 10-12: "altid vise hvilke lamper den kommer i den
     // naeste sektion saa man altid kan planlaegge" / "force specifikke lamper i en
     // sektion"). The plan is for the NEXT section; a tap makes it his, and then
@@ -10862,6 +10871,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (m_groups.contains(key) && m_groupOff.contains(key) == false)
                     castSet.insert(key);
         }
+        hitCast(beat, castSet);          // R445_DROP_HIT: his STROBE - the strobe group on stage for the bar
         // the plan for the next section
         const int boundary = (nextState.isEmpty() || beatsToNext <= 0) ? -1 : beat + beatsToNext;
         if (boundary < 0)
@@ -14031,8 +14041,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // dropBar, not bar: the landing burst waits for the kick (see m_dropLand).
     // In a drop the only thing driveStrobe reads `bar` for IS the landing.
     driveStrobe(castSet, beat, energy, isDrop && dropSettled == false, isBuild, riserFollow ? buildProg : prog, isDrop ? dropBar : bar, beatInBar,
-                isCalm || still || dropWaiting || m_flash || m_blackout
-                || isBreak || isIntro || isOutro || exposureRest); // nobody strobes a break/intro/outro/rest (runde 235)
+                m_hitStrobeNow ? (still || m_flash || m_blackout)          // R445_DROP_HIT: his STROBE strobes
+                : (isCalm || still || dropWaiting || m_flash || m_blackout
+                   || isBreak || isIntro || isOutro || exposureRest)); // nobody strobes a break/intro/outro/rest (runde 235)
 
     checkConflicts(castSet);
 
@@ -18157,6 +18168,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 
 void TrackEngine::release()
 {
+    hitUndark();                         // R445_DROP_HIT: the show does not fade out from his DARK
     // This fades the show out over a bar exactly as it did before round 162.
     // It touches nothing on the Virtual Console: the console is cleared once,
     // at SHOW ON (resetConsole), and never locked. release() is reached from
@@ -19365,6 +19377,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
 void TrackEngine::stopAll()
 {
     m_beatWatch.stop();
+    hitReset();                          // R445_DROP_HIT
     m_sequenceGroups.clear();
     m_restUntil = -1;
     if (m_testTimer.isActive())
@@ -22606,4 +22619,157 @@ void TrackEngine::planForgetTrack()
     if (m_planRemembered)
         planEngineDecides();
     emit planLaneChanged();
+}
+/* =====================================================================
+ *  DROP HIT (runde 445, N12) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/drophit.inc.cpp.
+ *
+ *  Tobias, 2026-10-13: "Lav: 4" (ARM DROP HIT), mockup A approved - the
+ *  button in the rail beside PLAN, all three hits: FLASH, STROBE, DARK -> BANG.
+ *
+ *  Armed, the next drop that ARRIVES (its landing - the same beat as the
+ *  strobe landing, m_dropArrivedNow / m_lateLandNow) gets his hit, once:
+ *    FLASH   the manual FLASH (the strobes in white) for one beat
+ *    STROBE  the strobe group on stage for the drop's first bar, its landing
+ *            burst at the fastest rate for the whole bar
+ *    DARK    the room black for the two beats before the drop flag (BLACKOUT),
+ *            then the FLASH beat on the landing - a drop that waits for its
+ *            kick is dark at most six beats, then it bangs
+ *  Then it disarms itself. Nothing moves: the flash and the blackout are the
+ *  operator's own buttons, and the burst keeps the bars' amok rule.
+ * ===================================================================== */
+
+#define ENGINE_HIT_DARK_BEATS 2          // DARK: black for this many beats before the flag
+#define ENGINE_HIT_DARK_MAX   6          // ... and never longer than this (a drop waiting for its kick)
+
+int TrackEngine::hitKind() const
+{
+    return m_hitKind;
+}
+
+int TrackEngine::hitLast() const
+{
+    if (m_hitLast <= 0)
+        m_hitLast = qBound(1, QSettings().value(QStringLiteral("trackengine/hit-last"), 1).toInt(), 3);
+    return m_hitLast;
+}
+
+void TrackEngine::setHitKind(int kind)
+{
+    kind = qBound(0, kind, 3);
+    if (kind == m_hitKind)
+        return;
+    m_hitKind = kind;
+    if (kind > 0)
+    {
+        m_hitLast = kind;
+        QSettings().setValue(QStringLiteral("trackengine/hit-last"), kind);
+    }
+    if (kind != 3)
+        hitUndark();                     // disarmed (or another hit): the room back
+    logSignal(QStringLiteral("sig:drop-hit-arm:%1").arg(kind));
+    emit hitChanged();
+}
+
+void TrackEngine::hitUndark()
+{
+    if (m_hitDark == false)
+        return;
+    m_hitDark = false;
+    m_hitDarkFrom = -1;
+    if (m_blackout)
+        setBlackout(false);
+}
+
+void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int beatsToNext, qreal bpm)
+{
+    m_hitStrobeNow = false;
+    if (m_hitStrobeUntil >= 0 && (beat > m_hitStrobeUntil || beat < m_hitStrobeUntil - 3))
+        m_hitStrobeUntil = -1;           // the bar is over (or the DJ jumped back out of it)
+    // the flash beat is over on the next beat
+    if (m_hitFlashBeat >= 0 && beat != m_hitFlashBeat)
+    {
+        m_hitFlashBeat = -1;
+        if (m_flash)
+            setFlash(false);
+    }
+    if (m_hitKind == 0)
+    {
+        hitUndark();
+        return;
+    }
+    const bool arrives = isDrop && (m_dropArrivedNow || m_lateLandNow);
+    // DARK: the beats before the flag - his BLACKOUT, unless his own is on
+    if (m_hitKind == 3 && arrives == false && m_hitDark == false && m_blackout == false
+        && isDrop == false && nextState == QStringLiteral("drop")
+        && beatsToNext > 0 && beatsToNext <= ENGINE_HIT_DARK_BEATS)
+    {
+        m_hitDark = true;
+        m_hitDarkFrom = beat;
+        setBlackout(true);
+        logSignal(QStringLiteral("sig:drop-hit-dark"));
+    }
+    // a jump or a loop away from the drop while dark: the room back, still armed
+    if (m_hitDark && (beat < m_hitDarkFrom
+                      || (isDrop == false && (nextState != QStringLiteral("drop") || beatsToNext > ENGINE_HIT_DARK_BEATS))))
+        hitUndark();
+    const bool overdue = m_hitDark && beat - m_hitDarkFrom >= ENGINE_HIT_DARK_MAX;
+    if (arrives == false && overdue == false)
+        return;
+    // ---- the hit ----
+    const int kind = m_hitKind;
+    hitUndark();
+    if (kind == 2)
+    {
+        m_hitStrobeNow = true;
+        m_hitStrobeUntil = beat + 3;     // the drop's first bar
+    }
+    else if (m_flash == false)
+    {
+        setFlash(true);
+        m_hitFlashBeat = beat;
+        // the link going quiet must not leave it on: a beat and a half at most
+        const int ms = int(qBound(200.0, 90000.0 / qMax(60.0, bpm), 1500.0));
+        QTimer::singleShot(ms, this, [this, beat]() {
+            if (m_hitFlashBeat == beat)
+            {
+                m_hitFlashBeat = -1;
+                if (m_flash)
+                    setFlash(false);
+            }
+        });
+    }
+    m_hitKind = 0;
+    logSignal(QStringLiteral("sig:drop-hit:%1").arg(kind == 1 ? QStringLiteral("flash")
+                                                   : (kind == 2 ? QStringLiteral("strobe") : QStringLiteral("dark-bang"))));
+    emit hitChanged();
+}
+
+void TrackEngine::hitCast(int beat, QSet<QString> &castSet) const
+{
+    // STROBE: the strobe group is on stage for the drop's first bar
+    if (m_hitStrobeUntil < beat || beat < m_hitStrobeUntil - 3)
+        return;
+    foreach (const QString &key, m_groupOrder)
+        if (m_groups.value(key).strobes && m_groupOff.contains(key) == false)
+            castSet.insert(key);
+}
+
+void TrackEngine::hitReset()
+{
+    // the show stops: nothing armed, the room not left black, no flash left on
+    m_hitStrobeUntil = -1;
+    m_hitStrobeNow = false;
+    if (m_hitFlashBeat >= 0)
+    {
+        m_hitFlashBeat = -1;
+        if (m_flash)
+            setFlash(false);
+    }
+    hitUndark();
+    if (m_hitKind != 0)
+    {
+        m_hitKind = 0;
+        emit hitChanged();
+    }
 }

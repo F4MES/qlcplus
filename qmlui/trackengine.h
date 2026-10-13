@@ -403,6 +403,9 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool planRemembered READ planRemembered NOTIFY dropSetChanged)   // R439_TRACK_MEMORY
     /** R443_PLAN_LANE: the plan lane on the track (PLAN beside MARKERS) */
     Q_PROPERTY(bool planLane READ planLane WRITE setPlanLane NOTIFY planLaneChanged)
+    /** R445_DROP_HIT: 0 off, 1 FLASH, 2 STROBE, 3 DARK -> BANG on the next drop */
+    Q_PROPERTY(int hitKind READ hitKind WRITE setHitKind NOTIFY hitChanged)
+    Q_PROPERTY(int hitLast READ hitLast NOTIFY hitChanged)
     Q_PROPERTY(QVariantList palette READ palette NOTIFY tableChanged)
     Q_PROPERTY(bool showAll READ showAll WRITE setShowAll NOTIFY tableChanged)
     /** The engine makes everything itself from the fixtures' channels -
@@ -713,6 +716,10 @@ public:
     Q_INVOKABLE void clabCompare(int mode);
     /** ALL ON / ALL OFF: the lab opens dark */
     Q_INVOKABLE void clabToggleDark();
+    /* ---- R445_DROP_HIT (track_runtime/drophit.inc.cpp) ---- */
+    int hitKind() const;
+    int hitLast() const;
+    void setHitKind(int kind);
     /* ---- R443_PLAN_LANE (track_runtime/planlane.inc.cpp) ---- */
     bool planLane() const;
     void setPlanLane(bool on);
@@ -1052,6 +1059,7 @@ signals:
     void clabChanged();                  // R440_COLOUR_LAB
     void sendChanged();                  // R440_SEND
     void planLaneChanged();              // R443_PLAN_LANE
+    void hitChanged();                   // R445_DROP_HIT
     /** a colour tile was pressed but the colour cannot be used (not in the
      *  palette any more, banned): the tile blinks (runde 313, B27/Tobias) */
     void colourRejected(const QString &colour);
@@ -1624,6 +1632,18 @@ public:
     QString planShortOf(const QString &key) const;
     QVariantList planChips(const QStringList &keys) const;
     QStringList planGuess(const QString &section, int boundary);
+    // R445_DROP_HIT
+    int m_hitKind = 0;
+    mutable int m_hitLast = 0;
+    bool m_hitDark = false;              // the DARK beats are ours (his BLACKOUT tile is lit for them)
+    int m_hitDarkFrom = -1;
+    int m_hitFlashBeat = -1;             // the beat the hit's FLASH went on
+    bool m_hitStrobeNow = false;         // driveStrobe: this beat is his STROBE landing
+    int m_hitStrobeUntil = -1;           // ... and the strobes are on stage to here
+    void hitStep(int beat, bool isDrop, const QString &nextState, int beatsToNext, qreal bpm);
+    void hitCast(int beat, QSet<QString> &castSet) const;
+    void hitUndark();
+    void hitReset();
 private:
     bool m_bigDrop = false;              // R357_KICK_BACK: this drop arrived big
     int m_kickBackLast = -100;
