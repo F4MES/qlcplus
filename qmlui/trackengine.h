@@ -1644,6 +1644,16 @@ public:
     void hitCast(int beat, QSet<QString> &castSet) const;
     void hitUndark();
     void hitReset();
+    // R446_DROP_VARIETY (track_runtime/dropvariety.inc.cpp)
+    QStringList m_prevDropSet;           // the last drop's cast where it landed (sorted)
+    QString m_prevDropLead;              // ... the rhythm lead it opened with
+    QString m_prevDropTitle;             // ... and its track
+    QStringList m_thisDropSet;           // the running drop's, moved over when it ends
+    QString m_thisDropLead;
+    QString m_thisDropTitle;
+    QStringList dropPicks(const QStringList &priority, int effects) const;
+    void dropVariety(QStringList &priority, int effects, const QString &base, bool strobeFirst);
+    void dropRemember(bool isDrop, const QSet<QString> &castSet);
 private:
     bool m_bigDrop = false;              // R357_KICK_BACK: this drop arrived big
     int m_kickBackLast = -100;
