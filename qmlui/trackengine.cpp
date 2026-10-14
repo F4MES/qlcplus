@@ -296,22 +296,13 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     loadClockCurve(settings);
     m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
     m_stutterRate = qBound(1, settings.value(SETTINGS_ENGINE_STUTTER, 3).toInt(), 3);   // R420_STUTTER, R427_STUTTER_16
-    // runde 184: ENERGY by clock and the group faders come back after a
-    // restart - the same night only. A new evening starts as it always has:
-    // the clock on and every group at 100 % - the strobes at 50 % (R418_STROBE_HALF).
+    // runde 184: ENERGY by clock came back after a restart - the same night only.
+    // R453_TRIMS_FRESH (Tobias 10-14: "gruppefaders staar stadig som de var sat
+    // inden den lukkede. Det skal den ikke huske"): the group faders are NOT
+    // read back - every start-up is a new evening: every group at 100 %, the
+    // strobes at 50 % (R418_STROBE_HALF). saveNight() still writes them.
     if (settings.value(SETTINGS_ENGINE_NIGHT).toString() == nightKey())
-    {
         m_roomAuto = false;              // R378_ROOM_OFF (Tobias 10-06): off at every start-up - only its AUTO tile turns it on
-        foreach (const QString &entry, settings.value(SETTINGS_ENGINE_GROUPTRIM, QString())
-                                               .toString().split(';', Qt::SkipEmptyParts))
-        {
-            const int eq = entry.lastIndexOf(QLatin1Char('='));
-            bool ok = false;
-            const qreal level = eq > 0 ? entry.mid(eq + 1).toDouble(&ok) : 0.0;
-            if (ok)
-                m_groupTrim.insert(entry.left(eq), qBound(0.0, level, 1.0));
-        }
-    }
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_fullAuto = settings.value(SETTINGS_ENGINE_FULLAUTO, false).toBool();
     // Read once, here. loadRoles() does not touch the group switches (the
