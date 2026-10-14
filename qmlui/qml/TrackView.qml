@@ -3663,10 +3663,11 @@ Rectangle
             Repeater
             {
                 model: [
-                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
-                    { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track (intro, break, build, drop) at Link's tempo or 128 BPM, on a loop, to try the page and the rig. Nothing is learned or logged. <b>STOP TEST</b> ends it; a real track from the CDJs takes over by itself." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG.<br><b>DROP HIT</b> arms a hit on the next drop: <b>FLASH</b> (a white beat), <b>STROBE</b> (the strobes flat out for the first bar) or <b>DARK \u2192 BANG</b> (black for two beats, then the flash). It lands once, on the drop's first beat, and switches itself off - tap <b>HIT ARMED</b> to take it back. It sits in LIVE beside <b>FLASH WHITE</b>; a tap on a kind arms that one." },
-                    { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
+                    // R455_HELP (Tobias 10-14: "Opdater nu ogsaa vores Help knap, til alt det nye")
+                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing." },
+                    { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br><b>HIT</b> on a DROP flag - a hit is armed for that drop (<b>DROP HIT</b> in LIVE).<br>Warnings appear in the bar under the track." },
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG." },
+                    { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from the system tray.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column
                 {
@@ -3691,7 +3692,7 @@ Rectangle
             x: rigCard.inX; y: helpOverlay.rowY(1); width: rigCard.inW
             height: 5 * trackViewRoot.rowH + 4 * trackViewRoot.g
             verticalAlignment: Text.AlignTop
-            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling.<br><br><font color='#6ECD82'>● on stage</font> - lit now. ○ <b>waiting</b> - in the show, not used right now.<br><br><b>Tap a name</b> - in or out of the next section: <font color='#F05050'>▶ NEXT BREAK</font> (BUILD, DROP ...) is the engine's plan; a tap makes it yours for that whole section. The dot: lit now or waiting. The base has a toggle too.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
+            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling; kept through a restart the same night (until noon).<br><br><font color='#6ECD82'>● on stage</font> - lit now. ○ <b>waiting</b> - in the show, not used right now.<br><br><b>Tap a name</b> - in or out of the next section: <font color='#F05050'>▶ NEXT BREAK</font> (BUILD, DROP ...) is the engine's plan; a tap makes it yours for that whole section. The dot: lit now or waiting. The base has a toggle too.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
         }
 
         // ---- LOOK: the explanation on each row, after its label
@@ -3744,11 +3745,12 @@ Rectangle
                 { y: 0, h: 1, b: "<b>NEXT LOOK</b> - a new look now." },
                 { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
                 { y: 2, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
-                { y: 3, h: 2, b: "<b>BLACKOUT</b> - dark while held.  <b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 of the beat while held; a quick tap locks it. Both: slide off before letting go to lock; tap to release." },
-                { y: 4, h: 2, b: "<b>FLASH WHITE</b> - white while held." }
+                { y: 3, h: 2, b: "<b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 while held; a quick tap locks it.  <b>BLACKOUT</b> - dark while held. Slide off to lock; tap to release." },
+                { y: 4, h: 2, b: "<b>DROP HIT</b> arms a hit on the next drop: a tap = the gold kind, or <b>FLSH</b> / <b>STRB</b> / <b>DARK</b>. Once, then off.  <b>FLASH WHITE</b> - white while held." }
             ]
             HelpText
             {
+                objectName: "liveHelp:" + modelData.y        // R455_HELP
                 x: liveCard.x + liveCard.inX
                 width: liveCard.inW
                 y: modelData.y < 4 ? helpOverlay.rowY(modelData.y) : helpOverlay.rowY(3) + liveCard.bigH + trackViewRoot.g
