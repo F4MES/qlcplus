@@ -1643,8 +1643,10 @@ public:
     int m_hitFlashBeat = -1;             // the beat the hit's FLASH went on
     bool m_hitStrobeNow = false;         // driveStrobe: this beat is his STROBE landing
     int m_hitStrobeUntil = -1;           // ... and the strobes are on stage to here
+    quint32 m_hitDarkSerial = 0;         // R449_DARK_QUIET: which DARK the quiet timer is for
+    QStringList m_hitAdded;              // R449_HIT_NOT_DROP: the groups hitCast() put on stage this beat
     void hitStep(int beat, bool isDrop, const QString &nextState, int beatsToNext, qreal bpm);
-    void hitCast(int beat, QSet<QString> &castSet) const;
+    void hitCast(int beat, QSet<QString> &castSet);
     void hitUndark();
     void hitReset();
     // R446_DROP_VARIETY (track_runtime/dropvariety.inc.cpp)
