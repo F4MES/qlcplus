@@ -11380,6 +11380,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // jump, a new composition and a group joining still draw. A build
     // promoted by the riser mid-section has drawn nothing yet, so its first
     // roll still brings the build's moves in.
+    // R447_HEADS_ROUND: the music turned on this bar line (or in the bar before)
+    if (turn)
+        m_musicTurnBeat = beat;
+    const bool musicTurnNow = beatInBar == 0 && m_musicTurnBeat >= 0 && beat >= m_musicTurnBeat && beat - m_musicTurnBeat <= 3;
     bool redraw = hold == false
                && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump || settleNow
                    || (bar > 0 && bar % 8 == 0 && beatInBar == 0 && rng->bounded(3) > 0
@@ -11391,6 +11395,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // FULL AUTO the drop flag is a part change and re-composes the roles, so
     // the wait draws there as before; an inner build flag does not.)
     const bool buildKeeps = isBuild && m_buildDrawn && faderJump == false && compositionChanged == false;
+    // R447_HEADS_ROUND: a redraw that is only the 8-bar dice (no section line,
+    // no new composition, no hand on the fader)
+    const bool clockRedraw = redraw && (sectionChanged || compositionChanged || m_moves.isEmpty()
+                                        || faderJump || settleNow) == false;
     // THE FLOOR ROUND (runde 214, Tobias: "det ser sejt ud, naar alle hoveder
     // peger lige ned i gulvet og skiftes til at blinke rundt i rummet zoomet
     // helt"). A build's look for the heads: every head straight down (the
@@ -12393,6 +12401,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         bool fresh = (redraw && buildKeeps == false) || m_sweep.contains(key) == false
                   || (hold == false && isCalm == false        // HOLD/CALM freeze it too (r199)
                       && isBuild && prog >= 0.5 && prevProg < 0.5 && beatInBar == 0 && m_sweep.value(key).shape >= 0);
+        // R447_HEADS_ROUND (Tobias 10-13: "P1 (men ... de må skifte hvis der sker
+        // en musikalsk ændring midt i en sektion)"): measured 10-13 at 98 %, 20 of
+        // 39 figure changes were mid-section and every one was the 8-bar dice -
+        // 12 before the figure had been round once (break figures 40-57 beats,
+        // the dice every 32). A head's figure now runs its round: the dice does
+        // not redraw it; the music turning does, once it has been round.
+        if (g.heads && g.lasers == false && m_sweep.contains(key) && m_sweep.value(key).shape >= 0)
+        {
+            const bool turnDraws = musicTurnNow && hold == false && isCalm == false && isBuild == false
+                                && headsRoundDone(key, beat);
+            if (fresh && clockRedraw && buildKeeps == false && turnDraws == false)
+                fresh = false;
+            else if (fresh == false && turnDraws)
+                fresh = true;
+        }
         // Runde 219: a bar figure is never redrawn while it runs. On 09-20
         // it lasted 10-14 s against a 30-60 s figure: every section line,
         // cast change, fader jump and two in three 8-bar lines drew a new
@@ -12466,6 +12489,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     sw = candidate;
             }
             m_sweep.insert(key, sw);
+            m_sweepDrawn.insert(key, beat);      // R447_HEADS_ROUND: its round starts here
             if (sw.shape >= 0)
             {
                 history.append(sw.shape);
@@ -15944,6 +15968,17 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
         }
     }
     return sw;
+}
+
+bool TrackEngine::headsRoundDone(const QString &key, int beat) const
+{
+    // R447_HEADS_ROUND: has the figure on stage been round once? A jump back
+    // in the track (or nothing drawn) counts as round.
+    const int drawn = m_sweepDrawn.value(key, -1);
+    if (drawn < 0 || beat < drawn)
+        return true;
+    const TrackSweep sw = m_sweep.value(key);
+    return beat - drawn >= qMax(sweepFloor(sw), sw.beats);
 }
 
 int TrackEngine::sweepFloor(const TrackSweep &sw) const

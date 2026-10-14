@@ -1479,6 +1479,9 @@ private:
     QMap<QString, TrackSweep> m_sweepShown; // what the EFX is configured to right now
     QMap<QString, QList<int> > m_moveHistory;   // the last patterns per group - not again
     QMap<QString, QList<int> > m_sweepHistory;  // the last figures per head group
+    QHash<QString, int> m_sweepDrawn;            // R447_HEADS_ROUND: the beat each group's figure was drawn on
+    int m_musicTurnBeat = -1;                         // R447_HEADS_ROUND: the last musical turn (BLT)
+    bool headsRoundDone(const QString &key, int beat) const;
     int m_fillUntil = -1;
     int m_fillLast = -8;
     QMap<QString, QPair<int, int> > m_autoRatings; // stable recipe -> up/down; never scene IDs
