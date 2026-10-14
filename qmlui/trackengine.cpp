@@ -22760,6 +22760,18 @@ void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int b
         m_hitDarkFrom = beat;
         setBlackout(true);
         logSignal(QStringLiteral("sig:drop-hit-dark"));
+        // R449_DARK_QUIET: the dark ends on a beat - a deck stopped (or the
+        // link gone quiet) inside it must not leave the room black. The same
+        // six beats and a half at this tempo, then the room back; still armed
+        const quint32 serial = ++m_hitDarkSerial;
+        const int ms = int(qBound(1500.0, (ENGINE_HIT_DARK_MAX + 0.5) * 60000.0 / qMax(60.0, bpm), 6500.0));
+        QTimer::singleShot(ms, this, [this, serial]() {
+            if (m_hitDark && m_hitDarkSerial == serial)
+            {
+                logSignal(QStringLiteral("sig:drop-hit-dark-quiet"));
+                hitUndark();
+            }
+        });
     }
     // a jump or a loop away from the drop while dark: the room back, still armed
     if (m_hitDark && (beat < m_hitDarkFrom
@@ -22797,20 +22809,26 @@ void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int b
     emit hitChanged();
 }
 
-void TrackEngine::hitCast(int beat, QSet<QString> &castSet) const
+void TrackEngine::hitCast(int beat, QSet<QString> &castSet)
 {
     // STROBE: the strobe group is on stage for the drop's first bar
+    m_hitAdded.clear();                  // R449_HIT_NOT_DROP: what the hit added is not the drop
     if (m_hitStrobeUntil < beat || beat < m_hitStrobeUntil - 3)
         return;
     foreach (const QString &key, m_groupOrder)
         if (m_groups.value(key).strobes && m_groupOff.contains(key) == false)
+        {
+            if (castSet.contains(key) == false)
+                m_hitAdded << key;
             castSet.insert(key);
+        }
 }
 
 void TrackEngine::hitReset()
 {
     // the show stops: nothing armed, the room not left black, no flash left on
     m_hitStrobeUntil = -1;
+    m_hitAdded.clear();                  // R449_HIT_NOT_DROP
     m_hitStrobeNow = false;
     if (m_hitFlashBeat >= 0)
     {
@@ -22963,6 +22981,9 @@ void TrackEngine::dropRemember(bool isDrop, const QSet<QString> &castSet)
     if (isDrop && m_dropArrivedNow)
     {
         m_thisDropSet = castSet.values();
+        // R449_HIT_NOT_DROP: his DROP HIT's strobes were the hit, not the drop
+        foreach (const QString &key, m_hitAdded)
+            m_thisDropSet.removeAll(key);
         m_thisDropSet.sort();
         m_thisDropLead = m_rhythmLead;
         m_thisDropTitle = m_trackTitle;
