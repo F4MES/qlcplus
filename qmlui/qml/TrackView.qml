@@ -135,6 +135,7 @@ Rectangle
     readonly property real laneH: Math.max(30, Math.round(38 * ks))
     property var planModel: []
     property bool planCardOpen: false
+    property bool bltGuideOpen: false                // R452_EMPTY: the (i) guide over the empty track
     property var planCardRows: []
     function planRefresh()
     {
@@ -434,6 +435,7 @@ Rectangle
                 circle(12,12,6); circle(12,12,2)
                 for(var j=0;j<8;j++){var b=j*Math.PI/4;line(12+6*Math.cos(b),12+6*Math.sin(b),12+9*Math.cos(b),12+9*Math.sin(b))}
             } else if (kind === "showSwitch" || kind === "stop") { c.fillRect(5,5,14,14) }
+            else if (kind === "deck") { circle(12,12,9.5); circle(12,12,5); c.beginPath(); c.arc(12,12,1.6,0,Math.PI*2); c.fill() }   // R452_EMPTY
             else if (kind === "play") { c.beginPath(); c.moveTo(7,4); c.lineTo(20,12); c.lineTo(7,20); c.closePath(); c.fill() }   // R450_TEST_TRACK
             else if (kind === "laser") { c.strokeRect(3,18,18,4); line(5,15,2,4); line(10,15,8,2); line(15,15,16,2); line(20,15,23,4) }
             else if (kind === "strobe") { c.strokeRect(3,2,18,20); circle(8,7,2); circle(16,7,2); circle(8,17,2); circle(16,17,2) }
@@ -1666,18 +1668,79 @@ Rectangle
                 }
             }
 
-            Column
+            // R452_EMPTY (Tobias 10-14, mockup C/D/E: "Waiting for track data ... paenere
+            // ... en lille guide ... start Beat-link-trigger ... system-tray ... genstarte
+            // det hvis det ikke virker"): what is missing, and (i) for how
+            Item
             {
+                id: emptyBox
                 objectName: "emptyTrack"
                 anchors.centerIn: wfCanvas
                 visible: trackViewRoot.beatCount === 0
-                spacing: Math.round(14 * trackViewRoot.ks)
-                Text
+                readonly property bool linked: !!trackManager && trackManager.connected === true
+                width: emptyRow.implicitWidth
+                height: emptyRow.implicitHeight
+                Row
                 {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: qsTr("Waiting for track data from Beat Link Trigger...")
-                    color: trackViewRoot.cMute
-                    font.pixelSize: trackViewRoot.fs(15)
+                    id: emptyRow
+                    spacing: Math.round(18 * trackViewRoot.ks)
+                    ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(52 * trackViewRoot.ks); height: width
+                                  kind: "deck"; ink: emptyBox.linked ? trackViewRoot.cDim : trackViewRoot.cGold }
+                    Column
+                    {
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Math.round(8 * trackViewRoot.ks)
+                        Row
+                        {
+                            spacing: Math.round(12 * trackViewRoot.ks)
+                            Text
+                            {
+                                objectName: "emptyTitle"
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: emptyBox.linked ? qsTr("Waiting for a track") : qsTr("Beat Link Trigger is not connected")
+                                color: trackViewRoot.cText
+                                font.bold: true
+                                font.pixelSize: trackViewRoot.fs(20)
+                            }
+                            Rectangle
+                            {
+                                id: bltInfo
+                                objectName: "bltInfo"
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: Math.round(26 * trackViewRoot.ks); height: width; radius: width / 2
+                                color: trackViewRoot.bltGuideOpen ? trackViewRoot.cGold : "transparent"
+                                border.width: 2
+                                border.color: trackViewRoot.bltGuideOpen ? trackViewRoot.cGold : trackViewRoot.cMute
+                                Text
+                                {
+                                    anchors.centerIn: parent
+                                    text: "i"
+                                    font.bold: true
+                                    font.pixelSize: trackViewRoot.fs(15)
+                                    color: trackViewRoot.bltGuideOpen ? "#1A1408" : trackViewRoot.cMute
+                                }
+                                TouchInput
+                                {
+                                    onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.bltGuideOpen = !trackViewRoot.bltGuideOpen }
+                                }
+                            }
+                        }
+                        Row
+                        {
+                            spacing: Math.round(8 * trackViewRoot.ks)
+                            Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Math.round(10 * trackViewRoot.ks); height: width; radius: width / 2
+                                        color: emptyBox.linked ? trackViewRoot.cGreen : trackViewRoot.cGold }
+                            Text
+                            {
+                                objectName: "emptySub"
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: emptyBox.linked ? qsTr("Beat Link Trigger is connected - play a track on a CDJ")
+                                                      : qsTr("Start it from the system tray - then play a track on a CDJ")
+                                color: trackViewRoot.cMute
+                                font.pixelSize: trackViewRoot.fs(13)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1867,58 +1930,7 @@ Rectangle
                         onTapped: if (trackEngine) trackEngine.planLane = !active
                     }
 
-                    // R445_DROP_HIT: a hit on the next drop - armed by a tap, the kind
-                    // while armed, off by a tap or by itself once it has landed
-                    Btn
-                    {
-                        id: hitBtn
-                        objectName: "dropHit"
-                        visible: !trackViewRoot.markerEdit && !!trackEngine
-                        readonly property bool armed: trackEngine ? trackEngine.hitKind > 0 : false
-                        width: Math.round(200 * trackViewRoot.ks)
-                        height: rail.bh
-                        icon: "bolt"
-                        active: armed
-                        tone: "#E23B3B"
-                        text: armed ? qsTr("HIT ARMED") : qsTr("DROP HIT")
-                        onTapped: if (trackEngine) trackEngine.hitKind = armed ? 0 : trackEngine.hitLast
-                    }
-                    Repeater
-                    {
-                        model: [ { k: 1, w: 98 }, { k: 2, w: 108 }, { k: 3, w: 150 } ]
-                        Btn
-                        {
-                            objectName: "hitKind:" + modelData.k
-                            visible: hitBtn.visible && hitBtn.armed
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: Math.round(modelData.w * trackViewRoot.ks)
-                            height: rail.bh - Math.round(8 * trackViewRoot.ks)
-                            fontPx: trackViewRoot.fs(13)
-                            text: trackViewRoot.hitName(modelData.k)
-                            active: trackEngine ? trackEngine.hitKind === modelData.k : false
-                            tone: trackViewRoot.cGold
-                            onTapped: if (trackEngine) trackEngine.hitKind = modelData.k
-                        }
-                    }
-                    Text
-                    {
-                        objectName: "hitHint"
-                        visible: hitBtn.visible && warnText.text.length === 0
-                        anchors.verticalCenter: parent.verticalCenter
-                        leftPadding: Math.round(6 * trackViewRoot.ks)
-                        width: Math.max(0, rail.width - x - verdictTools.width - Math.round(40 * trackViewRoot.ks))
-                        elide: Text.ElideRight
-                        color: hitBtn.armed ? trackViewRoot.cMute : trackViewRoot.cDim
-                        font.pixelSize: trackViewRoot.fs(15)
-                        text:
-                        {
-                            if (!hitBtn.armed) return qsTr("tap: arm a hit on the next drop")
-                            var at = trackViewRoot.nextDropBeat()
-                            var cur = trackManager ? trackManager.currentBeat : 0
-                            var when = at > 0 ? qsTr("on the DROP in %1 bars").arg(Math.max(1, Math.ceil((at - cur) / 4))) : qsTr("on the next drop")
-                            return when + "  \u00B7  " + qsTr("tap HIT ARMED again = off")
-                        }
-                    }
+                    // R452_HIT_LIVE: DROP HIT moved to LIVE, beside FLASH WHITE (Tobias 10-14)
 
                     // ---- the flag tools: a flag on the bar the track is at, the
                     //      selected flag retyped or deleted. What the operator sets
@@ -2823,7 +2835,8 @@ Rectangle
                     objectName: "blackout"
                     property bool armed: false          // this press is the one holding it
                     property bool on: trackEngine ? trackEngine.blackout : false
-                    x: liveCard.inX; y: deck.rowY(3); width: liveCard.halfW; height: liveCard.bigH
+                    // R452_HIT_LIVE: BLACKOUT on the right, beside STUTTER (Tobias 10-14)
+                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(3); width: liveCard.halfW; height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#B03030" : (boIn.down ? "#1A1A1F" : "#0A0A0C")
                     Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 120 } }     // R402_FADE
@@ -2884,7 +2897,7 @@ Rectangle
                     readonly property int tapMs: 250    // shorter than this = a tap, it locks
                     property bool on: trackEngine ? trackEngine.stutter : false
                     readonly property int rate: trackEngine ? trackEngine.stutterRate : 3
-                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(3)
+                    x: liveCard.inX; y: deck.rowY(3)          // R452_HIT_LIVE: STUTTER on the left
                     width: liveCard.halfW; height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#E0A030" : (stIn.down ? "#1A1A1F" : "#0A0A0C")
@@ -2985,6 +2998,89 @@ Rectangle
                     }
                 }
 
+                // R452_HIT_LIVE (Tobias 10-14, mockup A/B: "Drop hit skal ligge ved siden af
+                // FLASH WHITE, ligesom Stutter med samme stil for valg af flash, dark etc."):
+                // a tap on the tile arms the gold kind (the last one) or takes it back; a
+                // chip arms that kind. Lands once on the next drop and disarms (R445).
+                Rectangle
+                {
+                    id: hitTile
+                    objectName: "dropHit"
+                    readonly property bool armed: trackEngine ? trackEngine.hitKind > 0 : false
+                    readonly property int kind: trackEngine ? (trackEngine.hitKind > 0 ? trackEngine.hitKind : trackEngine.hitLast) : 1
+                    readonly property string text: armed ? qsTr("HIT ARMED") : qsTr("DROP HIT")
+                    x: liveCard.inX; y: deck.rowY(3) + liveCard.bigH + trackViewRoot.g
+                    width: liveCard.halfW; height: liveCard.bigH
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: armed ? "#E23B3B" : (hitIn.down ? "#1A1A1F" : "#0A0A0C")
+                    Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 120 } }     // R402_FADE
+                    scale: hitIn.down ? 0.975 : 1.0                                                           // R402_PRESS
+                    Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
+                    readonly property real chipH: Math.round(30 * trackViewRoot.ks)
+                    readonly property real pad: Math.round(8 * trackViewRoot.ks)
+                    readonly property color ink: armed ? "#2A0808" : "#D6D6DC"
+                    Column
+                    {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.verticalCenterOffset: -(hitTile.chipH + hitTile.pad) / 2
+                        spacing: Math.round(4 * trackViewRoot.ks)
+                        ControlIcon { anchors.horizontalCenter: parent.horizontalCenter; width: Math.round(18 * trackViewRoot.ks); height: width
+                                      kind: "bolt"; ink: hitTile.ink }
+                        Text
+                        {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: hitTile.text
+                            color: hitTile.ink
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(14)
+                            font.letterSpacing: (trackViewRoot.fs(14)) * 0.1
+                        }
+                    }
+                    TouchInput
+                    {
+                        id: hitIn
+                        onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.hitKind = hitTile.armed ? 0 : trackEngine.hitLast }
+                    }
+                    // the kind: over the tile, each chip its own finger (as STUTTER's rate)
+                    Row
+                    {
+                        id: hitChips
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: hitTile.pad
+                        spacing: Math.round(6 * trackViewRoot.ks)
+                        Repeater
+                        {
+                            model: [ { k: 1, t: qsTr("FLSH") }, { k: 2, t: qsTr("STRB") }, { k: 3, t: qsTr("DARK") } ]   // as the approved mockup
+                            Rectangle
+                            {
+                                objectName: "hitKind:" + modelData.k
+                                readonly property bool picked: hitTile.kind === modelData.k
+                                width: Math.floor((hitTile.width - 2 * hitTile.pad - 2 * hitChips.spacing) / 3)
+                                height: hitTile.chipH
+                                radius: Math.round(6 * trackViewRoot.ks)
+                                color: picked ? "#E0A030" : (hitTile.armed ? Qt.rgba(0, 0, 0, 0.22) : "#26262E")
+                                Text
+                                {
+                                    anchors.centerIn: parent
+                                    width: parent.width - 4
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: modelData.t
+                                    font.bold: true
+                                    font.pixelSize: trackViewRoot.fs(11)
+                                    fontSizeMode: Text.HorizontalFit
+                                    minimumPixelSize: 7
+                                    color: parent.picked ? "#101010" : (hitTile.armed ? "#3A0E0E" : "#9A9AA4")
+                                }
+                                TouchInput
+                                {
+                                    onPressedAt: (x, y) => { if (trackEngine) trackEngine.hitKind = modelData.k }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // FLASH WHITE: on while held. Dark with a white edge at rest - a big
                 // light tile glares in a dark booth - and white while it flashes
                 Rectangle
@@ -2992,7 +3088,9 @@ Rectangle
                     id: flashTile
                     objectName: "flash"
                     property bool on: trackEngine ? trackEngine.flashing : false
-                    x: liveCard.inX; y: deck.rowY(3) + liveCard.bigH + trackViewRoot.g; width: liveCard.inW
+                    // R452_HIT_LIVE: the right half, beside DROP HIT
+                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(3) + liveCard.bigH + trackViewRoot.g
+                    width: liveCard.halfW
                     height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#FFFFFF" : (flashIn.down ? "#34343C" : "#24242A")
@@ -3000,20 +3098,21 @@ Rectangle
                     Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                     border.width: 2
                     border.color: "#F2F2F5"
-                    Row
+                    Column
                     {
                         anchors.centerIn: parent
-                        spacing: Math.round(12 * trackViewRoot.ks)
-                        ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(24 * trackViewRoot.ks); height: width
+                        spacing: Math.round(6 * trackViewRoot.ks)
+                        ControlIcon { anchors.horizontalCenter: parent.horizontalCenter; width: Math.round(24 * trackViewRoot.ks); height: width
                                       kind: "flash"; ink: flashTile.on ? "#101010" : "#FFFFFF" }
                         Text
                         {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: qsTr("FLASH WHITE")
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            horizontalAlignment: Text.AlignHCenter
+                            text: qsTr("FLASH") + "\n" + qsTr("WHITE")      // R452_HIT_LIVE: half the width now
                             color: flashTile.on ? "#101010" : "#FFFFFF"
                             font.bold: true
-                            font.pixelSize: trackViewRoot.fs(18)
-                            font.letterSpacing: (trackViewRoot.fs(18)) * 0.14
+                            font.pixelSize: trackViewRoot.fs(16)
+                            font.letterSpacing: (trackViewRoot.fs(16)) * 0.12
                         }
                     }
                     TouchInput
@@ -3082,6 +3181,114 @@ Rectangle
                     color: trackViewRoot.cMute
                     text: trackManager ? "<font color='#CFCFD6'>" + trackManager.nextTitle + "</font>"
                                          + (trackManager.nextFirstDrop > 0 ? "  ·  " + qsTr("first drop bar") + " " + trackManager.nextFirstDrop : "") : ""
+                }
+            }
+        }
+    }
+
+    // R452_EMPTY: the (i) guide - a press anywhere else closes it (and is taken)
+    Item
+    {
+        objectName: "bltGuideCloser"
+        anchors.fill: parent
+        z: 49
+        visible: bltGuide.visible
+        TouchInput { onPressedAt: (x, y) => trackViewRoot.bltGuideOpen = false }
+    }
+    Rectangle
+    {
+        id: bltGuide
+        objectName: "bltGuide"
+        visible: trackViewRoot.bltGuideOpen && trackViewRoot.beatCount === 0 && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
+        z: 50
+        readonly property real pad: Math.round(18 * trackViewRoot.ks)
+        width: Math.min(trackViewRoot.width - 2 * pad, Math.round(470 * trackViewRoot.ks))
+        height: guideCol.implicitHeight + 2 * pad
+        // under the (i), read again when the page moves (as the PLAN card)
+        readonly property real moved: trackViewRoot.width + trackViewRoot.height + waveCard.x + waveCard.y + waveCard.width + waveCard.height + emptyRow.width
+        x:
+        {
+            var dep = moved
+            var p = bltInfo.mapToItem(trackViewRoot, bltInfo.width, 0)
+            return Math.max(pad, Math.min(trackViewRoot.width - width - pad, p.x - width + Math.round(120 * trackViewRoot.ks)))
+        }
+        y:
+        {
+            var dep = moved
+            var p = bltInfo.mapToItem(trackViewRoot, 0, bltInfo.height)
+            return Math.max(pad, Math.min(trackViewRoot.height - height - pad, p.y + Math.round(10 * trackViewRoot.ks)))
+        }
+        radius: Math.round(10 * trackViewRoot.ks)
+        color: "#1A1A20"
+        TouchInput { onReleasedAt: (x, y, inside) => trackViewRoot.bltGuideOpen = false }
+        Column
+        {
+            id: guideCol
+            x: bltGuide.pad; y: bltGuide.pad
+            width: bltGuide.width - 2 * bltGuide.pad
+            spacing: Math.round(12 * trackViewRoot.ks)
+            Text
+            {
+                text: qsTr("HOW TO GET THE TRACKS IN")
+                color: trackViewRoot.cGold
+                font.bold: true
+                font.pixelSize: trackViewRoot.fs(13)
+                font.letterSpacing: trackViewRoot.fs(13) * 0.08
+            }
+            Repeater
+            {
+                model: [
+                    qsTr("<b>Beat Link Trigger has to run.</b> Its icon sits in the system tray, bottom right by the clock - maybe hidden under the ^ arrow."),
+                    qsTr("<b>Load and play a track on a CDJ.</b> It shows up here within a second or two."),
+                    qsTr("<b>Still nothing?</b> Right-click the tray icon, quit Beat Link Trigger and start it again from the Start menu.") ]
+                Row
+                {
+                    spacing: Math.round(10 * trackViewRoot.ks)
+                    Rectangle
+                    {
+                        width: Math.round(22 * trackViewRoot.ks); height: width; radius: width / 2
+                        color: "#2C2C34"
+                        Text { anchors.centerIn: parent; text: String(index + 1); color: trackViewRoot.cText; font.bold: true; font.pixelSize: trackViewRoot.fs(12) }
+                    }
+                    Text
+                    {
+                        width: guideCol.width - Math.round(32 * trackViewRoot.ks)
+                        wrapMode: Text.WordWrap
+                        textFormat: Text.StyledText
+                        text: modelData
+                        color: trackViewRoot.cMute
+                        font.pixelSize: trackViewRoot.fs(13)
+                    }
+                }
+            }
+            // where to look: the tray by the clock (a neutral deck icon, not BLT's logo)
+            Row
+            {
+                spacing: Math.round(10 * trackViewRoot.ks)
+                Rectangle
+                {
+                    id: trayBox
+                    width: Math.round(150 * trackViewRoot.ks); height: Math.round(28 * trackViewRoot.ks)
+                    radius: Math.round(4 * trackViewRoot.ks)
+                    color: "#0C0C0F"
+                    Row
+                    {
+                        anchors.left: parent.left; anchors.leftMargin: Math.round(10 * trackViewRoot.ks)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Math.round(12 * trackViewRoot.ks)
+                        Text { anchors.verticalCenter: parent.verticalCenter; text: "^"; color: trackViewRoot.cMute; font.bold: true; font.pixelSize: trackViewRoot.fs(14) }
+                        ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(16 * trackViewRoot.ks); height: width; kind: "deck"; ink: trackViewRoot.cGold }
+                        Text { anchors.verticalCenter: parent.verticalCenter; text: Qt.formatTime(new Date(), "hh:mm"); color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(11) }
+                    }
+                }
+                Text
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: guideCol.width - trayBox.width - Math.round(10 * trackViewRoot.ks)
+                    wrapMode: Text.WordWrap
+                    text: qsTr("the tray, bottom right - tap ^ to see every icon")
+                    color: trackViewRoot.cDim
+                    font.pixelSize: trackViewRoot.fs(12)
                 }
             }
         }
@@ -3458,7 +3665,7 @@ Rectangle
                 model: [
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track (intro, break, build, drop) at Link's tempo or 128 BPM, on a loop, to try the page and the rig. Nothing is learned or logged. <b>STOP TEST</b> ends it; a real track from the CDJs takes over by itself." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG.<br><b>DROP HIT</b> arms a hit on the next drop: <b>FLASH</b> (a white beat), <b>STROBE</b> (the strobes flat out for the first bar) or <b>DARK \u2192 BANG</b> (black for two beats, then the flash). It lands once, on the drop's first beat, and switches itself off - tap <b>HIT ARMED</b> to take it back." },
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG.<br><b>DROP HIT</b> arms a hit on the next drop: <b>FLASH</b> (a white beat), <b>STROBE</b> (the strobes flat out for the first bar) or <b>DARK \u2192 BANG</b> (black for two beats, then the flash). It lands once, on the drop's first beat, and switches itself off - tap <b>HIT ARMED</b> to take it back. It sits in LIVE beside <b>FLASH WHITE</b>; a tap on a kind arms that one." },
                     { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column
