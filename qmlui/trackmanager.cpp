@@ -232,7 +232,7 @@ void TrackManager::slotDisconnected()
     sock->deleteLater();
 
     // only the last client leaving is a broken link
-    if (m_playing && m_clients.isEmpty() && m_linkStale == false)
+    if (m_playing && m_clients.isEmpty() && m_linkStale == false && m_testTrack == false)   // R452_TT_STALE2
     {
         m_linkStale = true;
         emit linkChanged();
@@ -1008,7 +1008,8 @@ void TrackManager::slotEnergyTick()
     // seconds is a broken link, not a pause
     // no client at all is a broken link right away
     bool stale = m_playing && ((m_lastPosMs > 0
-              && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 4000) || m_clients.isEmpty());
+              && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 4000)
+             || (m_clients.isEmpty() && m_testTrack == false));   // R452_TT_STALE1: the test track needs no BLT
     if (stale != m_linkStale)
     {
         m_linkStale = stale;
