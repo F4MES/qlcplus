@@ -1679,31 +1679,86 @@ Rectangle
                     color: trackViewRoot.cMute
                     font.pixelSize: trackViewRoot.fs(15)
                 }
-                // R450_TEST_TRACK (Tobias 10-14, mockup 3): a made-up track to try
-                // the page and the rig without the CDJs
-                Btn
+            }
+
+            // R451_TEST_HOLD (Tobias 10-14: "meget mindre og rykkes helt ned i venstre
+            // hjoerne ... saa det ikke er hvemsomhelst der kan trykke paa den" - mockup
+            // approved): small and dim in the corner, held 1.5 s to start (it fills
+            // with gold); a short tap only shows how. R450's test track behind it.
+            Rectangle
+            {
+                id: testHold
+                objectName: "testTrack"
+                z: 10                            // over the empty rail at the card's foot
+                visible: trackViewRoot.beatCount === 0 && !!trackManager
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: Math.round(12 * trackViewRoot.ks)
+                anchors.bottomMargin: Math.round(12 * trackViewRoot.ks)
+                width: Math.round(88 * trackViewRoot.ks)
+                height: Math.round(30 * trackViewRoot.ks)
+                radius: Math.round(5 * trackViewRoot.ks)
+                color: trackViewRoot.cBtn
+                property real progress: 0
+                property bool hint: false
+                Rectangle
                 {
-                    objectName: "testTrack"
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    visible: !!trackManager
-                    width: Math.round(240 * trackViewRoot.ks)
-                    height: Math.round(58 * trackViewRoot.ks)
-                    icon: "play"
-                    text: qsTr("TEST TRACK")
-                    active: true
-                    tone: trackViewRoot.cGold
-                    fontPx: trackViewRoot.fs(18)
-                    onTapped: if (trackManager) trackManager.startTestTrack()
+                    objectName: "testTrackFill"
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: parent.width * testHold.progress
+                    radius: parent.radius
+                    color: trackViewRoot.cGold
                 }
+                Row
+                {
+                    anchors.centerIn: parent
+                    spacing: Math.round(6 * trackViewRoot.ks)
+                    readonly property color ink: testHold.progress > 0.5 ? "#1A1408" : trackViewRoot.cDim
+                    ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(12 * trackViewRoot.ks); height: width; kind: "play"; ink: parent.ink }
+                    Text
+                    {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: testHoldIn.down ? qsTr("HOLD") : qsTr("TEST")
+                        color: parent.ink
+                        font.bold: true
+                        font.pixelSize: trackViewRoot.fs(12)
+                        font.letterSpacing: trackViewRoot.fs(12) * 0.08
+                    }
+                }
+                NumberAnimation { id: testFill; target: testHold; property: "progress"; from: 0; to: 1; duration: 1500 }
+                Timer { id: testHintOff; interval: 3000; onTriggered: testHold.hint = false }
+                TouchInput
+                {
+                    id: testHoldIn
+                    holdEnabled: true
+                    holdMs: 1500
+                    onPressedAt: { testHold.hint = true; testHintOff.stop(); testFill.restart() }
+                    onHeld: { testFill.stop(); testHold.progress = 0; testHold.hint = false; if (trackManager) trackManager.startTestTrack() }
+                    onReleasedAt: (x, y, inside) => { testFill.stop(); testHold.progress = 0; testHintOff.restart() }
+                    onCanceled: { testFill.stop(); testHold.progress = 0; testHintOff.restart() }
+                }
+            }
+            Rectangle
+            {
+                objectName: "testTrackHint"
+                z: 10
+                visible: testHold.visible && testHold.hint
+                anchors.left: testHold.left
+                anchors.bottom: testHold.top
+                anchors.bottomMargin: Math.round(6 * trackViewRoot.ks)
+                width: testHintText.implicitWidth + Math.round(18 * trackViewRoot.ks)
+                height: Math.round(26 * trackViewRoot.ks)
+                radius: Math.round(4 * trackViewRoot.ks)
+                color: "#2A2418"
                 Text
                 {
-                    objectName: "testTrackHint"
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    visible: !!trackManager
-                    text: qsTr("a made-up track at Link's tempo (or 128 BPM): intro - break - build - drop, on a loop") + "  \u00B7  "
-                          + qsTr("nothing is learned or logged") + "  \u00B7  " + qsTr("a real track from the CDJs takes over")
-                    color: trackViewRoot.cDim
-                    font.pixelSize: trackViewRoot.fs(13)
+                    id: testHintText
+                    anchors.centerIn: parent
+                    text: qsTr("hold 1.5 s to play a test track - nothing is learned, a real track takes over")
+                    color: trackViewRoot.cGold
+                    font.pixelSize: trackViewRoot.fs(12)
                 }
             }
 
@@ -3402,7 +3457,7 @@ Rectangle
             {
                 model: [
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
-                    { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track.<br><b>TEST TRACK</b> - with no track from the CDJs: a made-up track (intro, break, build, drop) at Link's tempo or 128 BPM, on a loop, to try the page and the rig. Nothing is learned or logged. <b>STOP TEST</b> ends it; a real track from the CDJs takes over by itself." },
+                    { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track (intro, break, build, drop) at Link's tempo or 128 BPM, on a loop, to try the page and the rig. Nothing is learned or logged. <b>STOP TEST</b> ends it; a real track from the CDJs takes over by itself." },
                     { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG.<br><b>DROP HIT</b> arms a hit on the next drop: <b>FLASH</b> (a white beat), <b>STROBE</b> (the strobes flat out for the first bar) or <b>DARK \u2192 BANG</b> (black for two beats, then the flash). It lands once, on the drop's first beat, and switches itself off - tap <b>HIT ARMED</b> to take it back." },
                     { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
