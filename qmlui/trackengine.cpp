@@ -10657,6 +10657,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
     }
+    // R446_DROP_VARIETY (Tobias 10-13, "A+B"): not the last drop again, and in
+    // the same track not opened by the same group - inside the budget above
+    if (isDrop && hold == false && isCalm == false && m_forceOn == false)
+        dropVariety(priority, effects, base, strobeLead);
     // Runde 235: one laser type at a time below the top of the fader - the
     // bars or the animation laser, whichever the order put first; the next
     // group in line takes the other's place. On 25-26 Sep Tobias switched a
@@ -11330,6 +11334,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         QString lead = leads.isEmpty() ? QString() : leads.first();
         if (leads.count() >= 2 && rng->bounded(100) >= 55)
             lead = leads.at(1 + int(rng->bounded(int(leads.count()) - 1)));
+        // R446_DROP_VARIETY (B): not the lead the last drop of this track opened with
+        if (isDrop && leads.count() >= 2 && lead == m_prevDropLead && m_prevDropTitle == m_trackTitle)
+        {
+            foreach (const QString &other, leads)
+            {
+                if (other != lead)
+                {
+                    lead = other;
+                    break;
+                }
+            }
+        }
         compositionChanged = lead != m_rhythmLead || roleContextChanged;
         if (compositionChanged)
             m_sectionMotion.clear(); // programmes must obey the new roles too
@@ -13731,6 +13747,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // that has just dropped out sitting at full for a beat
     m_cast = castSet;
     planRecord(secStart, castSet);       // R443_PLAN_LANE: what this section lit
+    dropRemember(isDrop, castSet);       // R446_DROP_VARIETY: the drop it landed as
 
     applyGroupOff();
     // (driveStrobe moved below the hits, runde 220)
@@ -22771,5 +22788,156 @@ void TrackEngine::hitReset()
     {
         m_hitKind = 0;
         emit hitChanged();
+    }
+}
+/* =====================================================================
+ *  DROP VARIETY (runde 446, backlog 10/8) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/dropvariety.inc.cpp.
+ *
+ *  Tobias, 2026-10-13: "Drops A+B (husk energi-slideren - det skal stadig
+ *  passe)". Measured in runde 445 at 98 %: 72 % of the drops were the wash,
+ *  the strobes and the bars (with or without the Minis), and 8 drops in 28
+ *  had exactly the cast of the drop before.
+ *
+ *  A  never the same drop twice running: when the cast a drop would land
+ *     with is exactly the last drop's, one group gives its place to the next
+ *     in the drawn order - the same number of groups, so the ENERGY slider
+ *     keeps deciding how big the drop is (a Mini never steps in: it comes
+ *     along free, and the drop would grow). Only groups the slider already
+ *     lets in are offered (the pool: the strobes from 30 %, the animation
+ *     laser from 70 %), and the one-laser rule still runs after it. Where
+ *     the slider leaves no other real group (55 %: the strobes and the bars),
+ *     the Minis - who use no place - come along or sit it out instead.
+ *  B  the next drop in the same track does not open with the group that
+ *     opened the last one: that group gives up the first effect place
+ *     (behind the strobes' lead) and is not drawn as the rhythm lead again.
+ *  Neither touches his own set (RIG / PLAN), HOLD or CALM.
+ * ===================================================================== */
+
+QStringList TrackEngine::dropPicks(const QStringList &priority, int effects) const
+{
+    // what the cast loop below would take from this order, with the
+    // one-laser rule that runs after this - the base is added by the caller
+    QStringList out;
+    bool bars = false, ani = false;
+    int used = 0;
+    for (int i = 0; i < priority.count() && used < effects; i++)
+    {
+        const QString &key = priority.at(i);
+        const TrackGroup &g = m_groups.value(key);
+        const bool isBars = g.lasers && g.patternDevice == false;
+        if (m_oneLaser && ((isBars && ani) || (g.patternDevice && bars)))
+            continue;
+        bars = bars || isBars;
+        ani = ani || g.patternDevice;
+        out << key;
+        if (smallWash(key) == false)
+            used++;
+    }
+    return out;
+}
+
+static QStringList dropSetOf(const QStringList &picks, const QString &base)
+{
+    QStringList s = picks;
+    if (base.isEmpty() == false && s.contains(base) == false)
+        s << base;
+    s.sort();
+    return s;
+}
+
+void TrackEngine::dropVariety(QStringList &priority, int effects, const QString &base, bool strobeFirst)
+{
+    if (priority.count() < 2 || effects <= 0)
+        return;
+    const int first = (strobeFirst && m_groups.value(priority.first()).strobes) ? 1 : 0;
+    // ---- B: the same track's next drop opens with another group
+    if (m_prevDropTitle == m_trackTitle && m_prevDropLead.isEmpty() == false
+        && first < priority.count() && priority.at(first) == m_prevDropLead)
+    {
+        for (int j = first + 1; j < priority.count(); j++)
+        {
+            const TrackGroup &g = m_groups.value(priority.at(j));
+            if (smallWash(priority.at(j)) || g.strobes)
+                continue;
+            priority.move(j, first);
+            break;
+        }
+    }
+    // ---- A: never the last drop's cast again
+    if (m_prevDropSet.isEmpty())
+        return;
+    QStringList picks = dropPicks(priority, effects);
+    if (dropSetOf(picks, base) != m_prevDropSet)
+        return;
+    // the last place that counts gives way to the first group in the order
+    // that would make it another drop
+    int counted = 0;
+    foreach (const QString &key, picks)
+        if (smallWash(key) == false)
+            counted++;
+    int last = -1;
+    for (int i = priority.count() - 1; i >= 0; i--)
+        if (picks.contains(priority.at(i)) && smallWash(priority.at(i)) == false
+            && (i != 0 || first == 0 || counted == 1))   // the strobes' lead keeps its place - unless it is the whole drop
+        {
+            last = i;
+            break;
+        }
+    if (last < 0)
+        return;
+    // a real group for a real group: a Mini moved up would come along free
+    // and make the drop bigger than the slider asks for
+    for (int j = last + 1; j < priority.count(); j++)
+    {
+        if (smallWash(priority.at(j)))
+            continue;
+        QStringList trial = priority;
+        trial.move(j, last);
+        const QStringList tp = dropPicks(trial, effects);
+        if (tp.count() == picks.count() && dropSetOf(tp, base) != m_prevDropSet)
+        {
+            priority = trial;
+            return;
+        }
+    }
+    // No other real group the slider lets in (at 55 % the pool is the strobes
+    // and the bars - the animation laser waits for 70 %): the Minis, which
+    // use no place, come along this time or sit this one out
+    for (int j = 0; j < priority.count(); j++)
+    {
+        if (smallWash(priority.at(j)) == false)
+            continue;
+        QStringList trial = priority;
+        if (picks.contains(priority.at(j)))
+            trial.move(j, trial.count() - 1);        // out of reach of the budget
+        else
+            trial.move(j, 0);                        // in front: free, it comes along
+        if (dropSetOf(dropPicks(trial, effects), base) != m_prevDropSet)
+        {
+            priority = trial;
+            return;
+        }
+    }
+}
+
+void TrackEngine::dropRemember(bool isDrop, const QSet<QString> &castSet)
+{
+    // the drop's cast where it lands (and the lead it opened with) - the
+    // comparison for the NEXT drop, so it moves over when this one is over
+    if (isDrop && m_dropArrivedNow)
+    {
+        m_thisDropSet = castSet.values();
+        m_thisDropSet.sort();
+        m_thisDropLead = m_rhythmLead;
+        m_thisDropTitle = m_trackTitle;
+    }
+    else if (isDrop == false && m_thisDropSet.isEmpty() == false)
+    {
+        m_prevDropSet = m_thisDropSet;
+        m_prevDropLead = m_thisDropLead;
+        m_prevDropTitle = m_thisDropTitle;
+        m_thisDropSet.clear();
+        m_thisDropLead.clear();
     }
 }
