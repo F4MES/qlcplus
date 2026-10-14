@@ -50,6 +50,16 @@ MasterTimerPrivate::~MasterTimerPrivate()
     stop();
 }
 
+void MasterTimerPrivate::start(Priority priority)
+{
+    // B1_MASTERTIMER_RACE: the thread used to set m_run = true itself when it
+    // got going - a stop() before that was undone, and stop() waited for ever
+    if (isRunning() == true)
+        return;              /* Don't start another thread */
+    m_run = true;
+    QThread::start(priority);
+}
+
 void MasterTimerPrivate::stop()
 {
     m_run = false;
@@ -82,10 +92,9 @@ int MasterTimerPrivate::compareTime(struct timespec *time1, struct timespec *tim
 
 void MasterTimerPrivate::run()
 {
-    /* Don't start another thread */
-    if (m_run == true)
-        return;
-
+    /* B1_MASTERTIMER_RACE: start() has set m_run (and refuses a second
+       thread); a stop() before this point has cleared it, and the loop
+       below never runs */
     MasterTimer* mt = qobject_cast <MasterTimer*> (parent());
     Q_ASSERT(mt != NULL);
 
@@ -120,10 +129,6 @@ void MasterTimerPrivate::run()
         qWarning() << Q_FUNC_INFO << "Unable to get the time accurately:"
                    << strerror(errno) << "- Stopping MasterTimerPrivate";
         m_run = false;
-    }
-    else
-    {
-        m_run = true;
     }
 
     while (m_run == true)

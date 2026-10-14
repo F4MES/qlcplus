@@ -22,6 +22,7 @@
 #define MASTERTIMER_PRIVATE_H
 
 #include <QThread>
+#include <atomic>
 
 #if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
 #include <mach/clock.h>
@@ -40,6 +41,9 @@ public:
     MasterTimerPrivate(MasterTimer* masterTimer);
     ~MasterTimerPrivate();
 
+    /** B1_MASTERTIMER_RACE: m_run is set here, before the thread runs, so a
+     *  stop() that comes before the thread has started is never undone */
+    void start(Priority priority = InheritPriority);
     void stop();
 
 private:
@@ -51,7 +55,7 @@ private:
 #endif
 
 private:
-    bool m_run;
+    std::atomic<bool> m_run;   // B1_MASTERTIMER_RACE: shared by two threads
 #if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
     clock_serv_t cclock;
 #endif
