@@ -71,6 +71,13 @@ Chaser::Chaser(Doc *doc)
 
 Chaser::~Chaser()
 {
+    // B1_CHASER_RUNNER: the runner is a QObject child, and QObject deletes
+    // children only after this destructor has freed m_steps - the runner's
+    // last clearRunningList() then read a freed step list (heap corruption,
+    // the hanging Linux CI job). It goes while the Chaser is whole.
+    QMutexLocker runnerLocker(&m_runnerMutex);
+    delete m_runner;
+    m_runner = NULL;
 }
 
 QIcon Chaser::getIcon() const
