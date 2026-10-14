@@ -34,6 +34,7 @@
 #include "scene.h"
 #include <QRegularExpression>
 #include <algorithm>
+#include <cmath>                   // R450_TT_CMATH
 
 #define TRACK_INTENSITY_ATTR 0
 
@@ -324,6 +325,12 @@ void TrackManager::handleLine(const QByteArray &line)
     QJsonObject obj = json.object();
     QString evt = obj.value(QStringLiteral("evt")).toString();
 
+    // R450_TT_BLT: the test track plays - BLT's positions are not its; a real
+    // track from BLT stops the test and plays
+    if (m_testTrack && evt == QStringLiteral("pos"))
+        return;
+    if (m_testTrack && evt == QStringLiteral("track"))
+        stopTestTrack();
     if (evt == QStringLiteral("track"))
         handleTrack(obj);
     else if (evt == QStringLiteral("pos"))
@@ -1326,6 +1333,167 @@ void TrackManager::moveMarker(int index, int beat)
     m_markersManual = true;              // FJ_MOVE_MANUAL_FIRST: before updateState() reads it
     updateState();
     sendMarkers(true);                   // let BLT remember the correction
+}
+
+// R450_TT_CPP
+/* =====================================================================
+ *  TEST TRACK (runde 450) - put into trackmanager.cpp by
+ *  feature_trackview_engine.py from track_runtime/testtrack.inc.cpp.
+ *
+ *  Tobias, 2026-10-14: "Lavede vi paa et tidspunkt ikke en knap hvor jeg
+ *  kunne 'loade' et fiktivt track saa jeg kunne teste uden at skulle loade
+ *  paa CDJS?" - mockup 3+4 approved: the button in the empty waveform,
+ *  learns nothing, a real track takes over, a loop, lights on the rig.
+ *
+ *  A made-up track, played into the same two doors BLT uses (handleTrack,
+ *  handlePosition), so the page and the engine cannot tell it from a deck -
+ *  sim_track.py's track, in QLC+ itself. While it plays:
+ *    - BLT's position messages are not listened to; a TRACK from BLT stops
+ *      the test and is played (the real one takes over)
+ *    - nothing is learned or logged (TrackEngine::setTestTrack - the
+ *      verdicts, the section and colour taste, the track memory, the drop
+ *      punch, the tracklog), and nothing goes back to BLT's cache
+ *    - the tempo is Link's when the CDJs are on it (READ only - we never
+ *      write to Link), else 128 BPM
+ *    - it loops: after the outro it starts from the top, until STOP TEST
+ * ===================================================================== */
+
+bool TrackManager::testTrack() const { return m_testTrack; }
+
+qreal TrackManager::testBpm() const { return m_testTrack ? m_testBpm : 0.0; }
+
+void TrackManager::startTestTrack()
+{
+    if (m_testTrack || (m_beatCount > 0 && m_playing))
+        return;                          // a real track is playing: it stays
+
+    qreal bpm = 128.0;
+    MasterTimer *mt = m_doc != nullptr ? m_doc->masterTimer() : nullptr;
+    if (mt != nullptr && mt->linkEnabled() && mt->linkPeers() > 0
+        && mt->linkBpm() >= 70.0 && mt->linkBpm() <= 180.0)
+        bpm = mt->linkBpm();             // what the engine times on - read, never written
+
+    // 104 bars (3:15 at 128): two drops, so DROP HIT and the drops' variety show
+    static const struct { const char *type; int bars; double energy; } plan[] = {
+        { "intro", 8, 0.40 }, { "normal", 16, 0.60 }, { "break", 8, 0.30 }, { "build", 8, 0.70 },
+        { "drop", 16, 0.95 }, { "normal", 8, 0.60 }, { "break", 8, 0.30 }, { "build", 8, 0.70 },
+        { "drop", 16, 0.95 }, { "outro", 8, 0.40 } };
+    // the curves BLT would hear (sim_track.py's): drops loud with a kick on every
+    // beat, breaks without the low end, builds ramping the highs
+    quint32 seed = 450u;                 // the same track every time
+    auto wobble = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return (int((seed >> 8) % 1001u) - 500) / 10000.0;   // +-0.05
+    };
+    auto byte = [](double x) { return int(qRound(255.0 * qBound(0.0, x, 1.0))); };
+    QJsonArray markers, level, low, high, kick;
+    int beat = 1;
+    for (const auto &sec : plan)
+    {
+        const QString type = QString::fromLatin1(sec.type);
+        QJsonObject m;
+        m.insert(QStringLiteral("beat"), beat);
+        m.insert(QStringLiteral("type"), type);
+        m.insert(QStringLiteral("energy"), sec.energy);
+        markers.append(m);
+        const int n = sec.bars * 4;
+        for (int i = 0; i < n; i++)
+        {
+            const double t = i / double(qMax(1, n - 1));
+            const double w = wobble();
+            double lv, lo, hi, kk;
+            if (type == QLatin1String("drop"))
+            {
+                lv = 0.90; lo = 0.85; hi = 0.65; kk = (i % 2 == 0) ? 0.90 : 0.70;
+            }
+            else if (type == QLatin1String("build"))
+            {
+                lv = 0.55 + 0.35 * t; lo = 0.30 + 0.30 * t; hi = 0.40 + 0.50 * t;
+                kk = (i % 2 == 0) ? 0.20 + 0.60 * t : 0.10 + 0.30 * t;
+            }
+            else if (type == QLatin1String("normal"))
+            {
+                lv = 0.65; lo = 0.60; hi = 0.45; kk = (i % 2 == 0) ? 0.60 : 0.30;
+            }
+            else                         // break, intro, outro
+            {
+                lv = 0.45 - 0.10 * t; lo = 0.15; hi = 0.40; kk = 0.05;
+            }
+            lv += 0.04 * std::sin(i * 1.5707963267948966);   // a little swell in each bar
+            level.append(byte(lv + w));
+            low.append(byte(lo + w));
+            high.append(byte(hi + w));
+            kick.append(byte(kk + w * 0.5));
+        }
+        beat += n;
+    }
+
+    QJsonObject track;
+    track.insert(QStringLiteral("evt"), QStringLiteral("track"));
+    track.insert(QStringLiteral("title"), tr("Test track"));
+    track.insert(QStringLiteral("bpm"), bpm);
+    track.insert(QStringLiteral("beats"), beat - 1);
+    track.insert(QStringLiteral("duration"), int((beat - 1) * 60000.0 / bpm));
+    track.insert(QStringLiteral("waveform"), level);
+    track.insert(QStringLiteral("low"), low);
+    track.insert(QStringLiteral("high"), high);
+    track.insert(QStringLiteral("kick"), kick);
+    track.insert(QStringLiteral("manual"), false);
+    track.insert(QStringLiteral("markers"), markers);
+    track.insert(QStringLiteral("analysis"), 10);   // the flags are final: no second pass
+    track.insert(QStringLiteral("downbeat"), 0);
+    track.insert(QStringLiteral("key"), QStringLiteral("Am"));
+
+    m_testBpm = bpm;
+    m_testBeats = beat - 1;
+    m_testBeat = 0;
+    m_testTicks = 0;
+    m_testTrack = true;                  // before the track: trackLoaded() learns nothing either
+    if (m_engine != nullptr)
+        m_engine->setTestTrack(true);
+    emit testTrackChanged();
+    handleTrack(track);
+    m_testClock.start();
+    testStep(++m_testSerial);
+}
+
+void TrackManager::testStep(quint32 serial)
+{
+    if (m_testTrack == false || serial != m_testSerial)
+        return;                          // stopped, or another test since
+    // the loop: after the last beat, the top again (a DJ cueing back)
+    m_testBeat = m_testBeat >= m_testBeats ? 1 : m_testBeat + 1;
+    const qreal beatMs = 60000.0 / m_testBpm;
+    QJsonObject pos;
+    pos.insert(QStringLiteral("evt"), QStringLiteral("pos"));
+    pos.insert(QStringLiteral("beat"), m_testBeat);
+    pos.insert(QStringLiteral("playing"), true);
+    pos.insert(QStringLiteral("time"), int((m_testBeat - 1) * beatMs));
+    pos.insert(QStringLiteral("bpm"), m_testBpm);
+    handlePosition(pos);
+    // on a clock of its own: the next beat is due n beats after the start,
+    // so a late beat does not push every later one
+    m_testTicks++;
+    const qint64 due = qint64(m_testTicks * beatMs);
+    const int wait = int(qMax<qint64>(1, due - m_testClock.elapsed()));
+    QTimer::singleShot(wait, Qt::PreciseTimer, this, [this, serial]() { testStep(serial); });
+}
+
+void TrackManager::stopTestTrack()
+{
+    if (m_testTrack == false)
+        return;
+    m_testSerial++;                      // the beat on its way does nothing
+    clear();                             // the page empty again: TEST TRACK comes back
+    m_stopSinceMs = 0;
+    m_lastEngineBeat = -1;
+    // nothing playing: the start scene, as after a track (still not learned from)
+    if (m_engine != nullptr && m_autoRun && m_roleMode)
+        m_engine->idle();
+    m_testTrack = false;
+    if (m_engine != nullptr)
+        m_engine->setTestTrack(false);
+    emit testTrackChanged();
 }
 
 void TrackManager::clear()
@@ -2343,6 +2511,8 @@ void TrackManager::nextSection(int beat, QString &state, int &beatsToNext) const
 
 void TrackManager::sendMarkers(bool manual)
 {
+    if (m_testTrack)
+        return;                          // R450_TT_NOCACHE: BLT never caches the made-up track
     // The operator moved a flag. Tell BLT, so the correction is cached with
     // the track and comes back right the next time it is played.
     QJsonArray arr;
@@ -2710,6 +2880,8 @@ void TrackManager::markersEdited()
 
 void TrackManager::learnFromFlag(const QString &type, int beat, bool added)
 {
+    if (m_testTrack)
+        return;                          // R450_TT_NOLEARN: its flags teach nothing
     // The operator is the teacher. A drop they add at a soft kick lowers
     // what the second pass demands of a drop; a drop they delete at a hard
     // kick raises it. Breaks the other way round. Small steps, remembered.
