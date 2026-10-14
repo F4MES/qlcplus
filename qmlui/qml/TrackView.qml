@@ -69,6 +69,7 @@ Rectangle
     readonly property color cLine:   "#2E2E36"
 
     property int beatCount: trackManager ? trackManager.beatCount : 0
+    readonly property bool testOn: !!trackManager && trackManager.testTrack === true   // R450_TEST_TRACK
     property int currentBeat: trackManager ? trackManager.currentBeat : 0
     property string liveState: trackManager ? trackManager.currentState : "normal"
     property var states: [ "normal", "break", "build", "drop" ]
@@ -432,7 +433,8 @@ Rectangle
             } else if (kind === "setupSwitch") {
                 circle(12,12,6); circle(12,12,2)
                 for(var j=0;j<8;j++){var b=j*Math.PI/4;line(12+6*Math.cos(b),12+6*Math.sin(b),12+9*Math.cos(b),12+9*Math.sin(b))}
-            } else if (kind === "showSwitch") { c.fillRect(5,5,14,14) }
+            } else if (kind === "showSwitch" || kind === "stop") { c.fillRect(5,5,14,14) }
+            else if (kind === "play") { c.beginPath(); c.moveTo(7,4); c.lineTo(20,12); c.lineTo(7,20); c.closePath(); c.fill() }   // R450_TEST_TRACK
             else if (kind === "laser") { c.strokeRect(3,18,18,4); line(5,15,2,4); line(10,15,8,2); line(15,15,16,2); line(20,15,23,4) }
             else if (kind === "strobe") { c.strokeRect(3,2,18,20); circle(8,7,2); circle(16,7,2); circle(8,17,2); circle(16,17,2) }
             else if (kind === "eyes") { circle(12,6,5); circle(6,17,5); circle(18,17,5); circle(12,6,1.5); circle(6,17,1.5); circle(18,17,1.5) }
@@ -767,17 +769,43 @@ Rectangle
             {
                 anchors.left: sectionPill.right
                 anchors.leftMargin: Math.round(22 * trackViewRoot.ks)
-                anchors.right: oldShowChip.visible ? oldShowChip.left : statusRight.left
+                anchors.right: testStop.visible ? testStop.left : (oldShowChip.visible ? oldShowChip.left : statusRight.left)
                 anchors.rightMargin: Math.round(22 * trackViewRoot.ks)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 3
-                Text
+                Row
                 {
                     width: parent.width
-                    elide: Text.ElideRight
-                    text: trackManager && trackManager.title !== "" ? trackManager.title : qsTr("No track loaded")
-                    color: trackViewRoot.cText
-                    font.pixelSize: trackViewRoot.fs(23)
+                    spacing: Math.round(12 * trackViewRoot.ks)
+                    Text
+                    {
+                        width: Math.min(implicitWidth, parent.width - (testChip.visible ? testChip.width + parent.spacing : 0))
+                        elide: Text.ElideRight
+                        text: trackManager && trackManager.title !== "" ? trackManager.title : qsTr("No track loaded")
+                        color: trackViewRoot.cText
+                        font.pixelSize: trackViewRoot.fs(23)
+                    }
+                    // R450_TEST_TRACK: the made-up track says so
+                    Rectangle
+                    {
+                        id: testChip
+                        objectName: "testChip"
+                        visible: trackViewRoot.testOn
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: testChipText.implicitWidth + Math.round(20 * trackViewRoot.ks)
+                        height: Math.round(28 * trackViewRoot.ks)
+                        radius: Math.round(5 * trackViewRoot.ks)
+                        color: trackViewRoot.cGold
+                        Text
+                        {
+                            id: testChipText
+                            anchors.centerIn: parent
+                            text: qsTr("TEST") + " \u00B7 " + (trackManager ? Math.round(trackManager.testBpm) : 0) + " BPM"
+                            color: "#1A1408"
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(14)
+                        }
+                    }
                 }
                 Text
                 {
@@ -797,6 +825,40 @@ Rectangle
                     color: nm === null ? trackViewRoot.cDim : trackViewRoot.markerColor(nm.type)
                     font.pixelSize: trackViewRoot.fs(15)
                 }
+            }
+
+            // R450_TEST_TRACK (mockup 4): STOP TEST while the made-up track plays
+            Rectangle
+            {
+                id: testStop
+                objectName: "testStop"
+                visible: trackViewRoot.testOn
+                anchors.right: oldShowChip.visible ? oldShowChip.left : statusRight.left
+                anchors.rightMargin: Math.round(22 * trackViewRoot.ks)
+                anchors.verticalCenter: parent.verticalCenter
+                width: testStopRow.implicitWidth + Math.round(44 * trackViewRoot.ks)
+                height: Math.round(trackViewRoot.topH * 0.70)
+                radius: Math.round(8 * trackViewRoot.ks)
+                color: testStopIn.down ? "#4A3A18" : "#2A2418"
+                border.width: 2
+                border.color: trackViewRoot.cGold
+                Row
+                {
+                    id: testStopRow
+                    anchors.centerIn: parent
+                    spacing: Math.round(12 * trackViewRoot.ks)
+                    ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(18 * trackViewRoot.ks); height: width; kind: "stop"; ink: trackViewRoot.cGold }
+                    Text
+                    {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("STOP TEST")
+                        color: trackViewRoot.cGold
+                        font.bold: true
+                        font.pixelSize: trackViewRoot.fs(16)
+                        font.letterSpacing: trackViewRoot.fs(16) * 0.06
+                    }
+                }
+                TouchInput { id: testStopIn; onReleasedAt: (x, y, inside) => { if (inside && trackManager) trackManager.stopTestTrack() } }
             }
 
             // R436_SHOW_CHECK (mock 7b): after CONTINUE ANYWAY, until the show file
@@ -880,6 +942,7 @@ Rectangle
                               + "  ·  " + (trackManager && trackManager.engineTempo !== undefined ? trackManager.engineTempo.toFixed(1) : "0") + " BPM"
                               + (trackManager && trackManager.tempoSource ? "  ·  " + trackManager.tempoSource : "")
                               + "  ·  " + (trackManager && trackManager.connected ? qsTr("BLT ok") : qsTr("no BLT"))
+                              + (trackViewRoot.testOn ? "  ·  " + qsTr("TEST") : "")   // R450_TEST_TRACK
                         color: trackManager && trackManager.playing
                                ? (trackManager.tempoSource === "LINK" ? "#59C36A" : "#E3B44F")
                                : trackViewRoot.cDim
@@ -1603,13 +1666,45 @@ Rectangle
                 }
             }
 
-            Text
+            Column
             {
+                objectName: "emptyTrack"
                 anchors.centerIn: wfCanvas
                 visible: trackViewRoot.beatCount === 0
-                text: qsTr("Waiting for track data from Beat Link Trigger...")
-                color: trackViewRoot.cMute
-                font.pixelSize: trackViewRoot.fs(15)
+                spacing: Math.round(14 * trackViewRoot.ks)
+                Text
+                {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: qsTr("Waiting for track data from Beat Link Trigger...")
+                    color: trackViewRoot.cMute
+                    font.pixelSize: trackViewRoot.fs(15)
+                }
+                // R450_TEST_TRACK (Tobias 10-14, mockup 3): a made-up track to try
+                // the page and the rig without the CDJs
+                Btn
+                {
+                    objectName: "testTrack"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    visible: !!trackManager
+                    width: Math.round(240 * trackViewRoot.ks)
+                    height: Math.round(58 * trackViewRoot.ks)
+                    icon: "play"
+                    text: qsTr("TEST TRACK")
+                    active: true
+                    tone: trackViewRoot.cGold
+                    fontPx: trackViewRoot.fs(18)
+                    onTapped: if (trackManager) trackManager.startTestTrack()
+                }
+                Text
+                {
+                    objectName: "testTrackHint"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    visible: !!trackManager
+                    text: qsTr("a made-up track at Link's tempo (or 128 BPM): intro - break - build - drop, on a loop") + "  \u00B7  "
+                          + qsTr("nothing is learned or logged") + "  \u00B7  " + qsTr("a real track from the CDJs takes over")
+                    color: trackViewRoot.cDim
+                    font.pixelSize: trackViewRoot.fs(13)
+                }
             }
 
             // the countdown to the next section, in bars - the last 32 bars
@@ -3307,7 +3402,7 @@ Rectangle
             {
                 model: [
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig." },
-                    { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track." },
+                    { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br>Warnings appear in the bar under the track.<br><b>TEST TRACK</b> - with no track from the CDJs: a made-up track (intro, break, build, drop) at Link's tempo or 128 BPM, on a loop, to try the page and the rig. Nothing is learned or logged. <b>STOP TEST</b> ends it; a real track from the CDJs takes over by itself." },
                     { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG.<br><b>DROP HIT</b> arms a hit on the next drop: <b>FLASH</b> (a white beat), <b>STROBE</b> (the strobes flat out for the first bar) or <b>DARK \u2192 BANG</b> (black for two beats, then the flash). It lands once, on the drop's first beat, and switches itself off - tap <b>HIT ARMED</b> to take it back." },
                     { t: "TOUCH", b: "Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>, or move two faders together.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]

@@ -1829,6 +1829,8 @@ void TrackEngine::noteSectionRelease(const QString &held, const QString &now)
 
 void TrackEngine::rememberDropPunch(qreal kick, qreal low)
 {
+    if (m_testTrack)
+        return;                          // R450_TEST_TRACK
     // runde 327 (review): the same drop again - a DJ loop over the build/drop
     // line locks at bar 2 on every pass - is not a new drop: the last entry
     // of this track with (nearly) the same kick is replaced, not added to
@@ -3854,6 +3856,8 @@ void TrackEngine::tasteLast(const QString &section, QStringList &order) const
 
 void TrackEngine::decaySectionTaste()
 {
+    if (m_testTrack)
+        return;                          // R450_TEST_TRACK: not the night's first track
     // R435_TASTE_DECAY (Tobias 10-12, forslag 3): the lean glides back toward
     // neutral, 10 % a night, so one night's picks do not lock a group out for
     // good. A night runs to noon (02:00 is still the evening before).
@@ -3946,6 +3950,8 @@ void TrackEngine::loadTrackMemory()
 
 void TrackEngine::rememberPick(int boundary, const QString &section, const QStringList &set, qreal fader)
 {
+    if (m_testTrack)
+        return;                          // R450_TEST_TRACK
     if (m_trackTitle.isEmpty() || boundary < 0 || section.isEmpty() || set.isEmpty())
         return;
     loadTrackMemory();
@@ -4030,6 +4036,8 @@ int TrackEngine::trackMemoryCount(const QString &title)
 
 void TrackEngine::learnSection(const QString &section, const QStringList &plan, const QStringList &his)
 {
+    if (m_testTrack)
+        return;                          // R450_TEST_TRACK
     // R433_SECTION_TASTE: what he put in that the engine had not planned weighs
     // more for this kind of section, what he took out weighs less. The base is
     // not learned - it is in every section unless he switches it off.
@@ -4068,6 +4076,8 @@ void TrackEngine::learnSection(const QString &section, const QStringList &plan, 
 
 void TrackEngine::learnColour(const QString &picked, const QString &shown)
 {
+    if (m_testTrack)
+        return;                          // R450_TEST_TRACK
     colourTaste(picked);                 // loaded
     m_colourTaste.insert(picked, qMin(2.5, m_colourTaste.value(picked, 1.0) * 1.08));
     // the colour he tapped away from, unless he keeps it in the mix
@@ -14123,7 +14133,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 continue;
             onceEach.insert(fid);
             QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.find(fid);
-            if (it != m_funcs.end() && it.value().generated == false)
+            if (it != m_funcs.end() && it.value().generated == false && m_testTrack == false)   // R450_TEST_TRACK
                 it.value().seen[b] += 1;
         }
     }
@@ -16894,6 +16904,8 @@ bool TrackEngine::rateAutoLook(int verdict, const QString &group)
         if (once.contains(it.value()))
             continue;
         once.insert(it.value());
+        if (m_testTrack)
+            continue;                    // R450_TEST_TRACK: no vote from the made-up track
         QPair<int, int> &votes = m_autoRatings[it.value()];
         int amount = group.isEmpty() ? 1 : ENGINE_RATE_AIMED;
         if (verdict >= 0) votes.first = qMin(1000000, votes.first + amount);
@@ -16984,7 +16996,7 @@ void TrackEngine::rateGroup(int verdict, const QString &group)
             continue;
         counted.insert(it.value());
         QHash<quint32, TrackFuncInfo>::iterator fi = m_funcs.find(it.value());
-        if (fi == m_funcs.end() || fi.value().generated)
+        if (fi == m_funcs.end() || fi.value().generated || m_testTrack)   // R450_TEST_TRACK
             continue;
         if (verdict >= 0)
             fi.value().up[b] += ENGINE_RATE_AIMED;
@@ -17071,7 +17083,7 @@ bool TrackEngine::creditVerdict(int verdict)
         if (m_funcs.contains(fid) == false)
             continue;
         TrackFuncInfo &info = m_funcs[fid];
-        if (info.generated)
+        if (info.generated || m_testTrack)   // R450_TEST_TRACK
             continue;
         if (verdict >= 0)
             info.up[b] += 1;
@@ -18117,7 +18129,7 @@ QByteArray TrackEngine::logSettings() const
 
 void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy)
 {
-    if (m_logEnabled == false)
+    if (m_logEnabled == false || m_testTrack)   // R450_TEST_TRACK: the tracklog is real nights only
         return;
 
     // one file per date: a desk that runs past midnight starts a new one

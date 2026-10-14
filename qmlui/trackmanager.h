@@ -29,6 +29,7 @@
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <QElapsedTimer>             // R450_TT_INC
 #include <QHash>
 #include <QList>
 #include <QMap>
@@ -126,6 +127,8 @@ class TrackManager : public QObject
     Q_PROPERTY(int energyTrim READ energyTrim WRITE setEnergyTrim NOTIFY energyChanged)
     Q_PROPERTY(int bpmLow READ bpmLow WRITE setBpmLow NOTIFY energyChanged)
     Q_PROPERTY(int bpmHigh READ bpmHigh WRITE setBpmHigh NOTIFY energyChanged)
+    Q_PROPERTY(bool testTrack READ testTrack NOTIFY testTrackChanged)   // R450_TT_PROP
+    Q_PROPERTY(qreal testBpm READ testBpm NOTIFY testTrackChanged)
 
 public:
     TrackManager(QQuickView *view, Doc *doc, QObject *parent = nullptr);
@@ -222,6 +225,12 @@ public:
 
     Q_INVOKABLE void reroll();
     Q_INVOKABLE void clear();
+    /** R450_TT_API: TEST TRACK - a made-up track when the CDJs have none;
+     *  learns nothing, loops, a real track takes over */
+    bool testTrack() const;
+    qreal testBpm() const;
+    Q_INVOKABLE void startTestTrack();
+    Q_INVOKABLE void stopTestTrack();
 
     /* ---- roles ---- */
     bool roleMode() const;
@@ -255,6 +264,7 @@ public:
     Q_INVOKABLE qreal sectionEnergy(int beat) const;
 
 signals:
+    void testTrackChanged();             // R450_TT_SIG
     void listenPortChanged();
     void connectedChanged();
     void linkChanged();
@@ -309,6 +319,7 @@ protected:
     void sendEvent(const QJsonObject &obj);
     void handleExtra(const QString &evt, const QJsonObject &obj);
     void learnFromFlag(const QString &type, int beat, bool added);
+    void testStep(quint32 serial);       // R450_TT_STEP: one beat of the test track
     quint32 pickRole(QString state, int role, int cursor) const;
     void driveRole(int role, quint32 fid, qreal level, int division,
                    bool hard = false);
@@ -434,6 +445,15 @@ private:
     /* The movement pick is sticky: it only changes when a break starts,
      * inside a one-beat dark gap. Never at a drop, never mid-section. */
     quint32 m_movePick;
+
+    /* R450_TT_MEM: the test track */
+    bool m_testTrack = false;
+    qreal m_testBpm = 128.0;
+    int m_testBeats = 0;                 // its length
+    int m_testBeat = 0;                  // the beat it is on
+    qint64 m_testTicks = 0;              // beats since it started (the clock's count)
+    quint32 m_testSerial = 0;            // a stop or a new test cancels the beat on its way
+    QElapsedTimer m_testClock;
 };
 
 #endif // TRACKMANAGER_H

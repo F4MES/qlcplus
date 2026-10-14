@@ -841,6 +841,10 @@ public:
     Q_INVOKABLE void setFlash(bool pressed);
     bool blackout() const;
     void setBlackout(bool on);
+    /** R450_TEST_TRACK: the Track page's made-up track is playing - nothing
+     *  is learned from it and nothing is written to the tracklog */
+    void setTestTrack(bool on) { m_testTrack = on; }
+    bool testTrackOn() const { return m_testTrack; }
     bool stutter() const { return m_stutter; }          // R420_STUTTER
     void setStutter(bool on);
     int stutterRate() const { return m_stutterRate; }
@@ -1635,6 +1639,7 @@ public:
     QString planShortOf(const QString &key) const;
     QVariantList planChips(const QStringList &keys) const;
     QStringList planGuess(const QString &section, int boundary);
+    bool m_testTrack = false;            // R450_TEST_TRACK: learns nothing, logs nothing
     // R445_DROP_HIT
     int m_hitKind = 0;
     mutable int m_hitLast = 0;
