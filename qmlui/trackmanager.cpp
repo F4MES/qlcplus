@@ -398,6 +398,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
                                  obj.value(QStringLiteral("onsetHigh")).toArray().toVariantList());
     if (m_engine != nullptr)            // R359_PUMP: the fall between the kicks
         m_engine->setTrackPump(obj.value(QStringLiteral("pumpRaw")).toArray().toVariantList());
+    if (m_engine != nullptr)            // R461_ONSETS: the bass's and the mids' quarter-beat onsets
+        m_engine->setTrackOnsets(obj.value(QStringLiteral("onsetLow")).toArray().toVariantList(),
+                                 obj.value(QStringLiteral("onsetMid")).toArray().toVariantList());
     if (m_engine != nullptr)            // R317_PUNCH: how hard, not how full
         m_engine->setTrackPunch(m_title,                // R318_PUNCH_TITLE: one entry per track
                                 obj.value(QStringLiteral("kickRef")).toDouble(-1.0),

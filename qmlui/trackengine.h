@@ -1054,6 +1054,8 @@ public:
      *  the track's own 90th percentile = 255) and the highs' onset in each
      *  quarter of the beat, four nibbles (quarter q in bits 4q..4q+3, 0-15). */
     void setTrackRhythm(const QVariantList &midRaw, const QVariantList &onsetHigh);
+    /** R461_ONSETS: the bass's and the mids' onsets per quarter beat (BLT, 4 nibbles) */
+    void setTrackOnsets(const QVariantList &onsetLow, const QVariantList &onsetMid);
     /** Runde 359 (R359_PUMP): per beat how far the sound falls between two
      *  kicks - 1 - (the quietest stretch after the first quarter of the beat
      *  / the beat's attack), 0-255. */
@@ -1815,6 +1817,13 @@ private:
     QVector<quint8> m_audMid;            // R358_RHYTHM: the mid band, beat for beat
     QVector<quint16> m_onsetHigh;        // the highs' onsets per quarter beat
     int onsetHigh(int beat, int quarter) const;   // 0-15, or -1 without data
+    QVector<quint16> m_onsetLow;         // R461_ONSETS: the bass's onsets per quarter beat
+    QVector<quint16> m_onsetMid;         // ... and the mids'
+    int onsetLow(int beat, int quarter) const;    // 0-15, or -1 without data
+    int onsetMid(int beat, int quarter) const;
+    bool m_andBass = false;              // R461_AND_BASS: the bass on the "and" in this groove
+    QHash<QString, int> m_andSeen;       // ... the base / Minis already hit on it this beat
+    int m_pluckSlots = 0;                // R461_BREAK_PLUCK: the quarters a break's pattern hits (bits 0-3)
     qreal audMid(int beat) const;        // 0-1, or -1 without data
     // R358_LOOP: the DJ's loop as the beat numbers show it - a step back to
     // the same beat from the same top, again and again
