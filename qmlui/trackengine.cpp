@@ -4100,6 +4100,12 @@ void TrackEngine::setTrackAudio(const QVariantList &level, const QVariantList &k
     m_audLevel.clear();
     m_audKick.clear();
     m_audHigh.clear();
+    m_fallFrom = -1;                     // R460: a new track starts clean
+    m_dropVocalSec = -1;
+    m_dropVocalRun = 0;
+    m_dropVocal = false;
+    m_timbreMed = -1.0;
+    m_timbreBias = -1;
     for (const QVariant &v : level)
         m_audLevel.append(quint8(qBound(0, v.toInt(), 255)));
     // the raw kick and highs count only when they cover the track beat for beat
@@ -4110,6 +4116,94 @@ void TrackEngine::setTrackAudio(const QVariantList &level, const QVariantList &k
         for (const QVariant &v : highRaw)
             m_audHigh.append(quint8(qBound(0, v.toInt(), 255)));
     }
+}
+
+qreal TrackEngine::audHighN(int beat) const
+{
+    // R460: the highs of a beat, 0-1 (BLT's raw top over the track's own p90)
+    if (beat < 1 || beat > m_audHigh.count())
+        return 0.0;
+    return m_audHigh.at(beat - 1) / 255.0;
+}
+
+int TrackEngine::fallLength(int beat, qreal *h0) const
+{
+    // R460_FALL (Tobias 10-15, idea 7): a groove has just ended (this beat starts
+    // the new section). The highs peak around the line (the analysis' flags can sit a
+    // beat or two off the sound) and then FALL - the beat after the peak still a
+    // third of it or more (a hard cut is runde 356's dark, not this), three to five
+    // beats on under 45 % of it. Measured on 86 of his tracks: 10 of 139 groove
+    // endings, one track in six or seven. The length: until the highs are under 30 %
+    // of the peak, 2 to 8 beats from the line.
+    if (h0 != nullptr)
+        *h0 = 0.0;
+    if (m_audHigh.isEmpty() || m_audHigh.count() != m_audLevel.count() || beat < 3 || beat + 5 > m_audHigh.count())
+        return 0;
+    int at = beat - 2;
+    for (int b = beat - 1; b <= beat; b++)
+        if (audHighN(b) > audHighN(at))
+            at = b;
+    const qreal peak = audHighN(at);
+    if (peak < 0.15)
+        return 0;
+    if (audHighN(at + 1) < 0.35 * peak)
+        return 0;                            // a hard cut
+    const qreal tail = (audHighN(beat + 3) + audHighN(beat + 4) + audHighN(beat + 5)) / 3.0;
+    if (tail > 0.45 * peak)
+        return 0;                            // it does not fall: the break keeps its highs
+    int len = 2;
+    while (len < 8 && beat + len <= m_audHigh.count() && audHighN(beat + len) > 0.30 * peak)
+        len++;
+    if (h0 != nullptr)
+        *h0 = peak;
+    return len;
+}
+
+int TrackEngine::sectionTimbre(int from, int to)
+{
+    // R460_TIMBRE (Tobias 10-15, idea 9): the section's own colour of sound - the
+    // highs against the mids over its first 32 beats, against the track's own
+    // median of the same over 16-beat windows. 1.25 times the median and up is
+    // bright, 0.80 and under dark. Measured on his tracks: in half of them the
+    // brightest groove section is 1.7 times the darkest or more.
+    if (m_audHigh.isEmpty() || m_audMid.count() != m_audHigh.count() || m_audHigh.count() < 32)
+        return -1;
+    auto ratio = [&](int a, int b) {
+        qreal hs = 0.0, ms = 0.0;
+        int n = 0;
+        for (int i = qMax(1, a); i < qMin(b, int(m_audHigh.count()) + 1); i++)
+        {
+            if (audLevel(i) < 0.15)
+                continue;                    // a silent beat says nothing about the sound
+            hs += audHighN(i);
+            ms += audMid(i);
+            n++;
+        }
+        return n >= 8 ? hs / qMax(0.02, ms) : -1.0;
+    };
+    if (m_timbreMed < 0.0)
+    {
+        QVector<qreal> all;
+        for (int a = 1; a + 16 <= m_audHigh.count() + 1; a += 16)
+        {
+            const qreal r = ratio(a, a + 16);
+            if (r >= 0.0)
+                all.append(r);
+        }
+        if (all.count() < 4)
+            return -1;
+        std::sort(all.begin(), all.end());
+        m_timbreMed = qMax(0.02, all.at(all.count() / 2));
+    }
+    const int end = to > from ? qMin(to, from + 32) : from + 32;
+    const qreal r = ratio(from, end);
+    if (r < 0.0)
+        return -1;
+    if (r >= 1.25 * m_timbreMed)
+        return 1;
+    if (r <= 0.80 * m_timbreMed)
+        return 0;
+    return -1;
 }
 
 qreal TrackEngine::audLevel(int beat) const
@@ -8697,6 +8791,12 @@ QString TrackEngine::drawColour(const QStringList &pool, int keyBias, QRandomGen
         int n = (c == QLatin1String("green")) ? 1 : 3;
         if (keyBias >= 0 && (keyBias == 0 ? cold : warm).contains(c))
             n *= 3;
+        // R460_TIMBRE (Tobias 10-15, idea 9): the section's sound - a bright one leans
+        // to the light colours, a dark one to the deep ones. The room's draw only.
+        static const QStringList deep = { "red", "blue", "magenta", "purple", "uv" };
+        static const QStringList light = { "cyan", "yellow", "amber", "orange", "pink" };
+        if (m_timbreDraw >= 0 && (m_timbreDraw == 0 ? deep : light).contains(c))
+            n *= 2;
         // runde 357 (R357_TASTE, Tobias: "lad motoren laere mine valg"): his
         // taste from the colour tiles, in tenths of a ticket
         n = qMax(1, int(qRound(qreal(n) * 10.0 * colourTaste(c))));
@@ -9588,6 +9688,33 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         preDrop = false;
     }
 
+    // R460_FALL (Tobias 10-15, idea 7): a groove (a drop or a normal) ends into a
+    // break and the highs fall with it - the light sinks with them (below, where
+    // the groups' levels are set). Not under HOLD, in a mix or at the bottom.
+    if (sectionChanged && isBreak && (m_lastState == QStringLiteral("drop") || m_lastState == QStringLiteral("normal")
+                                      || m_lastState == QStringLiteral("drive"))
+        && hold == false && m_mixing == false && still == false)
+    {
+        qreal h0 = 0.0;
+        const int len = fallLength(beat, &h0);
+        m_fallFrom = len > 0 ? beat : -1;
+        m_fallLen = len;
+        m_fallH0 = h0;
+    }
+    else if (m_fallFrom >= 0 && (beat < m_fallFrom || beat >= m_fallFrom + m_fallLen || isBreak == false))
+        m_fallFrom = -1;
+    // ... and when the fall starts BEFORE the line (the flags sit a beat or two off
+    // the sound, or the downlifter begins in the groove's last bar): the groove's
+    // own last beats sink with the falling highs, down to 55 %.
+    m_fallAheadMul = 1.0;
+    if (isBreak == false && isBuild == false && nextState == QStringLiteral("break") && beatsToNext >= 1 && beatsToNext <= 3
+        && hold == false && m_mixing == false && still == false)
+    {
+        qreal h0 = 0.0;
+        if (fallLength(beat + beatsToNext, &h0) > 0 && h0 > 0.0 && audHighN(beat) < 0.98 * h0
+            && audHighN(beat) <= audHighN(beat - 1))
+            m_fallAheadMul = qBound(0.55, 0.55 + 0.45 * audHighN(beat) / h0, 1.0);
+    }
     // R358_REPEAT (Tobias 10-05, "omkvaedet faar sit eget look hver gang"):
     // the second drop of a track that SOUNDS like the first (the waveform,
     // kick, highs and mids over its first 16 beats, each within 0.12) lands
@@ -9832,7 +9959,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (pool.count() > 1)
             pool.removeAll(m_leftColour);
         m_leftColour = m_colour;
+        m_timbreBias = sectionTimbre(secStart, secEnd);   // R460_TIMBRE
+        m_timbreDraw = m_timbreBias;
         m_colour = drawColour(pool, m_keyBias, rng);
+        m_timbreDraw = -1;
         if (m_reuseColour.isEmpty() == false && m_palette.contains(m_reuseColour)
             && engineBannedColour(m_reuseColour) == false)
             m_colour = m_reuseColour;    // R358_REPEAT
@@ -12024,6 +12154,36 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
     m_vocalNow = m_vocalRun >= 2 && isDrop == false && still == false && m_mixing == false && isCalm == false;
+    // R460_DROP_VOCAL (Tobias 10-15, idea 8): a vocal or a lead OVER a drop - the
+    // kick is there, so the break's rule above cannot see it. The mids 18 % over
+    // the drop's own median on 3 of the last 4 beats, the music loud enough.
+    // Measured on his tracks: half of them have such a passage of two bars or more.
+    if (isDrop && m_audMid.isEmpty() == false && m_audMid.count() == m_audLevel.count())
+    {
+        if (m_dropVocalSec != secStart)
+        {
+            m_dropVocalSec = secStart;
+            QVector<qreal> mids;
+            const int last = secEnd > secStart ? qMin(secEnd, int(m_audMid.count()) + 1) : int(m_audMid.count()) + 1;
+            for (int b = qMax(1, secStart); b < last; b++)
+                mids.append(audMid(b));
+            std::sort(mids.begin(), mids.end());
+            m_dropVocalMed = mids.isEmpty() ? 0.0 : mids.at(mids.count() / 2);
+        }
+        if (beat != m_dropVocalBeat)
+        {
+            m_dropVocalBeat = beat;
+            m_dropVocalRun = 0;
+            for (int b = beat - 3; b <= beat; b++)
+            {
+                if (b >= 1 && m_dropVocalMed >= 0.08 && audMid(b) >= 1.18 * m_dropVocalMed && audLevel(b) >= 0.30)
+                    m_dropVocalRun++;
+            }
+        }
+    }
+    else
+        m_dropVocalRun = 0;
+    m_dropVocal = m_dropVocalRun >= 3 && isDrop && still == false && m_mixing == false && isCalm == false;
     // R358_GROOVE (Tobias 10-05, "rytmen inde i slaget"): where the drums hit
     // BETWEEN the beats, over the last eight - BLT's highs per quarter beat.
     // A quarter that hits a quarter harder than the beat itself (an off-beat
@@ -13133,7 +13293,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // trim still apply.
         if (g.strobes && isDrop && support < 1.0)
             support = qMax(support, 0.70 + 0.30 * qBound(0.0, (fader - 0.60) / 0.40, 1.0));
-        qreal groupLevel = qBound(0.0, level * ((isBreak && (key == base || m_barsAloneNow) && still == false) ? 1.4 : 1.0) * duck * support, 1.0);   // R383_BARS_ALONE: the bars alone have the base's lift
+        // R460_FALL: the light sinks with the highs from the groove's level (x1.40)
+        // to the break's own - not the strobes, not the lasers. R460_DROP_VOCAL:
+        // the Minis ride the voice over a drop.
+        qreal r460 = 1.0;
+        if (m_fallFrom >= 0 && beat >= m_fallFrom && beat < m_fallFrom + m_fallLen && m_fallH0 > 0.0
+            && g.strobes == false && g.lasers == false && g.patternDevice == false)
+            r460 = 1.0 + 0.40 * qBound(0.0, audHighN(beat) / m_fallH0, 1.0);
+        if (m_fallAheadMul < 1.0 && g.strobes == false && g.lasers == false && g.patternDevice == false)
+            r460 = m_fallAheadMul;
+        if (m_dropVocal && smallWash(key) && m_dropVocalMed > 0.0)
+            r460 = qBound(0.85, 0.55 + 0.45 * audMid(beat) / m_dropVocalMed, 1.15);
+        qreal groupLevel = qBound(0.0, level * ((isBreak && (key == base || m_barsAloneNow) && still == false) ? 1.4 : 1.0) * duck * support * r460, 1.0);   // R383_BARS_ALONE: the bars alone have the base's lift
         // R385_BARS_FULL: full light - MASTER and the trim put on after
         if (m_barsAloneNow && m_aloneFull && g.lasers && g.patternDevice == false && still == false)
             groupLevel = 1.0;
@@ -13617,6 +13788,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // dimmer-as-switch fixture reads it as off.
             if (bass >= 0.0 && depth > 0.0)
                 depth = qMin(0.95, depth * qBound(0.70, 0.70 + 0.60 * bass, 1.25));
+            // R460_DROP_VOCAL: over a vocal the Minis breathe shallow - they sing, not pump
+            if (m_dropVocal && smallWash(key) && depth > 0.0)
+                depth *= 0.35;
             // R359_PUMP: and the track's own fall between the kicks, around
             // the library's median (0.93 = the depth as drawn): a quarter of
             // the tracks fall 0.85 or less and breathe at 0.80 of it, a full
@@ -14371,6 +14545,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (strobeChase) ev << "strobe-chase";
         if (m_mixing) ev << "mix-energy";
         if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
+        if (m_timbreBias >= 0) ev << (m_timbreBias == 1 ? "timbre-bright" : "timbre-dark");   // R460
+        if (m_dropVocal) ev << "drop-vocal";
+        if ((m_fallFrom >= 0 && beat >= m_fallFrom && beat < m_fallFrom + m_fallLen) || m_fallAheadMul < 1.0) ev << "fall";
         if (m_musicDarkEvent.isEmpty() == false) ev << m_musicDarkEvent;   // runde 356
         if (m_hardStart && sectionChanged) ev << "land-hard";
         if (kickBack && m_kickBackLast == beat) ev << "kick-back-hit";   // runde 357
