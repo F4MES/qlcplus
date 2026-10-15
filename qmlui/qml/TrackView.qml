@@ -1796,14 +1796,21 @@ Rectangle
                 anchors.centerIn: wfCanvas
                 visible: trackViewRoot.beatCount === 0
                 readonly property bool linked: !!trackManager && trackManager.connected === true
+                // R465_BLT_PAGE (Tobias 10-15): BLT connects only when it has something to send -
+                // running and quiet is the usual state before the first track (QLC+ looks for
+                // the program every 5 s, and BLT says hello every 4 s)
+                readonly property bool running: linked || (!!trackManager && trackManager.bltRunning === true)
                 width: emptyRow.implicitWidth
                 height: emptyRow.implicitHeight
                 Row
                 {
                     id: emptyRow
                     spacing: Math.round(18 * trackViewRoot.ks)
-                    ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(52 * trackViewRoot.ks); height: width
-                                  kind: "deck"; ink: emptyBox.linked ? trackViewRoot.cDim : trackViewRoot.cGold }
+                    // R465_BLT_PAGE: Beat Link Trigger's own logo (dim while it does not run)
+                    Image { objectName: "bltLogo"; anchors.verticalCenter: parent.verticalCenter
+                            width: Math.round(60 * trackViewRoot.ks); height: width
+                            source: "blt_logo.png"; smooth: true; mipmap: true; fillMode: Image.PreserveAspectFit
+                            opacity: emptyBox.running ? 1.0 : 0.45 }
                     Column
                     {
                         anchors.verticalCenter: parent.verticalCenter
@@ -1815,7 +1822,7 @@ Rectangle
                             {
                                 objectName: "emptyTitle"
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: emptyBox.linked ? qsTr("Waiting for a track") : qsTr("Beat Link Trigger is not connected")
+                                text: emptyBox.running ? qsTr("Waiting for track data") : qsTr("Beat Link Trigger is not running")
                                 color: trackViewRoot.cText
                                 font.bold: true
                                 font.pixelSize: trackViewRoot.fs(20)
@@ -1847,13 +1854,14 @@ Rectangle
                         {
                             spacing: Math.round(8 * trackViewRoot.ks)
                             Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Math.round(10 * trackViewRoot.ks); height: width; radius: width / 2
-                                        color: emptyBox.linked ? trackViewRoot.cGreen : trackViewRoot.cGold }
+                                        color: emptyBox.running ? trackViewRoot.cGreen : trackViewRoot.cGold }
                             Text
                             {
                                 objectName: "emptySub"
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: emptyBox.linked ? qsTr("Beat Link Trigger is connected - play a track on a CDJ")
-                                                      : qsTr("Start it from the system tray - then play a track on a CDJ")
+                                    : emptyBox.running ? qsTr("Beat Link Trigger is running - play a track on a CDJ")
+                                                       : qsTr("Start it from its logo on the taskbar - then play a track on a CDJ")
                                 color: trackViewRoot.cMute
                                 font.pixelSize: trackViewRoot.fs(13)
                             }
@@ -3361,9 +3369,10 @@ Rectangle
             Repeater
             {
                 model: [
-                    qsTr("<b>Beat Link Trigger has to run.</b> Its icon sits in the system tray, bottom right by the clock - maybe hidden under the ^ arrow."),
+                    qsTr("<b>Beat Link Trigger has to run.</b> Start it from its logo on the taskbar at the bottom of the screen."),
                     qsTr("<b>Load and play a track on a CDJ.</b> It shows up here within a second or two."),
-                    qsTr("<b>Still nothing?</b> Right-click the tray icon, quit Beat Link Trigger and start it again from the Start menu.") ]
+                    qsTr("<b>Still nothing?</b> Close Beat Link Trigger and start it again from the taskbar."),
+                    qsTr("<b>No taskbar?</b> QLC+ is in full screen: <b>SETUP</b> - <b>FULLSCREEN</b> takes it out (and back in).") ]
                 Row
                 {
                     spacing: Math.round(10 * trackViewRoot.ks)
@@ -3384,24 +3393,34 @@ Rectangle
                     }
                 }
             }
-            // where to look: the tray by the clock (a neutral deck icon, not BLT's logo)
+            // R465_BLT_PAGE: where to look - its logo on the taskbar (a shortcut, not the tray)
             Row
             {
                 spacing: Math.round(10 * trackViewRoot.ks)
                 Rectangle
                 {
                     id: trayBox
-                    width: Math.round(150 * trackViewRoot.ks); height: Math.round(28 * trackViewRoot.ks)
+                    width: Math.round(170 * trackViewRoot.ks); height: Math.round(34 * trackViewRoot.ks)
                     radius: Math.round(4 * trackViewRoot.ks)
                     color: "#0C0C0F"
                     Row
                     {
-                        anchors.left: parent.left; anchors.leftMargin: Math.round(10 * trackViewRoot.ks)
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: Math.round(12 * trackViewRoot.ks)
-                        Text { anchors.verticalCenter: parent.verticalCenter; text: "^"; color: trackViewRoot.cMute; font.bold: true; font.pixelSize: trackViewRoot.fs(14) }
-                        ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(16 * trackViewRoot.ks); height: width; kind: "deck"; ink: trackViewRoot.cGold }
-                        Text { anchors.verticalCenter: parent.verticalCenter; text: Qt.formatTime(new Date(), "hh:mm"); color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(11) }
+                        anchors.centerIn: parent
+                        spacing: Math.round(10 * trackViewRoot.ks)
+                        Repeater
+                        {
+                            model: 4
+                            Item
+                            {
+                                width: Math.round(24 * trackViewRoot.ks); height: Math.round(28 * trackViewRoot.ks)
+                                Rectangle { visible: index !== 2; anchors.centerIn: parent; width: Math.round(16 * trackViewRoot.ks); height: width
+                                            radius: Math.round(3 * trackViewRoot.ks); color: "#2C2C34" }
+                                Image { visible: index === 2; anchors.centerIn: parent; width: Math.round(22 * trackViewRoot.ks); height: width
+                                        source: "blt_logo.png"; smooth: true; mipmap: true }
+                                Rectangle { visible: index === 2; anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter
+                                            width: Math.round(14 * trackViewRoot.ks); height: Math.max(2, Math.round(2 * trackViewRoot.ks)); color: trackViewRoot.cGold }
+                            }
+                        }
                     }
                 }
                 Text
@@ -3409,7 +3428,7 @@ Rectangle
                     anchors.verticalCenter: parent.verticalCenter
                     width: guideCol.width - trayBox.width - Math.round(10 * trackViewRoot.ks)
                     wrapMode: Text.WordWrap
-                    text: qsTr("the tray, bottom right - tap ^ to see every icon")
+                    text: qsTr("the taskbar, bottom of the screen - this logo")
                     color: trackViewRoot.cDim
                     font.pixelSize: trackViewRoot.fs(12)
                 }
@@ -3790,7 +3809,7 @@ Rectangle
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (lasers and strobes out at the outro, then soft white for 5 min, haze down, then dark). Tap twice again to undo." },
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br><b>HIT</b> on a DROP flag - a hit is armed for that drop (<b>DROP HIT</b> in LIVE).<br>Warnings appear in the bar under the track." },
                     { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG." },
-                    { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from the system tray.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
+                    { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from its logo on the taskbar.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column
                 {

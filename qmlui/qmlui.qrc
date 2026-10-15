@@ -54,6 +54,7 @@
     <file alias="SingleAxisTool.qml">qml/SingleAxisTool.qml</file>
     <file alias="TimeEditTool.qml">qml/TimeEditTool.qml</file>
     <file alias="TrackView.qml">qml/TrackView.qml</file>
+    <file alias="blt_logo.png">qml/blt_logo.png</file>
     <file alias="track_remote.html">qml/track_remote.html</file>
     <file alias="ColourLab.qml">qml/ColourLab.qml</file>
     <file alias="StrobeLab.qml">qml/StrobeLab.qml</file>
