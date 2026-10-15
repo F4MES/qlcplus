@@ -436,6 +436,7 @@ Rectangle
                 for(var j=0;j<8;j++){var b=j*Math.PI/4;line(12+6*Math.cos(b),12+6*Math.sin(b),12+9*Math.cos(b),12+9*Math.sin(b))}
             } else if (kind === "showSwitch" || kind === "stop") { c.fillRect(5,5,14,14) }
             else if (kind === "deck") { circle(12,12,9.5); circle(12,12,5); c.beginPath(); c.arc(12,12,1.6,0,Math.PI*2); c.fill() }   // R452_EMPTY
+            else if (kind === "moon") { c.beginPath(); c.arc(12,12,9,0,Math.PI*2); c.fill(); c.globalCompositeOperation = "destination-out"; c.beginPath(); c.arc(17,8,8,0,Math.PI*2); c.fill(); c.globalCompositeOperation = "source-over" }   // R458_LAST_BTN
             else if (kind === "play") { c.beginPath(); c.moveTo(7,4); c.lineTo(20,12); c.lineTo(7,20); c.closePath(); c.fill() }   // R450_TEST_TRACK
             else if (kind === "laser") { c.strokeRect(3,18,18,4); line(5,15,2,4); line(10,15,8,2); line(15,15,16,2); line(20,15,23,4) }
             else if (kind === "strobe") { c.strokeRect(3,2,18,20); circle(8,7,2); circle(16,7,2); circle(8,17,2); circle(16,17,2) }
@@ -771,7 +772,7 @@ Rectangle
             {
                 anchors.left: sectionPill.right
                 anchors.leftMargin: Math.round(22 * trackViewRoot.ks)
-                anchors.right: testStop.visible ? testStop.left : (oldShowChip.visible ? oldShowChip.left : statusRight.left)
+                anchors.right: lastBtn.visible ? lastBtn.left : (testStop.visible ? testStop.left : (oldShowChip.visible ? oldShowChip.left : statusRight.left))   // R458_LAST_BTN
                 anchors.rightMargin: Math.round(22 * trackViewRoot.ks)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 3
@@ -826,6 +827,82 @@ Rectangle
                     }
                     color: nm === null ? trackViewRoot.cDim : trackViewRoot.markerColor(nm.type)
                     font.pixelSize: trackViewRoot.fs(15)
+                }
+            }
+
+            // R458_LAST_BTN (Tobias 10-15, mockup A/B/C approved): from ten minutes
+            // before closing (03:00, New Year's night 05:00 - the closing's clock). A
+            // tap asks SURE?, the second makes this track the last - or undoes it
+            Rectangle
+            {
+                id: lastBtn
+                objectName: "lastTrack"
+                readonly property int stage: trackEngine ? trackEngine.lastTrack : 0
+                property bool sure: false
+                readonly property bool filled: sure || stage > 0
+                visible: !!trackEngine && trackEngine.lastTrackShown === true && !trackViewRoot.testOn
+                anchors.right: testStop.visible ? testStop.left : (oldShowChip.visible ? oldShowChip.left : statusRight.left)
+                anchors.rightMargin: Math.round(22 * trackViewRoot.ks)
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.round(252 * trackViewRoot.ks)
+                height: Math.round(trackViewRoot.topH * 0.70)
+                radius: Math.round(8 * trackViewRoot.ks)
+                color: filled ? trackViewRoot.cGold : (lastIn.down ? "#2A2418" : trackViewRoot.cBtn)
+                border.width: filled ? 0 : 2
+                border.color: trackViewRoot.cGold
+                onStageChanged: sure = false
+                Timer { id: lastSureOff; interval: 4000; onTriggered: lastBtn.sure = false }
+                function clock(s) { return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
+                readonly property string sub:
+                {
+                    if (!trackEngine) return ""
+                    if (sure) return stage > 0 ? qsTr("tap again to undo it") : qsTr("tap again - this track ends the night")
+                    var left = trackEngine.lastTrackLeft
+                    if (stage === 1 || stage === 2) return left >= 0 ? qsTr("ends with the track") + " \u00B7 " + clock(left) : qsTr("ends with the track")
+                    if (stage === 3) return qsTr("white light") + " \u00B7 " + qsTr("dark in") + " " + clock(left)
+                    if (stage === 4) return qsTr("dark") + " \u00B7 " + qsTr("tap to undo")
+                    var m = trackEngine.lastTrackCloseMin
+                    return qsTr("closing") + " " + trackEngine.lastTrackCloseAt + (m > 0 ? " \u00B7 " + m + " " + qsTr("min") : "")
+                }
+                readonly property color ink: filled ? "#1A1408" : trackViewRoot.cGold
+                Row
+                {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Math.round(14 * trackViewRoot.ks)
+                    anchors.right: parent.right
+                    anchors.rightMargin: Math.round(8 * trackViewRoot.ks)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Math.round(10 * trackViewRoot.ks)
+                    visible: !lastBtn.sure
+                    ControlIcon { id: lastMoon; anchors.verticalCenter: parent.verticalCenter; width: Math.round(20 * trackViewRoot.ks); height: width; kind: "moon"; ink: lastBtn.ink }
+                    Column
+                    {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - lastMoon.width - parent.spacing
+                        spacing: 2
+                        Text { width: parent.width; elide: Text.ElideRight; text: qsTr("LAST TRACK"); color: lastBtn.ink; font.bold: true; font.pixelSize: trackViewRoot.fs(15); font.letterSpacing: trackViewRoot.fs(15) * 0.04 }
+                        Text { objectName: "lastTrackSub"; width: parent.width; elide: Text.ElideRight; text: lastBtn.sub; color: lastBtn.filled ? "#1A1408" : trackViewRoot.cDim; font.pixelSize: trackViewRoot.fs(11) }
+                    }
+                }
+                Column
+                {
+                    anchors.centerIn: parent
+                    spacing: 2
+                    visible: lastBtn.sure
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: qsTr("SURE?"); color: "#1A1408"; font.bold: true; font.pixelSize: trackViewRoot.fs(16) }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: lastBtn.sub; color: "#1A1408"; font.pixelSize: trackViewRoot.fs(10) }
+                }
+                TouchInput
+                {
+                    id: lastIn
+                    onReleasedAt: (x, y, inside) =>
+                    {
+                        if (!inside || !trackEngine) return
+                        if (!lastBtn.sure) { lastBtn.sure = true; lastSureOff.restart(); return }
+                        lastBtn.sure = false
+                        lastSureOff.stop()
+                        trackEngine.toggleLastTrack()
+                    }
                 }
             }
 
@@ -1633,6 +1710,47 @@ Rectangle
                 }
             }
 
+            // R458_LAST_BTN (mockup C): the last track's outro - the lasers and the
+            // strobes go out at the gold line, the soft white comes at the end
+            Item
+            {
+                id: lastOutro
+                objectName: "lastOutro"
+                z: 2
+                readonly property int stage: trackEngine ? trackEngine.lastTrack : 0
+                readonly property int from:
+                {
+                    var n = trackViewRoot.beatCount
+                    var mk = trackManager ? trackManager.markers : []
+                    var best = -1
+                    for (var i = 0; i < mk.length; i++)
+                        if (mk[i].type === "outro") best = Math.max(best, trackViewRoot.markerBeat(i))
+                    return best > 0 ? best : Math.max(1, n - 31)
+                }
+                readonly property int vf: trackViewRoot.viewFirst()
+                readonly property int vc: Math.max(1, trackViewRoot.viewCount())
+                readonly property real x0: wfCanvas.x + Math.max(0, from - vf) * wfCanvas.width / vc
+                visible: (stage === 1 || stage === 2) && trackViewRoot.beatCount > 0 && from < vf + vc && !trackViewRoot.markerEdit
+                x: x0
+                y: wfCanvas.y + wfCanvas.stripH + (trackViewRoot.planShown ? trackViewRoot.laneH : 0)
+                width: Math.max(0, wfCanvas.x + wfCanvas.width - x0)
+                height: wfCanvas.height - wfCanvas.stripH - (trackViewRoot.planShown ? trackViewRoot.laneH : 0)
+                Rectangle { anchors.fill: parent; color: "#000000"; opacity: 0.45 }
+                Rectangle { width: 2; height: parent.height; color: trackViewRoot.cGold }
+                Column
+                {
+                    // at the foot: the countdown box sits at the top right
+                    x: Math.round(8 * trackViewRoot.ks)
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: Math.round(14 * trackViewRoot.ks)
+                    width: Math.max(0, parent.width - x - 4)
+                    spacing: 2
+                    Text { width: parent.width; elide: Text.ElideRight; text: qsTr("LAST \u00B7 OUTRO"); color: trackViewRoot.cGold; font.bold: true; font.pixelSize: trackViewRoot.fs(11) }
+                    Text { width: parent.width; elide: Text.ElideRight; text: qsTr("lasers + strobes out"); color: trackViewRoot.cGold; font.pixelSize: trackViewRoot.fs(10) }
+                    Text { width: parent.width; elide: Text.ElideRight; text: qsTr("then soft white \u2192"); color: trackViewRoot.cText; font.pixelSize: trackViewRoot.fs(10) }
+                }
+            }
+
             // R445_DROP_HIT: the armed hit on the next DROP flag
             Rectangle
             {
@@ -2043,7 +2161,7 @@ Rectangle
                     visible: trackManager && trackManager.roleMode && !trackViewRoot.setupOpen
                              && !trackViewRoot.markerEdit && verdictTools.blaming === 0 && warnText.text.length > 0
                     width: Math.max(0, Math.min(implicitWidth, room))
-                    ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: 18; height: 18; kind: "warn"; ink: "#E3B44F" }
+                    ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: 18; height: 18; kind: trackEngine && trackEngine.lastTrack > 0 ? "moon" : "warn"; ink: "#E3B44F" }   // R458_LAST_BTN
                     Text
                     {
                         id: warnText
@@ -2055,6 +2173,11 @@ Rectangle
                         text:
                         {
                             var parts = []
+                            var lt = trackEngine ? trackEngine.lastTrack : 0     // R458_LAST_BTN
+                            if (lt === 1 || lt === 2)
+                                parts.push(qsTr("LAST TRACK: lasers and strobes go out at the outro, then soft white for 5 min and dark - tap LAST TRACK again to undo"))
+                            else if (lt >= 3)
+                                parts.push(qsTr("LAST TRACK: the white light goes dark by itself after 5 min - SHOW OFF ends it now"))
                             if (trackManager && trackManager.linkStale)
                                 parts.push(qsTr("BLT link stale - holding the last look"))
                             if (trackEngine)
@@ -3664,7 +3787,7 @@ Rectangle
             {
                 model: [
                     // R455_HELP (Tobias 10-14: "Opdater nu ogsaa vores Help knap, til alt det nye")
-                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing." },
+                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (lasers and strobes out at the outro, then soft white for 5 min, haze down, then dark). Tap twice again to undo." },
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br><b>HIT</b> on a DROP flag - a hit is armed for that drop (<b>DROP HIT</b> in LIVE).<br>Warnings appear in the bar under the track." },
                     { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG." },
                     { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from the system tray.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }

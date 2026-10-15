@@ -119,6 +119,7 @@ static quint32 nameScatter(const QString &name)
 // from 50 % a beat a step; from 75 % in a drop an eighth. strobePaceFloor().
 #define ENGINE_STROBE_ON      0.30
 #define ENGINE_ANI_MASTER_MIN 0.15   // R442_ANI_MASTER: the animation laser goes out under this MASTER x closing
+#define ENGINE_BASE_DUCK      0.25   // R457_WASH_DUCK: the base ducks to 75 % with the kick gone (the effects 45 %, to 55 %)
 #define ENGINE_STROBE_START   0.50   // R418_STROBE_HALF / R437_STROBE_START: the strobes' fader at a new night
 #define ENGINE_TASTE_OUT      0.60   // R433_SECTION_TASTE: under this he has taken it out
 #define ENGINE_TASTE_KEEP     0.90   // R435_TASTE_DECAY: what a night keeps of the lean
@@ -294,7 +295,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     m_holdBars = qBound(4, settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt(), 128);   // as setHoldBars (runde 220)
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
-    m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
+    m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, false).toBool();   // R458_CLOSING_OFF
     m_stutterRate = qBound(1, settings.value(SETTINGS_ENGINE_STUTTER, 3).toInt(), 3);   // R420_STUTTER, R427_STUTTER_16
     // runde 184: ENERGY by clock and the group faders come back after a
     // restart - the same night only. A new evening starts as it always has:
@@ -561,6 +562,7 @@ void TrackEngine::slotDocSettled()
     // function of the new one, and run it past every group and ban filter
     m_sectionMotion.clear();
     m_zoomScenes.clear();
+    m_houseZoom.clear();          // R458_LAST_TRACK
     m_strobeScenes.clear();
     m_offScenes.clear();
     m_strobeUntil = -1;
@@ -1658,6 +1660,7 @@ void TrackEngine::ensureTable()
     ensurePositionScenes();
     ensureSweeps();
     ensureZoomScenes();
+    ensureHouseZoom();             // R458_LAST_TRACK
     ensureDimmerScenes();
     ensureAtmosScenes();
 
@@ -7058,7 +7061,7 @@ QString TrackEngine::importSettings()
     m_holdBars = qBound(4, settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt(), 128);   // as setHoldBars (runde 220)
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
     loadClockCurve(settings);
-    m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, true).toBool();
+    m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, false).toBool();   // R458_CLOSING_OFF
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
     m_groupOff.clear();
@@ -8848,6 +8851,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         announceRoom();
         return;
     }
+    // R458_LAST_TRACK: the house light (or its dark) holds - nothing else runs,
+    // whatever plays now
+    if (m_lastStage >= 3)
+    {
+        clearMusicDark();
+        return;
+    }
     // R233_SAME_BEAT: a second call on a beat already drawn (a SECTION tap,
     // a flag edit or undo, a resend) is not a landing. On 25-26 Sep it
     // re-landed the section 334 times - a second drop look, lead and cast a
@@ -8864,6 +8874,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     m_hardStart = m_autoDark;    // runde 356: the light is dark as this beat begins
     m_curBeat = beat;            // runde 357
+    lastTrackBeat(state, beat, secStart, bpm);      // R458_LAST_TRACK: armed, outro, or its end
+    if (m_lastStage >= 3)
+        return;
     if (m_miniLandUntil >= 0 && (beat > m_miniLandUntil || beat < m_miniLandLast))
         m_miniLandUntil = -1;    // R362_MINI_LAND: over (or a jump back - R363: to before it, a two-beat loop kept it on)
     // R363_LOOP_LAND: a jump back to before the landing ends it too - a short
@@ -10022,6 +10035,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     foreach (const QString &key, m_groupOrder)
     {
         if (m_groupOff.contains(key))
+            continue;
+        // R458_LAST_TRACK: the last track's outro draws no laser and no strobe
+        // - the base and the washes carry it (the bars drawn alone there, dark,
+        // left the room black)
+        if (m_lastStage == 2 && lastTrackDark(m_groups.value(key)))
             continue;
         // Pattern devices carry colour in their motion scenes; requiring a
         // separate colour scene excludes an otherwise usable animation laser.
@@ -11936,6 +11954,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 darkGroups.insert(key);
         }
     }
+    // R458_LAST_TRACK: in the last track's outro the lasers and the strobes
+    // are out - dark, as the music's own dark makes them, never moved lit
+    if (m_lastStage == 2)
+    {
+        foreach (const QString &key, castSet)
+        {
+            if (lastTrackDark(m_groups.value(key)))
+                darkGroups.insert(key);
+        }
+    }
     m_silenceDark = (silenceNow && silenceLong == false && silenceGlow == false) || dropBlack;
     m_musicDarkEvent = silenceLong ? QStringLiteral("silence-dim")
                      : silenceGlow ? QStringLiteral("silence-glow")
@@ -13071,8 +13099,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // Four beats before anything happens, and four more to the bottom:
         // two beats would have caught every half-time bar (kick on the one,
         // nothing on two, three, four) and the room would have pumped
-        // between 55 % and 100 % every bar. The base is untouched; the room
-        // never dims with it. (Tobias, 2026-09-16, forslag 3.)
+        // between 55 % and 100 % every bar. (Tobias, 2026-09-16, forslag 3.)
+        // The base was untouched until runde 457; now it ducks to 75 % (below).
         qreal duck = 1.0;
         // a groove or a drop, as the comment says - not a build, where the
         // kick routinely drops out for the last bars just as the room should
@@ -13080,6 +13108,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_kickGone >= 4 && isBreak == false && isCalm == false && key != base
             && isBuild == false && preDrop == false)
             duck = 1.0 - 0.45 * qBound(0.0, qreal(m_kickGone - 4) / 4.0, 1.0);
+        // R457_WASH_DUCK (Tobias 10-15: "Wash dykker ... uden at den hitter, den
+        // skal bare dykke og vende tilbage, ligeledes i grooves"): the base ducks
+        // too now - the same clock, only to 75 %. Not at the slider's bottom, not
+        // in the mix, not in the music's own dark (runde 356 has its own levels).
+        // No hit on the return: the level comes back, that is all.
+        else if (m_kickGone >= 4 && key == base && isBreak == false && isCalm == false
+                 && isBuild == false && preDrop == false && still == false
+                 && m_mixing == false && m_musicDarkEvent.isEmpty())
+            duck = 1.0 - ENGINE_BASE_DUCK * qBound(0.0, qreal(m_kickGone - 4) / 4.0, 1.0);
         // (runde 290: + 0.15 over 50-100 % on the slider - the support comes
         // up with the room instead of sitting at 70 % of it at every fader)
         qreal support = (m_fullAuto && tier > 0 && key != base && key != m_rhythmLead)
@@ -17473,6 +17510,14 @@ int TrackEngine::closingMinutes()
 
 qreal TrackEngine::closingCap() const
 {
+    // R458_LAST_TRACK: the house light is never lidded, and while the last
+    // track plays its own lid rules - the clock's closing (when it is on)
+    // waits for it, up to an hour past closing time
+    if (m_lastStage >= 3)
+        return 1.0;
+    if ((m_lastStage == 1 || m_lastStage == 2)
+        && lastTrackMinutesNow() - closingMinutes() < ENGINE_LAST_WAIT_MIN)
+        return lastTrackCap();
     // A lid on the ENERGY that comes down by itself over the last forty
     // minutes - but ONLY while the clock is still driving the slider. A
     // hand on ENERGY turns "ENERGY by clock" off, and from that moment the
@@ -17545,7 +17590,9 @@ void TrackEngine::closingTick(bool showOn)
     // be the old show's, as in the pulse and fade timers.
     if (m_docTimer.isActive())
         return;
+    lastTrackTick(showOn);                           // R458_LAST_TRACK
     const qreal dim = showOn ? closingCap() : 1.0;
+    const bool lastLid = m_lastStage == 1 || m_lastStage == 2;   // R458: not the clock's closing
     const bool closingStarts = dim < 1.0 && m_closingDim >= 1.0;
     if (qAbs(dim - m_closingDim) > 0.004 || (dim == 0.0) != (m_closingDim == 0.0))
     {
@@ -17562,12 +17609,12 @@ void TrackEngine::closingTick(bool showOn)
             applyGroupOff();
         emit liveChanged();
     }
-    if (dim < 1.0 && m_haze > 0.0)
+    if (dim < 1.0 && m_haze > 0.0 && lastLid == false)
         setHaze(0.0);
     // Runde 221: haze set from a Virtual Console or MIDI fader never passed
     // through m_haze, so the closing left the hazer running. Once, as the
     // closing starts: the haze scene at nought over whatever set it.
-    else if (closingStarts)
+    else if (closingStarts && lastLid == false)
     {
         ensureTable();
         applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
@@ -18575,6 +18622,15 @@ void TrackEngine::slotSelfTestStep()
 void TrackEngine::idle()
 {
     clearMusicDark();                    // runde 356: a stopped deck is not a silent beat
+    // R458_LAST_TRACK: the house light holds, and the last track stopping
+    // (the DJ stops the deck, or BLT goes quiet) is the end of the night
+    if (m_lastStage >= 3)
+        return;
+    if (m_lastStage == 1 || m_lastStage == 2)
+    {
+        enterHouse();
+        return;
+    }
     m_sequenceGroups.clear();
     m_restUntil = -1;
     if (m_doc == nullptr)
@@ -23008,4 +23064,361 @@ void TrackEngine::dropRemember(bool isDrop, const QSet<QString> &castSet)
         m_thisDropSet.clear();
         m_thisDropLead.clear();
     }
+}
+/* =====================================================================
+ *  LAST TRACK (runde 458) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/lasttrack.inc.cpp.
+ *
+ *  Tobias, 2026-10-15 (mockup A/B/C approved): the DJ decides when the
+ *  night ends. From ten minutes before closing time (03:00, 05:00 on New
+ *  Year's night - closingMinutes(), the same clock as the closing sequence,
+ *  which counts real seconds across the summer-time change) a LAST TRACK
+ *  button shows in the top bar. One tap arms SURE?, the second makes the
+ *  track playing the last one:
+ *
+ *   1 ARMED   the show runs as before. The clock's closing (if it is
+ *             switched on) waits for the track - up to an hour past
+ *             closing time ("Kan vaere off-nights hvor der er laengere aabent").
+ *   2 OUTRO   from the track's OUTRO flag (or its last 32 beats): the lasers
+ *             (bars and animation laser) and the strobes go dark and the
+ *             closing lid slides the energy down to a quarter at the end.
+ *   3 HOUSE   the track ended (its last beat) or the deck stopped: soft
+ *             white on the strobe lamps and the wash, zoomed out as wide as
+ *             they go, fading up over 8 s; the haze fades to nought over the
+ *             same 8 s ("Haze skal ogsaa automatisk fade ned til 0 naar
+ *             dj'en har trykket last track"). It stands for 5 minutes ...
+ *   4 DARK    ... and fades to nought over 30 s ("hvordan slukker dj'en
+ *             lyset ... fader ned til 0 efter 5 minutter"). Dark until
+ *             someone acts.
+ *
+ *  A tap on the gold button undoes it at any stage (the show draws again on
+ *  the next beat). SHOW OFF ends it. A different track playing while it is
+ *  armed (not yet HOUSE) disarms it: that track was not the last.
+ *  The lasers only ever go DARK here - nothing moves them lit.
+ * ===================================================================== */
+
+// (the ENGINE_LAST_* and ENGINE_HOUSE_* numbers are with the other defines at the top)
+
+int TrackEngine::lastTrack() const { return m_lastStage; }
+bool TrackEngine::lastTrackShown() const { return m_lastShown; }
+QString TrackEngine::lastTrackCloseAt() const
+{
+    return QStringLiteral("%1:00").arg(closingMinutes() / 60 - 4, 2, 10, QLatin1Char('0'));
+}
+
+int TrackEngine::lastTrackMinutesNow()
+{
+    // minutes past 20:00, as closingMinutes() counts
+    const QTime now = QTime::currentTime();
+    int minutes = now.hour() * 60 + now.minute() - 20 * 60;
+    if (minutes < 0)
+        minutes += 24 * 60;
+    return minutes;
+}
+
+int TrackEngine::lastTrackCloseMin() const
+{
+    return closingMinutes() - lastTrackMinutesNow();
+}
+
+int TrackEngine::lastTrackEndBeat() const
+{
+    return m_audLevel.count();
+}
+
+int TrackEngine::lastTrackOutroBeat() const
+{
+    if (m_lastOutro > 0)
+        return m_lastOutro;
+    return qMax(1, lastTrackEndBeat() - ENGINE_LAST_OUTRO_BEATS + 1);
+}
+
+int TrackEngine::lastTrackLeft() const
+{
+    if (m_lastStage == 1 || m_lastStage == 2)
+    {
+        const int left = lastTrackEndBeat() - m_lastBeatNow;
+        if (left <= 0 || m_lastBpm <= 0.0)
+            return -1;
+        return qRound(qreal(left) * 60.0 / m_lastBpm);
+    }
+    if (m_lastStage == 3)
+    {
+        const qint64 t = m_clock.elapsed() - m_houseMs;
+        return int(qMax<qint64>(0, ENGINE_HOUSE_HOLD_MS - t) / 1000);
+    }
+    return -1;
+}
+
+bool TrackEngine::lastTrackHouse() const
+{
+    return m_lastStage >= 3;
+}
+
+void TrackEngine::setLastStage(int stage)
+{
+    if (stage == m_lastStage)
+        return;
+    m_lastStage = stage;
+    static const char *names[5] = { "off", "armed", "outro", "house", "dark" };
+    logSignal(QStringLiteral("sig:last-track-%1").arg(QLatin1String(names[qBound(0, stage, 4)])));
+    emit lastTrackChanged();
+    emit liveChanged();
+}
+
+void TrackEngine::toggleLastTrack()
+{
+    if (m_lastStage > 0)
+    {
+        // undo, at any stage: the show is drawn again on the next beat
+        const bool wasHouse = m_lastStage >= 3;
+        setLastStage(0);
+        m_lastTitle.clear();
+        m_lastOutro = -1;
+        if (wasHouse)
+        {
+            stopAll();               // the white goes; m_lastState is cleared, so the next beat lands
+            m_houseLevel = -1.0;
+            m_closingDim = 1.0;      // (closingTick sets it on its own next turn too)
+            if (m_showOnNow)
+                idle();              // a stopped deck stands in the idle look, as before
+        }
+        return;
+    }
+    if (m_lastShown == false || m_showOnNow == false || m_testTrack || m_trackTitle.isEmpty()
+        || lastTrackEndBeat() <= 0)
+        return;
+    m_lastTitle = m_trackTitle;
+    m_lastOutro = -1;
+    m_lastBeatNow = qMax(1, m_curBeat);
+    setLastStage(1);
+}
+
+void TrackEngine::lastTrackBeat(const QString &state, int beat, int secStart, qreal bpm)
+{
+    // from tick(), every beat drawn: where the last track is
+    if (m_lastStage != 1 && m_lastStage != 2)
+        return;
+    if (m_trackTitle != m_lastTitle)
+    {
+        // another track plays: that one was not the last
+        logSignal(QStringLiteral("sig:last-track-other"));
+        setLastStage(0);
+        m_lastTitle.clear();
+        m_lastOutro = -1;
+        return;
+    }
+    m_lastBeatNow = beat;
+    if (bpm > 0.0)
+        m_lastBpm = bpm;
+    if (state == QStringLiteral("outro") && (m_lastOutro < 0 || secStart < m_lastOutro))
+        m_lastOutro = qMax(1, secStart);
+    const int end = lastTrackEndBeat();
+    if (end > 0 && beat >= end - 1)
+    {
+        enterHouse();
+        return;
+    }
+    // a DJ loop back out of the outro is the track again
+    setLastStage(beat >= lastTrackOutroBeat() ? 2 : 1);
+}
+
+qreal TrackEngine::lastTrackCap() const
+{
+    // the closing lid while the last track plays: none before its outro,
+    // then down to a quarter at the last beat
+    if (m_lastStage != 2)
+        return 1.0;
+    const int from = lastTrackOutroBeat();
+    const int end = qMax(from + 1, lastTrackEndBeat());
+    const qreal p = qBound(0.0, qreal(m_lastBeatNow - from) / qreal(end - from), 1.0);
+    return 1.0 - (1.0 - ENGINE_LAST_END_LID) * p;
+}
+
+bool TrackEngine::lastTrackDark(const TrackGroup &g) const
+{
+    // in the outro the lasers and the strobes are out - dark, never moved
+    return m_lastStage == 2 && (g.lasers || g.patternDevice || g.strobes);
+}
+
+bool TrackEngine::houseGroup(const QString &key, bool evenOff) const
+{
+    const TrackGroup &g = m_groups.value(key);
+    if (g.lasers || g.patternDevice || g.fixtures.isEmpty() || (evenOff == false && m_groupOff.contains(key)))
+        return false;
+    return g.strobes || key == baseGroup() || key.contains(QStringLiteral("wash"), Qt::CaseInsensitive);
+}
+
+void TrackEngine::ensureHouseZoom()
+{
+    // one hidden scene per house group with a zoom channel: as wide as it goes.
+    // Made with the table (beside ensureZoomScenes), never in the house light
+    // itself: a function added to the Doc there would settle the Doc and stop
+    // the look it had just put up.
+    m_houseZoom.clear();
+    if (m_doc == nullptr)
+        return;
+    QMap<QString, quint32> existing;
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func != nullptr && func->name().startsWith(QStringLiteral("TRACK House: ")))
+            existing.insert(func->name(), func->id());
+    }
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (houseGroup(key, true) == false)
+            continue;
+        QList<SceneValue> values;
+        foreach (quint32 fid, m_groups.value(key).fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr)
+                continue;
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch == nullptr)
+                    continue;
+                if (qch->preset() == QLCChannel::BeamZoomSmallBig)
+                    values.append(SceneValue(fid, ch, 255));
+                else if (qch->preset() == QLCChannel::BeamZoomBigSmall)
+                    values.append(SceneValue(fid, ch, 0));
+            }
+        }
+        if (values.isEmpty())
+            continue;
+        const QString name = QStringLiteral("TRACK House: ") + key + QStringLiteral(" Wide");
+        Scene *scene = existing.contains(name) ? qobject_cast<Scene *>(m_doc->function(existing.value(name))) : nullptr;
+        if (scene != nullptr)
+        {
+            foreach (SceneValue old, scene->values())
+                scene->unsetValue(old.fxi, old.channel);
+        }
+        else
+        {
+            scene = new Scene(m_doc);
+            scene->setName(name);
+            scene->setVisible(false);
+            if (m_doc->addFunction(scene) == false)
+            {
+                delete scene;
+                continue;
+            }
+        }
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+        scene->setFadeInSpeed(1500);
+        m_houseZoom.insert(key, scene->id());
+    }
+}
+
+void TrackEngine::houseLook(qreal level)
+{
+    // the soft white on the strobe lamps and the wash, the start scene's aim
+    level = qBound(0.0, level, 1.0);
+    m_houseLevel = level;
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (houseGroup(key) == false)
+            continue;
+        const TrackGroup &g = m_groups.value(key);
+        const quint32 cf = colourFunction(key, QStringLiteral("white"));
+        if (cf == Function::invalidId())
+            continue;
+        if (g.hasDimmer && g.parts.isEmpty() == false && m_funcs.value(cf).dimmer == false)
+        {
+            run(QStringLiteral("col:") + key, cf, 1.0, 0, false);
+            setDimmer(key, level);
+        }
+        else
+            run(QStringLiteral("col:") + key, cf, level, 0, false);
+        if (m_houseZoom.contains(key))
+            run(QStringLiteral("zoom:") + key, m_houseZoom.value(key), 1.0, 0, false);
+    }
+}
+
+void TrackEngine::enterHouse()
+{
+    if (m_lastStage >= 3 || m_doc == nullptr)
+        return;
+    ensureTable();
+    // everything from the show goes - the lasers already stand dark in the
+    // outro; a deck stopped before it takes them dark here, as SHOW ON's
+    // start picture does (stopAll), never moved lit
+    stopAll();
+    stopSweeps();
+    foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_IDLE, QString()))
+        run("idle:" + QString::number(info->id), info->id, 0.0, 0, false);   // the aim only, as startLook()
+    applyHeadHold(true);
+    m_houseMs = m_clock.elapsed();
+    m_houseHaze = m_haze;
+    m_houseHazeDone = false;
+    m_closingDim = 1.0;
+    setLastStage(3);
+    houseLook(0.0);
+    m_report = tr("(last track)  |  house light");
+}
+
+void TrackEngine::lastTrackTick(bool showOn)
+{
+    // from closingTick(), every 200 ms
+    m_showOnNow = showOn;
+    if (showOn == false && m_lastStage > 0)
+    {
+        // SHOW OFF ends it (release() has taken the light)
+        setLastStage(0);
+        m_lastTitle.clear();
+        m_lastOutro = -1;
+        m_houseLevel = -1.0;
+    }
+    const int minutes = lastTrackMinutesNow();
+    const int close = closingMinutes();
+    const bool window = minutes >= close - ENGINE_LAST_SHOW_MIN && minutes < 600;   // until 06:00
+    const bool shown = m_lastStage > 0
+                    || (showOn && window && m_testTrack == false && m_trackTitle.isEmpty() == false);
+    if (shown != m_lastShown)
+    {
+        m_lastShown = shown;
+        emit lastTrackChanged();
+    }
+    if (m_lastStage < 3)
+    {
+        if (m_lastStage > 0)
+            emit lastTrackChanged();     // the seconds left
+        return;
+    }
+    const qint64 t = m_clock.elapsed() - m_houseMs;
+    // the haze down over the white's 8 s - from wherever it stood. Once more
+    // at nought at the end, for a hazer set from a Virtual Console fader
+    // (runde 221) that m_haze never saw.
+    if (t < ENGINE_HOUSE_IN_MS && m_houseHaze > 0.0)
+        setHaze(m_houseHaze * (1.0 - qreal(t) / qreal(ENGINE_HOUSE_IN_MS)));
+    else if (m_houseHazeDone == false)
+    {
+        m_houseHazeDone = true;
+        setHaze(0.0);
+        ensureTable();
+        Function *hazeFunc = m_doc != nullptr ? m_doc->function(m_hazeScene) : nullptr;
+        if (hazeFunc != nullptr && hazeFunc->name() == ENGINE_HAZE_SCENE)
+            applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
+    }
+    qreal level;
+    if (t < ENGINE_HOUSE_IN_MS)
+        level = ENGINE_HOUSE_LEVEL * qreal(t) / qreal(ENGINE_HOUSE_IN_MS);
+    else if (t < ENGINE_HOUSE_HOLD_MS)
+        level = ENGINE_HOUSE_LEVEL;
+    else if (t < ENGINE_HOUSE_HOLD_MS + ENGINE_HOUSE_OUT_MS)
+        level = ENGINE_HOUSE_LEVEL * (1.0 - qreal(t - ENGINE_HOUSE_HOLD_MS) / qreal(ENGINE_HOUSE_OUT_MS));
+    else
+        level = 0.0;
+    if (m_lastStage == 3 && t >= ENGINE_HOUSE_HOLD_MS + ENGINE_HOUSE_OUT_MS)
+    {
+        houseLook(0.0);
+        setLastStage(4);
+        m_report = tr("(last track)  |  dark");
+        return;
+    }
+    if (m_lastStage == 3 && qAbs(level - m_houseLevel) >= 0.004)
+        houseLook(level);
+    emit lastTrackChanged();
 }

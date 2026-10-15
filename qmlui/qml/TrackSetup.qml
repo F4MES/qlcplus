@@ -1211,7 +1211,8 @@ Rectangle
             }
 
             // the closing sequence (runde 211): the last five minutes to
-            // closing bring the room to dark and the hazer off
+            // closing bring the room to dark and the hazer off. Off until
+            // switched on since R458_CLOSING_OFF - LAST TRACK is the DJ's end
             TrackTile
             {
                 Layout.preferredWidth: 130

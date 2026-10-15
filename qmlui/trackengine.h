@@ -95,9 +95,18 @@ class QRandomGenerator;
 #define ENGINE_CLOCK_POINTS 28
 // runde 211 (Tobias): the closing sequence - the last five minutes to closing
 // time bring the room down to dark, and the hazer off - can be switched off
-#define SETTINGS_ENGINE_CLOSING   QStringLiteral("trackengine/closing")
+#define SETTINGS_ENGINE_CLOSING   QStringLiteral("trackengine/closing-v2")   // R458_CLOSING_OFF: off until switched on (a new key)
 #define SETTINGS_ENGINE_STUTTER   QStringLiteral("trackengine/stutterRate")   // R420_STUTTER
 #define ENGINE_CLOSING_SECS       300
+// R458_LAST_TRACK (track_runtime/lasttrack.inc.cpp)
+#define ENGINE_LAST_SHOW_MIN      10        // the button shows this many minutes before closing
+#define ENGINE_LAST_WAIT_MIN      60        // the clock's closing waits this long for the last track
+#define ENGINE_LAST_OUTRO_BEATS   32        // no OUTRO flag: the last 32 beats are the outro
+#define ENGINE_LAST_END_LID       0.25      // the closing lid at the track's last beat
+#define ENGINE_HOUSE_LEVEL        0.40      // the soft white
+#define ENGINE_HOUSE_IN_MS        8000      // white up, haze down
+#define ENGINE_HOUSE_HOLD_MS      300000    // five minutes of white
+#define ENGINE_HOUSE_OUT_MS       30000     // then down to nought
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 // The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
 // Those lamps at a full white are painful to stand in front of, and it
@@ -567,6 +576,12 @@ class TrackEngine : public QObject
      *  the slider turns it off. */
     Q_PROPERTY(bool roomAuto READ roomAuto WRITE setRoomAuto NOTIFY liveChanged)
     Q_PROPERTY(bool closingSequence READ closingSequence WRITE setClosingSequence NOTIFY liveChanged)
+    // R458_LAST_TRACK: 0 off, 1 armed, 2 outro, 3 house light, 4 dark
+    Q_PROPERTY(int lastTrack READ lastTrack NOTIFY lastTrackChanged)
+    Q_PROPERTY(bool lastTrackShown READ lastTrackShown NOTIFY lastTrackChanged)
+    Q_PROPERTY(int lastTrackLeft READ lastTrackLeft NOTIFY lastTrackChanged)
+    Q_PROPERTY(int lastTrackCloseMin READ lastTrackCloseMin NOTIFY lastTrackChanged)
+    Q_PROPERTY(QString lastTrackCloseAt READ lastTrackCloseAt NOTIFY lastTrackChanged)
     /** The evening's opening picture: the IDLE functions (the START scene)
      *  held on their own, with the engine standing still. The first SHOW ON
      *  of the night with ENERGY at 0 puts it up, and ENERGY above 0 takes
@@ -716,6 +731,16 @@ public:
     Q_INVOKABLE void clabCompare(int mode);
     /** ALL ON / ALL OFF: the lab opens dark */
     Q_INVOKABLE void clabToggleDark();
+    /* ---- R458_LAST_TRACK (track_runtime/lasttrack.inc.cpp) ---- */
+    int lastTrack() const;
+    bool lastTrackShown() const;
+    int lastTrackLeft() const;
+    int lastTrackCloseMin() const;
+    QString lastTrackCloseAt() const;
+    /** a tap (after SURE? on the page): arm, or undo at any stage */
+    Q_INVOKABLE void toggleLastTrack();
+    /** every 200 ms from closingTick(): the window, the house fade, the haze */
+    void lastTrackTick(bool showOn);
     /* ---- R445_DROP_HIT (track_runtime/drophit.inc.cpp) ---- */
     int hitKind() const;
     int hitLast() const;
@@ -1054,6 +1079,7 @@ public:
 
 signals:
     void tableChanged();
+    void lastTrackChanged();             // R458_LAST_TRACK
     void dropSetChanged();               // R431_DROP_PICK
     void liveChanged();
     void labChanged();                   // R410_LAB
@@ -1911,8 +1937,33 @@ private:
     QMap<QString, int> m_turnBeat;         // ... and the beat it was last bumped on
     int m_room;
     bool m_roomAuto;
-    bool m_closingOn = true;               // the closing sequence (SETTINGS_ENGINE_CLOSING)
+    bool m_closingOn = false;              // the closing sequence (SETTINGS_ENGINE_CLOSING) - R458_CLOSING_OFF
     qreal m_closingDim = 1.0;              // closingCap() as last applied to the light (closingTick)
+    // R458_LAST_TRACK (track_runtime/lasttrack.inc.cpp)
+    int m_lastStage = 0;                   // 0 off, 1 armed, 2 outro, 3 house light, 4 dark
+    QString m_lastTitle;                   // the track that was made the last
+    int m_lastOutro = -1;                  // its OUTRO flag, once played
+    int m_lastBeatNow = 0;
+    qreal m_lastBpm = 0.0;
+    bool m_lastShown = false;              // the button's window
+    bool m_showOnNow = false;
+    qint64 m_houseMs = 0;                  // when the house light began (m_clock)
+    qreal m_houseHaze = 0.0;               // the haze it fades down from
+    bool m_houseHazeDone = false;
+    qreal m_houseLevel = -1.0;
+    QMap<QString, quint32> m_houseZoom;    // group -> its widest-zoom scene
+    static int lastTrackMinutesNow();
+    int lastTrackEndBeat() const;
+    int lastTrackOutroBeat() const;
+    bool lastTrackHouse() const;
+    void setLastStage(int stage);
+    void lastTrackBeat(const QString &state, int beat, int secStart, qreal bpm);
+    qreal lastTrackCap() const;
+    bool lastTrackDark(const TrackGroup &g) const;
+    bool houseGroup(const QString &key, bool evenOff = false) const;
+    void ensureHouseZoom();
+    void houseLook(qreal level);
+    void enterHouse();
     int m_roomSent;                        // last percent handed to the ENERGY trim
     bool m_fullAuto;
     QSet<QString> m_laserMoveDark;         // R401_LIFT_TWO_BEATS: bar figures waiting a dark beat to move
