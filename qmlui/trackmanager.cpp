@@ -11,6 +11,7 @@
 
 #include <QJsonDocument>
 #include <QCoreApplication>         // R459_RM_APPINC
+#include <QProcess>                 // R465_BLT_LIVE_INC
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QHostAddress>
@@ -116,6 +117,10 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     // does not link to the Track code)
     if (QCoreApplication::instance() != nullptr)
         QCoreApplication::instance()->setProperty("trackRemote", QVariant::fromValue<QObject *>(this));
+    // R465_BLT_LIVE_START: is Beat Link Trigger running - now, and every 5 s
+    connect(&m_bltProbeTimer, &QTimer::timeout, this, &TrackManager::probeBlt);
+    m_bltProbeTimer.start(5000);
+    QTimer::singleShot(0, this, &TrackManager::probeBlt);
     // R464_ZERO_AFTER: LAST TRACK over with ENERGY at 0 - the start scene, as a hand at 0
     connect(m_engine, &TrackEngine::lastTrackChanged, this, [this]() {
         const int st = m_engine != nullptr ? m_engine->lastTrack() : 0;
@@ -1363,6 +1368,55 @@ void TrackManager::moveMarker(int index, int beat)
     m_markersManual = true;              // FJ_MOVE_MANUAL_FIRST: before updateState() reads it
     updateState();
     sendMarkers(true);                   // let BLT remember the correction
+}
+
+// R465_BLT_LIVE_CPP
+bool TrackManager::bltRunning() const { return m_bltRunning; }
+
+void TrackManager::probeBlt()
+{
+    // R465_BLT_LIVE (Tobias 10-15): the program's list, read in a process of its own -
+    // the GUI and the engine never wait for it. Never two at once; one that hangs is
+    // stopped after 4 s (its finished() tidies up).
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_bltProbe != nullptr)
+    {
+        if (now - m_bltProbeMs > 4000)
+            m_bltProbe->kill();
+        return;
+    }
+    QProcess *p = new QProcess(this);
+    m_bltProbe = p;
+    m_bltProbeMs = now;
+    connect(p, &QProcess::finished, this, [this, p](int, QProcess::ExitStatus status) {
+        const QString out = QString::fromLocal8Bit(p->readAllStandardOutput()).toLower();
+        if (m_bltProbe == p)
+            m_bltProbe = nullptr;
+        p->deleteLater();
+        if (status != QProcess::NormalExit)
+            return;                      // stopped: the answer we had stands
+        // the program (Beat Link Trigger.exe) or its window's title (a java launch)
+        const bool on = out.contains(QLatin1String("beat link trigger"))
+                     || out.contains(QLatin1String("beat-link-trigger"));
+        if (on != m_bltRunning)
+        {
+            m_bltRunning = on;
+            emit bltRunningChanged();
+        }
+    });
+    connect(p, &QProcess::errorOccurred, this, [this, p](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart)
+            return;                      // finished() follows the others
+        if (m_bltProbe == p)
+            m_bltProbe = nullptr;
+        p->deleteLater();
+    });
+#if defined(Q_OS_WIN)
+    p->start(QStringLiteral("tasklist"), QStringList() << QStringLiteral("/V") << QStringLiteral("/FO")
+                                                     << QStringLiteral("CSV") << QStringLiteral("/NH"));
+#else
+    p->start(QStringLiteral("ps"), QStringList() << QStringLiteral("-A") << QStringLiteral("-o") << QStringLiteral("args="));
+#endif
 }
 
 // R459_RM_CPP

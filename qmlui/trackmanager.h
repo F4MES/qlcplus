@@ -40,6 +40,7 @@ class QTcpServer;
 class QTcpSocket;
 class QQuickView;
 class TrackEngine;
+class QProcess;                          // R465_BLT_LIVE_FWD
 class Function;
 class Doc;
 
@@ -86,6 +87,7 @@ class TrackManager : public QObject
 
     Q_PROPERTY(int listenPort READ listenPort WRITE setListenPort NOTIFY listenPortChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
+    Q_PROPERTY(bool bltRunning READ bltRunning NOTIFY bltRunningChanged)   // R465_BLT_LIVE_PROP
     /** No position from BLT for a while although a track was playing:
      *  the engine holds its last look instead of guessing. */
     Q_PROPERTY(bool linkStale READ linkStale NOTIFY linkChanged)
@@ -141,6 +143,7 @@ public:
     int listenPort() const;
     void setListenPort(int port);
     bool connected() const;
+    bool bltRunning() const;             // R465_BLT_LIVE_GET
     bool linkStale() const;
 
     QString title() const;
@@ -273,6 +276,7 @@ signals:
     void testTrackChanged();             // R450_TT_SIG
     void listenPortChanged();
     void connectedChanged();
+    void bltRunningChanged();            // R465_BLT_LIVE_SIG
     void linkChanged();
     void tempoChanged();        // R313_TEMPO_SIGNAL: engineTempo / tempoSource
     void trackChanged();
@@ -467,6 +471,11 @@ private:
     QSet<QString> m_remoteHeld;          // blackout / stutter / flash held by a finger on a phone
     QHash<QString, qint64> m_remoteHeldMs;   // R463_RM_HELD: when its phone last named it
     int m_lastStageSeen = 0;             // R464_ZERO_AFTER
+    void probeBlt();                     // R465_BLT_LIVE_MEM
+    QTimer m_bltProbeTimer;
+    QProcess *m_bltProbe = nullptr;
+    qint64 m_bltProbeMs = 0;
+    bool m_bltRunning = false;
     qint64 m_remoteSeenMs = 0;           // the last line from a phone
     QTimer m_remoteTimer;
     bool m_remoteTimerOn = false;
