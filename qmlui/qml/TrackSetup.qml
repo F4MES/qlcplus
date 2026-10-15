@@ -358,14 +358,19 @@ Rectangle
                 }
             }
 
+            // R462_FULLSCREEN (Tobias 10-15): the window in and out of full screen -
+            // kiosk (-k) has no menu, so this is the way out without Alt+F4. Lit
+            // while it is full screen. SETUP closes with the top bar's CLOSE.
             TrackTile
             {
-                Layout.preferredWidth: 110
+                objectName: "fullscreenTile"
+                Layout.preferredWidth: 120
                 Layout.preferredHeight: 34
-                label: qsTr("CLOSE")
-                activeColor: "#E36B6B"
-                active: true
-                onTapped: if (host) host.setupOpen = false
+                readonly property bool on: Window.window ? Window.window.visibility === Window.FullScreen : false
+                label: qsTr("FULLSCREEN")
+                active: on
+                activeColor: "#4FB3C8"
+                onTapped: if (typeof qlcplus !== "undefined" && qlcplus) qlcplus.toggleFullscreen()
             }
         }
 
