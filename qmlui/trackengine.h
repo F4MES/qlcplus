@@ -1314,6 +1314,22 @@ private:
     void applyOverride(const QString &colour);   // a tile's side effects (was setColourOverride's body)
     QString m_colour;
     QString m_leftColour;        // runde 236: the room colour before this one - not drawn straight back
+    // R460: 7 the fall after a groove, 8 a vocal over a drop, 9 the section's timbre
+    int m_fallFrom = -1;                 // R460_FALL: the first beat of the fall, -1 none
+    int m_fallLen = 0;
+    qreal m_fallH0 = 0.0;                // the highs where it began
+    qreal m_fallAheadMul = 1.0;          // ... and the groove's own last beats when it starts before the line
+    int m_dropVocalBeat = -1;            // R460_DROP_VOCAL
+    int m_dropVocalSec = -1;             // the drop its median is of
+    qreal m_dropVocalMed = 0.0;
+    int m_dropVocalRun = 0;
+    bool m_dropVocal = false;
+    int m_timbreBias = -1;               // R460_TIMBRE: the last room draw's section - -1 none, 0 dark, 1 bright
+    int m_timbreDraw = -1;               // ... read by drawColour() during the room draw only
+    qreal m_timbreMed = -1.0;            // the track's own median (highs / mids), -1 not yet
+    qreal audHighN(int beat) const;
+    int fallLength(int beat, qreal *h0) const;
+    int sectionTimbre(int from, int to);
     int m_colourBar;          // -1: a fresh track, hold the colour until a break or drop
     int m_colourSince;        // beat of the last colour change
     int m_holdNow;            // bars this colour holds - drawn each change around holdBars
