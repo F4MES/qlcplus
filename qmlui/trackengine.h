@@ -64,6 +64,7 @@ class Function;
 class Fixture;
 class Scene;
 class Doc;
+struct MicTap;                     // R467_MIC_CHECK (track_runtime/miccheck.inc.cpp)
 class QSettings;
 class QRandomGenerator;
 
@@ -107,6 +108,11 @@ class QRandomGenerator;
 #define ENGINE_HOUSE_IN_MS        8000      // white up, haze down
 #define ENGINE_HOUSE_HOLD_MS      300000    // five minutes of white
 #define ENGINE_HOUSE_OUT_MS       30000     // then down to nought
+// R467_HAZE_NAG (track_runtime/hazenag.inc.cpp)
+#define ENGINE_HAZE_NAG_MIN       10        // the haze at 0 this long ...
+#define ENGINE_HAZE_NAG_FROM_H    22        // ... from 22:00 ...
+#define ENGINE_HAZE_NAG_TO_H      8         // ... to 08:00
+#define ENGINE_HAZE_NAG_LATER_MIN 30        // LATER: quiet this long
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 // The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
 // Those lamps at a full white are painful to stand in front of, and it
@@ -582,6 +588,26 @@ class TrackEngine : public QObject
     Q_PROPERTY(int lastTrackLeft READ lastTrackLeft NOTIFY lastTrackChanged)
     Q_PROPERTY(int lastTrackCloseMin READ lastTrackCloseMin NOTIFY lastTrackChanged)
     Q_PROPERTY(QString lastTrackCloseAt READ lastTrackCloseAt NOTIFY lastTrackChanged)
+    // R467_HAZE_NAG: minutes the haze has stood at 0 (0 = nothing to say)
+    Q_PROPERTY(int hazeNag READ hazeNag NOTIFY hazeNagChanged)
+    // R467_MIC_CHECK: SETUP > LAB > MIC CHECK - it only listens
+    Q_PROPERTY(bool micActive READ micActive NOTIFY micChanged)
+    Q_PROPERTY(QString micDevice READ micDevice NOTIFY micChanged)
+    Q_PROPERTY(int micDeviceIndex READ micDeviceIndex NOTIFY micChanged)
+    Q_PROPERTY(int micDeviceCount READ micDeviceCount NOTIFY micChanged)
+    Q_PROPERTY(QString micProblem READ micProblem NOTIFY micChanged)
+    Q_PROPERTY(qreal micLevel READ micLevel NOTIFY micChanged)
+    Q_PROPERTY(qreal micPeak READ micPeak NOTIFY micChanged)
+    Q_PROPERTY(bool micClip READ micClip NOTIFY micChanged)
+    Q_PROPERTY(bool micSilent READ micSilent NOTIFY micChanged)
+    Q_PROPERTY(QVariantList micBands READ micBands NOTIFY micChanged)
+    Q_PROPERTY(QVariantList micRoom READ micRoom NOTIFY micChanged)
+    Q_PROPERTY(QVariantList micTrack READ micTrack NOTIFY micChanged)
+    Q_PROPERTY(int micBeatTick READ micBeatTick NOTIFY micChanged)
+    Q_PROPERTY(int micAgree READ micAgree NOTIFY micChanged)
+    Q_PROPERTY(int micRecLeft READ micRecLeft NOTIFY micRecChanged)
+    Q_PROPERTY(bool micAuto READ micAuto NOTIFY micRecChanged)
+    Q_PROPERTY(QVariantList micRecs READ micRecs NOTIFY micRecChanged)
     /** The evening's opening picture: the IDLE functions (the START scene)
      *  held on their own, with the engine standing still. The first SHOW ON
      *  of the night with ENERGY at 0 puts it up, and ENERGY above 0 takes
@@ -741,6 +767,42 @@ public:
     Q_INVOKABLE void toggleLastTrack();
     /** every 200 ms from closingTick(): the window, the house fade, the haze */
     void lastTrackTick(bool showOn);
+    /* ---- R467_HAZE_NAG (track_runtime/hazenag.inc.cpp) ---- */
+    int hazeNag() const;
+    /** LATER: quiet for 30 minutes */
+    Q_INVOKABLE void hazeLater();
+    /** every 200 ms from closingTick() */
+    void hazeNagTick(bool showOn);
+    /* ---- R467_MIC_CHECK (track_runtime/miccheck.inc.cpp) ---- */
+    bool micActive() const;
+    QString micDevice() const;
+    int micDeviceIndex() const;
+    int micDeviceCount() const;
+    QString micProblem() const;
+    qreal micLevel() const;
+    qreal micPeak() const;
+    bool micClip() const;
+    bool micSilent() const;
+    QVariantList micBands() const;
+    QVariantList micRoom() const;
+    QVariantList micTrack() const;
+    int micBeatTick() const;
+    int micAgree() const;
+    int micRecLeft() const;
+    bool micAuto() const;
+    QVariantList micRecs() const;
+    Q_INVOKABLE void micOpen();
+    Q_INVOKABLE void micClose();
+    Q_INVOKABLE void micNextDevice();
+    /** RECORD 30 s - a tap while it runs stops it (and keeps what is there) */
+    Q_INVOKABLE void micRecord();
+    /** EVERY SECTION TONIGHT - holds for this night only */
+    Q_INVOKABLE void micSetAuto(bool on);
+    /** every 200 ms from closingTick(): the capture only when something wants it */
+    void micTick(bool showOn);
+    /** from tick(): the link's beat, and EVERY SECTION TONIGHT */
+    void micBeat(const QString &state, bool sectionChanged, qreal bpm);
+    void micShutdown();
     /* ---- R445_DROP_HIT (track_runtime/drophit.inc.cpp) ---- */
     int hitKind() const;
     int hitLast() const;
@@ -1085,6 +1147,9 @@ public:
 signals:
     void tableChanged();
     void lastTrackChanged();             // R458_LAST_TRACK
+    void hazeNagChanged();               // R467_HAZE_NAG
+    void micChanged();                   // R467_MIC_CHECK
+    void micRecChanged();
     void dropSetChanged();               // R431_DROP_PICK
     void liveChanged();
     void labChanged();                   // R410_LAB
@@ -1985,6 +2050,46 @@ private:
     bool lastTrackHolds() const;           // R463_LAST_CLOCK
     int m_lastCloseMinSent = -100000;      // R463_HOUSE_SMALL
     bool m_linkIdle = false;               // R463_LINK_IDLE
+    // R467_HAZE_NAG (track_runtime/hazenag.inc.cpp)
+    int m_hazeNag = 0;
+    qint64 m_hazeZeroMs = 0;               // how long the haze has stood at 0, watched
+    qint64 m_hazeQuietUntil = -1;          // LATER (m_clock)
+    qint64 m_hazeNagLastMs = -1;
+    qint64 m_hazeBeatMs = -1;              // the last beat (m_clock): is music playing
+    // R467_MIC_CHECK (track_runtime/miccheck.inc.cpp)
+    MicTap *m_mic = nullptr;               // a child QObject: the capture and what it heard
+    bool m_micOpen = false;
+    QString m_micDeviceName;
+    int m_micDeviceIndex = -1;
+    int m_micDeviceCount = 0;
+    QString m_micProblem;
+    QVariantMap m_micShown;                // the last frame, as the panel reads it
+    QTimer m_micUiTimer;                   // 100 ms while the capture runs
+    QList<qint64> m_micLinkBeats;          // the link's beats of the last seconds (m_clock)
+    QString m_micState;                    // the section playing (tick)
+    qreal m_micBpm = 0.0;
+    qint64 m_micTriedMs = -1;
+    qint64 m_micUnwantedMs = -1;
+    mutable bool m_micAutoRead = false;
+    mutable QString m_micAutoStored;       // EVERY SECTION TONIGHT: the night it is on for
+    QFile m_micFile;
+    qint64 m_micRecStartMs = -1;
+    qint64 m_micRecUntilMs = -1;           // a recording runs until (m_clock); -1 none
+    int m_micRecLeftSent = -1;
+    QString m_micRecId, m_micRecWhy, m_micRecSection, m_micRecTitle;
+    QVariantList m_micRecs;                // tonight's recordings
+    QString m_micRecsNight;
+    QSet<QString> m_micAutoDone;           // title|section recorded tonight
+    void micDevicesRead();
+    bool micStart();
+    void micStop();
+    void micRead();
+    void micWindow();
+    void micFrame();
+    QVariantList micTrackNow() const;
+    bool micRecBegin(const QString &why);
+    void micRow(const QVariantMap &v);
+    void micRecEnd();
     int lastTrackEndBeat() const;
     int lastTrackOutroBeat() const;
     bool lastTrackHouse() const;
