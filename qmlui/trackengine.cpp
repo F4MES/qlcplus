@@ -707,6 +707,24 @@ void TrackEngine::slotPulseTimer()
                 }
             }
         }
+        // R461_AND_BASS (idea 2): the base and the Minis hit again on the "and" where the
+        // bass plays it - 55-80 % of the kick's hit, so the light is not at its lowest
+        // exactly when the bass comes in. Not a group stepping eighths of its own.
+        if (m_andBass && m_beatMs > 0.0 && m_pulseDepth.value(key, 0.0) > 0.0
+            && (key == m_compositionBase || smallWash(key)) && m_liveMove.value(key).subSteps <= 1)
+        {
+            const int q = int(qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999) * 4.0);
+            if (q == 2 && m_andSeen.value(key, 0) < 2)
+            {
+                m_andSeen.insert(key, 2);
+                const int nib = onsetLow(m_lastBeat, 2);
+                if (nib >= 5)
+                {
+                    m_pulseStart.insert(key, now);
+                    m_pulseStrength.insert(key, 0.55 + 0.25 * qMin(1.0, qreal(nib) / 12.0));
+                }
+            }
+        }
         // eighths and sixteenths: the pattern steps between the beats
         TrackMove mv = m_liveMove.value(key);
         if (mv.subSteps > 1 && m_patterned.value(key, false) && m_beatMs > 0.0)
@@ -745,7 +763,8 @@ void TrackEngine::slotPulseTimer()
         }
         if (m_pulseDepth.value(key, 0.0) <= 0.0 && m_breathe.value(key, 0) <= 0
             && !m_sequenceGroups.contains(key)
-            && !(m_landSixteenths && blink16Now() && m_groups.value(key).strobes))   // runde 359 (R362: or the mini landing)
+            && !(m_landSixteenths && blink16Now() && m_groups.value(key).strobes)   // runde 359 (R362: or the mini landing)
+            && !(m_pluckSlots != 0 && smallWash(key)))                            // R461_BREAK_PLUCK
             continue;
         any = true;
         // the chase owns the dimmers: the pulse rides on ITS intensity, since
@@ -3650,6 +3669,39 @@ void TrackEngine::setTrackRhythm(const QVariantList &midRaw, const QVariantList 
         for (const QVariant &v : onsetHigh)
             m_onsetHigh.append(quint16(qBound(0, v.toInt(), 65535)));
     }
+}
+
+void TrackEngine::setTrackOnsets(const QVariantList &onsetLow, const QVariantList &onsetMid)
+{
+    // R461_ONSETS (Tobias 10-15, ideas 2 + 3): beat for beat with the waveform, or not at all
+    m_onsetLow.clear();
+    m_onsetMid.clear();
+    m_andBass = false;
+    m_pluckSlots = 0;
+    if (m_audLevel.isEmpty() == false && onsetLow.count() == m_audLevel.count())
+    {
+        for (const QVariant &v : onsetLow)
+            m_onsetLow.append(quint16(qBound(0, v.toInt(), 65535)));
+    }
+    if (m_audLevel.isEmpty() == false && onsetMid.count() == m_audLevel.count())
+    {
+        for (const QVariant &v : onsetMid)
+            m_onsetMid.append(quint16(qBound(0, v.toInt(), 65535)));
+    }
+}
+
+int TrackEngine::onsetLow(int beat, int quarter) const
+{
+    if (beat < 1 || beat > m_onsetLow.count() || quarter < 0 || quarter > 3)
+        return -1;
+    return (m_onsetLow.at(beat - 1) >> (4 * quarter)) & 0xf;
+}
+
+int TrackEngine::onsetMid(int beat, int quarter) const
+{
+    if (beat < 1 || beat > m_onsetMid.count() || quarter < 0 || quarter > 3)
+        return -1;
+    return (m_onsetMid.at(beat - 1) >> (4 * quarter)) & 0xf;
 }
 
 int TrackEngine::onsetHigh(int beat, int quarter) const
@@ -12184,6 +12236,47 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     else
         m_dropVocalRun = 0;
     m_dropVocal = m_dropVocalRun >= 3 && isDrop && still == false && m_mixing == false && isCalm == false;
+    // R461_AND_BASS (Tobias 10-15, idea 2): the bass on the "and" - its onset on the
+    // half beat a real one (5+) and the strongest between the beats, on 4 of the
+    // last 8 groove beats. In a groove or a drop only (the groove rule's own gates).
+    m_andBass = false;
+    m_andSeen.clear();
+    if (m_onsetLow.isEmpty() == false && isBuild == false && isBreak == false && fader >= 0.45
+        && isCalm == false && still == false && m_mixing == false && preDrop == false)
+    {
+        int hits = 0, seen = 0;
+        for (int b = beat - 7; b <= beat; b++)
+        {
+            const int q2 = onsetLow(b, 2);
+            if (q2 < 0)
+                continue;
+            seen++;
+            if (q2 >= 5 && q2 >= onsetLow(b, 1) && q2 >= onsetLow(b, 3))
+                hits++;
+        }
+        m_andBass = seen >= 6 && hits >= 4;
+    }
+    // R461_BREAK_PLUCK (Tobias 10-15, idea 3): a break's melody pattern - the same
+    // quarter hit (6+ in the mids) on 6 of the last 8 beats. The mids, not the
+    // highs: the hats that stay when the kick goes gave half of all break beats.
+    m_pluckSlots = 0;
+    if (isBreak && m_onsetMid.isEmpty() == false
+        && isCalm == false && still == false && m_mixing == false && fader >= 0.30)
+    {
+        for (int q = 0; q < 4; q++)
+        {
+            int hits = 0;
+            for (int b = beat - 7; b <= beat; b++)
+            {
+                if (onsetMid(b, q) >= 6)
+                    hits++;
+            }
+            if (hits >= 6)
+                m_pluckSlots |= 1 << q;
+        }
+        if (m_pluckSlots == 0xf || m_pluckSlots == 0x1)
+            m_pluckSlots = 0;                // every quarter is noise; the one alone is a filtered kick or a chord
+    }
     // R358_GROOVE (Tobias 10-05, "rytmen inde i slaget"): where the drums hit
     // BETWEEN the beats, over the last eight - BLT's highs per quarter beat.
     // A quarter that hits a quarter harder than the beat itself (an off-beat
@@ -13975,11 +14068,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
-    if ((anyPulse || (m_landSixteenths && blink16Now())) && m_pulseTimer.isActive() == false)   // runde 359 (R362: or the mini landing)
+    if ((anyPulse || (m_landSixteenths && blink16Now()) || m_pluckSlots != 0) && m_pulseTimer.isActive() == false)   // runde 359 (R362: or the mini landing), R461_BREAK_PLUCK
     {
         m_pulseTimer.start();
     }
-    else if (anyPulse == false && m_pulseTimer.isActive() && !(m_landSixteenths && blink16Now()))   // R363: not under the sixteenths
+    else if (anyPulse == false && m_pulseTimer.isActive() && !(m_landSixteenths && blink16Now()) && m_pluckSlots == 0)   // R363: not under the sixteenths (R461: nor the plucks)
     {
         // the last factor the timer wrote may have been the shut half of a
         // gate: level everything again or that zero stays until the next beat
@@ -14547,6 +14640,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
         if (m_timbreBias >= 0) ev << (m_timbreBias == 1 ? "timbre-bright" : "timbre-dark");   // R460
         if (m_dropVocal) ev << "drop-vocal";
+        if (m_andBass) ev << "and-bass";                               // R461
+        if (m_pluckSlots != 0) ev << QString("pluck%1").arg(m_pluckSlots);
         if ((m_fallFrom >= 0 && beat >= m_fallFrom && beat < m_fallFrom + m_fallLen) || m_fallAheadMul < 1.0) ev << "fall";
         if (m_musicDarkEvent.isEmpty() == false) ev << m_musicDarkEvent;   // runde 356
         if (m_hardStart && sectionChanged) ev << "land-hard";
@@ -15731,6 +15826,24 @@ qreal TrackEngine::pulseFactor(const QString &group) const
 {
     qreal factor = 1.0;
     qint64 now = m_clock.elapsed();
+
+    // R461_BREAK_PLUCK (Tobias 10-15, idea 3): the Minis twinkle on a break's own
+    // pattern - 85 % between the notes, 100 % on them, a tenth of a beat to fall.
+    // Only where this beat has the note (a pattern that stops, stops the twinkle).
+    if (m_pluckSlots != 0 && m_beatMs > 0.0 && smallWash(group))
+    {
+        const qreal within = qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999);
+        qreal since = 1.0e9;
+        for (int k = int(within * 4.0); k >= 0; k--)
+        {
+            if ((m_pluckSlots & (1 << k)) != 0 && onsetMid(m_lastBeat, k) >= 4)
+            {
+                since = (within - k / 4.0) * m_beatMs;
+                break;
+            }
+        }
+        factor *= 0.85 + 0.15 * std::exp(-since / qMax(25.0, m_beatMs * 0.10));
+    }
 
     // R359_LAND_16 (Tobias 10-05, "stroberne blinker i takt paa landingen"):
     // the strobe lamps' landing blinks on the sixteenths of THIS beat - lit
