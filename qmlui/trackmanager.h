@@ -466,6 +466,7 @@ private:
     /* R459_RM_MEM: the phone remote */
     QSet<QString> m_remoteHeld;          // blackout / stutter / flash held by a finger on a phone
     QHash<QString, qint64> m_remoteHeldMs;   // R463_RM_HELD: when its phone last named it
+    int m_lastStageSeen = 0;             // R464_ZERO_AFTER
     qint64 m_remoteSeenMs = 0;           // the last line from a phone
     QTimer m_remoteTimer;
     bool m_remoteTimerOn = false;

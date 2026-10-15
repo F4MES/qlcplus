@@ -645,7 +645,7 @@ void TrackEngine::slotDocSettled()
     if (m_startScene)
         startLook();
     else if (wasIdle)
-        idle();
+        linkIdle();                      // R464_DOC_IDLE: not the deck stopping - an armed LAST TRACK holds
     emit tableChanged();
     emit liveChanged();
 }
@@ -4157,8 +4157,7 @@ void TrackEngine::setTrackAudio(const QVariantList &level, const QVariantList &k
     m_audLevel.clear();
     m_audKick.clear();
     m_audHigh.clear();
-    m_fallFrom = -1;                     // R460: a new track starts clean
-    m_dropVocalSec = -1;
+    m_dropVocalSec = -1;                 // R460: (R464_RESEND_FALL: the fall is reset in trackLoaded())
     m_dropVocalRun = 0;
     m_dropVocal = false;
     m_timbreMed = -1.0;
@@ -4197,6 +4196,10 @@ int TrackEngine::fallLength(int beat, qreal *h0, int *peakAt) const
     if (peakAt != nullptr)
         *peakAt = -1;
     if (m_audHigh.isEmpty() || m_audHigh.count() != m_audLevel.count() || beat < 3 || beat + 5 > m_audHigh.count())
+        return 0;
+    // R464_MONO_FALL: a mono (blue) waveform has no bands - BLT sends no mids for it,
+    // and its "highs" are the loudness: no fall read from them
+    if (m_audMid.isEmpty())
         return 0;
     int at = beat - 2;
     for (int b = beat - 1; b <= beat; b++)
@@ -9752,9 +9755,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // R460_FALL (Tobias 10-15, idea 7): a groove (a drop or a normal) ends into a
     // break and the highs fall with it - the light sinks with them (below, where
     // the groups' levels are set). Not under HOLD, in a mix or at the bottom.
+    // R464_TIMBRE_LOG: a section that draws no colour has no timbre of its own
+    if (sectionChanged)
+        m_timbreBias = -1;
     if (sectionChanged && isBreak && (m_lastState == QStringLiteral("drop") || m_lastState == QStringLiteral("normal")
                                       || m_lastState == QStringLiteral("drive"))
-        && hold == false && m_mixing == false && still == false)
+        && hold == false && m_mixing == false && still == false && isCalm == false)   // R464_CALM
     {
         qreal h0 = 0.0;
         const int len = fallLength(beat, &h0);
@@ -9772,13 +9778,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the highs' peak - a dip before it went down, up and down again
     if (isBreak == false && isBuild == false && nextState == QStringLiteral("break") && beatsToNext >= 1 && beatsToNext <= 3
         && (state == QStringLiteral("drop") || state == QStringLiteral("normal") || state == QStringLiteral("drive"))
-        && hold == false && m_mixing == false && still == false)
+        && hold == false && m_mixing == false && still == false && isCalm == false)   // R464_CALM
     {
+        // R464_FALL_AHEAD: the peak over the groove's last bar (line-4 .. line), not the
+        // line's own window (line-2 .. line) - with that the last beats could almost
+        // never sink. After the peak, and sinking.
+        const int line = beat + beatsToNext;
         qreal h0 = 0.0;
-        int peakAt = -1;
-        if (fallLength(beat + beatsToNext, &h0, &peakAt) > 0 && h0 > 0.0 && beat > peakAt
-            && audHighN(beat) < 0.98 * h0 && audHighN(beat) <= audHighN(beat - 1))
-            m_fallAheadMul = qBound(0.55, 0.55 + 0.45 * audHighN(beat) / h0, 1.0);
+        int pk = qMax(1, line - 4);
+        for (int b = pk + 1; b <= line; b++)
+        {
+            if (audHighN(b) > audHighN(pk))
+                pk = b;
+        }
+        const qreal hp = audHighN(pk);
+        if (fallLength(line, &h0) > 0 && hp > 0.0 && beat > pk
+            && audHighN(beat) < 0.98 * hp && audHighN(beat) <= audHighN(beat - 1))
+            m_fallAheadMul = qBound(0.55, 0.55 + 0.45 * audHighN(beat) / hp, 1.0);
     }
     // R358_REPEAT (Tobias 10-05, "omkvaedet faar sit eget look hver gang"):
     // the second drop of a track that SOUNDS like the first (the waveform,
@@ -13408,10 +13424,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             r460 = 1.0 + 0.40 * qBound(0.0, audHighN(beat) / m_fallH0, 1.0);
             // R463_FALL_BASE: the base has the break's own x1.4 below already - the
-            // lift on top made it x1.96 (a flash at the line). From the groove's
-            // level to the break's own, as for the others.
-            if (key == base && still == false)
-                r460 /= 1.4;
+            // lift on top made it x1.96 (a flash at the line). R464_FALL_BASE: no
+            // lift for it at all (463's divide sank it under the break's own level
+            // and stepped it back up) - nor for the bars alone, under the same x1.4.
+            if ((key == base || m_barsAloneNow) && still == false)
+                r460 = 1.0;
         }
         if (m_fallAheadMul < 1.0 && g.strobes == false && g.lasers == false && g.patternDevice == false)
             r460 = m_fallAheadMul;
@@ -17911,7 +17928,12 @@ void TrackEngine::closingTick(bool showOn)
         return;
     lastTrackTick(showOn);                           // R458_LAST_TRACK
     const qreal dim = showOn ? closingCap() : 1.0;
-    const bool lastLid = m_lastStage == 1 || m_lastStage == 2;   // R458: not the clock's closing
+    // R458: not the clock's closing - R464_HAZE_LID: only while LAST TRACK's lid is the
+    // one that applies (closingCap's own test); after the clock's hour the room went
+    // dark and the hazer ran on
+    const bool lastLid = (m_lastStage == 1 || m_lastStage == 2)
+                      && (m_closingOn == false || m_roomAuto == false
+                          || -lastTrackSecsToClose() < qint64(ENGINE_LAST_WAIT_MIN) * 60);
     const bool closingStarts = dim < 1.0 && m_closingDim >= 1.0;
     if (qAbs(dim - m_closingDim) > 0.004 || (dim == 0.0) != (m_closingDim == 0.0))
     {
@@ -18946,6 +18968,13 @@ void TrackEngine::linkIdle()
     // link quiet - idle() took an armed LAST TRACK to the house light in the middle
     // of the track. The idle look as before; the stage holds, and the beats coming
     // back carry on with it. The deck stopping (and the 30 s watchdog) still end it.
+    // R464_OUTRO_QUIET: in the outro the light holds as it stands - the idle look
+    // could put the start scene up where the outro keeps lasers and strobes dark
+    if (m_lastStage == 2)
+    {
+        clearMusicDark();
+        return;
+    }
     m_linkIdle = true;
     idle();
     m_linkIdle = false;
@@ -19227,6 +19256,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     // the new track's first beat drew a fresh colour over the one the mix
     // handed over (runde 300, bane B's B19)
     m_forceNext = false;
+    m_fallFrom = -1;                     // R464_RESEND_FALL: a new track (a resend of the same keeps its fall)
     clearMusicDark();                    // runde 356
     newTrackMemory(title);               // runde 358: no loop; the drops of another track are forgotten
     // R435_CRUMBS: the trail names the track; the last run's crash goes in the log
@@ -23154,6 +23184,13 @@ void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int b
         hitUndark();
         return;
     }
+    // R464_HIT_OUTRO: not in LAST TRACK's outro - its flash took every strobe white
+    // where the outro keeps them dark. Still armed.
+    if (m_lastStage == 2)
+    {
+        hitUndark();
+        return;
+    }
     const bool arrives = isDrop && (m_dropArrivedNow || m_lateLandNow);
     // DARK: the beats before the flag - his BLACKOUT, unless his own is on
     if (m_hitKind == 3 && arrives == false && m_hitDark == false && m_blackout == false
@@ -23553,6 +23590,13 @@ void TrackEngine::toggleLastTrack()
     if (m_lastShown == false || m_showOnNow == false || m_testTrack || m_trackTitle.isEmpty()
         || lastTrackEndBeat() <= 0)
         return;
+    // R464_NO_START: not over the start scene - tick() draws nothing under it, so no
+    // outro, and the start look came back over the house light
+    if (m_startScene)
+    {
+        logSignal(QStringLiteral("sig:last-track-refused-start-scene"));
+        return;
+    }
     m_lastTitle = m_trackTitle;
     m_lastOutro = -1;
     m_lastBeatNow = qMax(1, m_curBeat);
@@ -23702,6 +23746,9 @@ void TrackEngine::houseLook(qreal level)
             run(QStringLiteral("col:") + key, cf, level, 0, false);
         if (m_houseZoom.contains(key))
             run(QStringLiteral("zoom:") + key, m_houseZoom.value(key), 1.0, 0, false);
+        // R464_HOUSE_CLEAN: a partner colour (FADE / CHASE) is not left over the white
+        if (m_active.contains(QStringLiteral("colx:") + key))
+            stopSlot(QStringLiteral("colx:") + key, true);
     }
 }
 
@@ -23710,11 +23757,19 @@ void TrackEngine::enterHouse()
     if (m_lastStage >= 3 || m_doc == nullptr)
         return;
     ensureTable();
+    // R464_HOUSE_CLEAN: the colour FADE's timer (2+ colour tiles) painted the tiles
+    // over the white and left the partner colour on through DARK; a music-dark or a
+    // stutter stab held the white at nought
+    m_layerTimer.stop();
+    m_layerOwned.clear();
+    m_mixGlide = false;
+    clearMusicDark();
     // everything from the show goes - the lasers already stand dark in the
     // outro; a deck stopped before it takes them dark here, as SHOW ON's
     // start picture does (stopAll), never moved lit
     stopAll();
     stopSweeps();
+    applyGroupOff();                     // R464_HOUSE_CLEAN: OFF and BLACKOUT's masks back (stopAll dropped them)
     foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_IDLE, QString()))
         run("idle:" + QString::number(info->id), info->id, 0.0, 0, false);   // the aim only, as startLook()
     applyHeadHold(true);
@@ -23738,6 +23793,19 @@ void TrackEngine::lastTrackTick(bool showOn)
         m_lastTitle.clear();
         m_lastOutro = -1;
         m_houseLevel = -1.0;
+    }
+    // R464_DARK_NOON: DARK holds until someone acts - or until noon: a show left on
+    // all day drew nothing the next evening (tick() draws nothing in DARK)
+    if (m_lastStage == 4 && lastTrackMinutesNow() >= 960 && lastTrackMinutesNow() < 1440)
+    {
+        logSignal(QStringLiteral("sig:last-track-noon"));
+        setLastStage(0);
+        m_lastTitle.clear();
+        m_lastOutro = -1;
+        m_houseLevel = -1.0;
+        m_closingDim = 1.0;
+        if (showOn)
+            idle();
     }
     const int minutes = lastTrackMinutesNow();
     // R463_LAST_SECS: ten minutes before closing in real seconds, until 06:00

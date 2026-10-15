@@ -116,6 +116,17 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     // does not link to the Track code)
     if (QCoreApplication::instance() != nullptr)
         QCoreApplication::instance()->setProperty("trackRemote", QVariant::fromValue<QObject *>(this));
+    // R464_ZERO_AFTER: LAST TRACK over with ENERGY at 0 - the start scene, as a hand at 0
+    connect(m_engine, &TrackEngine::lastTrackChanged, this, [this]() {
+        const int st = m_engine != nullptr ? m_engine->lastTrack() : 0;
+        if (st == 0 && m_lastStageSeen > 0 && m_autoRun && m_engine != nullptr && m_energyTrim == 0
+            && m_engine->startScene() == false)
+        {
+            m_engine->setStartScene(true, true);
+            m_startAuto = m_engine->startScene();
+        }
+        m_lastStageSeen = st;
+    }, Qt::QueuedConnection);
     // ROOM (by clock, or a tap) is the ENERGY trim: one dial, not two
     connect(m_engine, &TrackEngine::roomChanged, this, &TrackManager::setEnergyTrim);
     // R184_START_SCENE_INIT: tonight's state, and the clock's ENERGY at once -
@@ -1576,7 +1587,14 @@ QString TrackManager::remoteCommand(const QString &line)
     if (cmd == QStringLiteral("show"))
         setAutoRun(a.value(1) == QStringLiteral("1"));
     else if (cmd == QStringLiteral("last"))
+    {
+        // R464_RM_LAST: the phone says what it wants - last|1 arm, last|0 undo. The desk
+        // may have done it between the phone's two taps; a bare "last" toggles (an old page)
+        const QString want = a.value(1);
+        if ((want == QLatin1String("1") && e->lastTrack() > 0) || (want == QLatin1String("0") && e->lastTrack() == 0))
+            return remoteState();
         e->toggleLastTrack();
+    }
     // ---- LIVE
     else if (cmd == QStringLiteral("energy"))
     {
@@ -1728,6 +1746,8 @@ void TrackManager::startTestTrack()
 {
     if (m_testTrack || (m_beatCount > 0 && m_playing))
         return;                          // a real track is playing: it stays
+    if (m_engine != nullptr && m_engine->lastTrack() > 0)
+        return;                          // R464_NO_TEST: LAST TRACK is on - its undo would hide
 
     qreal bpm = 128.0;
     MasterTimer *mt = m_doc != nullptr ? m_doc->masterTimer() : nullptr;
