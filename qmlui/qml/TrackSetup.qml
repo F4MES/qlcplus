@@ -306,7 +306,7 @@ Rectangle
                 objectName: "labTile"
                 Layout.preferredWidth: 80
                 Layout.preferredHeight: 34
-                visible: trackEngine ? (trackEngine.labAvailable || trackEngine.slabAvailable) : false
+                visible: trackEngine ? true : false      // R467_MIC_CHECK: MIC CHECK needs no lamps
                 label: qsTr("LAB")
                 active: setupRoot.labMenuOpen
                 activeColor: "#E3B44F"
@@ -525,7 +525,7 @@ Rectangle
             Text
             {
                 x: 70; y: 17; width: parent.width - 90; elide: Text.ElideRight
-                text: qsTr("one lamp type at a time - see every look on the rig, keep it or not.  SHOW OFF only.")
+                text: qsTr("one lamp type at a time - see every look on the rig, keep it or not.  SHOW OFF only (MIC CHECK: any time).")
                 color: setupRoot.cDim; font.pixelSize: 13
             }
             Grid
@@ -581,6 +581,19 @@ Rectangle
                                                                      : qsTr("every level as the show file made it")
                     openName: "labOpen:colour"
                     onOpen: if (trackEngine) trackEngine.clabOpen()
+                }
+                // R467_MIC_CHECK: only listens, so SHOW ON is fine
+                LabCard
+                {
+                    title: qsTr("MIC CHECK")
+                    width: labMenu.cw; showOn: false
+                    sub: qsTr("this PC's microphone  ·  SHOW ON is fine")
+                    can: true
+                    line1: qsTr("the level, 16 bands, the room's shape against the track")
+                    line2: trackEngine && trackEngine.micRecs.length > 0 ? qsTr("%1 recordings tonight").arg(trackEngine.micRecs.length)
+                                                                        : qsTr("only listens - nothing on the rig changes")
+                    openName: "labOpen:mic"
+                    onOpen: if (trackEngine) trackEngine.micOpen()
                 }
                 LabCard { width: labMenu.cw; title: qsTr("WASH LAB"); sub: qsTr("the moving heads"); live: false }
             }
@@ -1370,6 +1383,19 @@ Rectangle
         active: trackEngine ? trackEngine.clabActive : false
         visible: active
         source: "qrc:/ColourLab.qml"
+    }
+
+    // R467_MIC_CHECK: the same, for MIC CHECK
+    Loader
+    {
+        id: micLoader
+        objectName: "micLoader"
+        parent: setupRoot.host ? setupRoot.host : setupRoot
+        anchors.fill: parent
+        z: 1000
+        active: trackEngine ? trackEngine.micActive : false
+        visible: active
+        source: "qrc:/MicCheck.qml"
     }
 
     // R440_SEND: SEND TO CLAUDE - over the whole page, from ADVANCED

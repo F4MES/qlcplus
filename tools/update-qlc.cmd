@@ -18,8 +18,13 @@ exit /b
      shortcut opens it (the old one kept beside it as PSMAIN.qxw.bak-<time>)
      and starts QLC+ again if it was running
   4. BLT's qlc_shared_functions.clj goes to Downloads\qlc-update (BLT reads it
-     from its own window - paste it there yourself if it changed)
-  Nothing is ever deleted. Options (after the file name in a cmd window):
+     from its own window - paste it there yourself if it changed); the one it
+     replaces is kept as qlc_shared_functions.clj.bak-<time>
+  5. rollback-qlc.cmd goes to Downloads\qlc-update too: it puts back the build,
+     the show file and BLT's functions from before (runde 467)
+  Nothing is ever deleted. The installers stay in Downloads\qlc-update
+  (QLC-rig-setup-<build>.exe) - rollback-qlc.cmd needs them.
+  A build that rollback-qlc.cmd took away is not installed again (-Force does). Options (after the file name in a cmd window):
       -Ask        ask before closing QLC+ and installing
       -Interactive  the installer with its windows (not silent)
       -NoStart    do not start QLC+ again afterwards
@@ -48,12 +53,16 @@ New-Item -ItemType Directory -Force -Path (Split-Path $state) | Out-Null
 function Say($text, $colour = "Gray") { Write-Host $text -ForegroundColor $colour }
 
 function Read-State {
-    $s = [pscustomobject]@{ exeRev = ""; showSha = "" }
+    # runde 467: + history (every build installed, newest last) and rolledBack (the
+    # builds rollback-qlc.cmd took away - not installed again by themselves)
+    $s = [pscustomobject]@{ exeRev = ""; showSha = ""; history = @(); rolledBack = @() }
     if (Test-Path $state) {
         try {
             $j = Get-Content $state -Raw | ConvertFrom-Json
             if ($j.exeRev) { $s.exeRev = "$($j.exeRev)" }
             if ($j.showSha) { $s.showSha = "$($j.showSha)" }
+            if ($j.history) { $s.history = @($j.history | ForEach-Object { "$_" }) }
+            if ($j.rolledBack) { $s.rolledBack = @($j.rolledBack | ForEach-Object { "$_" }) }
         } catch { }
     }
     return $s
@@ -153,6 +162,9 @@ if (-not $exe) {
     Say "No QLC-rig-setup.exe in the release yet (the build may still be running)." "Yellow"
 } elseif ($rev -and $rev -eq $s.exeRev -and -not $Force) {
     Say "QLC+ $rev is already installed." "Green"
+} elseif ($rev -and $s.rolledBack -contains $rev -and -not $Force) {
+    # runde 467: rollback-qlc.cmd took this build away - not again by itself
+    Say "QLC+ $rev was rolled back with rollback-qlc.cmd - not installed again (a newer build will be; -Force installs this one)." "Yellow"
 } else {
     $exeFile = Join-Path $work ("QLC-rig-setup-{0}.exe" -f ($(if ($rev) { $rev } else { "new" })))
     Fetch $exe $exeFile
@@ -186,7 +198,10 @@ if ($exeFile -or $showFile) {
         if ($Interactive) { $p = Start-Process -FilePath $exeFile -Wait -PassThru }
         else              { $p = Start-Process -FilePath $exeFile -ArgumentList "/S" -Wait -PassThru }
         if ($p.ExitCode -eq 0) {
-            $s.exeRev = $rev; Save-State $s
+            $s.exeRev = $rev
+            if ($rev) { $s.history = @($s.history | Where-Object { $_ -ne $rev }) + @($rev) }   # runde 467
+            $s.rolledBack = @($s.rolledBack | Where-Object { $_ -ne $rev })
+            Save-State $s
             Say "QLC+ $rev installed." "Green"
         } else {
             Say ("The installer ended with code {0} - nothing marked as installed. It is in {1}." -f $p.ExitCode, $exeFile) "Yellow"
@@ -219,7 +234,24 @@ if ($exeFile -or $showFile) {
 $clj = Get-Asset $release "qlc_shared_functions.clj"
 if ($clj) {
     $cljPath = Join-Path $work "qlc_shared_functions.clj"
-    Fetch $clj $cljPath
+    $cljNew = Join-Path $work "qlc_shared_functions.clj.new"
+    Fetch $clj $cljNew
+    # runde 467: the one it replaces is kept (rollback-qlc.cmd puts it back)
+    if ((Test-Path $cljPath) -and (Get-FileHash $cljPath).Hash -ne (Get-FileHash $cljNew).Hash) {
+        $cljBak = "{0}.bak-{1}" -f $cljPath, (Get-Date -Format "yyyyMMdd-HHmm")
+        Copy-Item -Path $cljPath -Destination $cljBak
+        Say "  the old BLT functions are kept as $cljBak"
+    }
+    Copy-Item -Path $cljNew -Destination $cljPath -Force
+    Remove-Item -Path $cljNew -ErrorAction SilentlyContinue
     Say "BLT's shared functions are in $cljPath (paste them into BLT if they changed)."
+}
+
+# ---- 5. rollback-qlc.cmd beside the installers (runde 467) ----
+$rb = Get-Asset $release "rollback-qlc.cmd"
+if ($rb) {
+    $rbPath = Join-Path $work "rollback-qlc.cmd"
+    try { Fetch $rb $rbPath; Say "If this build misbehaves: double-click $rbPath" }
+    catch { Say "  rollback-qlc.cmd could not be fetched: $($_.Exception.Message)" "Yellow" }
 }
 Say "Done." "Cyan"

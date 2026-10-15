@@ -348,6 +348,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
 TrackEngine::~TrackEngine()
 {
     stopAll();
+    micShutdown();                       // R467_MIC_CHECK
     crumbsEnd();                         // R435_CRUMBS
 }
 
@@ -9001,6 +9002,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         return;
     }
     crumb(QStringLiteral("beat ") + QString::number(beat) + QLatin1Char(' ') + state);   // R435_CRUMBS
+    m_hazeBeatMs = m_clock.elapsed();                // R467_HAZE_NAG: music is playing
+    micBeat(state, sectionChanged, bpm);             // R467_MIC_CHECK
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
     labShutdown(false);          // R410_LAB: so does the lab (the table rebuilds below)
@@ -16874,7 +16877,13 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     m_warnings = found;
 }
 
-QStringList TrackEngine::warnings() const { return m_warnings; }
+QStringList TrackEngine::warnings() const
+{
+    // R467_HAZE_NAG: at once, not on the next beat (LATER takes it away at once too)
+    if (m_hazeNag <= 0)
+        return m_warnings;
+    return QStringList(m_warnings) << tr("HAZE at 0 for %1 min - lasers and beams need haze to show").arg(m_hazeNag);
+}
 
 void TrackEngine::calm(int bars)
 {
@@ -17927,6 +17936,8 @@ void TrackEngine::closingTick(bool showOn)
     if (m_docTimer.isActive())
         return;
     lastTrackTick(showOn);                           // R458_LAST_TRACK
+    hazeNagTick(showOn);                             // R467_HAZE_NAG
+    micTick(showOn);                                 // R467_MIC_CHECK
     const qreal dim = showOn ? closingCap() : 1.0;
     // R458: not the clock's closing - R464_HAZE_LID: only while LAST TRACK's lid is the
     // one that applies (closingCap's own test); after the clock's hour the room went
@@ -22613,6 +22624,14 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
         if (out.isEmpty() && tonight && logs.isEmpty() == false)
             out << logs.first().absoluteFilePath();
     }
+    else if (id == QStringLiteral("mic"))
+    {
+        // R467_MIC_CHECK: MIC CHECK's recordings of the last 16 hours
+        const QDateTime now = QDateTime::currentDateTime();
+        foreach (const QFileInfo &fi, docs.entryInfoList(QStringList() << "miccheck-*.csv", QDir::Files, QDir::Time))
+            if (fi.lastModified().secsTo(now) / 3600 < 16)
+                out << fi.absoluteFilePath();
+    }
     else if (id == QStringLiteral("crumbs"))
     {
         foreach (const QFileInfo &fi, docs.entryInfoList(QStringList() << "crumbs-current.txt" << "crumbs-prev.txt"
@@ -22676,6 +22695,7 @@ QVariantList TrackEngine::sendItems()
     struct Item { const char *id; const char *title; bool on; };
     static const Item items[] = {
         { "tracklog",  QT_TR_NOOP("Tonight's tracklog"), true },
+        { "mic",       QT_TR_NOOP("Tonight's MIC CHECK"), true },
         { "crumbs",    QT_TR_NOOP("Crash trail"), true },
         { "wer",       QT_TR_NOOP("Windows crash reports"), true },
         { "dumps",     QT_TR_NOOP("Crash dumps"), true },
@@ -23885,4 +23905,819 @@ void TrackEngine::lastTrackTick(bool showOn)
     if (m_lastStage == 3 && (lost || qAbs(level - m_houseLevel) >= 0.004))
         houseLook(level);
     emit lastTrackChanged();
+}
+/* =====================================================================
+ *  HAZE NAG (runde 467) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/hazenag.inc.cpp.
+ *
+ *  Tobias, 2026-10-15 (mockup approved, "efter 10 minutter efter kl. 22
+ *  ish"): the lasers and the beams show nothing in a clear room. When the
+ *  haze has stood at 0 for 10 minutes with the show on and music playing,
+ *  between 22:00 and 08:00, the desk's HAZE MACHINE row and the phone say
+ *  so. LATER quiets it for 30 minutes. Not under LAST TRACK (it takes the
+ *  haze down itself) and never in the test track.
+ *  It only SAYS it: the haze is by hand, always - nothing here sets it.
+ *  (A hazer driven from a Virtual Console fader is not seen: m_haze is the
+ *  desk's and the phone's slider.)
+ * ===================================================================== */
+
+int TrackEngine::hazeNag() const { return m_hazeNag; }
+
+void TrackEngine::hazeLater()
+{
+    m_hazeQuietUntil = m_clock.elapsed() + qint64(ENGINE_HAZE_NAG_LATER_MIN) * 60000;
+    hazeNagTick(m_showOnNow);
+}
+
+void TrackEngine::hazeNagTick(bool showOn)
+{
+    // every 200 ms from closingTick()
+    const qint64 now = m_clock.elapsed();
+    const qint64 dt = m_hazeNagLastMs < 0 ? 0 : qBound(qint64(0), now - m_hazeNagLastMs, qint64(2000));
+    m_hazeNagLastMs = now;
+    const int hour = QTime::currentTime().hour();
+    const bool night = hour >= ENGINE_HAZE_NAG_FROM_H || hour < ENGINE_HAZE_NAG_TO_H;
+    const bool music = m_hazeBeatMs >= 0 && now - m_hazeBeatMs < 5000 && m_testTrack == false;
+    const bool zero = m_haze < 0.03;
+    if (showOn == false || zero == false || hazeAvailable() == false)
+    {
+        // a new start: the count, and LATER with it
+        m_hazeZeroMs = 0;
+        m_hazeQuietUntil = -1;
+    }
+    else if (night && music && m_lastStage == 0)
+    {
+        m_hazeZeroMs += dt;
+    }
+    // while the music pauses (a gap between tracks, a pause) the count holds
+    const bool watch = showOn && zero && night && music && m_lastStage == 0;
+    int nag = 0;
+    if (watch && m_hazeZeroMs >= qint64(ENGINE_HAZE_NAG_MIN) * 60000
+        && (m_hazeQuietUntil < 0 || now >= m_hazeQuietUntil))
+        nag = int(m_hazeZeroMs / 60000);
+    if (nag != m_hazeNag)
+    {
+        if (m_hazeNag == 0 && nag > 0)
+            logSignal(QStringLiteral("sig:haze-nag"));
+        m_hazeNag = nag;
+        emit hazeNagChanged();
+        emit liveChanged();              // the warnings line
+    }
+}
+/* =====================================================================
+ *  MIC CHECK (runde 467) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/miccheck.inc.cpp.
+ *
+ *  Tobias, 2026-10-15 (mockup approved): "kan vi maaske bruge den indbyggede
+ *  mikrofon i PC'en til at lytte til musikken?" - first find out what the
+ *  lys-PC's microphone really hears in the room. MIC CHECK (SETUP > LAB)
+ *  shows it, and RECORD writes 30 s of it to Documents/QLC+/miccheck-<date>.csv
+ *  beside the tracklog, with the track's own curves on every row.
+ *
+ *  It ONLY LISTENS: nothing here touches the rig, SHOW ON or OFF.
+ *  His rules for what comes after (MIXER EARS, AUDIO FALLBACK):
+ *   - the mic is a help on top of the link, never in its place
+ *   - the LOUDNESS means nothing ("DJ monitor er taet paa mikrofonen, saa
+ *     hoejere er ikke noedvendigvis = vildere") - only the music itself (its
+ *     shape: bass / mids / highs, its beat) and the silence count. So the
+ *     room is shown as SHARES of its own sound against what is usual for it,
+ *     and the silence as a drop well under the room's own recent level.
+ *   - people talk at the booth: one reading is never trusted alone
+ *  The level meter is there to set the mic up (CLIP), nothing else.
+ *
+ *  The capture is Qt Multimedia's QAudioSource on the GUI thread (a few
+ *  hundred kB a second; one 2048-point FFT every 1024 samples, well under a
+ *  millisecond). It runs while MIC CHECK is open, while a recording runs,
+ *  and - EVERY SECTION TONIGHT on - while the show is on. Off otherwise.
+ *  EVERY SECTION TONIGHT ("lad den vaere off ... jeg skal nok slaa den til")
+ *  is off at every start and holds for one night only (to noon).
+ * ===================================================================== */
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QAudioSource>
+#include <QAudioDevice>
+#include <QAudioFormat>
+#include <QMediaDevices>
+#define TRACK_MIC_QT6 1
+#endif
+#include <complex>
+#include <cstring>
+
+#define MIC_N            2048                // the FFT window (a power of two)
+#define MIC_PI           3.14159265358979323846
+#define MIC_HOP          1024                // a new window every 1024 samples
+#define MIC_BANDS        16                  // as QLC+'s own capture: 40 Hz - 5 kHz, log spaced
+#define MIC_FMIN         40.0
+#define MIC_FMAX         5000.0
+#define MIC_REC_SECS     30
+#define MIC_REC_NIGHT    100                 // EVERY SECTION TONIGHT: at most this many
+#define SETTINGS_MIC_DEVICE    QStringLiteral("trackengine/micDevice")
+#define SETTINGS_MIC_AUTO      QStringLiteral("trackengine/micAutoNight")
+
+// the night a moment belongs to: noon to noon
+static QString micNightKey()
+{
+    return QDateTime::currentDateTime().addSecs(-12 * 3600).date().toString(QStringLiteral("yyyy-MM-dd"));
+}
+
+static qreal micDb(double power)
+{
+    return power > 1e-12 ? 10.0 * std::log10(power) : -120.0;
+}
+
+/* Everything the capture holds. A QObject so the engine owns (and deletes) it;
+ * no Q_OBJECT - it has no signals of its own. */
+struct MicTap : public QObject
+{
+    explicit MicTap(QObject *parent) : QObject(parent)
+    {
+        hann.resize(MIC_N);
+        for (int i = 0; i < MIC_N; i++)
+            hann[i] = 0.5 * (1.0 - std::cos(2.0 * MIC_PI * i / (MIC_N - 1)));
+        win.fill(0.0, MIC_N);
+        for (int b = 0; b < MIC_BANDS; b++)
+            bandDb[b] = -120.0;
+    }
+#ifdef TRACK_MIC_QT6
+    QAudioSource *src = nullptr;
+    QIODevice *io = nullptr;
+    QAudioFormat fmt;
+#endif
+    int rate = 44100;
+    QVector<double> hann;
+    QVector<double> win;          // a ring of the last MIC_N samples, mono -1..1
+    int head = 0;                 // where the next sample goes (= the oldest one)
+    int fresh = 0;                // samples since the last window
+    double at(int i) const { return win.at((head + i) % MIC_N); }   // 0 = the oldest
+    qint64 startedMs = -1;
+    qint64 lastDataMs = -1;
+    // this window
+    double rmsDb = -120.0, peakDb = -120.0;
+    bool clipSince = false;       // since the last row / meter read
+    double peakHoldDb = -120.0;
+    qint64 peakHoldMs = 0;
+    qint64 clipMs = -100000;
+    double bandDb[MIC_BANDS];
+    double share[3] = { 0.0, 0.0, 0.0 };     // bass, mids, highs of this window's sound
+    double shareAvg[3] = { -1.0, -1.0, -1.0 }; // ... and what is usual for this room (about 30 s)
+    // the beat: the bass's rise, against its own recent average
+    double bassPrev = 0.0;
+    QVector<double> flux;
+    qint64 lastOnsetMs = -100000;
+    int onsets = 0;               // all of them (the panel's MIC lamp)
+    int onsetsSince = 0;          // since the last row
+    QList<qint64> onsetTimes;     // the last few seconds of them
+    // the silence: well under the room's own recent level, for half a second
+    double typicalDb = -120.0;
+    qint64 quietSinceMs = -1;
+    bool silent = false;
+};
+
+/* ---- an in-place radix-2 FFT (MIC_N is a power of two) ---- */
+static void micFft(std::vector<std::complex<double> > &a)
+{
+    const int n = int(a.size());
+    for (int i = 1, j = 0; i < n; i++)
+    {
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1)
+            j ^= bit;
+        j ^= bit;
+        if (i < j)
+            std::swap(a[i], a[j]);
+    }
+    for (int len = 2; len <= n; len <<= 1)
+    {
+        const double ang = -2.0 * MIC_PI / len;
+        const std::complex<double> wl(std::cos(ang), std::sin(ang));
+        for (int i = 0; i < n; i += len)
+        {
+            std::complex<double> w(1.0, 0.0);
+            for (int k = 0; k < len / 2; k++)
+            {
+                const std::complex<double> u = a[i + k], v = a[i + k + len / 2] * w;
+                a[i + k] = u + v;
+                a[i + k + len / 2] = u - v;
+                w *= wl;
+            }
+        }
+    }
+}
+
+/* ---------------------------------------------------------------- getters */
+bool TrackEngine::micActive() const { return m_micOpen; }
+QString TrackEngine::micDevice() const { return m_micDeviceName; }
+int TrackEngine::micDeviceIndex() const { return m_micDeviceIndex; }
+int TrackEngine::micDeviceCount() const { return m_micDeviceCount; }
+QString TrackEngine::micProblem() const { return m_micProblem; }
+qreal TrackEngine::micLevel() const { return m_micShown.value(QStringLiteral("level")).toReal(); }
+qreal TrackEngine::micPeak() const { return m_micShown.value(QStringLiteral("peak")).toReal(); }
+bool TrackEngine::micClip() const { return m_micShown.value(QStringLiteral("clip")).toBool(); }
+bool TrackEngine::micSilent() const { return m_micShown.value(QStringLiteral("silent")).toBool(); }
+QVariantList TrackEngine::micBands() const { return m_micShown.value(QStringLiteral("bands")).toList(); }
+QVariantList TrackEngine::micRoom() const { return m_micShown.value(QStringLiteral("room")).toList(); }
+QVariantList TrackEngine::micTrack() const { return m_micShown.value(QStringLiteral("track")).toList(); }
+int TrackEngine::micBeatTick() const { return m_mic != nullptr ? m_mic->onsets : 0; }
+int TrackEngine::micAgree() const { return m_micShown.value(QStringLiteral("agree"), -1).toInt(); }
+int TrackEngine::micRecLeft() const
+{
+    if (m_micRecUntilMs < 0)
+        return 0;
+    return int(qMax<qint64>(0, (m_micRecUntilMs - m_clock.elapsed() + 999) / 1000));
+}
+bool TrackEngine::micAuto() const
+{
+    if (m_micAutoRead == false)
+    {
+        m_micAutoStored = QSettings().value(SETTINGS_MIC_AUTO).toString();
+        m_micAutoRead = true;
+    }
+    return m_micAutoStored.isEmpty() == false && m_micAutoStored == micNightKey();
+}
+QVariantList TrackEngine::micRecs() const
+{
+    if (m_micRecsNight != micNightKey())
+        return QVariantList();
+    return m_micRecs;
+}
+
+/* ---------------------------------------------------------------- the panel */
+void TrackEngine::micOpen()
+{
+    if (m_micOpen)
+        return;
+    m_micOpen = true;
+    crumb(QStringLiteral("mic open"));
+    micTick(m_showOnNow);
+    emit micChanged();
+}
+
+void TrackEngine::micClose()
+{
+    if (m_micOpen == false)
+        return;
+    m_micOpen = false;
+    micTick(m_showOnNow);
+    emit micChanged();
+}
+
+void TrackEngine::micNextDevice()
+{
+#ifdef TRACK_MIC_QT6
+    const QList<QAudioDevice> devices = QMediaDevices::audioInputs();
+    if (devices.count() < 2)
+        return;
+    const int next = (qMax(0, m_micDeviceIndex) + 1) % devices.count();
+    QSettings().setValue(SETTINGS_MIC_DEVICE, QString::fromLatin1(devices.at(next).id().toHex()));
+    const bool was = m_mic != nullptr && m_mic->src != nullptr;
+    micStop();
+    if (was || m_micOpen)
+        micStart();
+    else
+        micDevicesRead();
+    emit micChanged();
+#endif
+}
+
+void TrackEngine::micSetAuto(bool on)
+{
+    QSettings settings;
+    m_micAutoStored = on ? micNightKey() : QString();
+    m_micAutoRead = true;
+    if (on)
+        settings.setValue(SETTINGS_MIC_AUTO, m_micAutoStored);
+    else
+        settings.remove(SETTINGS_MIC_AUTO);
+    micTick(m_showOnNow);
+    emit micRecChanged();
+}
+
+void TrackEngine::micRecord()
+{
+    if (m_micRecUntilMs >= 0)
+    {
+        micRecEnd();                     // a tap while it runs: stop, keep what is there
+        return;
+    }
+    micRecBegin(QStringLiteral("hand"));
+}
+
+/* ---------------------------------------------------------------- the capture */
+void TrackEngine::micDevicesRead()
+{
+#ifdef TRACK_MIC_QT6
+    const QList<QAudioDevice> devices = QMediaDevices::audioInputs();
+    m_micDeviceCount = devices.count();
+    m_micDeviceIndex = -1;
+    m_micDeviceName.clear();
+    if (devices.isEmpty())
+        return;
+    const QByteArray want = QByteArray::fromHex(QSettings().value(SETTINGS_MIC_DEVICE).toString().toLatin1());
+    int pick = -1;
+    for (int i = 0; i < devices.count() && pick < 0; i++)
+        if (want.isEmpty() == false && devices.at(i).id() == want)
+            pick = i;
+    if (pick < 0)
+    {
+        const QAudioDevice def = QMediaDevices::defaultAudioInput();
+        for (int i = 0; i < devices.count() && pick < 0; i++)
+            if (devices.at(i).id() == def.id())
+                pick = i;
+    }
+    m_micDeviceIndex = pick < 0 ? 0 : pick;
+    m_micDeviceName = devices.at(m_micDeviceIndex).description();
+#endif
+}
+
+bool TrackEngine::micStart()
+{
+#ifdef TRACK_MIC_QT6
+    if (m_mic != nullptr && m_mic->src != nullptr)
+        return true;
+    micDevicesRead();
+    if (m_micDeviceCount == 0)
+    {
+        m_micProblem = tr("No microphone this PC can use. Check Settings > Privacy & security > Microphone "
+                          "(\"Let desktop apps access your microphone\"), or plug in a USB sound card.");
+        return false;
+    }
+    const QAudioDevice dev = QMediaDevices::audioInputs().value(m_micDeviceIndex);
+    if (m_mic == nullptr)
+        m_mic = new MicTap(this);
+    QAudioFormat fmt;
+    fmt.setSampleRate(44100);
+    fmt.setChannelCount(1);
+    fmt.setSampleFormat(QAudioFormat::Int16);
+    if (dev.isFormatSupported(fmt) == false)
+        fmt = dev.preferredFormat();
+    if (fmt.sampleRate() < 8000 || fmt.channelCount() < 1 || fmt.sampleFormat() == QAudioFormat::Unknown)
+    {
+        m_micProblem = tr("%1 gives no sound format QLC+ can read.").arg(dev.description());
+        return false;
+    }
+    m_mic->fmt = fmt;
+    m_mic->rate = fmt.sampleRate();
+    m_mic->src = new QAudioSource(dev, fmt, m_mic);
+    m_mic->src->setBufferSize(fmt.bytesForDuration(250000));
+    connect(m_mic->src, &QAudioSource::stateChanged, this, [this](QAudio::State) {
+        if (m_mic == nullptr || m_mic->src == nullptr)
+            return;
+        if (m_mic->src->error() != QAudio::NoError && m_mic->src->error() != QAudio::UnderrunError)
+        {
+            m_micProblem = tr("The microphone would not open (%1) - is another program holding it, or is it switched off in Windows?")
+                           .arg(m_micDeviceName);
+            crumb(QStringLiteral("mic error ") + QString::number(int(m_mic->src->error())));
+            emit micChanged();
+        }
+    });
+    m_mic->io = m_mic->src->start();
+    if (m_mic->io == nullptr)
+    {
+        m_micProblem = tr("The microphone would not open (%1) - is another program holding it, or is it switched off in Windows?")
+                       .arg(m_micDeviceName);
+        micStop();
+        return false;
+    }
+    connect(m_mic->io, &QIODevice::readyRead, this, &TrackEngine::micRead);
+    m_mic->startedMs = m_clock.elapsed();
+    m_mic->lastDataMs = -1;
+    m_micProblem.clear();
+    if (m_micUiTimer.isActive() == false)
+    {
+        m_micUiTimer.setInterval(100);
+        connect(&m_micUiTimer, &QTimer::timeout, this, &TrackEngine::micFrame, Qt::UniqueConnection);
+        m_micUiTimer.start();
+    }
+    crumb(QStringLiteral("mic start ") + m_micDeviceName);
+    return true;
+#else
+    m_micProblem = tr("MIC CHECK needs the Qt 6 build of QLC+.");
+    return false;
+#endif
+}
+
+void TrackEngine::micStop()
+{
+#ifdef TRACK_MIC_QT6
+    if (m_mic != nullptr && m_mic->src != nullptr)
+    {
+        QAudioSource *src = m_mic->src;
+        m_mic->src = nullptr;
+        m_mic->io = nullptr;
+        src->disconnect(this);
+        src->stop();
+        src->deleteLater();
+        crumb(QStringLiteral("mic stop"));
+    }
+#endif
+    m_micUiTimer.stop();
+    if (m_micRecUntilMs >= 0)
+        micRecEnd();
+    m_micShown.clear();
+}
+
+void TrackEngine::micRead()
+{
+#ifdef TRACK_MIC_QT6
+    if (m_mic == nullptr || m_mic->io == nullptr)
+        return;
+    const QByteArray data = m_mic->io->readAll();
+    if (data.isEmpty())
+        return;
+    MicTap *t = m_mic;
+    t->lastDataMs = m_clock.elapsed();
+    const QAudioFormat &f = t->fmt;
+    const int ch = qMax(1, f.channelCount());
+    const int bps = qMax(1, f.bytesPerSample());
+    const int frames = data.size() / (bps * ch);
+    const char *p = data.constData();
+    for (int i = 0; i < frames; i++)
+    {
+        double sum = 0.0;
+        for (int c = 0; c < ch; c++)
+        {
+            const char *s = p + (i * ch + c) * bps;
+            double v = 0.0;
+            switch (f.sampleFormat())
+            {
+            case QAudioFormat::UInt8: v = (double(*reinterpret_cast<const quint8 *>(s)) - 128.0) / 128.0; break;
+            case QAudioFormat::Int16: { qint16 x; memcpy(&x, s, 2); v = x / 32768.0; } break;
+            case QAudioFormat::Int32: { qint32 x; memcpy(&x, s, 4); v = x / 2147483648.0; } break;
+            case QAudioFormat::Float: { float x; memcpy(&x, s, 4); v = x; } break;
+            default: break;
+            }
+            sum += v;
+        }
+        const double mono = sum / ch;
+        t->win[t->head] = mono;
+        t->head = (t->head + 1) % MIC_N;
+        if (++t->fresh >= MIC_HOP)
+        {
+            t->fresh = 0;
+            micWindow();
+        }
+    }
+#endif
+}
+
+void TrackEngine::micWindow()
+{
+    MicTap *t = m_mic;
+    const qint64 now = m_clock.elapsed();
+    // the newest hop: level, peak, clip (only to set the mic up - nothing follows them)
+    double sq = 0.0, pk = 0.0;
+    int clips = 0;
+    for (int i = MIC_N - MIC_HOP; i < MIC_N; i++)
+    {
+        const double v = t->at(i);
+        sq += v * v;
+        pk = qMax(pk, qAbs(v));
+        if (qAbs(v) >= 0.995)
+            clips++;
+    }
+    t->rmsDb = micDb(sq / MIC_HOP);
+    t->peakDb = micDb(pk * pk);
+    if (t->peakDb >= t->peakHoldDb || now - t->peakHoldMs > 1500)
+    {
+        t->peakHoldDb = t->peakDb;
+        t->peakHoldMs = now;
+    }
+    if (clips >= 3)
+    {
+        t->clipSince = true;
+        t->clipMs = now;
+    }
+    // the spectrum: Hann window, amplitude where a full-scale sine reads 1
+    std::vector<std::complex<double> > a(MIC_N);
+    for (int i = 0; i < MIC_N; i++)
+        a[i] = std::complex<double>(t->at(i) * t->hann.at(i), 0.0);
+    micFft(a);
+    const double hz = double(t->rate) / MIC_N;
+    const double norm = 2.0 / (MIC_N * 0.5);
+    double band[MIC_BANDS];
+    for (int b = 0; b < MIC_BANDS; b++)
+        band[b] = 0.0;
+    double zone[3] = { 0.0, 0.0, 0.0 };
+    double bass = 0.0;
+    const double logRange = std::log(MIC_FMAX / MIC_FMIN);
+    for (int k = 1; k < MIC_N / 2; k++)
+    {
+        const double f = k * hz;
+        if (f < MIC_FMIN || f >= MIC_FMAX)
+            continue;
+        const double m = std::abs(a[k]) * norm;
+        const double e = m * m;
+        const int b = qBound(0, int(std::log(f / MIC_FMIN) / logRange * MIC_BANDS), MIC_BANDS - 1);
+        band[b] += e;
+        zone[f < 250.0 ? 0 : (f < 2000.0 ? 1 : 2)] += e;
+        if (f < 250.0)
+            bass += e;
+    }
+    for (int b = 0; b < MIC_BANDS; b++)
+        t->bandDb[b] = micDb(band[b]);
+    // the SHAPE of the sound, not its loudness: each zone's share of it, and
+    // what is usual for this room over about 30 s (louder or softer, the
+    // shares stay where they were)
+    const double total = zone[0] + zone[1] + zone[2];
+    const double hop = double(MIC_HOP) / t->rate;
+    // the silence: well under the room's own recent level for half a second
+    if (t->typicalDb < -119.0)
+        t->typicalDb = t->rmsDb;
+    const bool quiet = t->rmsDb < t->typicalDb - 20.0 || t->rmsDb < -70.0;
+    if (quiet == false)
+        t->typicalDb += (1.0 - std::exp(-hop / 60.0)) * (t->rmsDb - t->typicalDb);
+    if (quiet)
+    {
+        if (t->quietSinceMs < 0)
+            t->quietSinceMs = now;
+    }
+    else
+        t->quietSinceMs = -1;
+    t->silent = t->quietSinceMs >= 0 && now - t->quietSinceMs >= 500;
+    if (total > 1e-9 && t->silent == false)
+    {
+        const double alpha = 1.0 - std::exp(-hop / 30.0);
+        for (int z = 0; z < 3; z++)
+        {
+            t->share[z] = zone[z] / total;
+            t->shareAvg[z] = t->shareAvg[z] < 0.0 ? t->share[z] : t->shareAvg[z] + alpha * (t->share[z] - t->shareAvg[z]);
+        }
+    }
+    // the beat: the bass rising faster than it has lately (a log rise - so
+    // the loudness does not decide it either), at most one each 0.25 s
+    const double bassDb = micDb(bass);
+    const double rise = qMax(0.0, bassDb - t->bassPrev);
+    t->bassPrev = bassDb;
+    t->flux.append(rise);
+    if (t->flux.count() > 43)
+        t->flux.removeFirst();
+    double mean = 0.0;
+    for (double v : t->flux)
+        mean += v;
+    mean /= qMax(1, int(t->flux.count()));
+    if (t->silent == false && rise > qMax(1.5, mean * 1.8) && now - t->lastOnsetMs >= 250)
+    {
+        t->lastOnsetMs = now;
+        t->onsets++;
+        t->onsetsSince++;
+        t->onsetTimes.append(now);
+        while (t->onsetTimes.isEmpty() == false && now - t->onsetTimes.first() > 6000)
+            t->onsetTimes.removeFirst();
+    }
+}
+
+/* the track's own curves at this beat, each against its mean over the track:
+ * 1 = as usual for this track */
+QVariantList TrackEngine::micTrackNow() const
+{
+    QVariantList out;
+    const int beat = m_curBeat;
+    const QVector<quint8> *curves[3] = { &m_audKick, &m_audMid, &m_audHigh };
+    if (beat < 1 || m_audKick.isEmpty())
+        return out;
+    for (int z = 0; z < 3; z++)
+    {
+        const QVector<quint8> &c = *curves[z];
+        if (beat > c.count())
+            return QVariantList();
+        double mean = 0.0;
+        for (quint8 v : c)
+            mean += v;
+        mean /= qMax(1, int(c.count()));
+        out << (mean > 1.0 ? c.at(beat - 1) / mean : 0.0);
+    }
+    return out;
+}
+
+void TrackEngine::micFrame()
+{
+    // every 100 ms while the capture runs: the panel, the recording's row
+    if (m_mic == nullptr)
+        return;
+    MicTap *t = m_mic;
+    const qint64 now = m_clock.elapsed();
+#ifdef TRACK_MIC_QT6
+    if (t->src != nullptr && m_micProblem.isEmpty() && now - t->startedMs > 5000
+        && (t->lastDataMs < 0 || now - t->lastDataMs > 3000))
+    {
+        m_micProblem = tr("No sound from %1 - Windows may be keeping desktop apps from the microphone "
+                          "(Settings > Privacy & security > Microphone).").arg(m_micDeviceName);
+        emit micChanged();
+    }
+#endif
+    // the link's beats the mic heard: a mic beat from 80 ms before to 180 ms after
+    // (the sound reaches the mic and the PC's buffer later than the CDJ says it)
+    while (m_micLinkBeats.isEmpty() == false && now - m_micLinkBeats.first() > 6000)
+        m_micLinkBeats.removeFirst();
+    int heard = 0, judged = 0;
+    for (qint64 lb : m_micLinkBeats)
+    {
+        if (now - lb < 200)
+            continue;
+        judged++;
+        for (qint64 ob : t->onsetTimes)
+            if (ob >= lb - 80 && ob <= lb + 180) { heard++; break; }
+    }
+    QVariantMap v;
+    v.insert(QStringLiteral("level"), qBound(0.0, (t->rmsDb + 60.0) / 60.0, 1.0));
+    v.insert(QStringLiteral("peak"), qBound(0.0, (t->peakHoldDb + 60.0) / 60.0, 1.0));
+    v.insert(QStringLiteral("clip"), now - t->clipMs < 2000);
+    v.insert(QStringLiteral("silent"), t->silent);
+    QVariantList bands;
+    for (int b = 0; b < MIC_BANDS; b++)
+        bands << qBound(0.0, (t->bandDb[b] + 80.0) / 70.0, 1.0);
+    v.insert(QStringLiteral("bands"), bands);
+    // the room: each zone's share now against what is usual for this room (1 = usual)
+    QVariantList room;
+    for (int z = 0; z < 3; z++)
+        room << (t->shareAvg[z] >= 0.0 && t->silent == false ? (t->share[z] + 0.02) / (t->shareAvg[z] + 0.02) : 0.0);   // + 2 %: a zone with next to nothing in it does not swing
+    v.insert(QStringLiteral("room"), room);
+    const QVariantList track = micTrackNow();
+    v.insert(QStringLiteral("track"), track);
+    v.insert(QStringLiteral("agree"), judged >= 8 ? int(qRound(100.0 * heard / judged)) : -1);
+    m_micShown = v;
+    if (m_micRecUntilMs >= 0)
+        micRow(v);
+    t->clipSince = false;
+    t->onsetsSince = 0;
+    if (m_micOpen)
+        emit micChanged();
+    if (m_micRecUntilMs >= 0)
+    {
+        const int left = micRecLeft();
+        if (left != m_micRecLeftSent)
+        {
+            m_micRecLeftSent = left;
+            emit micRecChanged();
+        }
+        if (now >= m_micRecUntilMs)
+            micRecEnd();
+    }
+}
+
+/* ---------------------------------------------------------------- recording */
+bool TrackEngine::micRecBegin(const QString &why)
+{
+    if (m_micRecUntilMs >= 0)
+        return false;
+    if (micStart() == false)
+    {
+        emit micChanged();
+        return false;
+    }
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QDir::separator() + "QLC+";
+    QDir().mkpath(dir);
+    m_micFile.setFileName(dir + QDir::separator() + "miccheck-" + QDate::currentDate().toString("yyyyMMdd") + ".csv");
+    const bool fresh = m_micFile.exists() == false || m_micFile.size() == 0;
+    if (m_micFile.open(QIODevice::Append | QIODevice::Text) == false)
+    {
+        m_micProblem = tr("Could not write %1").arg(m_micFile.fileName());
+        emit micChanged();
+        return false;
+    }
+    if (fresh)
+    {
+        QStringList head;
+        head << "time" << "rec" << "why" << "title" << "section" << "beat" << "bpm"
+             << "level_db" << "peak_db" << "clip" << "silent" << "mic_beats";
+        for (int b = 0; b < MIC_BANDS; b++)
+            head << QStringLiteral("band%1_db").arg(b + 1);
+        head << "share_bass" << "share_mid" << "share_high" << "room_bass" << "room_mid" << "room_high"
+             << "track_kick" << "track_mid" << "track_high" << "track_level";
+        m_micFile.write((head.join(',') + '\n').toUtf8());
+    }
+    if (m_micRecsNight != micNightKey())
+    {
+        m_micRecsNight = micNightKey();
+        m_micRecs.clear();
+        m_micAutoDone.clear();
+    }
+    m_micRecId = QDateTime::currentDateTime().toString(QStringLiteral("HHmmss"));
+    m_micRecWhy = why;
+    m_micRecSection = why == QStringLiteral("hand") ? m_micState : why;
+    m_micRecTitle = m_trackTitle;
+    m_micRecStartMs = m_clock.elapsed();
+    m_micRecUntilMs = m_micRecStartMs + MIC_REC_SECS * 1000;
+    m_micRecLeftSent = -1;
+    crumb(QStringLiteral("mic rec ") + why);
+    emit micRecChanged();
+    return true;
+}
+
+void TrackEngine::micRow(const QVariantMap &v)
+{
+    if (m_micFile.isOpen() == false || m_mic == nullptr)
+        return;
+    const MicTap *t = m_mic;
+    const int beat = m_curBeat;
+    auto at = [&](const QVector<quint8> &c) { return beat >= 1 && beat <= c.count() ? QString::number(c.at(beat - 1)) : QString(); };
+    QString title = m_trackTitle;
+    title.replace('"', '\'');
+    QStringList row;
+    row << QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")) << m_micRecId << m_micRecWhy
+        << '"' + title + '"' << m_micState << QString::number(beat) << QString::number(m_micBpm, 'f', 1)
+        << QString::number(t->rmsDb, 'f', 1) << QString::number(t->peakDb, 'f', 1)
+        << (t->clipSince ? "1" : "0") << (t->silent ? "1" : "0") << QString::number(t->onsetsSince);
+    for (int b = 0; b < MIC_BANDS; b++)
+        row << QString::number(t->bandDb[b], 'f', 1);
+    for (int z = 0; z < 3; z++)
+        row << QString::number(t->share[z], 'f', 3);
+    const QVariantList room = v.value(QStringLiteral("room")).toList();
+    for (int z = 0; z < 3; z++)
+        row << QString::number(room.value(z).toDouble(), 'f', 3);
+    row << at(m_audKick) << at(m_audMid) << at(m_audHigh) << at(m_audLevel);
+    m_micFile.write((row.join(',') + '\n').toUtf8());
+}
+
+void TrackEngine::micRecEnd()
+{
+    if (m_micRecUntilMs < 0)
+        return;
+    const int secs = int(qMax<qint64>(1, (m_clock.elapsed() - m_micRecStartMs + 500) / 1000));
+    m_micRecUntilMs = -1;
+    m_micFile.close();
+    QVariantMap r;
+    r.insert(QStringLiteral("at"), QTime::currentTime().toString(QStringLiteral("HH:mm")));
+    r.insert(QStringLiteral("section"), m_micRecSection.isEmpty() ? QStringLiteral("hand") : m_micRecSection);
+    r.insert(QStringLiteral("title"), m_micRecTitle.isEmpty() ? tr("(no track)") : m_micRecTitle);
+    r.insert(QStringLiteral("secs"), qMin(secs, MIC_REC_SECS));
+    m_micRecs << r;
+    crumb(QStringLiteral("mic rec end"));
+    emit micRecChanged();
+}
+
+/* ---------------------------------------------------------------- from the engine */
+void TrackEngine::micBeat(const QString &state, bool sectionChanged, qreal bpm)
+{
+    // from tick(): the link's beat (for the panel's agreement) and EVERY SECTION TONIGHT
+    m_micState = state;
+    m_micBpm = bpm;
+    if (m_mic == nullptr || m_testTrack)
+        return;
+    m_micLinkBeats.append(m_clock.elapsed());
+    if (sectionChanged == false || m_micRecUntilMs >= 0 || micAuto() == false || m_showOnNow == false)
+        return;
+    if (m_micRecsNight == micNightKey() && m_micRecs.count() >= MIC_REC_NIGHT)
+        return;
+    const QString key = m_trackTitle + QLatin1Char('|') + state;
+    if (m_trackTitle.isEmpty() || m_micAutoDone.contains(key))
+        return;
+    if (micRecBegin(state))
+        m_micAutoDone.insert(key);
+}
+
+void TrackEngine::micTick(bool showOn)
+{
+    // every 200 ms from closingTick(): run the capture only when something wants it
+    const bool want = m_micOpen || m_micRecUntilMs >= 0 || (showOn && micAuto());
+    const qint64 now = m_clock.elapsed();
+    if (want)
+    {
+        m_micUnwantedMs = -1;
+        const bool running = m_mic != nullptr
+#ifdef TRACK_MIC_QT6
+                             && m_mic->src != nullptr
+#endif
+                             ;
+        // a failed start is tried again every 10 s, not every 200 ms
+        if (running == false && (m_micTriedMs < 0 || now - m_micTriedMs > 10000))
+        {
+            m_micTriedMs = now;
+            const QString before = m_micProblem;
+            micStart();
+            if (m_micProblem != before || m_micOpen)
+                emit micChanged();
+        }
+    }
+    else if (m_mic != nullptr)
+    {
+        // a few seconds' grace, so the capture does not flap between the tracks
+        if (m_micUnwantedMs < 0)
+            m_micUnwantedMs = now;
+        else if (now - m_micUnwantedMs > 5000)
+        {
+            micStop();
+            m_micTriedMs = -1;
+            m_micUnwantedMs = -1;
+        }
+    }
+    else
+        m_micTriedMs = -1;
+}
+
+void TrackEngine::micShutdown()
+{
+    // from the destructor: no signals, no recording entry - just let go of the device
+#ifdef TRACK_MIC_QT6
+    if (m_mic != nullptr && m_mic->src != nullptr)
+    {
+        m_mic->src->disconnect(this);
+        if (m_mic->io != nullptr)
+            m_mic->io->disconnect(this);
+        m_mic->src->stop();
+    }
+#endif
+    m_micUiTimer.stop();
+    if (m_micFile.isOpen())
+        m_micFile.close();
 }

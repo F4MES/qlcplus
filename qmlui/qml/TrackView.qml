@@ -2879,7 +2879,24 @@ Rectangle
                         y: deck.rowY(5) - Math.round(trackViewRoot.g / 2) - 1
                         color: trackViewRoot.cEdge
                     }
-                    RowLabel { x: lookCard.inX; y: deck.rowY(5); width: lookCard.labW; height: trackViewRoot.rowH; text: "HAZE MACHINE" }
+                    // R467_HAZE_NAG: haze at 0 for 10 min after 22:00 - the label says so in
+                    // gold and LATER quiets it for 30 min; the engine never touches the haze
+                    readonly property int hazeNag: trackEngine ? trackEngine.hazeNag : 0
+                    RowLabel
+                    {
+                        objectName: "hazeLabel"
+                        x: lookCard.inX; y: deck.rowY(5); width: lookCard.labW; height: trackViewRoot.rowH
+                        text: parent.hazeNag > 0 ? qsTr("HAZE AT 0") + "\n" + qsTr("%1 MIN").arg(parent.hazeNag) : "HAZE MACHINE"
+                        color: parent.hazeNag > 0 ? "#E3B44F" : trackViewRoot.cMute
+                    }
+                    Btn
+                    {
+                        objectName: "hazeLater"
+                        visible: parent.hazeNag > 0
+                        x: lookCard.autoX; y: deck.rowY(5); width: lookCard.autoW; height: trackViewRoot.rowH
+                        text: qsTr("LATER"); tone: "#E3B44F"; active: true; solid: false
+                        onTapped: if (trackEngine) trackEngine.hazeLater()
+                    }
                     Fader
                     {
                         objectName: "haze"

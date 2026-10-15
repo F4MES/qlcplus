@@ -46,6 +46,14 @@ button{font-family:inherit;cursor:pointer}
 .moon{width:14px;height:14px;border-radius:50%;box-shadow:inset -4px 2px 0 0 currentColor;flex:none}
 .offline{position:absolute;left:0;right:0;top:0;bottom:0;background:#2A1416;color:#FFB4B4;display:none;align-items:center;justify-content:center;font-weight:800;letter-spacing:.1em;font-size:13px;text-align:center;padding:0 16px}
 .offline.on{display:flex}
+/* R467_HAZE_NAG */
+.nag{display:none;align-items:center;gap:8px;margin-top:8px;padding:8px 8px 8px 12px;border-radius:10px;background:#3C2E12;color:var(--gold)}
+.nag.on{display:flex}
+.nag div{flex:1;min-width:0}.nag b{display:block;font-size:13px;letter-spacing:.08em}
+.nag small{display:block;font-size:11px;color:#D9C38E;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nag button{height:38px;border:0;border-radius:8px;padding:0 12px;font-weight:800;font-size:12px;letter-spacing:.08em}
+.nag .go{background:var(--gold);color:#1A1408}.nag .later{background:#2A2210;color:var(--gold)}
+.fader.low .name{color:var(--mute)!important}
 .pages{flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch}
 .lbl{font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--mute);margin:14px 2px 7px}
 .page>.lbl:first-child{margin-top:2px}
@@ -103,6 +111,7 @@ button{font-family:inherit;cursor:pointer}
       <button class="chip last" id="last"><span class="moon"></span><span><span id="lasttitle">LAST TRACK</span><small id="lastsub"></small></span></button>
       <div class="chip link" id="link"><b>●</b>&nbsp; <span>—</span></div>
     </div>
+    <div class="nag" id="hazenag"><div><b id="hazenagt">HAZE 0</b><small>lasers and beams need haze to show</small></div><button class="go" id="hazego">HAZE</button><button class="later" id="hazelater">LATER</button></div>
     <div class="offline on" id="offline">NO CONNECTION TO QLC+ - TRYING AGAIN ...</div>
   </div>
 
@@ -236,6 +245,9 @@ function sureTap(key, el, cmd) {
 }
 $('show').onclick = () => { if (!S) return; if (!S.show) send('show|1'); else sureTap('show', $('show'), 'show|0'); };
 // R464_RM_LAST: what it wants, not a toggle - arm, or undo
+// R467_HAZE_NAG: HAZE = the slider (by hand, as always), LATER = quiet for 30 min
+$('hazego').onclick = () => { tab('rig'); const f = document.querySelector('[data-f="haze"]'); if (f) f.scrollIntoView({block: 'center'}); };
+$('hazelater').onclick = () => send('hazelater');
 $('last').onclick = () => sureTap('last', $('last'), ((S && S.last && S.last.stage) > 0) ? 'last|0' : 'last|1');
 
 /* ---------------- held buttons: BLACKOUT, STUTTER, FLASH WHITE ---------------- */
@@ -293,6 +305,7 @@ function drawFader(el, v) {
   el.querySelector('.fill').style.width = (v * 100) + '%';
   const g = el.querySelector('.grip'); if (g) g.style.left = (v * 100) + '%';
   el.querySelector('.val').textContent = Math.round(v * 100) + '%';
+  el.classList.toggle('low', v < 0.3);     // R467_HAZE_NAG: the name readable on an empty slider
 }
 function wireFader(el) {
   let last = 0, timer = null, val = 0;
@@ -352,6 +365,10 @@ function render() {
   const show = $('show');
   show.className = 'chip show' + (S.show ? ' on' : '') + (sure.show ? ' sure' : '');
   show.textContent = sure.show ? 'SURE?' : (S.show ? 'SHOW ON' : 'START SHOW');
+  // R467_HAZE_NAG
+  const nag = +(S.hazeNag || 0);
+  $('hazenag').className = 'nag' + (nag > 0 ? ' on' : '');
+  $('hazenagt').textContent = 'HAZE AT 0 · ' + nag + ' MIN';
   const L = S.last || {}, last = $('last');
   // R464_RM_LAST: a SURE? is about the stage it was asked in
   if (L.stage !== lastStageSeen) { if (sure.last) { clearTimeout(sure.last); sure.last = 0; } lastStageSeen = L.stage; }
@@ -458,7 +475,7 @@ function mockApply(cmd) {
     colourMode: () => S.colourMode = S.colourMode === +a[1] ? 0 : +a[1], position: () => S.position = a[1] === S.position ? '' : a[1],
     speed: () => S.speed = +a[1], master: () => S.master = a[1] / 100, haze: () => S.haze = a[1] / 100, fan: () => S.fan = a[1] / 100,
     trim: () => S.trims[a[1]] = a[2] / 100, group: () => S.groups.find(g => g.key === a[1]).enabled = a[2] === '1',
-    last: () => S.last.stage = S.last.stage > 0 ? 0 : 1};
+    last: () => S.last.stage = S.last.stage > 0 ? 0 : 1, hazelater: () => S.hazeNag = 0};
   if (m[c]) { m[c](); render(); }
 }
 const q = new URLSearchParams(location.search);
@@ -470,7 +487,7 @@ if (q.get('mock')) {
     markers: [{b: 1, t: 'intro'}, {b: 33, t: 'normal'}, {b: 81, t: 'break'}, {b: 97, t: 'build'}, {b: 165, t: 'drop'}, {b: 229, t: 'break'}, {b: 261, t: 'build'}, {b: 293, t: 'drop'}, {b: 357, t: 'outro'}],
     roomAuto: false, calm: 0, hold: false, blackout: false, stutter: false, stutterRate: 2, hitKind: 3, hitLast: 3, flash: false,
     colour: 'blue', overrides: [], colourMode: 1, palette: ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white'], position: '', speed: 0,
-    master: 0.8, haze: 0.4, fan: 0.6,
+    master: 0.8, haze: q.get('nag') ? 0 : 0.4, fan: 0.6, hazeNag: +(q.get('nag') || 0),
     groups: [{key: 'Laserbars', enabled: true}, {key: 'Strobes All', enabled: true}, {key: 'Shark Zoom Wash', enabled: true, base: true},
              {key: 'Animation Laser', enabled: false, switchOnly: true}, {key: 'Mini 4 Eyes', enabled: true}],
     trims: {'Laserbars': 1, 'Strobes All': 0.5, 'Shark Zoom Wash': 1, 'Animation Laser': 1, 'Mini 4 Eyes': 0.5},

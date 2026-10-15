@@ -1574,6 +1574,7 @@ QString TrackManager::remoteState()
         o.insert(QStringLiteral("master"), e->master());
         o.insert(QStringLiteral("haze"), e->haze());
         o.insert(QStringLiteral("fan"), e->fan());
+        o.insert(QStringLiteral("hazeNag"), e->hazeNag());          // R467_HAZE_NAG
         // the groups' list is a walk over the show's functions - every 2 s is plenty
         // (a toggle or a trim from the phone refreshes it at once, below)
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -1756,6 +1757,8 @@ QString TrackManager::remoteCommand(const QString &line)
             v = 0;                           // as the desk's fader: the bottom is off
         e->setHaze(v / 100.0);
     }
+    else if (cmd == QStringLiteral("hazelater"))
+        e->hazeLater();                      // R467_HAZE_NAG: quiet for 30 min - the haze stays by hand
     else if (cmd == QStringLiteral("fan"))
     {
         if (remoteArg(a, 1, &n) == false)
