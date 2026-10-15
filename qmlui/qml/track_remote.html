@@ -206,7 +206,12 @@ setInterval(() => {
   // R463_PAGE: a socket open but silent for 1.5 s (Wi-Fi gone without a close) is dead
   if (ws && ws.readyState === 1 && lastState && Date.now() - lastState > 1500) {
     $('offline').classList.add('on');
-    try { ws.close(); } catch (e) {}
+    // R464_PAGE_RETRY: dropped, and a new one at once - the browser waited up to a
+    // minute for the old one's close before it tried again
+    const old = ws; ws = null;
+    old.onclose = old.onmessage = old.onopen = null;
+    try { old.close(); } catch (e) {}
+    connect();
   }
 }, 250);
 
@@ -230,7 +235,8 @@ function sureTap(key, el, cmd) {
   clearTimeout(sure[key]); sure[key] = 0; send(cmd); render();
 }
 $('show').onclick = () => { if (!S) return; if (!S.show) send('show|1'); else sureTap('show', $('show'), 'show|0'); };
-$('last').onclick = () => sureTap('last', $('last'), 'last');
+// R464_RM_LAST: what it wants, not a toggle - arm, or undo
+$('last').onclick = () => sureTap('last', $('last'), ((S && S.last && S.last.stage) > 0) ? 'last|0' : 'last|1');
 
 /* ---------------- held buttons: BLACKOUT, STUTTER, FLASH WHITE ---------------- */
 // as the desk: down = on (or, when it is on, off); up ON the button = let go;
@@ -310,7 +316,7 @@ function sorted(m) { return (m || []).slice().sort((a, b) => a.b - b.b); }
 function sectionAt(mk, beat) { let t = 'normal'; for (const m of mk) if (m.b <= beat) t = m.t; return t; }
 function mmss(s) { return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
 function cls(el, c, on) { el.classList.toggle(c, !!on); }
-let groupKeys = '', sectionsBuilt = false, colourKeys = '';
+let groupKeys = '', sectionsBuilt = false, colourKeys = '', lastStageSeen;
 
 function render() {
   if (!S) return;
@@ -347,6 +353,8 @@ function render() {
   show.className = 'chip show' + (S.show ? ' on' : '') + (sure.show ? ' sure' : '');
   show.textContent = sure.show ? 'SURE?' : (S.show ? 'SHOW ON' : 'START SHOW');
   const L = S.last || {}, last = $('last');
+  // R464_RM_LAST: a SURE? is about the stage it was asked in
+  if (L.stage !== lastStageSeen) { if (sure.last) { clearTimeout(sure.last); sure.last = 0; } lastStageSeen = L.stage; }
   const lastShown = !!L.shown && !S.test;
   last.style.display = lastShown ? 'flex' : 'none';
   $('link').style.display = lastShown ? 'none' : 'flex';
