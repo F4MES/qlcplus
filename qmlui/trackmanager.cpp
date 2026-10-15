@@ -10,6 +10,7 @@
 */
 
 #include <QJsonDocument>
+#include <QCoreApplication>         // R459_RM_APPINC
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QHostAddress>
@@ -111,6 +112,10 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_lastPosMs = 0;
     m_linkStale = false;
     m_engine = new TrackEngine(m_doc, this);
+    // R459_RM_REG: QLC's web server finds the phone remote's door here (it
+    // does not link to the Track code)
+    if (QCoreApplication::instance() != nullptr)
+        QCoreApplication::instance()->setProperty("trackRemote", QVariant::fromValue<QObject *>(this));
     // ROOM (by clock, or a tap) is the ENERGY trim: one dial, not two
     connect(m_engine, &TrackEngine::roomChanged, this, &TrackManager::setEnergyTrim);
     // R184_START_SCENE_INIT: tonight's state, and the clock's ENERGY at once -
@@ -1334,6 +1339,248 @@ void TrackManager::moveMarker(int index, int beat)
     m_markersManual = true;              // FJ_MOVE_MANUAL_FIRST: before updateState() reads it
     updateState();
     sendMarkers(true);                   // let BLT remember the correction
+}
+
+// R459_RM_CPP
+/* =====================================================================
+ *  TRACK REMOTE (runde 459) - inserted into trackmanager.cpp by
+ *  feature_trackview_engine.py from track_runtime/remote.inc.cpp.
+ *
+ *  Tobias, 2026-10-15 (mockups A-D approved): "en man faktisk kan trykke paa
+ *  ... jeg gerne vil kunne styre det fra min telefon naar jeg gaar rundt i
+ *  lokalet" / "Der skal ingen sikkerhed bygges paa ... QLC koerer paa et
+ *  lukket netvaerk". The phone page (track_remote.html, served by QLC's own
+ *  web server on the layout branch) sends one line per tap over its web
+ *  socket: "TRACK|<command>|<args>". This is the one door those lines come
+ *  through. Every command calls exactly what the desk's own button calls,
+ *  so every rule of the engine (the lasers, ENERGY's lines, haze by hand)
+ *  holds for the phone as it does for the desk. The last touch wins.
+ *
+ *  "state" answers with the page's state as JSON; the phone asks four times
+ *  a second, and that is also its heartbeat: a button HELD on the phone
+ *  (BLACKOUT, STUTTER, FLASH WHITE) lets go by itself when the phone has
+ *  not been heard from for 1.2 s (the Wi-Fi dropped, the screen locked).
+ *  A latched one (slid off, as on the desk) stays.
+ * ===================================================================== */
+
+#define TRACK_REMOTE_GONE_MS 1200
+
+static int remoteArgInt(const QStringList &a, int i, int fallback = 0)
+{
+    bool ok = false;
+    const int v = a.value(i).toInt(&ok);
+    return ok ? v : fallback;
+}
+
+void TrackManager::remoteWatch()
+{
+    // R459_REMOTE: a held button on a phone that went quiet lets go
+    if (m_remoteHeld.isEmpty())
+    {
+        m_remoteTimer.stop();
+        return;
+    }
+    if (QDateTime::currentMSecsSinceEpoch() - m_remoteSeenMs < TRACK_REMOTE_GONE_MS || m_engine == nullptr)
+        return;
+    if (m_remoteHeld.contains(QStringLiteral("blackout")))
+        m_engine->setBlackout(false);
+    if (m_remoteHeld.contains(QStringLiteral("stutter")))
+        m_engine->setStutter(false);
+    if (m_remoteHeld.contains(QStringLiteral("flash")))
+        m_engine->setFlash(false);
+    qDebug() << "[TRACK remote] the phone went quiet - let go of" << m_remoteHeld.values();
+    m_remoteHeld.clear();
+    m_remoteTimer.stop();
+}
+
+void TrackManager::remoteHeld(const QString &what, bool on, const QStringList &a)
+{
+    // "<what>|1|held" while a finger is on it, "<what>|1|latched" slid off, "<what>|0"
+    if (on && a.value(2) == QStringLiteral("held"))
+    {
+        m_remoteHeld.insert(what);
+        if (m_remoteTimerOn == false)
+        {
+            connect(&m_remoteTimer, &QTimer::timeout, this, &TrackManager::remoteWatch);
+            m_remoteTimer.setInterval(300);
+            m_remoteTimerOn = true;
+        }
+        if (m_remoteTimer.isActive() == false)
+            m_remoteTimer.start();
+    }
+    else
+        m_remoteHeld.remove(what);
+}
+
+QString TrackManager::remoteState()
+{
+    QJsonObject o;
+    o.insert(QStringLiteral("show"), m_autoRun);
+    o.insert(QStringLiteral("title"), title());
+    o.insert(QStringLiteral("state"), currentState());
+    o.insert(QStringLiteral("override"), overrideState());
+    o.insert(QStringLiteral("beat"), currentBeat());
+    o.insert(QStringLiteral("beats"), beatCount());
+    o.insert(QStringLiteral("playing"), playing());
+    o.insert(QStringLiteral("bpm"), engineBpm());
+    o.insert(QStringLiteral("tempo"), tempoSource());
+    o.insert(QStringLiteral("connected"), connected());
+    o.insert(QStringLiteral("test"), m_testTrack);
+    o.insert(QStringLiteral("energy"), energyTrim());
+    QJsonArray mk;
+    const QVariantList markerList = markers();
+    for (const QVariant &v : markerList)
+    {
+        const QVariantMap m = v.toMap();
+        QJsonObject j;
+        j.insert(QStringLiteral("b"), m.value(QStringLiteral("beat")).toInt());
+        j.insert(QStringLiteral("t"), m.value(QStringLiteral("type")).toString());
+        mk.append(j);
+    }
+    o.insert(QStringLiteral("markers"), mk);
+    if (m_engine != nullptr)
+    {
+        TrackEngine *e = m_engine;           // (groups() and palette() are not const)
+        o.insert(QStringLiteral("roomAuto"), e->roomAuto());
+        o.insert(QStringLiteral("calm"), e->calmBarsLeft());
+        o.insert(QStringLiteral("hold"), e->hold());
+        o.insert(QStringLiteral("blackout"), e->blackout());
+        o.insert(QStringLiteral("stutter"), e->stutter());
+        o.insert(QStringLiteral("stutterRate"), e->stutterRate());
+        o.insert(QStringLiteral("hitKind"), e->hitKind());
+        o.insert(QStringLiteral("hitLast"), e->hitLast());
+        o.insert(QStringLiteral("flash"), e->flashing());
+        o.insert(QStringLiteral("colour"), e->currentColour());
+        o.insert(QStringLiteral("overrides"), QJsonArray::fromStringList(e->colourOverrides()));
+        o.insert(QStringLiteral("colourMode"), e->colourMode());
+        o.insert(QStringLiteral("palette"), QJsonArray::fromVariantList(e->palette()));
+        o.insert(QStringLiteral("position"), e->positionMode());
+        o.insert(QStringLiteral("speed"), e->speed());
+        o.insert(QStringLiteral("master"), e->master());
+        o.insert(QStringLiteral("haze"), e->haze());
+        o.insert(QStringLiteral("fan"), e->fan());
+        // the groups' list is a walk over the show's functions - every 2 s is plenty
+        // (a toggle or a trim from the phone refreshes it at once, below)
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (m_remoteGroups.isEmpty() || now - m_remoteGroupsMs > 2000)
+        {
+            m_remoteGroups = QJsonArray();
+            const QVariantList groupList = e->groups();
+            for (const QVariant &v : groupList)
+            {
+                const QVariantMap g = v.toMap();
+                QJsonObject j;
+                for (const char *k : { "key", "enabled", "base", "switchOnly", "strobes", "lasers" })
+                    j.insert(QLatin1String(k), QJsonValue::fromVariant(g.value(QLatin1String(k))));
+                m_remoteGroups.append(j);
+            }
+            m_remoteGroupsMs = now;
+        }
+        o.insert(QStringLiteral("groups"), m_remoteGroups);
+        o.insert(QStringLiteral("trims"), QJsonObject::fromVariantMap(e->trims()));
+        QJsonObject last;
+        last.insert(QStringLiteral("stage"), e->lastTrack());
+        last.insert(QStringLiteral("shown"), e->lastTrackShown());
+        last.insert(QStringLiteral("left"), e->lastTrackLeft());
+        last.insert(QStringLiteral("closeMin"), e->lastTrackCloseMin());
+        last.insert(QStringLiteral("closeAt"), e->lastTrackCloseAt());
+        o.insert(QStringLiteral("last"), last);
+    }
+    return QStringLiteral("TRACKSTATE|") + QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+QString TrackManager::remoteCommand(const QString &line)
+{
+    m_remoteSeenMs = QDateTime::currentMSecsSinceEpoch();
+    const QStringList a = line.split(QLatin1Char('|'));
+    const QString cmd = a.value(0);
+    if (cmd == QStringLiteral("state") || cmd.isEmpty())
+        return remoteState();
+    TrackEngine *e = m_engine;
+    if (e == nullptr)
+        return QString();
+
+    // ---- the top: the show switch (the page asks SURE? before OFF), LAST TRACK
+    if (cmd == QStringLiteral("show"))
+        setAutoRun(a.value(1) == QStringLiteral("1"));
+    else if (cmd == QStringLiteral("last"))
+        e->toggleLastTrack();
+    // ---- LIVE
+    else if (cmd == QStringLiteral("energy"))
+    {
+        if (e->roomAuto())
+            e->setRoomAuto(false);           // a hand on ENERGY, as the desk's slider
+        setEnergyTrim(qBound(0, remoteArgInt(a, 1, energyTrim()), 100));
+    }
+    else if (cmd == QStringLiteral("energyAuto"))
+        e->setRoomAuto(true);
+    else if (cmd == QStringLiteral("calm"))
+        e->calm(e->calmBarsLeft() > 0 ? 0 : 16);
+    else if (cmd == QStringLiteral("next"))
+        e->next();
+    else if (cmd == QStringLiteral("hold"))
+        e->setHold(!e->hold());
+    else if (cmd == QStringLiteral("blackout"))
+    {
+        const bool on = a.value(1) == QStringLiteral("1");
+        e->setBlackout(on);
+        remoteHeld(QStringLiteral("blackout"), on, a);
+    }
+    else if (cmd == QStringLiteral("stutter"))
+    {
+        const bool on = a.value(1) == QStringLiteral("1");
+        e->setStutter(on);
+        remoteHeld(QStringLiteral("stutter"), on, a);
+    }
+    else if (cmd == QStringLiteral("stutterRate"))
+        e->setStutterRate(remoteArgInt(a, 1, e->stutterRate()));
+    else if (cmd == QStringLiteral("hit"))
+        e->setHitKind(qBound(0, remoteArgInt(a, 1), 3));
+    else if (cmd == QStringLiteral("flash"))
+    {
+        const bool on = a.value(1) == QStringLiteral("1");
+        e->setFlash(on);
+        remoteHeld(QStringLiteral("flash"), on, a);
+    }
+    // ---- LOOK
+    else if (cmd == QStringLiteral("section"))
+        setOverrideState(a.value(1) == overrideState() ? QString() : a.value(1));
+    else if (cmd == QStringLiteral("colourAuto"))
+        e->setColourOverride(QString());
+    else if (cmd == QStringLiteral("colour"))
+        e->toggleColourOverride(a.value(1));
+    else if (cmd == QStringLiteral("colourMode"))
+    {
+        const int m = remoteArgInt(a, 1);
+        if (m == 1 || m == 2)
+            e->setColourMode(e->colourMode() == m ? 0 : m);
+    }
+    else if (cmd == QStringLiteral("position"))
+        e->setPositionMode(a.value(1) == e->positionMode() ? QString() : a.value(1));
+    else if (cmd == QStringLiteral("speed"))
+        e->setSpeed(qBound(-1, remoteArgInt(a, 1), 1));
+    // ---- RIG
+    else if (cmd == QStringLiteral("master"))
+        e->setMaster(qBound(0, remoteArgInt(a, 1, 100), 100) / 100.0);
+    else if (cmd == QStringLiteral("trim"))
+        e->setGroupTrim(a.value(1), qBound(0, remoteArgInt(a, 2, 100), 100) / 100.0);
+    else if (cmd == QStringLiteral("group"))
+    {
+        e->setGroupEnabled(a.value(1), a.value(2) == QStringLiteral("1"));
+        m_remoteGroupsMs = 0;                // the list again at once
+    }
+    else if (cmd == QStringLiteral("haze"))
+    {
+        int v = qBound(0, remoteArgInt(a, 1), 100);
+        if (v < 3)
+            v = 0;                           // as the desk's fader: the bottom is off
+        e->setHaze(v / 100.0);
+    }
+    else if (cmd == QStringLiteral("fan"))
+        e->setFan(qBound(0, remoteArgInt(a, 1), 100) / 100.0);
+    else
+        return QStringLiteral("TRACKERR|unknown command ") + cmd;
+    return remoteState();
 }
 
 // R450_TT_CPP
