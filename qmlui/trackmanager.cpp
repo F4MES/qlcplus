@@ -143,6 +143,10 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
 
 TrackManager::~TrackManager()
 {
+    // R463_RM_FREE: the web server's door to the phone remote goes with us
+    if (QCoreApplication::instance() != nullptr
+        && QCoreApplication::instance()->property("trackRemote").value<QObject *>() == this)
+        QCoreApplication::instance()->setProperty("trackRemote", QVariant());
     stopLook();
     if (m_server != nullptr)
         m_server->close();
@@ -244,7 +248,7 @@ void TrackManager::slotDisconnected()
         if (m_engine != nullptr && m_autoRun && m_roleMode)   // R246_DISCONNECT_IDLE
         {
             m_lastEngineBeat = -1;
-            m_engine->idle();
+            m_engine->linkIdle();        // R463_LINK_IDLE_DISCONNECT
         }
     }
     // R187_MIX_ON_DISCONNECT: BLT forgets it was mixing when it reconnects
@@ -745,7 +749,7 @@ void TrackManager::reroll()
     if (m_linkStale && m_roleMode && m_engine != nullptr)
     {
         m_lastEngineBeat = -1;           // R188_REROLL_BEAT: the link's return runs at once
-        m_engine->idle();
+        m_engine->linkIdle();            // R463_LINK_IDLE_REROLL
         return;
     }
     applyLook();
@@ -1025,7 +1029,7 @@ void TrackManager::slotEnergyTick()
         if (stale && m_engine != nullptr && m_autoRun && m_roleMode)   // R244_STALE_IDLE
         {
             m_lastEngineBeat = -1;
-            m_engine->idle();
+            m_engine->linkIdle();        // R463_LINK_IDLE_STALE
         }
     }
     // half a minute without a word from BLT is not a hiccup: the track is
@@ -1144,7 +1148,8 @@ void TrackManager::setEnergyTrim(int percent)
     noteShowRunning();                   // R184_START_SCENE_ENERGY
     // R379_ZERO_ENERGY: the slider at 0 with the show on - the start scene
     // again (the DJ's tiles kept); above 0 noteShowRunning() takes it down
-    if (m_autoRun && m_engine != nullptr && m_energyTrim == 0 && m_engine->startScene() == false)
+    if (m_autoRun && m_engine != nullptr && m_energyTrim == 0 && m_engine->startScene() == false
+        && m_engine->lastTrack() == 0)   // R463_LAST_ZERO: not over the last track or its light
     {
         m_engine->setStartScene(true, true);
         m_startAuto = m_engine->startScene();
@@ -1202,7 +1207,12 @@ void TrackManager::noteShowRunning()
         // (From inside tick() the deck is playing, so this is not reached
         // there.)
         if ((m_playing == false || m_linkStale) && m_roleMode)   // R295_IDLE_STALE
-            m_engine->idle();
+        {
+            if (m_playing == false)
+                m_engine->idle();
+            else
+                m_engine->linkIdle();    // R463_LINK_IDLE_ROLES
+        }
     }
 }
 
@@ -1360,40 +1370,72 @@ void TrackManager::moveMarker(int index, int beat)
  *  holds for the phone as it does for the desk. The last touch wins.
  *
  *  "state" answers with the page's state as JSON; the phone asks four times
- *  a second, and that is also its heartbeat: a button HELD on the phone
- *  (BLACKOUT, STUTTER, FLASH WHITE) lets go by itself when the phone has
- *  not been heard from for 1.2 s (the Wi-Fi dropped, the screen locked).
- *  A latched one (slid off, as on the desk) stays.
+ *  a second, and that is also its heartbeat: "state|blackout,flash" names
+ *  what a finger still holds on that phone (BLACKOUT, STUTTER, FLASH WHITE).
+ *  What is not named for 1.2 s lets go by itself (the Wi-Fi dropped, the
+ *  screen locked) - per button, so a second phone does not keep it on
+ *  (R463_RM_HELD). A latched one (slid off, as on the desk) stays.
  * ===================================================================== */
 
 #define TRACK_REMOTE_GONE_MS 1200
 
-static int remoteArgInt(const QStringList &a, int i, int fallback = 0)
+// R463_RM_ARGS: a number, or nothing - a word where a number belongs is refused,
+// not read as 100 (MASTER, a trim) or 0
+static bool remoteArg(const QStringList &a, int i, int *v)
 {
     bool ok = false;
-    const int v = a.value(i).toInt(&ok);
-    return ok ? v : fallback;
+    const int n = a.value(i).toInt(&ok);
+    if (ok)
+        *v = n;
+    return ok;
+}
+
+static bool remoteHeldOn(TrackEngine *e, const QString &what)
+{
+    if (what == QLatin1String("blackout"))
+        return e->blackout();
+    if (what == QLatin1String("stutter"))
+        return e->stutter();
+    return e->flashing();
 }
 
 void TrackManager::remoteWatch()
 {
-    // R459_REMOTE: a held button on a phone that went quiet lets go
-    if (m_remoteHeld.isEmpty())
+    // R459_REMOTE: a held button on a phone that went quiet lets go -
+    // R463_RM_HELD: per button, from the phone that holds it
+    if (m_remoteHeld.isEmpty() || m_engine == nullptr)
     {
+        m_remoteHeld.clear();
+        m_remoteHeldMs.clear();
         m_remoteTimer.stop();
         return;
     }
-    if (QDateTime::currentMSecsSinceEpoch() - m_remoteSeenMs < TRACK_REMOTE_GONE_MS || m_engine == nullptr)
-        return;
-    if (m_remoteHeld.contains(QStringLiteral("blackout")))
-        m_engine->setBlackout(false);
-    if (m_remoteHeld.contains(QStringLiteral("stutter")))
-        m_engine->setStutter(false);
-    if (m_remoteHeld.contains(QStringLiteral("flash")))
-        m_engine->setFlash(false);
-    qDebug() << "[TRACK remote] the phone went quiet - let go of" << m_remoteHeld.values();
-    m_remoteHeld.clear();
-    m_remoteTimer.stop();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const QStringList held = m_remoteHeld.values();
+    for (const QString &what : held)
+    {
+        // the desk (or another phone) has let it go already: forgotten, not let go
+        // again over a later hand
+        if (remoteHeldOn(m_engine, what) == false)
+        {
+            m_remoteHeld.remove(what);
+            m_remoteHeldMs.remove(what);
+            continue;
+        }
+        if (now - m_remoteHeldMs.value(what, 0) < TRACK_REMOTE_GONE_MS)
+            continue;
+        if (what == QLatin1String("blackout"))
+            m_engine->setBlackout(false);
+        else if (what == QLatin1String("stutter"))
+            m_engine->setStutter(false);
+        else
+            m_engine->setFlash(false);
+        qDebug() << "[TRACK remote] the phone went quiet - let go of" << what;
+        m_remoteHeld.remove(what);
+        m_remoteHeldMs.remove(what);
+    }
+    if (m_remoteHeld.isEmpty())
+        m_remoteTimer.stop();
 }
 
 void TrackManager::remoteHeld(const QString &what, bool on, const QStringList &a)
@@ -1402,6 +1444,7 @@ void TrackManager::remoteHeld(const QString &what, bool on, const QStringList &a
     if (on && a.value(2) == QStringLiteral("held"))
     {
         m_remoteHeld.insert(what);
+        m_remoteHeldMs.insert(what, QDateTime::currentMSecsSinceEpoch());   // R463_RM_HELD
         if (m_remoteTimerOn == false)
         {
             connect(&m_remoteTimer, &QTimer::timeout, this, &TrackManager::remoteWatch);
@@ -1412,7 +1455,10 @@ void TrackManager::remoteHeld(const QString &what, bool on, const QStringList &a
             m_remoteTimer.start();
     }
     else
+    {
         m_remoteHeld.remove(what);
+        m_remoteHeldMs.remove(what);
+    }
 }
 
 QString TrackManager::remoteState()
@@ -1479,6 +1525,18 @@ QString TrackManager::remoteState()
             }
             m_remoteGroupsMs = now;
         }
+        // R463_RM_GROUPS: on/off fresh every time - a desk tap held back for 2 s
+        // made the phone's next tap do nothing
+        for (int i = 0; i < m_remoteGroups.count(); i++)
+        {
+            QJsonObject j = m_remoteGroups.at(i).toObject();
+            const bool en = e->groupEnabled(j.value(QStringLiteral("key")).toString());
+            if (j.value(QStringLiteral("enabled")).toBool() != en)
+            {
+                j.insert(QStringLiteral("enabled"), en);
+                m_remoteGroups.replace(i, j);
+            }
+        }
         o.insert(QStringLiteral("groups"), m_remoteGroups);
         o.insert(QStringLiteral("trims"), QJsonObject::fromVariantMap(e->trims()));
         QJsonObject last;
@@ -1498,10 +1556,21 @@ QString TrackManager::remoteCommand(const QString &line)
     const QStringList a = line.split(QLatin1Char('|'));
     const QString cmd = a.value(0);
     if (cmd == QStringLiteral("state") || cmd.isEmpty())
+    {
+        // R463_RM_HELD: what a finger still holds on this phone stays held
+        const QStringList still = a.value(1).split(QLatin1Char(','), Qt::SkipEmptyParts);
+        for (const QString &what : still)
+        {
+            if (m_remoteHeld.contains(what))
+                m_remoteHeldMs.insert(what, m_remoteSeenMs);
+        }
         return remoteState();
+    }
     TrackEngine *e = m_engine;
     if (e == nullptr)
         return QString();
+    const QString bad = QStringLiteral("TRACKERR|not a number: ") + line;   // R463_RM_ARGS
+    int n = 0;
 
     // ---- the top: the show switch (the page asks SURE? before OFF), LAST TRACK
     if (cmd == QStringLiteral("show"))
@@ -1511,9 +1580,11 @@ QString TrackManager::remoteCommand(const QString &line)
     // ---- LIVE
     else if (cmd == QStringLiteral("energy"))
     {
+        if (remoteArg(a, 1, &n) == false)
+            return bad;
         if (e->roomAuto())
             e->setRoomAuto(false);           // a hand on ENERGY, as the desk's slider
-        setEnergyTrim(qBound(0, remoteArgInt(a, 1, energyTrim()), 100));
+        setEnergyTrim(qBound(0, n, 100));
     }
     else if (cmd == QStringLiteral("energyAuto"))
         e->setRoomAuto(true);
@@ -1536,9 +1607,17 @@ QString TrackManager::remoteCommand(const QString &line)
         remoteHeld(QStringLiteral("stutter"), on, a);
     }
     else if (cmd == QStringLiteral("stutterRate"))
-        e->setStutterRate(remoteArgInt(a, 1, e->stutterRate()));
+    {
+        if (remoteArg(a, 1, &n) == false)
+            return bad;
+        e->setStutterRate(n);
+    }
     else if (cmd == QStringLiteral("hit"))
-        e->setHitKind(qBound(0, remoteArgInt(a, 1), 3));
+    {
+        if (remoteArg(a, 1, &n) == false)
+            return bad;
+        e->setHitKind(qBound(0, n, 3));
+    }
     else if (cmd == QStringLiteral("flash"))
     {
         const bool on = a.value(1) == QStringLiteral("1");
@@ -1554,33 +1633,65 @@ QString TrackManager::remoteCommand(const QString &line)
         e->toggleColourOverride(a.value(1));
     else if (cmd == QStringLiteral("colourMode"))
     {
-        const int m = remoteArgInt(a, 1);
+        const int m = remoteArg(a, 1, &n) ? n : 0;
         if (m == 1 || m == 2)
             e->setColourMode(e->colourMode() == m ? 0 : m);
     }
     else if (cmd == QStringLiteral("position"))
         e->setPositionMode(a.value(1) == e->positionMode() ? QString() : a.value(1));
     else if (cmd == QStringLiteral("speed"))
-        e->setSpeed(qBound(-1, remoteArgInt(a, 1), 1));
+    {
+        if (remoteArg(a, 1, &n) == false)
+            return bad;
+        e->setSpeed(qBound(-1, n, 1));
+    }
     // ---- RIG
     else if (cmd == QStringLiteral("master"))
-        e->setMaster(qBound(0, remoteArgInt(a, 1, 100), 100) / 100.0);
+    {
+        if (remoteArg(a, 1, &n) == false)
+            return bad;
+        e->setMaster(qBound(0, n, 100) / 100.0);
+    }
     else if (cmd == QStringLiteral("trim"))
-        e->setGroupTrim(a.value(1), qBound(0, remoteArgInt(a, 2, 100), 100) / 100.0);
+    {
+        // R463_RM_ARGS: a group that is one (an unknown key was saved for the night),
+        // and the ends as on the desk's fader
+        if (e->trims().contains(a.value(1)) == false)
+            return QStringLiteral("TRACKERR|no group ") + a.value(1);
+        if (remoteArg(a, 2, &n) == false)
+            return bad;
+        int v = qBound(0, n, 100);
+        if (v > 97)
+            v = 100;
+        else if (v < 3)
+            v = 0;
+        e->setGroupTrim(a.value(1), v / 100.0);
+    }
     else if (cmd == QStringLiteral("group"))
     {
+        if (e->trims().contains(a.value(1)) == false)
+            return QStringLiteral("TRACKERR|no group ") + a.value(1);
         e->setGroupEnabled(a.value(1), a.value(2) == QStringLiteral("1"));
         m_remoteGroupsMs = 0;                // the list again at once
     }
     else if (cmd == QStringLiteral("haze"))
     {
-        int v = qBound(0, remoteArgInt(a, 1), 100);
+        if (remoteArg(a, 1, &n) == false)
+            return bad;
+        int v = qBound(0, n, 100);
         if (v < 3)
             v = 0;                           // as the desk's fader: the bottom is off
         e->setHaze(v / 100.0);
     }
     else if (cmd == QStringLiteral("fan"))
-        e->setFan(qBound(0, remoteArgInt(a, 1), 100) / 100.0);
+    {
+        if (remoteArg(a, 1, &n) == false)
+            return bad;
+        int v = qBound(0, n, 100);
+        if (v < 3)
+            v = 0;                           // R463_RM_ARGS: as the desk's fader
+        e->setFan(v / 100.0);
+    }
     else
         return QStringLiteral("TRACKERR|unknown command ") + cmd;
     return remoteState();
