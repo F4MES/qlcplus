@@ -1,0 +1,455 @@
+<!doctype html>
+<!-- R459_TRACK_REMOTE (Tobias 10-15, mockups A-D approved): the Track page on the
+     phone. Served by QLC+'s own web server (start with -w) at http://<lys-pc>:9999/track.
+     Every tap is one line "TRACK|<command>|<args>" on QLC's web socket; the answer
+     and the 4-a-second "state" are the page's state. No login - a closed network
+     (Tobias: "Der skal ingen sikkerhed bygges paa"). Flat: no gradients, glow or shadows. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0A0A0D">
+<title>Track remote</title>
+<style>
+:root{--bg:#0A0A0D;--card:#141418;--btn:#202027;--edge:#2E2E36;--text:#E9E9EE;--mute:#8C8C96;--dim:#5E5E68;
+--green:#6ECD82;--gold:#E3B44F;--blue:#4FA3E3;--red:#E23B3B;--drop:#E23B3B;--build:#E0921A;--break:#2F7FD0;--intro:#5FB37A;--outro:#8C6BB1;--normal:#9AA0A6;--drive:#C2566E}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI",Roboto,"DejaVu Sans",sans-serif;height:100%;overflow:hidden;touch-action:manipulation}
+button{font-family:inherit;cursor:pointer}
+#app{display:flex;flex-direction:column;height:100%;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.status{padding:10px 12px 8px;background:var(--card);border-bottom:1px solid #1E1E24;position:relative}
+.row{display:flex;align-items:center;gap:8px}
+.pill{min-width:84px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;letter-spacing:.08em;color:#141005;font-size:14px;padding:0 10px;background:var(--normal)}
+.pill.pinned{box-shadow:inset 0 0 0 3px #fff}
+.title{flex:1;min-width:0}
+.title .t{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.title .n{font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.dots{display:flex;gap:5px}
+.dots i{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.14);display:block}
+.dots i.on{background:var(--green)} .dots i.one{background:#fff}
+.strip{position:relative;height:10px;margin-top:9px;border-radius:3px;overflow:hidden;display:flex;gap:2px;background:#1A1A20}
+.strip i{display:block;height:100%;opacity:.45}
+.strip i.played{opacity:1}
+.strip .pos{position:absolute;top:0;bottom:0;width:2px;background:#fff}
+.row2{margin-top:8px;display:flex;gap:8px}
+.chip{height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;letter-spacing:.08em;padding:0 12px;border:0;color:var(--text);background:var(--btn)}
+.show{flex:1;background:#4A1E1E;color:#FFC8C8}
+.show.on{background:#3FBF3F;color:#0A2A0A}
+.show.sure,.last.sure{background:var(--gold);color:#1A1408;border:0}
+.link{color:var(--mute);font-weight:600;font-size:11px;letter-spacing:.04em;white-space:nowrap}
+.link b{color:var(--dim)} .link b.ok{color:var(--green)}
+.last{flex:1.6;background:var(--btn);color:var(--gold);border:2px solid var(--gold);justify-content:flex-start;gap:8px;white-space:nowrap;text-align:left;display:none;overflow:hidden}
+.last.on{background:var(--gold);color:#1A1408;border:0}
+.last small{display:block;font-weight:500;font-size:10px;letter-spacing:0;opacity:.85;overflow:hidden;text-overflow:ellipsis}
+.moon{width:14px;height:14px;border-radius:50%;box-shadow:inset -4px 2px 0 0 currentColor;flex:none}
+.offline{position:absolute;left:0;right:0;top:0;bottom:0;background:#2A1416;color:#FFB4B4;display:none;align-items:center;justify-content:center;font-weight:800;letter-spacing:.1em;font-size:13px;text-align:center;padding:0 16px}
+.offline.on{display:flex}
+.pages{flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch}
+.lbl{font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--mute);margin:14px 2px 7px}
+.page>.lbl:first-child{margin-top:2px}
+.grid{display:grid;gap:8px}
+.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}.g4{grid-template-columns:repeat(4,1fr)}
+.b{height:58px;border-radius:10px;background:var(--btn);display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;font-size:13px;letter-spacing:.08em;color:var(--text);position:relative;border:0;padding:0 4px;touch-action:none}
+.b.tall{height:118px}
+.b.sm{height:44px;font-size:12px}
+.b.on{background:var(--green);color:#0A2A0A}
+.b.gold{background:var(--gold);color:#1A1408}
+.b.blue{background:var(--blue);color:#06182A}
+.b.white{background:#E9E9EE;color:#101010}
+.b.ring{box-shadow:inset 0 0 0 2px #E9E9EE}
+.b .sub{font-size:10px;font-weight:600;letter-spacing:.02em;margin-top:4px;opacity:.75}
+.b .bar{position:absolute;left:14%;right:14%;bottom:8px;height:3px;border-radius:2px}
+.chips{display:flex;gap:4px;margin-top:8px}
+.chips span{font-size:10px;font-weight:800;padding:5px 7px;border-radius:4px;background:#2C2C34;color:var(--mute)}
+.chips span.on{background:var(--gold);color:#1A1408}
+.b.armed{background:var(--red);color:#280808}
+.b.armed .chips span{background:#7A2020;color:#F0C8C8}.b.armed .chips span.on{background:var(--gold);color:#1A1408}
+.flash{box-shadow:inset 0 0 0 2px var(--text);background:#24242A}
+.fader{height:58px;border-radius:10px;background:#0B0B0E;position:relative;overflow:hidden;border:1px solid #1E1E24;touch-action:none}
+.fader .fill{position:absolute;left:0;top:0;bottom:0;border-radius:9px 0 0 9px;background:#3A86C8}
+.fader .grip{position:absolute;top:6px;bottom:6px;width:10px;border-radius:3px;background:#D8E6F2;margin-left:-14px}
+.fader .name{position:absolute;left:14px;right:84px;top:0;bottom:0;display:flex;align-items:center;font-weight:800;font-size:12px;letter-spacing:.14em;white-space:nowrap;overflow:hidden}
+.fader .val{position:absolute;right:26px;top:0;bottom:0;display:flex;align-items:center;font-weight:800;font-size:14px}
+.energy{height:84px}.energy .fill{background:var(--gold)}.energy .name{color:#1A1408}
+.grp{display:grid;grid-template-columns:1fr 54px;gap:8px;align-items:center;margin-bottom:8px}
+.grp .fader{height:50px}
+.grp .name{letter-spacing:.06em;font-size:11px;right:70px}
+.tog{height:50px;border-radius:10px;background:var(--btn);display:flex;align-items:center;justify-content:center;border:0}
+.tog i{width:34px;height:20px;border-radius:10px;background:#3A3A44;position:relative;display:block}
+.tog i:after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#9A9AA4}
+.tog.on i{background:var(--green)} .tog.on i:after{left:17px;background:#fff}
+.grp.off .fill{background:#33333B} .grp.off .name,.grp.off .val{color:var(--dim)}
+.switchonly .fill{display:none}.switchonly .grip{display:none}
+.tabs{display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--card);border-top:1px solid #1E1E24}
+.tabs button{height:56px;background:none;border:0;color:var(--mute);font-weight:800;font-size:12px;letter-spacing:.14em}
+.tabs button.on{color:var(--text);box-shadow:inset 0 3px 0 var(--gold)}
+.page{display:none}.page.on{display:block}
+.note{font-size:11px;color:var(--dim);margin:10px 2px 0;line-height:1.4}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="status">
+    <div class="row">
+      <div class="pill" id="pill">—</div>
+      <div class="title"><div class="t" id="title">No track loaded</div><div class="n" id="next"></div></div>
+      <div class="dots" id="dots"><i></i><i></i><i></i><i></i></div>
+    </div>
+    <div class="strip" id="strip"></div>
+    <div class="row2">
+      <button class="chip show" id="show">START SHOW</button>
+      <button class="chip last" id="last"><span class="moon"></span><span><span id="lasttitle">LAST TRACK</span><small id="lastsub"></small></span></button>
+      <div class="chip link" id="link"><b>●</b>&nbsp; <span>—</span></div>
+    </div>
+    <div class="offline on" id="offline">NO CONNECTION TO QLC+ - TRYING AGAIN ...</div>
+  </div>
+
+  <div class="pages">
+    <div class="page on" id="p-live">
+      <div class="lbl">ENERGY</div>
+      <div class="fader energy" data-f="energy"><div class="fill"></div><div class="grip"></div><div class="name">ENERGY</div><div class="val"></div></div>
+      <div class="grid g2" style="margin-top:8px">
+        <button class="b sm" data-c="energyAuto">AUTO<span class="sub">ENERGY by clock</span></button>
+        <button class="b sm" data-c="calm" id="calm">CALM</button>
+      </div>
+      <div class="lbl">LOOK</div>
+      <div class="grid g2">
+        <button class="b" data-c="next">NEXT LOOK</button>
+        <button class="b" data-c="hold" id="holdb">HOLD</button>
+      </div>
+      <div class="lbl">LIVE</div>
+      <div class="grid g2">
+        <button class="b tall" id="stutter">STUTTER<span class="sub">hold · tap locks</span>
+          <div class="chips" id="rates"><span data-r="1">1/4</span><span data-r="2">1/8</span><span data-r="3">1/16</span></div></button>
+        <button class="b tall" id="blackout">BLACKOUT<span class="sub">hold · slide off locks</span></button>
+        <button class="b tall" id="hit"><span id="hittitle">DROP HIT</span><span class="sub" id="hitsub">arms the next drop</span>
+          <div class="chips" id="kinds"><span data-k="1">FLSH</span><span data-k="2">STRB</span><span data-k="3">DARK</span></div></button>
+        <button class="b tall flash" id="flash">FLASH WHITE<span class="sub">hold</span></button>
+      </div>
+    </div>
+
+    <div class="page" id="p-look">
+      <div class="lbl">SECTION</div>
+      <div class="grid g3" id="sections"></div>
+      <div class="lbl">COLOUR</div>
+      <div class="grid g4" id="colours"></div>
+      <div class="grid g2" style="margin-top:8px">
+        <button class="b sm" data-c="colourMode|1" id="fade">FADE</button>
+        <button class="b sm" data-c="colourMode|2" id="chase">CHASE</button>
+      </div>
+      <div class="lbl">POSITION</div>
+      <div class="grid g2" id="positions"></div>
+      <div class="lbl">SPEED</div>
+      <div class="grid g3" id="speeds"></div>
+    </div>
+
+    <div class="page" id="p-rig">
+      <div class="lbl">MASTER</div>
+      <div class="fader" data-f="master" style="--c:#4FA3E3"><div class="fill" style="background:#4FA3E3"></div><div class="grip"></div><div class="name" style="color:#06182A">MASTER DIMMER</div><div class="val"></div></div>
+      <div class="lbl">GROUPS</div>
+      <div id="groups"></div>
+      <div class="lbl">HAZE MACHINE</div>
+      <div class="fader" data-f="haze" style="margin-bottom:8px"><div class="fill" style="background:#8C8C96"></div><div class="grip"></div><div class="name" style="color:#141418">HAZE</div><div class="val"></div></div>
+      <div class="fader" data-f="fan"><div class="fill" style="background:#6A8496"></div><div class="grip"></div><div class="name" style="color:#141418">FAN SPEED</div><div class="val"></div></div>
+      <div class="note">The same controls as the desk - the last touch wins. A held button lets go by itself if the phone loses the Wi-Fi.</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button data-p="live" class="on">LIVE</button>
+    <button data-p="look">LOOK</button>
+    <button data-p="rig">RIG</button>
+  </div>
+</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const SECTION_COL = {drop:'#E23B3B',build:'#E0921A',break:'#2F7FD0',intro:'#5FB37A',outro:'#8C6BB1',drive:'#C2566E',normal:'#9AA0A6'};
+const COLOUR = {red:['#E23B3B','#280808'],orange:['#E8822A','#F09A50'],yellow:['#E8D23A','#F0E070'],green:['#2EC04A','#4FD66A'],cyan:['#23C4D8','#45D6E8'],
+  blue:['#3355EE','#7FB2FF'],purple:['#8A4BE0','#B58AF0'],magenta:['#D040D0','#E56FE5'],pink:['#E0609A','#F08CB8'],white:['#E9E9EE','#E9E9EE'],uv:['#6A3AD0','#9D7AF0']};
+let S = null, ws = null, mockOn = false;
+const sent = window.__sent = [];
+const busy = {};                         // a fader under a finger is not redrawn from the state
+
+/* ---------------- the line to QLC+ ---------------- */
+function send(cmd) {
+  sent.push(cmd);
+  if (mockOn) { mockApply(cmd); return; }
+  if (ws && ws.readyState === 1) ws.send('TRACK|' + cmd);
+}
+function onLine(data) {
+  if (typeof data !== 'string' || data.indexOf('TRACKSTATE|') !== 0) return;
+  try { S = JSON.parse(data.slice(11)); render(); } catch (e) {}
+}
+function connect() {
+  if (mockOn) return;
+  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/qlcplusWS'); }
+  catch (e) { $('offline').classList.add('on'); setTimeout(connect, 1500); return; }
+  ws.onopen = () => { $('offline').classList.remove('on'); send('state'); };
+  ws.onmessage = e => onLine(e.data);
+  ws.onclose = () => { $('offline').classList.add('on'); setTimeout(connect, 1000); };
+}
+setInterval(() => { if (!mockOn) send('state'); }, 250);   // the state - and the heartbeat that keeps a held button held
+
+/* ---------------- tabs ---------------- */
+function tab(p) {
+  document.querySelectorAll('.page').forEach(e => e.classList.toggle('on', e.id === 'p-' + p));
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => tab(b.dataset.p));
+
+/* ---------------- plain taps ---------------- */
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-c]');
+  if (b) send(b.dataset.c);
+});
+
+/* ---------------- SURE? - as the desk: SHOW OFF and LAST TRACK ---------------- */
+const sure = {};
+function sureTap(key, el, cmd) {
+  if (!sure[key]) { sure[key] = setTimeout(() => { sure[key] = 0; render(); }, 4000); render(); return; }
+  clearTimeout(sure[key]); sure[key] = 0; send(cmd); render();
+}
+$('show').onclick = () => { if (!S) return; if (!S.show) send('show|1'); else sureTap('show', $('show'), 'show|0'); };
+$('last').onclick = () => sureTap('last', $('last'), 'last');
+
+/* ---------------- held buttons: BLACKOUT, STUTTER, FLASH WHITE ---------------- */
+// as the desk: down = on (or, when it is on, off); up ON the button = let go;
+// a finger slid off = locked. STUTTER: a quick tap (< 250 ms) locks it too.
+function holdButton(el, what, opts) {
+  let armed = false, at = 0, id = null;
+  el.addEventListener('pointerdown', e => {
+    if (e.target.closest('[data-r],[data-k]')) return;
+    if (!S) return;
+    id = e.pointerId; el.setPointerCapture && el.setPointerCapture(id);
+    if (opts.momentary) { send(what + '|1|held'); armed = true; return; }
+    if (S[what]) { send(what + '|0'); armed = false; return; }
+    send(what + '|1|held'); armed = true; at = Date.now();
+  });
+  const inside = e => { const r = el.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; };
+  el.addEventListener('pointermove', e => {
+    if (!armed || opts.momentary || e.pointerId !== id) return;
+    if (!inside(e)) { armed = false; send(what + '|1|latched'); }   // slid off: it stays
+  });
+  el.addEventListener('pointerup', e => {
+    if (!armed) return; armed = false;
+    if (opts.momentary) { send(what + '|0'); return; }
+    if (!inside(e)) { send(what + '|1|latched'); return; }
+    if (opts.tapMs && Date.now() - at < opts.tapMs) { send(what + '|1|latched'); return; }   // a quick tap locks
+    send(what + '|0');
+  });
+  el.addEventListener('pointercancel', () => { if (armed) send(what + '|0'); armed = false; });
+}
+holdButton($('blackout'), 'blackout', {});
+holdButton($('stutter'), 'stutter', {tapMs: 250});
+holdButton($('flash'), 'flash', {momentary: true});
+$('rates').addEventListener('pointerdown', e => { const c = e.target.closest('[data-r]'); if (c) { e.stopPropagation(); send('stutterRate|' + c.dataset.r); } });
+$('kinds').addEventListener('pointerdown', e => { const c = e.target.closest('[data-k]'); if (c) { e.stopPropagation(); send('hit|' + c.dataset.k); } });
+$('hit').addEventListener('click', e => {
+  if (e.target.closest('[data-k]') || !S) return;
+  send('hit|' + (S.hitKind > 0 ? 0 : (S.hitLast || 1)));
+});
+
+/* ---------------- faders ---------------- */
+function faderValue(el) {
+  const f = el.dataset.f;
+  if (!S) return 0;
+  if (f === 'energy') return S.energy / 100;
+  if (f === 'master') return S.master;
+  if (f === 'haze') return S.haze;
+  if (f === 'fan') return S.fan;
+  if (f.indexOf('trim:') === 0) return (S.trims || {})[f.slice(5)] ?? 1;
+  return 0;
+}
+function drawFader(el, v) {
+  v = Math.max(0, Math.min(1, v));
+  el.querySelector('.fill').style.width = (v * 100) + '%';
+  const g = el.querySelector('.grip'); if (g) g.style.left = (v * 100) + '%';
+  el.querySelector('.val').textContent = Math.round(v * 100) + '%';
+}
+function wireFader(el) {
+  let last = 0, timer = null, val = 0;
+  const cmd = v => { const f = el.dataset.f, p = Math.round(v * 100);
+    return f.indexOf('trim:') === 0 ? 'trim|' + f.slice(5) + '|' + p : f + '|' + p; };
+  const at = e => { const r = el.getBoundingClientRect(); return (e.clientX - r.left) / r.width; };
+  const flush = () => { timer = null; last = Date.now(); send(cmd(val)); };
+  const move = e => {
+    val = Math.max(0, Math.min(1, at(e))); drawFader(el, val);
+    if (!timer) timer = setTimeout(flush, Math.max(0, 80 - (Date.now() - last)));
+  };
+  el.addEventListener('pointerdown', e => { busy[el.dataset.f] = Infinity; el.setPointerCapture && el.setPointerCapture(e.pointerId); move(e); });
+  el.addEventListener('pointermove', e => { if (busy[el.dataset.f] === Infinity) move(e); });
+  const up = () => { if (busy[el.dataset.f] !== Infinity) return; if (timer) { clearTimeout(timer); flush(); } busy[el.dataset.f] = Date.now() + 700; };
+  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+}
+document.querySelectorAll('.fader[data-f]').forEach(wireFader);
+
+/* ---------------- the state onto the page ---------------- */
+function sorted(m) { return (m || []).slice().sort((a, b) => a.b - b.b); }
+function sectionAt(mk, beat) { let t = 'normal'; for (const m of mk) if (m.b <= beat) t = m.t; return t; }
+function mmss(s) { return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
+function cls(el, c, on) { el.classList.toggle(c, !!on); }
+let groupKeys = '', sectionsBuilt = false, colourKeys = '';
+
+function render() {
+  if (!S) return;
+  const mk = sorted(S.markers), beat = S.beat, n = S.beats;
+  // --- status
+  const state = S.override || S.state || 'normal';
+  const pill = $('pill');
+  pill.textContent = n > 0 ? state.toUpperCase() : '—';
+  pill.style.background = n > 0 ? (SECTION_COL[state] || SECTION_COL.normal) : '#2A2A30';
+  cls(pill, 'pinned', S.override);
+  $('title').textContent = n > 0 ? (S.title || '—') : (S.connected ? 'Waiting for a track' : 'Beat Link Trigger is not connected');
+  const nx = mk.find(m => m.b > beat);
+  const nEl = $('next');
+  if (n > 0 && nx) { const bars = Math.ceil((nx.b - beat) / 4); nEl.textContent = nx.t.toUpperCase() + ' in ' + bars + (bars === 1 ? ' bar' : ' bars'); nEl.style.color = SECTION_COL[nx.t] || SECTION_COL.normal; }
+  else { nEl.textContent = n > 0 ? 'No further points' : ''; nEl.style.color = 'var(--dim)'; }
+  const dots = $('dots').children, inBar = S.playing && beat > 0 ? (beat - 1) % 4 : -1;
+  for (let i = 0; i < 4; i++) { dots[i].className = i === inBar ? (i === 0 ? 'one' : 'on') : ''; }
+  // the track's sections and where it is
+  const strip = $('strip');
+  let html = '';
+  if (n > 0 && mk.length) {
+    const first = mk[0].b > 1 ? [{b: 1, t: 'normal'}] : [];
+    const all = first.concat(mk);
+    for (let i = 0; i < all.length; i++) {
+      const from = all[i].b, to = i + 1 < all.length ? all[i + 1].b : n + 1;
+      if (to <= from) continue;
+      html += '<i class="' + (beat >= to ? 'played' : (beat >= from ? 'played' : '')) + '" style="flex:' + (to - from) + ';background:' + (SECTION_COL[all[i].t] || SECTION_COL.normal) + '"></i>';
+    }
+    html += '<span class="pos" style="left:' + (100 * Math.max(0, beat - 1) / n) + '%"></span>';
+  }
+  strip.innerHTML = html;
+  // SHOW / LAST TRACK / the tempo
+  const show = $('show');
+  show.className = 'chip show' + (S.show ? ' on' : '') + (sure.show ? ' sure' : '');
+  show.textContent = sure.show ? 'SURE?' : (S.show ? 'SHOW ON' : 'START SHOW');
+  const L = S.last || {}, last = $('last');
+  const lastShown = !!L.shown && !S.test;
+  last.style.display = lastShown ? 'flex' : 'none';
+  $('link').style.display = lastShown ? 'none' : 'flex';
+  last.className = 'chip last' + (L.stage > 0 ? ' on' : '') + (sure.last ? ' sure' : '');
+  $('lasttitle').textContent = sure.last ? 'SURE?' : 'LAST TRACK';
+  let sub;
+  if (sure.last) sub = L.stage > 0 ? 'tap again to undo it' : 'tap again - this track ends the night';
+  else if (L.stage === 1 || L.stage === 2) sub = 'ends with the track' + (L.left >= 0 ? ' · ' + mmss(L.left) : '');
+  else if (L.stage === 3) sub = 'white light · dark in ' + mmss(Math.max(0, L.left));
+  else if (L.stage === 4) sub = 'dark · tap to undo';
+  else sub = 'closing ' + (L.closeAt || '03:00') + (L.closeMin > 0 ? ' · ' + L.closeMin + ' min' : '');
+  $('lastsub').textContent = sub;
+  const link = $('link');
+  link.querySelector('b').className = S.connected ? 'ok' : '';
+  link.querySelector('span').textContent = Math.round(S.bpm || 0) + ' BPM' + (S.tempo ? ' · ' + S.tempo : '');
+
+  // --- LIVE
+  document.querySelectorAll('.fader[data-f]').forEach(el => { if (!(busy[el.dataset.f] > Date.now())) drawFader(el, faderValue(el)); });
+  cls(document.querySelector('[data-c="energyAuto"]'), 'on', S.roomAuto);
+  const calm = $('calm'); cls(calm, 'on', S.calm > 0); calm.firstChild.textContent = 'CALM';
+  cls($('holdb'), 'gold', S.hold);
+  cls($('stutter'), 'gold', S.stutter);
+  [...$('rates').children].forEach(c => cls(c, 'on', +c.dataset.r === S.stutterRate));
+  cls($('blackout'), 'white', S.blackout);
+  const hit = $('hit'), armed = S.hitKind > 0;
+  cls(hit, 'armed', armed);
+  $('hittitle').textContent = armed ? 'HIT ARMED' : 'DROP HIT';
+  $('hitsub').textContent = armed ? 'next drop' : 'arms the next drop';
+  const kind = S.hitKind > 0 ? S.hitKind : (S.hitLast || 1);
+  [...$('kinds').children].forEach(c => cls(c, 'on', +c.dataset.k === kind));
+  cls($('flash'), 'white', S.flash);
+
+  // --- LOOK
+  if (!sectionsBuilt) {
+    $('sections').innerHTML = '<button class="b sm" data-c="section|" id="sec-auto">AUTO</button>' +
+      ['normal', 'break', 'build', 'drop'].map(s => '<button class="b sm" data-c="section|' + s + '" id="sec-' + s + '">' + s.toUpperCase() +
+        '<span class="bar" style="background:' + SECTION_COL[s] + '"></span></button>').join('');
+    $('positions').innerHTML = '<button class="b sm" data-c="position|" id="pos-auto">AUTO</button>' +
+      [['start', 'START POSITION'], ['column', 'CENTER COLUMN'], ['down', 'STRAIGHT DOWN']].map(p =>
+        '<button class="b sm" data-c="position|' + p[0] + '" id="pos-' + p[0] + '">' + p[1] + '</button>').join('');
+    $('speeds').innerHTML = [[-1, '½×'], [0, '1×'], [1, '2×']].map(p => '<button class="b sm" data-c="speed|' + p[0] + '" id="spd' + p[0] + '">' + p[1] + '</button>').join('');
+    sectionsBuilt = true;
+  }
+  cls($('sec-auto'), 'on', !S.override);
+  ['normal', 'break', 'build', 'drop'].forEach(s => { const b = $('sec-' + s), on = S.override === s;
+    b.style.background = on ? SECTION_COL[s] : ''; b.style.color = on ? '#141005' : ''; b.querySelector('.bar').style.display = on ? 'none' : ''; });
+  const pal = (S.palette || []).map(String);
+  if (pal.join() !== colourKeys) {
+    colourKeys = pal.join();
+    $('colours').innerHTML = '<button class="b sm" data-c="colourAuto" id="col-auto">AUTO</button>' + pal.map(c => {
+      const k = COLOUR[c] || ['#9AA0A6', '#C8C8D0'];
+      return '<button class="b sm" data-c="colour|' + c + '" id="col-' + c + '" style="color:' + k[1] + '">' + c.toUpperCase() +
+        '<span class="bar" style="background:' + k[0] + '"></span></button>'; }).join('');
+  }
+  const ov = S.overrides || [];
+  cls($('col-auto'), 'on', ov.length === 0);
+  pal.forEach(c => { const b = $('col-' + c); if (!b) return; const on = ov.indexOf(c) >= 0, k = COLOUR[c] || ['#9AA0A6', '#C8C8D0'];
+    b.style.background = on ? k[0] : ''; b.style.color = on ? (c === 'white' ? '#101010' : '#141005') : k[1];
+    b.querySelector('.bar').style.display = on ? 'none' : '';
+    cls(b, 'ring', ov.length === 0 && S.colour === c); });
+  cls($('fade'), 'blue', S.colourMode === 1); cls($('chase'), 'blue', S.colourMode === 2);
+  cls($('pos-auto'), 'on', !S.position);
+  ['start', 'column', 'down'].forEach(p => cls($('pos-' + p), 'blue', S.position === p));
+  [-1, 0, 1].forEach(v => cls($('spd' + v), 'blue', S.speed === v));
+
+  // --- RIG
+  const groups = S.groups || [];
+  const keys = groups.map(g => g.key + (g.switchOnly ? '!' : '')).join('|');
+  if (keys !== groupKeys) {
+    groupKeys = keys;
+    $('groups').innerHTML = groups.map(g =>
+      '<div class="grp' + (g.switchOnly ? ' switchonly' : '') + '" data-g="' + g.key + '">' +
+      '<div class="fader" data-f="trim:' + g.key + '"><div class="fill"></div><div class="grip"></div><div class="name">' +
+      (g.key.toUpperCase() + (g.base ? ' · BASE' : '')) + '</div><div class="val"></div></div>' +
+      '<button class="tog" data-t="' + g.key + '"><i></i></button></div>').join('');
+    $('groups').querySelectorAll('.fader[data-f]').forEach(el => { if (!el.parentNode.classList.contains('switchonly')) wireFader(el); });
+  }
+  groups.forEach(g => {
+    const row = $('groups').querySelector('[data-g="' + CSS.escape(g.key) + '"]'); if (!row) return;
+    cls(row, 'off', !g.enabled);
+    cls(row.querySelector('.tog'), 'on', g.enabled);
+    const f = row.querySelector('.fader');
+    if (g.switchOnly) f.querySelector('.val').textContent = g.enabled ? 'ON' : 'OFF';
+    else if (!(busy[f.dataset.f] > Date.now())) drawFader(f, faderValue(f));
+  });
+}
+$('groups').addEventListener('click', e => {
+  const t = e.target.closest('[data-t]'); if (!t || !S) return;
+  const g = (S.groups || []).find(x => x.key === t.dataset.t); if (g) send('group|' + g.key + '|' + (g.enabled ? 0 : 1));
+});
+
+/* ---------------- a stand-in QLC+ for screenshots and tests (?mock=1) ---------------- */
+function mockApply(cmd) {
+  const a = cmd.split('|'), c = a[0], on = a[1] === '1';
+  const m = {show: () => S.show = on, energy: () => { S.roomAuto = false; S.energy = +a[1]; }, energyAuto: () => S.roomAuto = true,
+    calm: () => S.calm = S.calm > 0 ? 0 : 16, hold: () => S.hold = !S.hold, blackout: () => S.blackout = on, stutter: () => S.stutter = on,
+    stutterRate: () => S.stutterRate = +a[1], hit: () => { S.hitKind = +a[1]; if (+a[1] > 0) S.hitLast = +a[1]; }, flash: () => S.flash = on,
+    section: () => S.override = a[1] === S.override ? '' : a[1], colourAuto: () => S.overrides = [],
+    colour: () => { const i = S.overrides.indexOf(a[1]); i >= 0 ? S.overrides.splice(i, 1) : S.overrides.push(a[1]); },
+    colourMode: () => S.colourMode = S.colourMode === +a[1] ? 0 : +a[1], position: () => S.position = a[1] === S.position ? '' : a[1],
+    speed: () => S.speed = +a[1], master: () => S.master = a[1] / 100, haze: () => S.haze = a[1] / 100, fan: () => S.fan = a[1] / 100,
+    trim: () => S.trims[a[1]] = a[2] / 100, group: () => S.groups.find(g => g.key === a[1]).enabled = a[2] === '1',
+    last: () => S.last.stage = S.last.stage > 0 ? 0 : 1};
+  if (m[c]) { m[c](); render(); }
+}
+const q = new URLSearchParams(location.search);
+if (q.get('mock')) {
+  mockOn = true;
+  $('offline').classList.remove('on');
+  S = {show: true, title: 'Calvin Who - Midnight Session (Extended)', state: 'build', override: '', beat: 129, beats: 392, playing: true,
+    bpm: 126, tempo: 'LINK', connected: true, test: false, energy: 72,
+    markers: [{b: 1, t: 'intro'}, {b: 33, t: 'normal'}, {b: 81, t: 'break'}, {b: 97, t: 'build'}, {b: 165, t: 'drop'}, {b: 229, t: 'break'}, {b: 261, t: 'build'}, {b: 293, t: 'drop'}, {b: 357, t: 'outro'}],
+    roomAuto: false, calm: 0, hold: false, blackout: false, stutter: false, stutterRate: 2, hitKind: 3, hitLast: 3, flash: false,
+    colour: 'blue', overrides: [], colourMode: 1, palette: ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white'], position: '', speed: 0,
+    master: 0.8, haze: 0.4, fan: 0.6,
+    groups: [{key: 'Laserbars', enabled: true}, {key: 'Strobes All', enabled: true}, {key: 'Shark Zoom Wash', enabled: true, base: true},
+             {key: 'Animation Laser', enabled: false, switchOnly: true}, {key: 'Mini 4 Eyes', enabled: true}],
+    trims: {'Laserbars': 1, 'Strobes All': 0.5, 'Shark Zoom Wash': 1, 'Animation Laser': 1, 'Mini 4 Eyes': 0.5},
+    last: {stage: +(q.get('last') || 0), shown: q.get('last') !== null, left: 198, closeMin: 9, closeAt: '03:00'}};
+  render();
+  tab(q.get('tab') || 'live');
+} else connect();
+</script>
+</body>
+</html>

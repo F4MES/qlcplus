@@ -443,6 +443,14 @@ void WebAccessQml::slotHandleHTTPRequest(QHttpRequest *req, QHttpResponse *resp)
     QString reqUrl = req->url().path();
     QString content;
 
+    // R459_RM_WEB_PAGE (Tobias 10-15): the Track page on the phone - no login,
+    // a closed network ("Der skal ingen sikkerhed bygges paa")
+    if (reqUrl == QLatin1String("/track") || reqUrl == QLatin1String("/track/"))
+    {
+        if (sendFile(resp, ":/track_remote.html", "text/html"))
+            return;
+    }
+
     qDebug() << Q_FUNC_INFO << req->methodString() << req->url();
 
     if (reqUrl == "/vc.json")
@@ -500,6 +508,23 @@ void WebAccessQml::slotHandleWebSocketRequest(QHttpConnection *conn, QString dat
     QStringList cmdList = data.split("|");
     if (cmdList.isEmpty())
         return;
+
+    // R459_RM_WEB_LINE: a line from the phone remote goes to TRACK, and the
+    // answer (the page's state) back to that phone only
+    if (cmdList[0] == QLatin1String("TRACK"))
+    {
+        QObject *track = QCoreApplication::instance() != nullptr
+                       ? QCoreApplication::instance()->property("trackRemote").value<QObject *>() : nullptr;
+        if (track != nullptr)
+        {
+            QString reply;
+            QMetaObject::invokeMethod(track, "remoteCommand", Qt::DirectConnection,
+                                      Q_RETURN_ARG(QString, reply), Q_ARG(QString, data.mid(6)));
+            if (reply.isEmpty() == false)
+                conn->webSocketWrite(reply);
+        }
+        return;
+    }
 
     if (cmdList[0] == "QLC+CMD")
     {

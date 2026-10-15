@@ -29,6 +29,8 @@
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <QSet>                    // R459_RM_INC
+#include <QJsonArray>
 #include <QElapsedTimer>             // R450_TT_INC
 #include <QHash>
 #include <QList>
@@ -231,6 +233,10 @@ public:
     qreal testBpm() const;
     Q_INVOKABLE void startTestTrack();
     Q_INVOKABLE void stopTestTrack();
+    /** R459_RM_API: the phone remote - one line "<command>|<args>" from the
+     *  page; the answer is the page's state ("TRACKSTATE|{json}") */
+    Q_INVOKABLE QString remoteCommand(const QString &line);
+    QString remoteState();
 
     /* ---- roles ---- */
     bool roleMode() const;
@@ -320,6 +326,8 @@ protected:
     void handleExtra(const QString &evt, const QJsonObject &obj);
     void learnFromFlag(const QString &type, int beat, bool added);
     void testStep(quint32 serial);       // R450_TT_STEP: one beat of the test track
+    void remoteWatch();                  // R459_RM_PRIV: a quiet phone lets go of what it held
+    void remoteHeld(const QString &what, bool on, const QStringList &args);
     quint32 pickRole(QString state, int role, int cursor) const;
     void driveRole(int role, quint32 fid, qreal level, int division,
                    bool hard = false);
@@ -454,6 +462,14 @@ private:
     qint64 m_testTicks = 0;              // beats since it started (the clock's count)
     quint32 m_testSerial = 0;            // a stop or a new test cancels the beat on its way
     QElapsedTimer m_testClock;
+
+    /* R459_RM_MEM: the phone remote */
+    QSet<QString> m_remoteHeld;          // blackout / stutter / flash held by a finger on a phone
+    qint64 m_remoteSeenMs = 0;           // the last line from a phone
+    QTimer m_remoteTimer;
+    bool m_remoteTimerOn = false;
+    QJsonArray m_remoteGroups;           // the groups for the phone, every 2 s
+    qint64 m_remoteGroupsMs = 0;
 };
 
 #endif // TRACKMANAGER_H
