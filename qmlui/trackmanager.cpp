@@ -1397,7 +1397,8 @@ void TrackManager::probeBlt()
             return;                      // stopped: the answer we had stands
         // the program (Beat Link Trigger.exe) or its window's title (a java launch)
         const bool on = out.contains(QLatin1String("beat link trigger"))
-                     || out.contains(QLatin1String("beat-link-trigger"));
+                     || out.contains(QLatin1String("beat-link-trigger"))
+                     || out.contains(QLatin1String("no dj link devices found"));   // R466_BLT_TITLE: waiting for the desk
         if (on != m_bltRunning)
         {
             m_bltRunning = on;
