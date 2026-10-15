@@ -170,28 +170,45 @@ const SECTION_COL = {drop:'#E23B3B',build:'#E0921A',break:'#2F7FD0',intro:'#5FB3
 const COLOUR = {red:['#E23B3B','#280808'],orange:['#E8822A','#F09A50'],yellow:['#E8D23A','#F0E070'],green:['#2EC04A','#4FD66A'],cyan:['#23C4D8','#45D6E8'],
   blue:['#3355EE','#7FB2FF'],purple:['#8A4BE0','#B58AF0'],magenta:['#D040D0','#E56FE5'],pink:['#E0609A','#F08CB8'],white:['#E9E9EE','#E9E9EE'],uv:['#6A3AD0','#9D7AF0']};
 let S = null, ws = null, mockOn = false;
-const sent = window.__sent = [];
+const sent = window.__sent = [];          // R463_PAGE: what was sent - in ?mock=1 only (it grew all night)
 const busy = {};                         // a fader under a finger is not redrawn from the state
+const holding = {};                      // R463_RM_HELD: what a finger holds on THIS phone
+let lastState = 0;                       // when QLC+ last answered
 
 /* ---------------- the line to QLC+ ---------------- */
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]); }
+function live() { return ws && ws.readyState === 1 && Date.now() - lastState < 1500; }
 function send(cmd) {
-  sent.push(cmd);
-  if (mockOn) { mockApply(cmd); return; }
-  if (ws && ws.readyState === 1) ws.send('TRACK|' + cmd);
+  if (mockOn) { sent.push(cmd); mockApply(cmd); return; }
+  // R463_PAGE: not into a socket that stopped answering - the browser kept the taps
+  // and sent them all at once when the Wi-Fi came back (NEXT three times, BLACKOUT)
+  if (ws && ws.readyState === 1 && (cmd.indexOf('state') === 0 || live())) ws.send('TRACK|' + cmd);
 }
 function onLine(data) {
   if (typeof data !== 'string' || data.indexOf('TRACKSTATE|') !== 0) return;
+  lastState = Date.now();
+  $('offline').classList.remove('on');
   try { S = JSON.parse(data.slice(11)); render(); } catch (e) {}
 }
 function connect() {
   if (mockOn) return;
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/qlcplusWS'); }
   catch (e) { $('offline').classList.add('on'); setTimeout(connect, 1500); return; }
-  ws.onopen = () => { $('offline').classList.remove('on'); send('state'); };
+  ws.onopen = () => { lastState = Date.now(); send('state'); };
   ws.onmessage = e => onLine(e.data);
   ws.onclose = () => { $('offline').classList.add('on'); setTimeout(connect, 1000); };
 }
-setInterval(() => { if (!mockOn) send('state'); }, 250);   // the state - and the heartbeat that keeps a held button held
+setInterval(() => {
+  if (mockOn) return;
+  // the state - and the heartbeat: it names what a finger still holds here
+  const held = Object.keys(holding).filter(k => holding[k]);
+  send('state' + (held.length ? '|' + held.join(',') : ''));
+  // R463_PAGE: a socket open but silent for 1.5 s (Wi-Fi gone without a close) is dead
+  if (ws && ws.readyState === 1 && lastState && Date.now() - lastState > 1500) {
+    $('offline').classList.add('on');
+    try { ws.close(); } catch (e) {}
+  }
+}, 250);
 
 /* ---------------- tabs ---------------- */
 function tab(p) {
@@ -220,27 +237,29 @@ $('last').onclick = () => sureTap('last', $('last'), 'last');
 // a finger slid off = locked. STUTTER: a quick tap (< 250 ms) locks it too.
 function holdButton(el, what, opts) {
   let armed = false, at = 0, id = null;
+  const hold = on => { armed = on; holding[what] = on; };   // R463_RM_HELD
   el.addEventListener('pointerdown', e => {
-    if (e.target.closest('[data-r],[data-k]')) return;
-    if (!S) return;
-    id = e.pointerId; el.setPointerCapture && el.setPointerCapture(id);
-    if (opts.momentary) { send(what + '|1|held'); armed = true; return; }
-    if (S[what]) { send(what + '|0'); armed = false; return; }
-    send(what + '|1|held'); armed = true; at = Date.now();
+    // R463_PAGE: a tap between the rate / hit chips is not the big button
+    if (e.target.closest('[data-r],[data-k],#rates,#kinds')) return;
+    if (!S || armed) return;             // R463_PAGE: a second finger does not take over the first
+    id = e.pointerId; try { el.setPointerCapture(id); } catch (err) {}
+    if (opts.momentary) { send(what + '|1|held'); hold(true); return; }
+    if (S[what]) { send(what + '|0'); hold(false); return; }
+    send(what + '|1|held'); hold(true); at = Date.now();
   });
   const inside = e => { const r = el.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; };
   el.addEventListener('pointermove', e => {
     if (!armed || opts.momentary || e.pointerId !== id) return;
-    if (!inside(e)) { armed = false; send(what + '|1|latched'); }   // slid off: it stays
+    if (!inside(e)) { hold(false); send(what + '|1|latched'); }   // slid off: it stays
   });
   el.addEventListener('pointerup', e => {
-    if (!armed) return; armed = false;
+    if (!armed || e.pointerId !== id) return; hold(false);
     if (opts.momentary) { send(what + '|0'); return; }
     if (!inside(e)) { send(what + '|1|latched'); return; }
     if (opts.tapMs && Date.now() - at < opts.tapMs) { send(what + '|1|latched'); return; }   // a quick tap locks
     send(what + '|0');
   });
-  el.addEventListener('pointercancel', () => { if (armed) send(what + '|0'); armed = false; });
+  el.addEventListener('pointercancel', e => { if (!armed || e.pointerId !== id) return; send(what + '|0'); hold(false); });
 }
 holdButton($('blackout'), 'blackout', {});
 holdButton($('stutter'), 'stutter', {tapMs: 250});
@@ -248,7 +267,7 @@ holdButton($('flash'), 'flash', {momentary: true});
 $('rates').addEventListener('pointerdown', e => { const c = e.target.closest('[data-r]'); if (c) { e.stopPropagation(); send('stutterRate|' + c.dataset.r); } });
 $('kinds').addEventListener('pointerdown', e => { const c = e.target.closest('[data-k]'); if (c) { e.stopPropagation(); send('hit|' + c.dataset.k); } });
 $('hit').addEventListener('click', e => {
-  if (e.target.closest('[data-k]') || !S) return;
+  if (e.target.closest('[data-k],#kinds') || !S) return;   // R463_PAGE: nor between the chips
   send('hit|' + (S.hitKind > 0 ? 0 : (S.hitLast || 1)));
 });
 
@@ -398,11 +417,12 @@ function render() {
   const keys = groups.map(g => g.key + (g.switchOnly ? '!' : '')).join('|');
   if (keys !== groupKeys) {
     groupKeys = keys;
+    // R463_PAGE: a group's name as text, whatever it holds (a " broke the page)
     $('groups').innerHTML = groups.map(g =>
-      '<div class="grp' + (g.switchOnly ? ' switchonly' : '') + '" data-g="' + g.key + '">' +
-      '<div class="fader" data-f="trim:' + g.key + '"><div class="fill"></div><div class="grip"></div><div class="name">' +
-      (g.key.toUpperCase() + (g.base ? ' · BASE' : '')) + '</div><div class="val"></div></div>' +
-      '<button class="tog" data-t="' + g.key + '"><i></i></button></div>').join('');
+      '<div class="grp' + (g.switchOnly ? ' switchonly' : '') + '" data-g="' + esc(g.key) + '">' +
+      '<div class="fader" data-f="trim:' + esc(g.key) + '"><div class="fill"></div><div class="grip"></div><div class="name">' +
+      esc(g.key.toUpperCase() + (g.base ? ' · BASE' : '')) + '</div><div class="val"></div></div>' +
+      '<button class="tog" data-t="' + esc(g.key) + '"><i></i></button></div>').join('');
     $('groups').querySelectorAll('.fader[data-f]').forEach(el => { if (!el.parentNode.classList.contains('switchonly')) wireFader(el); });
   }
   groups.forEach(g => {
@@ -416,7 +436,7 @@ function render() {
 }
 $('groups').addEventListener('click', e => {
   const t = e.target.closest('[data-t]'); if (!t || !S) return;
-  const g = (S.groups || []).find(x => x.key === t.dataset.t); if (g) send('group|' + g.key + '|' + (g.enabled ? 0 : 1));
+  const g = (S.groups || []).find(x => x.key === t.dataset.t); if (g) send('group|' + g.key + '|' + (g.enabled ? 0 : 1));   // R463_PAGE
 });
 
 /* ---------------- a stand-in QLC+ for screenshots and tests (?mock=1) ---------------- */

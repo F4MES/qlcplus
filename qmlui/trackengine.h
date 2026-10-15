@@ -1075,6 +1075,9 @@ public:
     void noteSectionRelease(const QString &held, const QString &now);
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
+    /** R463_LINK_IDLE: the link went quiet or BLT left - idle(), but an armed LAST
+     *  TRACK is not over (only the deck stopping ends it). */
+    void linkIdle();
     /** AUTO switched off: fade everything out over a bar, then let go. */
     void release();
     void stopAll();
@@ -1330,7 +1333,7 @@ private:
     int m_timbreDraw = -1;               // ... read by drawColour() during the room draw only
     qreal m_timbreMed = -1.0;            // the track's own median (highs / mids), -1 not yet
     qreal audHighN(int beat) const;
-    int fallLength(int beat, qreal *h0) const;
+    int fallLength(int beat, qreal *h0, int *peakAt = nullptr) const;   // R463_FALL_AHEAD: and where the peak was
     int sectionTimbre(int from, int to);
     int m_colourBar;          // -1: a fresh track, hold the colour until a break or drop
     int m_colourSince;        // beat of the last colour change
@@ -1978,6 +1981,10 @@ private:
     qreal m_houseLevel = -1.0;
     QMap<QString, quint32> m_houseZoom;    // group -> its widest-zoom scene
     static int lastTrackMinutesNow();
+    qint64 lastTrackSecsToClose() const;   // R463_LAST_SECS
+    bool lastTrackHolds() const;           // R463_LAST_CLOCK
+    int m_lastCloseMinSent = -100000;      // R463_HOUSE_SMALL
+    bool m_linkIdle = false;               // R463_LINK_IDLE
     int lastTrackEndBeat() const;
     int lastTrackOutroBeat() const;
     bool lastTrackHouse() const;

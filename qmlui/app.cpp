@@ -149,7 +149,11 @@ App::~App()
 #if defined(Q_OS_ANDROID)
     settings.setValue(SETTINGS_GEOMETRY, QVariant());
 #else
-    if (m_doc->isKiosk() == false && QLCFile::hasWindowManager())
+    if (windowState() & Qt::WindowFullScreen)
+    {
+        // FULLSCREEN_GEOMETRY_R463: the last normal geometry stays
+    }
+    else if (m_doc->isKiosk() == false && QLCFile::hasWindowManager())
         settings.setValue(SETTINGS_GEOMETRY, geometry());
     else
         settings.setValue(SETTINGS_GEOMETRY, QVariant());

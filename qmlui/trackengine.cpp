@@ -720,8 +720,13 @@ void TrackEngine::slotPulseTimer()
                 const int nib = onsetLow(m_lastBeat, 2);
                 if (nib >= 5)
                 {
+                    // R463_AND_STRENGTH: a hi-hat re-hit on this quarter, this tick
+                    // (R358) keeps its strength if it is the stronger
+                    qreal st = 0.55 + 0.25 * qMin(1.0, qreal(nib) / 12.0);
+                    if (m_pulseStart.value(key, -1) == now)
+                        st = qMax(st, m_pulseStrength.value(key, 0.0));
                     m_pulseStart.insert(key, now);
-                    m_pulseStrength.insert(key, 0.55 + 0.25 * qMin(1.0, qreal(nib) / 12.0));
+                    m_pulseStrength.insert(key, st);
                 }
             }
         }
@@ -4178,7 +4183,7 @@ qreal TrackEngine::audHighN(int beat) const
     return m_audHigh.at(beat - 1) / 255.0;
 }
 
-int TrackEngine::fallLength(int beat, qreal *h0) const
+int TrackEngine::fallLength(int beat, qreal *h0, int *peakAt) const
 {
     // R460_FALL (Tobias 10-15, idea 7): a groove has just ended (this beat starts
     // the new section). The highs peak around the line (the analysis' flags can sit a
@@ -4189,6 +4194,8 @@ int TrackEngine::fallLength(int beat, qreal *h0) const
     // of the peak, 2 to 8 beats from the line.
     if (h0 != nullptr)
         *h0 = 0.0;
+    if (peakAt != nullptr)
+        *peakAt = -1;
     if (m_audHigh.isEmpty() || m_audHigh.count() != m_audLevel.count() || beat < 3 || beat + 5 > m_audHigh.count())
         return 0;
     int at = beat - 2;
@@ -4208,6 +4215,8 @@ int TrackEngine::fallLength(int beat, qreal *h0) const
         len++;
     if (h0 != nullptr)
         *h0 = peak;
+    if (peakAt != nullptr)
+        *peakAt = at;
     return len;
 }
 
@@ -9759,12 +9768,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the sound, or the downlifter begins in the groove's last bar): the groove's
     // own last beats sink with the falling highs, down to 55 %.
     m_fallAheadMul = 1.0;
+    // R463_FALL_AHEAD: in a groove only (the lift at the line needs one), and after
+    // the highs' peak - a dip before it went down, up and down again
     if (isBreak == false && isBuild == false && nextState == QStringLiteral("break") && beatsToNext >= 1 && beatsToNext <= 3
+        && (state == QStringLiteral("drop") || state == QStringLiteral("normal") || state == QStringLiteral("drive"))
         && hold == false && m_mixing == false && still == false)
     {
         qreal h0 = 0.0;
-        if (fallLength(beat + beatsToNext, &h0) > 0 && h0 > 0.0 && audHighN(beat) < 0.98 * h0
-            && audHighN(beat) <= audHighN(beat - 1))
+        int peakAt = -1;
+        if (fallLength(beat + beatsToNext, &h0, &peakAt) > 0 && h0 > 0.0 && beat > peakAt
+            && audHighN(beat) < 0.98 * h0 && audHighN(beat) <= audHighN(beat - 1))
             m_fallAheadMul = qBound(0.55, 0.55 + 0.45 * audHighN(beat) / h0, 1.0);
     }
     // R358_REPEAT (Tobias 10-05, "omkvaedet faar sit eget look hver gang"):
@@ -13392,11 +13405,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         qreal r460 = 1.0;
         if (m_fallFrom >= 0 && beat >= m_fallFrom && beat < m_fallFrom + m_fallLen && m_fallH0 > 0.0
             && g.strobes == false && g.lasers == false && g.patternDevice == false)
+        {
             r460 = 1.0 + 0.40 * qBound(0.0, audHighN(beat) / m_fallH0, 1.0);
+            // R463_FALL_BASE: the base has the break's own x1.4 below already - the
+            // lift on top made it x1.96 (a flash at the line). From the groove's
+            // level to the break's own, as for the others.
+            if (key == base && still == false)
+                r460 /= 1.4;
+        }
         if (m_fallAheadMul < 1.0 && g.strobes == false && g.lasers == false && g.patternDevice == false)
             r460 = m_fallAheadMul;
         if (m_dropVocal && smallWash(key) && m_dropVocalMed > 0.0)
-            r460 = qBound(0.85, 0.55 + 0.45 * audMid(beat) / m_dropVocalMed, 1.15);
+        {
+            const qreal voice = qBound(0.85, 0.55 + 0.45 * audMid(beat) / m_dropVocalMed, 1.15);
+            // R463_VOCAL_SINK: not held up while the downlifter sinks the rest
+            r460 = m_fallAheadMul < 1.0 ? qMin(r460, voice) : voice;
+        }
         qreal groupLevel = qBound(0.0, level * ((isBreak && (key == base || m_barsAloneNow) && still == false) ? 1.4 : 1.0) * duck * support * r460, 1.0);   // R383_BARS_ALONE: the bars alone have the base's lift
         // R385_BARS_FULL: full light - MASTER and the trim put on after
         if (m_barsAloneNow && m_aloneFull && g.lasers && g.patternDevice == false && still == false)
@@ -14638,7 +14662,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (strobeChase) ev << "strobe-chase";
         if (m_mixing) ev << "mix-energy";
         if (m_keyBias >= 0) ev << (m_keyBias == 0 ? "key-minor" : "key-major");
-        if (m_timbreBias >= 0) ev << (m_timbreBias == 1 ? "timbre-bright" : "timbre-dark");   // R460
+        if (m_timbreBias >= 0 && sectionChanged) ev << (m_timbreBias == 1 ? "timbre-bright" : "timbre-dark");   // R460 (R463_TIMBRE_LOG: on the section's beat)
         if (m_dropVocal) ev << "drop-vocal";
         if (m_andBass) ev << "and-bass";                               // R461
         if (m_pluckSlots != 0) ev << QString("pluck%1").arg(m_pluckSlots);
@@ -17603,7 +17627,9 @@ int TrackEngine::clockPercent() const
         minutes += 24 * 60;          // past midnight
     // with the closing sequence off the curve's last point holds past closing
     // time, until 05:00 - the house decides when it is over
-    if (minutes >= (m_closingOn ? close : 540) || m_clockCurve.isEmpty())
+    // R463_LAST_CLOCK: ... not while LAST TRACK holds: nought put the start scene up
+    // over the last track and the house light
+    if (m_clockCurve.isEmpty() || (minutes >= (m_closingOn ? close : 540) && lastTrackHolds() == false))
         return 0;                    // closed, until 20:00
     const int last = int(m_clockCurve.count()) - 1;
     auto curveAt = [&](int m) {
@@ -17619,7 +17645,7 @@ int TrackEngine::clockPercent() const
         night = night.addDays(-1);
     const qint64 left = QDateTime::currentDateTime()
                             .secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 4, 0)));
-    if (m_closingOn == false)
+    if (m_closingOn == false || lastTrackHolds())     // R463_LAST_CLOCK
         return v;
     if (left <= 0)
         return 0;
@@ -17805,8 +17831,11 @@ qreal TrackEngine::closingCap() const
     // waits for it, up to an hour past closing time
     if (m_lastStage >= 3)
         return 1.0;
+    // R463_LAST_LID: the hour is the clock's closing's wait - with the closing off
+    // (or ENERGY in a hand) the outro's lid holds however late the night runs
     if ((m_lastStage == 1 || m_lastStage == 2)
-        && lastTrackMinutesNow() - closingMinutes() < ENGINE_LAST_WAIT_MIN)
+        && (m_closingOn == false || m_roomAuto == false
+            || -lastTrackSecsToClose() < qint64(ENGINE_LAST_WAIT_MIN) * 60))
         return lastTrackCap();
     // A lid on the ENERGY that comes down by itself over the last forty
     // minutes - but ONLY while the clock is still driving the slider. A
@@ -18580,6 +18609,8 @@ void TrackEngine::release()
     m_restUntil = -1;
     m_calmUntil = 0;             // CALM goes with the show (stopAll() says so too; r199)
     m_forceNext = false;
+    m_andBass = false;           // R463_PLUCK_RESET
+    m_pluckSlots = 0;
     // the opening picture goes with everything else - and its tile with it:
     // the room went dark while START SCENE still showed lit, and the first
     // tap on it then turned "off" nothing (runde 176)
@@ -18909,6 +18940,17 @@ void TrackEngine::slotSelfTestStep()
     emit liveChanged();
 }
 
+void TrackEngine::linkIdle()
+{
+    // R463_LINK_IDLE: four seconds of a quiet link, BLT leaving, a re-roll with the
+    // link quiet - idle() took an armed LAST TRACK to the house light in the middle
+    // of the track. The idle look as before; the stage holds, and the beats coming
+    // back carry on with it. The deck stopping (and the 30 s watchdog) still end it.
+    m_linkIdle = true;
+    idle();
+    m_linkIdle = false;
+}
+
 void TrackEngine::idle()
 {
     clearMusicDark();                    // runde 356: a stopped deck is not a silent beat
@@ -18916,13 +18958,15 @@ void TrackEngine::idle()
     // (the DJ stops the deck, or BLT goes quiet) is the end of the night
     if (m_lastStage >= 3)
         return;
-    if (m_lastStage == 1 || m_lastStage == 2)
+    if ((m_lastStage == 1 || m_lastStage == 2) && m_linkIdle == false)   // R463_LINK_IDLE
     {
         enterHouse();
         return;
     }
     m_sequenceGroups.clear();
     m_restUntil = -1;
+    m_andBass = false;                   // R463_PLUCK_RESET
+    m_pluckSlots = 0;
     if (m_doc == nullptr)
         return;
     if (m_testTimer.isActive())   // SELF TEST owns the stage until it is done
@@ -19849,6 +19893,8 @@ void TrackEngine::stopAll()
     m_breathe.clear();
     m_pulseTimer.stop();
     stopEcho();
+    m_andBass = false;           // R463_PLUCK_RESET
+    m_pluckSlots = 0;
     m_flash = false;
     m_flashHeld.clear();         // release() clears it; without this the next
                                  // beat skips the whole out-of-cast teardown
@@ -23406,9 +23452,34 @@ int TrackEngine::lastTrackMinutesNow()
     return minutes;
 }
 
+qint64 TrackEngine::lastTrackSecsToClose() const
+{
+    // R463_LAST_SECS: real seconds to closing time, as closingCap() counts them - a
+    // local wall time that exists once on both nights the clocks change. The wall
+    // clock's minutes showed the button at 02:50 summer time and hid it for an hour
+    // at 03:00 = 02:00 (25 Oct).
+    QDate night = QDate::currentDate();
+    if (QTime::currentTime().hour() < 20)
+        night = night.addDays(-1);
+    const int close = closingMinutes();
+    return QDateTime::currentDateTime().secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 4, 0)));
+}
+
+bool TrackEngine::lastTrackHolds() const
+{
+    // R463_LAST_CLOCK: the clock's ENERGY holds (no nought, no start scene) while the
+    // last track plays - its closing waits up to an hour - and through the house light
+    if (m_lastStage >= 3)
+        return true;
+    if (m_lastStage != 1 && m_lastStage != 2)
+        return false;
+    return m_closingOn == false || -lastTrackSecsToClose() < qint64(ENGINE_LAST_WAIT_MIN) * 60;
+}
+
 int TrackEngine::lastTrackCloseMin() const
 {
-    return closingMinutes() - lastTrackMinutesNow();
+    const qint64 s = lastTrackSecsToClose();     // R463_LAST_SECS
+    return int(s > 0 ? (s + 59) / 60 : s / 60);
 }
 
 int TrackEngine::lastTrackEndBeat() const
@@ -23434,8 +23505,9 @@ int TrackEngine::lastTrackLeft() const
     }
     if (m_lastStage == 3)
     {
+        // R463_HOUSE_SMALL: "dark in" counts to dark - through the 30 s fade too
         const qint64 t = m_clock.elapsed() - m_houseMs;
-        return int(qMax<qint64>(0, ENGINE_HOUSE_HOLD_MS - t) / 1000);
+        return int(qMax<qint64>(0, ENGINE_HOUSE_HOLD_MS + ENGINE_HOUSE_OUT_MS - t) / 1000);
     }
     return -1;
 }
@@ -23462,6 +23534,9 @@ void TrackEngine::toggleLastTrack()
     {
         // undo, at any stage: the show is drawn again on the next beat
         const bool wasHouse = m_lastStage >= 3;
+        // R463_HOUSE_SMALL: undone while the haze was still fading - it comes back
+        if (m_lastStage == 3 && m_houseHazeDone == false && m_houseHaze > 0.0)
+            setHaze(m_houseHaze);
         setLastStage(0);
         m_lastTitle.clear();
         m_lastOutro = -1;
@@ -23501,7 +23576,10 @@ void TrackEngine::lastTrackBeat(const QString &state, int beat, int secStart, qr
     m_lastBeatNow = beat;
     if (bpm > 0.0)
         m_lastBpm = bpm;
-    if (state == QStringLiteral("outro") && (m_lastOutro < 0 || secStart < m_lastOutro))
+    // R463_OUTRO_FIRST: a flag later than the fallback (the last 32 beats) does not
+    // move the outro's start later - the lid jumped back up mid-outro
+    if (state == QStringLiteral("outro") && secStart <= lastTrackOutroBeat()
+        && (m_lastOutro < 0 || secStart < m_lastOutro))
         m_lastOutro = qMax(1, secStart);
     const int end = lastTrackEndBeat();
     if (end > 0 && beat >= end - 1)
@@ -23662,14 +23740,24 @@ void TrackEngine::lastTrackTick(bool showOn)
         m_houseLevel = -1.0;
     }
     const int minutes = lastTrackMinutesNow();
-    const int close = closingMinutes();
-    const bool window = minutes >= close - ENGINE_LAST_SHOW_MIN && minutes < 600;   // until 06:00
+    // R463_LAST_SECS: ten minutes before closing in real seconds, until 06:00
+    const bool window = minutes < 600 && lastTrackSecsToClose() <= qint64(ENGINE_LAST_SHOW_MIN) * 60;
     const bool shown = m_lastStage > 0
                     || (showOn && window && m_testTrack == false && m_trackTitle.isEmpty() == false);
     if (shown != m_lastShown)
     {
         m_lastShown = shown;
         emit lastTrackChanged();
+    }
+    // R463_HOUSE_SMALL: "closing · N min" moves on every minute
+    if (m_lastShown && m_lastStage == 0)
+    {
+        const int cm = lastTrackCloseMin();
+        if (cm != m_lastCloseMinSent)
+        {
+            m_lastCloseMinSent = cm;
+            emit lastTrackChanged();
+        }
     }
     if (m_lastStage < 3)
     {
@@ -23708,7 +23796,25 @@ void TrackEngine::lastTrackTick(bool showOn)
         m_report = tr("(last track)  |  dark");
         return;
     }
-    if (m_lastStage == 3 && qAbs(level - m_houseLevel) >= 0.004)
+    // R463_HOUSE_KEEP: ... and drawn again when something took it (a Function
+    // Manager edit settles the Doc and stops every slot, STOP TEST clears) - it
+    // was redrawn only when its level changed: dark through the 5-minute hold
+    bool lost = false;
+    if (m_lastStage == 3 && m_houseLevel > 0.01)
+    {
+        foreach (const QString &key, m_groupOrder)
+        {
+            if (houseGroup(key) && colourFunction(key, QStringLiteral("white")) != Function::invalidId()
+                && m_active.contains(QStringLiteral("col:") + key) == false)
+            {
+                lost = true;
+                break;
+            }
+        }
+        if (lost)
+            ensureTable();
+    }
+    if (m_lastStage == 3 && (lost || qAbs(level - m_houseLevel) >= 0.004))
         houseLook(level);
     emit lastTrackChanged();
 }
