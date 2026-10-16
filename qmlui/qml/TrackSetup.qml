@@ -1404,6 +1404,70 @@ Rectangle
             }
         }
 
+        // ------------------------------------------------- R473_ATMOS
+        // HAZE & FAN BY HAND: what his hand does with the hazer, quarter hour by quarter
+        // hour (Tobias 10-16, mockup approved) - only to look at: nothing runs by itself
+        ColumnLayout
+        {
+            objectName: "atmosHand"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            visible: setupRoot.advancedOpen && trackEngine && trackEngine.atmosKnown === true
+            spacing: 6
+            RowLayout
+            {
+                Layout.fillWidth: true
+                spacing: 10
+                Text { text: qsTr("HAZE & FAN BY HAND"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+                Text
+                {
+                    objectName: "atmosSub"
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    readonly property int view: trackEngine ? trackEngine.atmosView : 0
+                    readonly property var nights: trackEngine ? trackEngine.atmosNights : []
+                    text: (view === 0 ? qsTr("Fri + Sat, the last 2 weekends") : view === 1 ? qsTr("every Fri + Sat") : qsTr("the other nights"))
+                          + " - " + (nights.length > 0 ? qsTr("%1 nights (%2)").arg(nights.length).arg(nights.join(", ")) : qsTr("no nights yet"))
+                          + "  ·  " + qsTr("H = haze, F = fan  ·  only learning: the haze is yours until AUTO")
+                    color: setupRoot.cDim; font.pixelSize: 12
+                }
+                Repeater
+                {
+                    model: [qsTr("LAST 2 WEEKENDS"), qsTr("ALL FRI + SAT"), qsTr("OTHER NIGHTS")]
+                    TrackTile
+                    {
+                        objectName: "atmosView:" + index
+                        Layout.preferredWidth: 150; Layout.preferredHeight: 34
+                        label: modelData
+                        active: trackEngine ? trackEngine.atmosView === index : false
+                        activeColor: "#E3B44F"
+                        onTapped: if (trackEngine) trackEngine.atmosView = index
+                    }
+                }
+            }
+            GridLayout
+            {
+                Layout.fillWidth: true
+                columns: 14; columnSpacing: 4; rowSpacing: 4
+                Repeater
+                {
+                    model: trackEngine ? trackEngine.atmosHand : []
+                    TrackTile
+                    {
+                        objectName: "atmosHand:" + index
+                        Layout.preferredWidth: 60
+                        Layout.preferredHeight: 34
+                        property int at: 20 * 60 + 15 * index
+                        readonly property bool has: modelData !== undefined && modelData.h >= 0
+                        label: ("0" + (Math.floor(at / 60) % 24)).slice(-2) + ":" + ("0" + (at % 60)).slice(-2)
+                               + "\n" + (has ? "H" + modelData.h + " F" + modelData.f : "-")
+                        active: false
+                        opacity: has ? 1.0 : 0.4
+                    }
+                }
+            }
+        }
+
         // ------------------------------------------------- running
         Text
         {

@@ -5434,6 +5434,7 @@ void TrackEngine::setHaze(qreal level)
         return;
     ensureTable();
     m_haze = level;
+    m_atmosChangedMs = m_clock.elapsed();    // R473_ATMOS: logged once it has settled
     applyAtmos(m_hazeScene, m_hazeChannels, level);
     emit liveChanged();
 }
@@ -5445,6 +5446,7 @@ void TrackEngine::setFan(qreal level)
         return;
     ensureTable();
     m_fan = level;
+    m_atmosChangedMs = m_clock.elapsed();    // R473_ATMOS
     applyAtmos(m_fanScene, m_fanChannels, level);
     emit liveChanged();
 }
@@ -18011,6 +18013,7 @@ void TrackEngine::closingTick(bool showOn)
     padFlashTick();                                  // R469_GROUP_FLASH
     clockHandTick(showOn);                           // R470_CLOCK_HAND
     micTick(showOn);                                 // R467_MIC_CHECK
+    atmosTick(showOn);                               // R473_ATMOS: the log, his hand on the hazer
     const qreal dim = showOn ? closingCap() : 1.0;
     // R458: not the clock's closing - R464_HAZE_LID: only while LAST TRACK's lid is the
     // one that applies (closingCap's own test); after the clock's hour the room went
@@ -25646,4 +25649,309 @@ void TrackEngine::clockHandFlush()
     m_clockHandStore.insert(night, cells.mid(0, ENGINE_CLOCK_POINTS).join(QLatin1Char(';')));
     clockHandSave();
     emit clockHandChanged();
+}
+
+/* =====================================================================
+ *  HAZE & FAN BY HAND (runde 473, R473_ATMOS) - in track_runtime/clockhand.inc.cpp,
+ *  beside YOUR HAND: the same idea for the atmosphere.
+ *
+ *  Tobias, 2026-10-16: "log ogsaa baade haze og fan output samt tidspunkter
+ *  osv, og evt byg ind at den laerer hvordan vi bruger haze og fan ... den
+ *  skal ogsaa automatiseres paa et tidspunkt, men vi skal bruge noget data
+ *  inden" / "gennemsnit over de sidste to weekender ... kun fredag og
+ *  loerdag" / "ligesom energi slideren ... blive ved med at laere".
+ *
+ *  ONLY DATA. Nothing here sets the haze or the fan - the haze stays his
+ *  until an AUTO is built and approved.
+ *  - the log: Documents/QLC+/atmos-<night>.csv - a line a minute while the
+ *    show is on, and a line for every change once it has settled (1.5 s),
+ *    who made it (his hand, LAST TRACK, the clock's closing, SHOW OFF);
+ *    the tracklog gets "sig:atmos:<haze>:<fan>:<by>" for the changes
+ *  - the learning: every 200 ms with the show on (not the test track, not
+ *    LAST TRACK, not the clock's closing - those are the engine's, not his)
+ *    the haze and the fan go into the quarter hour, per night (noon to
+ *    noon), the last ENGINE_ATMOS_NIGHTS nights:
+ *    "trackengine/atmos-hand" { night: "quarter:hazesum,fansum,count;..." }
+ *  - SETUP > ADVANCED shows 20:00-03:00: the last 2 weekends (Fri + Sat),
+ *    all Fri + Sat, or the other nights - the average of the nights' own
+ *    averages, a quarter counted from 30 s of it.
+ * ===================================================================== */
+
+static int atmosQuarter(const QTime &t)
+{
+    // the night's quarter hours from noon: 0 = 12:00, 32 = 20:00, 95 = 11:45
+    int m = t.hour() * 60 + t.minute() - 12 * 60;
+    if (m < 0)
+        m += 24 * 60;
+    return m / 15;
+}
+
+static bool atmosWeekend(const QString &night)
+{
+    // the night's evening is a Friday or a Saturday
+    const int d = QDate::fromString(night, Qt::ISODate).dayOfWeek();
+    return d == 5 || d == 6;
+}
+
+static QHash<int, QVector<qint64> > atmosCells(const QString &stored)
+{
+    // "q:hazesum,fansum,count;..." -> q -> {haze sum, fan sum, count}
+    QHash<int, QVector<qint64> > out;
+    foreach (const QString &c, stored.split(QLatin1Char(';'), Qt::SkipEmptyParts))
+    {
+        bool ok = false;
+        const int q = c.section(QLatin1Char(':'), 0, 0).toInt(&ok);
+        const QStringList v = c.section(QLatin1Char(':'), 1).split(QLatin1Char(','));
+        if (ok == false || q < 0 || q >= ENGINE_ATMOS_CELLS || v.count() != 3)
+            continue;
+        out.insert(q, QVector<qint64>() << v.at(0).toLongLong() << v.at(1).toLongLong() << v.at(2).toLongLong());
+    }
+    return out;
+}
+
+static bool atmosNightCounts(const QString &stored)
+{
+    const QHash<int, QVector<qint64> > cells = atmosCells(stored);
+    for (auto it = cells.constBegin(); it != cells.constEnd(); ++it)
+        if (it.value().at(2) >= ENGINE_HAND_MIN_SAMPLES)
+            return true;
+    return false;
+}
+
+void TrackEngine::atmosLoad() const
+{
+    if (m_atmosRead)
+        return;
+    m_atmosRead = true;
+    m_atmosStore = QSettings().value(QStringLiteral("trackengine/atmos-hand")).toMap();
+}
+
+QStringList TrackEngine::atmosNightsFor(int view) const
+{
+    // the nights with a quarter long enough to count, oldest first:
+    // 0 = the last 2 weekends (its 4 newest Fri / Sat), 1 = every Fri / Sat, 2 = the other nights
+    atmosLoad();
+    QStringList nights = m_atmosStore.keys();
+    std::sort(nights.begin(), nights.end());
+    QStringList out;
+    foreach (const QString &n, nights)
+    {
+        if (atmosNightCounts(m_atmosStore.value(n).toString()) == false)
+            continue;
+        if ((view == 2) == atmosWeekend(n))
+            continue;
+        out << n;
+    }
+    if (view == 0)
+        out = out.mid(qMax(0, int(out.count()) - 4));
+    return out;
+}
+
+int TrackEngine::atmosView() const { return m_atmosView; }
+
+void TrackEngine::setAtmosView(int view)
+{
+    view = qBound(0, view, 2);
+    if (view == m_atmosView)
+        return;
+    m_atmosView = view;
+    emit atmosChanged();
+}
+
+QStringList TrackEngine::atmosNights() const
+{
+    QStringList out;
+    foreach (const QString &n, atmosNightsFor(m_atmosView))
+        out << n.mid(5);                 // "10-16"
+    return out;
+}
+
+bool TrackEngine::atmosKnown() const
+{
+    // the row shows from the first night of anything
+    for (int v = 1; v <= 2; v++)
+        if (atmosNightsFor(v).isEmpty() == false)
+            return true;
+    return false;
+}
+
+QVariantList TrackEngine::atmosHand() const
+{
+    // 20:00 - 03:00 (28 quarters): { h: haze %, f: fan % } - -1 where nothing counts
+    const QStringList nights = atmosNightsFor(m_atmosView);
+    QList<QHash<int, QVector<qint64> > > all;
+    foreach (const QString &n, nights)
+        all << atmosCells(m_atmosStore.value(n).toString());
+    QVariantList out;
+    for (int i = 0; i < ENGINE_CLOCK_POINTS; i++)
+    {
+        const int q = 32 + i;            // 20:00 is the night's quarter 32
+        qreal hs = 0.0, fs = 0.0;
+        int n = 0;
+        foreach (const auto &cells, all)
+        {
+            const QVector<qint64> c = cells.value(q);
+            if (c.count() != 3 || c.at(2) < ENGINE_HAND_MIN_SAMPLES)
+                continue;
+            hs += qreal(c.at(0)) / qreal(c.at(2));
+            fs += qreal(c.at(1)) / qreal(c.at(2));
+            n++;
+        }
+        QVariantMap cell;
+        cell.insert(QStringLiteral("h"), n > 0 ? int(qRound(hs / n)) : -1);
+        cell.insert(QStringLiteral("f"), n > 0 ? int(qRound(fs / n)) : -1);
+        out << cell;
+    }
+    return out;
+}
+
+QString TrackEngine::atmosBy(bool showOn) const
+{
+    if (m_lastStage > 0)
+        return QStringLiteral("last-track");
+    if (m_closingDim < 1.0)
+        return QStringLiteral("closing");
+    if (showOn == false)
+        return QStringLiteral("show-off");
+    return QStringLiteral("hand");
+}
+
+void TrackEngine::atmosCsv(const QString &why, const QString &by)
+{
+    // Documents/QLC+/atmos-<night>.csv - a night's file, the evening's date
+    if (m_testTrack)
+        return;
+    const QString night = nightKey();
+    if (m_atmosFile.isOpen() && m_atmosFileNight != night)
+        m_atmosFile.close();
+    if (m_atmosFile.isOpen() == false)
+    {
+        const QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                          + QDir::separator() + QStringLiteral("QLC+");
+        QDir().mkpath(dir);
+        m_atmosFile.setFileName(dir + QDir::separator() + QStringLiteral("atmos-")
+                                + QString(night).remove(QLatin1Char('-')) + QStringLiteral(".csv"));
+        const bool fresh = m_atmosFile.exists() == false || m_atmosFile.size() == 0;
+        if (m_atmosFile.open(QIODevice::Append | QIODevice::Text) == false)
+            return;
+        m_atmosFileNight = night;
+        if (fresh)
+            m_atmosFile.write("time,why,by,haze,fan,energy,master,bpm,section,title\n");
+    }
+    QString title = m_trackTitle;
+    title.replace(QLatin1Char('"'), QLatin1Char('\''));
+    const qreal bpm = m_beatMs > 0.0 ? 60000.0 / m_beatMs : 0.0;
+    const QString line = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+        + QLatin1Char(',') + why + QLatin1Char(',') + by
+        + QLatin1Char(',') + QString::number(int(qRound(m_haze * 100.0)))
+        + QLatin1Char(',') + QString::number(int(qRound(m_fan * 100.0)))
+        + QLatin1Char(',') + QString::number(int(qRound(m_faderNow * 100.0)))
+        + QLatin1Char(',') + QString::number(int(qRound(m_master * 100.0)))
+        + QLatin1Char(',') + QString::number(bpm, 'f', 1)
+        + QLatin1Char(',') + m_lastState
+        + QStringLiteral(",\"") + title + QStringLiteral("\"\n");
+    m_atmosFile.write(line.toUtf8());
+    m_atmosFile.flush();
+}
+
+void TrackEngine::atmosTick(bool showOn)
+{
+    // every 200 ms from closingTick(): the log, and his hand into the night's quarters
+    const qint64 now = m_clock.elapsed();
+    if (m_testTrack)
+        return;
+    // the show going on and off: a line each
+    if (showOn != m_atmosShowWas)
+    {
+        m_atmosShowWas = showOn;
+        atmosCsv(showOn ? QStringLiteral("show-on") : QStringLiteral("show-off"), atmosBy(showOn));
+        m_atmosMinuteMs = now;
+        if (showOn == false)
+            atmosFlush();
+    }
+    // a change, once it has settled (a slider drag is one change)
+    if (m_atmosChangedMs >= 0 && now - m_atmosChangedMs >= 1500)
+    {
+        m_atmosChangedMs = -1;
+        const int h = int(qRound(m_haze * 100.0));
+        const int f = int(qRound(m_fan * 100.0));
+        if (h != m_atmosLoggedHaze || f != m_atmosLoggedFan)
+        {
+            m_atmosLoggedHaze = h;
+            m_atmosLoggedFan = f;
+            const QString by = atmosBy(showOn);
+            atmosCsv(QStringLiteral("change"), by);
+            logSignal(QStringLiteral("sig:atmos:") + QString::number(h) + QLatin1Char(':')
+                      + QString::number(f) + QLatin1Char(':') + by);
+        }
+    }
+    if (showOn == false)
+        return;
+    if (m_atmosMinuteMs < 0 || now - m_atmosMinuteMs >= 60000)
+    {
+        m_atmosMinuteMs = now;
+        atmosCsv(QStringLiteral("minute"), atmosBy(showOn));
+    }
+    // his hand only: LAST TRACK and the clock's closing drive the haze themselves
+    if (m_lastStage > 0 || m_closingDim < 1.0 || hazeAvailable() == false)
+        return;
+    const int q = atmosQuarter(QTime::currentTime());
+    m_atmosHazeSum[q] += int(qRound(m_haze * 100.0));
+    m_atmosFanSum[q] += int(qRound(m_fan * 100.0));
+    m_atmosCnt[q] += 1;
+    if (m_atmosSavedMs >= 0 && now - m_atmosSavedMs < 60000)
+        return;
+    m_atmosSavedMs = now;
+    atmosFlush();
+}
+
+void TrackEngine::atmosFlush()
+{
+    bool any = false;
+    for (int q = 0; q < ENGINE_ATMOS_CELLS; q++)
+        any = any || m_atmosCnt[q] > 0;
+    if (any == false)
+        return;
+    atmosLoad();
+    const QString night = nightKey();
+    QHash<int, QVector<qint64> > cells = atmosCells(m_atmosStore.value(night).toString());
+    for (int q = 0; q < ENGINE_ATMOS_CELLS; q++)
+    {
+        if (m_atmosCnt[q] == 0)
+            continue;
+        QVector<qint64> c = cells.value(q, QVector<qint64>() << 0 << 0 << 0);
+        c[0] += m_atmosHazeSum[q];
+        c[1] += m_atmosFanSum[q];
+        c[2] += m_atmosCnt[q];
+        cells.insert(q, c);
+        m_atmosHazeSum[q] = 0;
+        m_atmosFanSum[q] = 0;
+        m_atmosCnt[q] = 0;
+    }
+    QList<int> qs = cells.keys();
+    std::sort(qs.begin(), qs.end());
+    QStringList parts;
+    foreach (int q, qs)
+    {
+        const QVector<qint64> &c = cells[q];
+        parts << QString::number(q) + QLatin1Char(':') + QString::number(c.at(0)) + QLatin1Char(',')
+                 + QString::number(c.at(1)) + QLatin1Char(',') + QString::number(c.at(2));
+    }
+    m_atmosStore.insert(night, parts.join(QLatin1Char(';')));
+    // the last nights - a night too short to count leaves first, never tonight
+    QStringList nights = m_atmosStore.keys();
+    std::sort(nights.begin(), nights.end());
+    while (nights.count() > ENGINE_ATMOS_NIGHTS)
+    {
+        int drop = 0;
+        for (int i = 0; i < nights.count(); i++)
+            if (nights.at(i) != night && atmosNightCounts(m_atmosStore.value(nights.at(i)).toString()) == false)
+            {
+                drop = i;
+                break;
+            }
+        m_atmosStore.remove(nights.takeAt(drop));
+    }
+    QSettings().setValue(QStringLiteral("trackengine/atmos-hand"), m_atmosStore);
+    emit atmosChanged();
 }

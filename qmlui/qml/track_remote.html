@@ -9,6 +9,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TRACK">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0A0A0D">
 <title>Track remote</title>
@@ -24,9 +26,9 @@ button{font-family:inherit;cursor:pointer}
 .pill{min-width:84px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;letter-spacing:.08em;color:#141005;font-size:14px;padding:0 10px;background:var(--normal)}
 .pill.pinned{box-shadow:inset 0 0 0 3px #fff}
 .title{flex:1;min-width:0}
-.title .t{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.title .t{font-size:16px;font-weight:700;line-height:1.2;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;word-break:break-word}
 .title .n{font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
-.dots{display:flex;gap:5px}
+.dots{display:flex;gap:5px;flex:none}
 .dots i{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.14);display:block}
 .dots i.on{background:var(--green)} .dots i.one{background:#fff}
 .strip{position:relative;height:10px;margin-top:9px;border-radius:3px;overflow:hidden;display:flex;gap:2px;background:#1A1A20}
@@ -67,7 +69,7 @@ button{font-family:inherit;cursor:pointer}
 .aim.up .grid button:not(.x){box-shadow:inset 0 -4px 0 #4FA36B}.aim.down .grid button:not(.x){box-shadow:inset 0 -4px 0 #B05050}
 .aim .grid button.x{color:var(--mute)}
 .ratenote{font-size:11px;color:var(--mute);margin:6px 2px 0;min-height:14px}
-.pages{flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch}
+.pages{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:12px;-webkit-overflow-scrolling:touch}
 .lbl{font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--mute);margin:14px 2px 7px}
 .page>.lbl:first-child{margin-top:2px}
 .grid{display:grid;gap:8px}
@@ -121,6 +123,9 @@ button{font-family:inherit;cursor:pointer}
 .tabs button.on{color:var(--text);box-shadow:inset 0 3px 0 var(--gold)}
 .page{display:none}.page.on{display:block}
 .note{font-size:11px;color:var(--dim);margin:10px 2px 0;line-height:1.4}
+/* R473_PHONE_APP: on the home screen iOS blurs the strip under the clock - the track line sits clear of it */
+@media (display-mode: standalone){#app{padding-top:calc(env(safe-area-inset-top) + 16px)}}
+html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
 </style>
 </head>
 <body>
@@ -232,6 +237,13 @@ function onLine(data) {
   $('offline').classList.remove('on');
   try { S = JSON.parse(data.slice(11)); render(); } catch (e) {}
 }
+// R473_PHONE_APP: iOS' own flag for a home-screen app; and back from the background the
+// state at once (a socket that died meanwhile: the heartbeat replaces it within 250 ms)
+if (navigator.standalone) document.documentElement.classList.add('standalone');
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || mockOn) return;
+  if (ws && ws.readyState === 1) ws.send('TRACK|state');
+});
 function connect() {
   if (mockOn) return;
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/qlcplusWS'); }

@@ -122,6 +122,9 @@ class QRandomGenerator;
 #define ENGINE_SYNC_BLINK_MS      90        // round 2: the strobes' blink
 // R470_CLOCK_HAND (track_runtime/clockhand.inc.cpp)
 #define ENGINE_HAND_MIN_SAMPLES   150       // 30 s of his hand in a quarter hour before it counts
+// R473_ATMOS (track_runtime/clockhand.inc.cpp): his hand on the hazer, kept - not used
+#define ENGINE_ATMOS_CELLS        96        // the night's quarter hours, noon to noon
+#define ENGINE_ATMOS_NIGHTS       120       // nights kept (about four months)
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 // The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
 // Those lamps at a full white are painful to stand in front of, and it
@@ -613,6 +616,11 @@ class TrackEngine : public QObject
     // R470_CLOCK_HAND: his hand's ENERGY per quarter hour, the last nights
     Q_PROPERTY(QVariantList clockHand READ clockHand NOTIFY clockHandChanged)
     Q_PROPERTY(QStringList clockHandNights READ clockHandNights NOTIFY clockHandChanged)
+    // R473_ATMOS: HAZE & FAN BY HAND - 20:00-03:00, { h, f } per quarter (-1 = nothing yet)
+    Q_PROPERTY(QVariantList atmosHand READ atmosHand NOTIFY atmosChanged)
+    Q_PROPERTY(QStringList atmosNights READ atmosNights NOTIFY atmosChanged)
+    Q_PROPERTY(bool atmosKnown READ atmosKnown NOTIFY atmosChanged)
+    Q_PROPERTY(int atmosView READ atmosView WRITE setAtmosView NOTIFY atmosChanged)
     // R467_MIC_CHECK: SETUP > LAB > MIC CHECK - it only listens
     Q_PROPERTY(bool micActive READ micActive NOTIFY micChanged)
     Q_PROPERTY(QString micDevice READ micDevice NOTIFY micChanged)
@@ -824,6 +832,12 @@ public:
     QStringList clockHandNights() const;
     /** a tile of YOUR HAND (-1: USE YOURS) into ENERGY by clock */
     Q_INVOKABLE void useClockHand(int index);
+    /* ---- R473_ATMOS (track_runtime/clockhand.inc.cpp) ---- */
+    QVariantList atmosHand() const;
+    QStringList atmosNights() const;
+    bool atmosKnown() const;
+    int atmosView() const;               // 0 the last 2 weekends, 1 every Fri + Sat, 2 the other nights
+    Q_INVOKABLE void setAtmosView(int view);
     /* ---- R467_MIC_CHECK (track_runtime/miccheck.inc.cpp) ---- */
     bool micActive() const;
     QString micDevice() const;
@@ -1202,6 +1216,7 @@ signals:
     void flashGroupsChanged();           // R469_GROUP_FLASH
     void syncChanged();                  // R470_SYNC
     void clockHandChanged();             // R470_CLOCK_HAND
+    void atmosChanged();                 // R473_ATMOS
     void micChanged();                   // R467_MIC_CHECK
     void micRecChanged();
     void dropSetChanged();               // R431_DROP_PICK
@@ -2164,6 +2179,27 @@ private:
     QStringList clockHandNightsAll() const;
     void clockHandTick(bool showOn);
     void clockHandFlush();
+    // R473_ATMOS (track_runtime/clockhand.inc.cpp)
+    mutable QVariantMap m_atmosStore;
+    mutable bool m_atmosRead = false;
+    qint64 m_atmosHazeSum[ENGINE_ATMOS_CELLS] = {};
+    qint64 m_atmosFanSum[ENGINE_ATMOS_CELLS] = {};
+    qint64 m_atmosCnt[ENGINE_ATMOS_CELLS] = {};
+    qint64 m_atmosSavedMs = -1;
+    qint64 m_atmosMinuteMs = -1;
+    qint64 m_atmosChangedMs = -1;          // a haze / fan change, not logged yet
+    int m_atmosLoggedHaze = -1;
+    int m_atmosLoggedFan = -1;
+    bool m_atmosShowWas = false;
+    int m_atmosView = 0;
+    QFile m_atmosFile;
+    QString m_atmosFileNight;
+    void atmosLoad() const;
+    QStringList atmosNightsFor(int view) const;
+    QString atmosBy(bool showOn) const;
+    void atmosCsv(const QString &why, const QString &by);
+    void atmosTick(bool showOn);
+    void atmosFlush();
     // R467_MIC_CHECK (track_runtime/miccheck.inc.cpp)
     MicTap *m_mic = nullptr;               // a child QObject: the capture and what it heard
     bool m_micOpen = false;
