@@ -1800,6 +1800,11 @@ Rectangle
                 // running and quiet is the usual state before the first track (QLC+ looks for
                 // the program every 5 s, and BLT says hello every 4 s)
                 readonly property bool running: linked || (!!trackManager && trackManager.bltRunning === true)
+                // R468_BLT_LOOK: "not running" only when QLC+ looked to the end - until then
+                // what the page said before r465: not connected
+                readonly property bool known: !!trackManager && trackManager.bltKnown === true
+                // R468_START_BLT: 0 not asked, 1 starting, 2 it did not come up
+                readonly property int bltStart: trackManager && trackManager.bltStartState !== undefined ? trackManager.bltStartState : 0
                 width: emptyRow.implicitWidth
                 height: emptyRow.implicitHeight
                 Row
@@ -1822,7 +1827,8 @@ Rectangle
                             {
                                 objectName: "emptyTitle"
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: emptyBox.running ? qsTr("Waiting for track data") : qsTr("Beat Link Trigger is not running")
+                                text: emptyBox.running ? qsTr("Waiting for track data")
+                                    : emptyBox.known ? qsTr("Beat Link Trigger is not running") : qsTr("Beat Link Trigger is not connected")
                                 color: trackViewRoot.cText
                                 font.bold: true
                                 font.pixelSize: trackViewRoot.fs(20)
@@ -1861,10 +1867,23 @@ Rectangle
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: emptyBox.linked ? qsTr("Beat Link Trigger is connected - play a track on a CDJ")
                                     : emptyBox.running ? qsTr("Beat Link Trigger is running - play a track on a CDJ")
-                                                       : qsTr("Start it from its logo on the taskbar - then play a track on a CDJ")
+                                    : emptyBox.bltStart === 1 ? qsTr("Starting Beat Link Trigger - it takes about half a minute")
+                                    : emptyBox.bltStart === 2 ? qsTr("It did not start - use its logo on the taskbar, then play a track on a CDJ")
+                                                       : qsTr("Start it here or from its logo on the taskbar - then play a track on a CDJ")
                                 color: trackViewRoot.cMute
                                 font.pixelSize: trackViewRoot.fs(13)
                             }
+                        }
+                        // R468_START_BLT: BLT from the taskbar's own shortcut, without leaving the page
+                        Btn
+                        {
+                            objectName: "startBlt"
+                            visible: !emptyBox.running && emptyBox.known      // R468_BLT_LOOK: never a second BLT
+                            width: Math.round(200 * trackViewRoot.ks); height: Math.round(48 * trackViewRoot.ks)
+                            text: emptyBox.bltStart === 1 ? qsTr("STARTING ...") : qsTr("START BLT")
+                            tone: trackViewRoot.cGold
+                            active: emptyBox.bltStart !== 1
+                            onTapped: if (trackManager && emptyBox.bltStart !== 1) trackManager.startBlt()
                         }
                     }
                 }

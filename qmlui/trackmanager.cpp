@@ -12,6 +12,9 @@
 #include <QJsonDocument>
 #include <QCoreApplication>         // R459_RM_APPINC
 #include <QProcess>                 // R465_BLT_LIVE_INC
+#include <QDesktopServices>         // R468_START_BLT_INC
+#include <QDirIterator>
+#include <QUrl>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QHostAddress>
@@ -1372,6 +1375,7 @@ void TrackManager::moveMarker(int index, int beat)
 
 // R465_BLT_LIVE_CPP
 bool TrackManager::bltRunning() const { return m_bltRunning; }
+bool TrackManager::bltKnown() const { return m_bltKnown; }   // R468_BLT_LOOK_KNOWN
 
 void TrackManager::probeBlt()
 {
@@ -1381,29 +1385,55 @@ void TrackManager::probeBlt()
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (m_bltProbe != nullptr)
     {
-        if (now - m_bltProbeMs > 4000)
+        if (now - m_bltProbeMs > (m_bltLook >= 2 ? 25000 : 8000))   // R468_BLT_LOOK_WAIT
             m_bltProbe->kill();
         return;
     }
     QProcess *p = new QProcess(this);
     m_bltProbe = p;
     m_bltProbeMs = now;
-    connect(p, &QProcess::finished, this, [this, p](int, QProcess::ExitStatus status) {
+    // R468_BLT_LOOK_LAST: three looks on Windows (names, java's windows, every window), one elsewhere
+#if defined(Q_OS_WIN)
+    const int lastLook = 2;
+#else
+    const int lastLook = 0;
+#endif
+    connect(p, &QProcess::finished, this, [this, p, lastLook](int, QProcess::ExitStatus status) {
         const QString out = QString::fromLocal8Bit(p->readAllStandardOutput()).toLower();
         if (m_bltProbe == p)
             m_bltProbe = nullptr;
         p->deleteLater();
         if (status != QProcess::NormalExit)
-            return;                      // stopped: the answer we had stands
+        {
+            m_bltLook = 0;               // stopped: the answer we had stands - from the top next time
+            return;
+        }
+        // R468_BLT_LOOK_STEP: nothing in this look - the next one, at once
+        const bool seen = out.contains(QLatin1String("beat link trigger"))
+                       || out.contains(QLatin1String("beat-link-trigger"))
+                       || out.contains(QLatin1String("beatlinktrigger"))
+                       || out.contains(QLatin1String("no dj link devices found"));
+        if (seen == false && m_bltLook < lastLook)
+        {
+            m_bltLook++;
+            QTimer::singleShot(0, this, &TrackManager::probeBlt);
+            return;
+        }
+        m_bltLook = 0;
+        if (m_bltKnown == false)
+        {
+            m_bltKnown = true;
+            if (seen == m_bltRunning)
+                emit bltRunningChanged();   // known now, the same answer
+        }
         // the program (Beat Link Trigger.exe) or its window's title (a java launch)
-        const bool on = out.contains(QLatin1String("beat link trigger"))
-                     || out.contains(QLatin1String("beat-link-trigger"))
-                     || out.contains(QLatin1String("no dj link devices found"));   // R466_BLT_TITLE: waiting for the desk
+        const bool on = seen;            // R468_BLT_LOOK_ON2: the step's own answer (R466_BLT_TITLE, R468_BLT_LOOK_NAME)
         if (on != m_bltRunning)
         {
             m_bltRunning = on;
             emit bltRunningChanged();
         }
+        bltProbed(on);                   // R468_START_BLT_HOOK
     });
     connect(p, &QProcess::errorOccurred, this, [this, p](QProcess::ProcessError e) {
         if (e != QProcess::FailedToStart)
@@ -1411,13 +1441,115 @@ void TrackManager::probeBlt()
         if (m_bltProbe == p)
             m_bltProbe = nullptr;
         p->deleteLater();
+        bltProbed(m_bltRunning);         // R468_START_BLT_NOLOOK: no tasklist - START BLT goes on
     });
 #if defined(Q_OS_WIN)
-    p->start(QStringLiteral("tasklist"), QStringList() << QStringLiteral("/V") << QStringLiteral("/FO")
-                                                     << QStringLiteral("CSV") << QStringLiteral("/NH"));
+    // R468_BLT_LOOK_ARGS: the names (fast), then java's windows, then every window
+    QStringList args;
+    if (m_bltLook >= 1)
+        args << QStringLiteral("/V");
+    args << QStringLiteral("/FO") << QStringLiteral("CSV") << QStringLiteral("/NH");
+    if (m_bltLook == 1)
+        args << QStringLiteral("/FI") << QStringLiteral("IMAGENAME eq java*");
+    p->start(QStringLiteral("tasklist"), args);
 #else
     p->start(QStringLiteral("ps"), QStringList() << QStringLiteral("-A") << QStringLiteral("-o") << QStringLiteral("args="));
 #endif
+}
+
+// R468_START_BLT_CPP
+int TrackManager::bltStartState() const { return m_bltStartState; }
+
+void TrackManager::setBltStart(int state)
+{
+    if (state == m_bltStartState)
+        return;
+    m_bltStartState = state;
+    emit bltStartChanged();
+}
+
+QString TrackManager::bltShortcut()
+{
+    // the taskbar's own shortcut first (Tobias starts it from there), then the Start
+    // menu and the desktop, then the program where its installer puts it
+#if defined(Q_OS_WIN)
+    const QString appData = QString::fromLocal8Bit(qgetenv("APPDATA"));
+    const QString progData = QString::fromLocal8Bit(qgetenv("ProgramData"));
+    QStringList dirs;
+    if (appData.isEmpty() == false)
+        dirs << appData + QStringLiteral("/Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar")
+             << appData + QStringLiteral("/Microsoft/Windows/Start Menu/Programs");
+    if (progData.isEmpty() == false)
+        dirs << progData + QStringLiteral("/Microsoft/Windows/Start Menu/Programs");
+    dirs << QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+    for (const QString &d : dirs)
+    {
+        QDirIterator it(d, QStringList() << QStringLiteral("*.lnk"), QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext())
+        {
+            const QString f = it.next();
+            const QString n = QFileInfo(f).completeBaseName().toLower();
+            if (n.contains(QLatin1String("beat link trigger")) || n.contains(QLatin1String("beat-link-trigger")))
+                return f;
+        }
+    }
+    for (const char *env : { "ProgramFiles", "ProgramW6432", "LOCALAPPDATA" })
+    {
+        const QString root = QString::fromLocal8Bit(qgetenv(env));
+        if (root.isEmpty())
+            continue;
+        for (const QString &rel : { QStringLiteral("/Beat Link Trigger/Beat Link Trigger.exe"),
+                                    QStringLiteral("/Programs/Beat Link Trigger/Beat Link Trigger.exe") })
+            if (QFileInfo::exists(root + rel))
+                return root + rel;
+    }
+#elif defined(Q_OS_MACOS)
+    if (QFileInfo::exists(QStringLiteral("/Applications/Beat Link Trigger.app")))
+        return QStringLiteral("/Applications/Beat Link Trigger.app");
+#endif
+    return QString();
+}
+
+void TrackManager::startBlt()
+{
+    if (m_bltRunning || m_bltStartState == 1)
+        return;
+    if (m_bltStartTimer.isSingleShot() == false)
+    {
+        m_bltStartTimer.setSingleShot(true);
+        connect(&m_bltStartTimer, &QTimer::timeout, this, [this]() {
+            if (m_bltRunning == false && m_bltStartState == 1)
+                setBltStart(2);          // a minute and no BLT: the page says so
+        });
+    }
+    setBltStart(1);
+    m_bltStartTimer.start(60000);
+    // one more look first: BLT coming up by hand (the 5 s look had not seen it yet)
+    // must not get a second BLT beside it - the launch waits for the answer
+    m_bltLaunchPending = true;
+    probeBlt();
+}
+
+void TrackManager::bltProbed(bool running)
+{
+    if (running)
+    {
+        m_bltLaunchPending = false;
+        m_bltStartTimer.stop();
+        setBltStart(0);
+        return;
+    }
+    if (m_bltLaunchPending == false)
+        return;
+    m_bltLaunchPending = false;
+    const QString target = bltShortcut();
+    // a shortcut opens as a double-click on it does (the program, its folder, its arguments)
+    if (target.isEmpty() || QDesktopServices::openUrl(QUrl::fromLocalFile(target)) == false)
+    {
+        m_bltStartTimer.stop();
+        setBltStart(2);
+    }
+    // else STARTING ...: the 5 s look sees it come up (bltProbed(true) above)
 }
 
 // R459_RM_CPP
@@ -1575,6 +1707,11 @@ QString TrackManager::remoteState()
         o.insert(QStringLiteral("haze"), e->haze());
         o.insert(QStringLiteral("fan"), e->fan());
         o.insert(QStringLiteral("hazeNag"), e->hazeNag());          // R467_HAZE_NAG
+        // R468_RATE: the groups on stage - what a held GOOD / BAD can point at
+        QJsonArray stage;
+        for (const QVariant &row : e->onStage())
+            stage.append(row.toMap().value(QStringLiteral("group")).toString());
+        o.insert(QStringLiteral("stage"), stage);
         // the groups' list is a walk over the show's functions - every 2 s is plenty
         // (a toggle or a trim from the phone refreshes it at once, below)
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -1756,6 +1893,24 @@ QString TrackManager::remoteCommand(const QString &line)
         if (v < 3)
             v = 0;                           // as the desk's fader: the bottom is off
         e->setHaze(v / 100.0);
+    }
+    // ---- R468_RATE: GOOD / BAD, as the desk's thumbs - the finger landing is the moment
+    else if (cmd == QStringLiteral("ratemark"))
+        e->markVerdictPoint();
+    else if (cmd == QStringLiteral("rate"))
+    {
+        if (remoteArg(a, 1, &n) == false)
+            return bad;
+        const int v = n >= 0 ? 1 : -1;
+        const QString group = a.value(2);
+        if (group.isEmpty())
+            e->rate(v);
+        else
+        {
+            if (e->trims().contains(group) == false)
+                return QStringLiteral("TRACKERR|no group ") + group;
+            e->rateGroup(v, group);
+        }
     }
     else if (cmd == QStringLiteral("hazelater"))
         e->hazeLater();                      // R467_HAZE_NAG: quiet for 30 min - the haze stays by hand

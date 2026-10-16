@@ -88,6 +88,8 @@ class TrackManager : public QObject
     Q_PROPERTY(int listenPort READ listenPort WRITE setListenPort NOTIFY listenPortChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
     Q_PROPERTY(bool bltRunning READ bltRunning NOTIFY bltRunningChanged)   // R465_BLT_LIVE_PROP
+    Q_PROPERTY(bool bltKnown READ bltKnown NOTIFY bltRunningChanged)       // R468_BLT_LOOK_PROP
+    Q_PROPERTY(int bltStartState READ bltStartState NOTIFY bltStartChanged)   // R468_START_BLT_PROP: 0, 1 starting, 2 it did not
     /** No position from BLT for a while although a track was playing:
      *  the engine holds its last look instead of guessing. */
     Q_PROPERTY(bool linkStale READ linkStale NOTIFY linkChanged)
@@ -144,6 +146,10 @@ public:
     void setListenPort(int port);
     bool connected() const;
     bool bltRunning() const;             // R465_BLT_LIVE_GET
+    bool bltKnown() const;               // R468_BLT_LOOK_GET
+    int bltStartState() const;           // R468_START_BLT_GET
+    /** START BLT on the empty track: Beat Link Trigger from the taskbar's own shortcut */
+    Q_INVOKABLE void startBlt();
     bool linkStale() const;
 
     QString title() const;
@@ -277,6 +283,7 @@ signals:
     void listenPortChanged();
     void connectedChanged();
     void bltRunningChanged();            // R465_BLT_LIVE_SIG
+    void bltStartChanged();              // R468_START_BLT_SIG
     void linkChanged();
     void tempoChanged();        // R313_TEMPO_SIGNAL: engineTempo / tempoSource
     void trackChanged();
@@ -476,6 +483,14 @@ private:
     QProcess *m_bltProbe = nullptr;
     qint64 m_bltProbeMs = 0;
     bool m_bltRunning = false;
+    bool m_bltKnown = false;             // R468_BLT_LOOK_MEM: a look that ran to the end said so
+    int m_bltLook = 0;                   // 0 the names, 1 java's windows, 2 every window
+    int m_bltStartState = 0;             // R468_START_BLT_MEM
+    bool m_bltLaunchPending = false;
+    QTimer m_bltStartTimer;
+    void bltProbed(bool running);
+    void setBltStart(int state);
+    static QString bltShortcut();
     qint64 m_remoteSeenMs = 0;           // the last line from a phone
     QTimer m_remoteTimer;
     bool m_remoteTimerOn = false;
