@@ -4084,6 +4084,7 @@ QStringList TrackEngine::recallPick(int boundary, const QString &section, qreal 
 
 void TrackEngine::forgetTrackMemory(const QString &title)
 {
+    colourMemForget(title);              // R470_COLOUR_MEMORY: the colours go with the picks
     loadTrackMemory();
     if (title.isEmpty())
         m_trackMem.clear();
@@ -9009,6 +9010,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     crumb(QStringLiteral("beat ") + QString::number(beat) + QLatin1Char(' ') + state);   // R435_CRUMBS
     m_hazeBeatMs = m_clock.elapsed();                // R467_HAZE_NAG: music is playing
     micBeat(state, sectionChanged, bpm);             // R467_MIC_CHECK
+    colourMemoryBeat(beat, state, sectionChanged);   // R470_COLOUR_MEMORY
+    syncBeat();                                      // R470_SYNC: round 2's blink
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
     labShutdown(false);          // R410_LAB: so does the lab (the table rebuilds below)
@@ -17943,6 +17946,7 @@ void TrackEngine::closingTick(bool showOn)
     lastTrackTick(showOn);                           // R458_LAST_TRACK
     hazeNagTick(showOn);                             // R467_HAZE_NAG
     padFlashTick();                                  // R469_GROUP_FLASH
+    clockHandTick(showOn);                           // R470_CLOCK_HAND
     micTick(showOn);                                 // R467_MIC_CHECK
     const qreal dim = showOn ? closingCap() : 1.0;
     // R458: not the clock's closing - R464_HAZE_LID: only while LAST TRACK's lid is the
@@ -19301,6 +19305,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
         m_planOriginal.clear();
         m_forceFrom = -1;                // R438_LOOP_ACROSS
         m_planRemembered = false;        // R439_TRACK_MEMORY
+        colourMemoryTrack();             // R470_COLOUR_MEMORY: last time's colours stay in their track
         planRanReset();                  // R443_PLAN_LANE: the old track's sections
         if (had)
             emit dropSetChanged();
@@ -24877,4 +24882,575 @@ void TrackEngine::padFlashClear()
     m_padFlash.clear();
     m_padFlashMs.clear();
     emit flashGroupsChanged();
+}
+/* =====================================================================
+ *  THE TRACK'S COLOURS (runde 470) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/colourmem.inc.cpp.
+ *
+ *  Tobias, 2026-10-16 (proposal 6, "farvehukommelse pr. nummer"): the
+ *  colours he picks by hand in a track are remembered per section of that
+ *  track, as R439 remembers his groups. The next time the track plays,
+ *  each of those sections starts in his colours again; a section he did
+ *  not colour goes back to AUTO.
+ *
+ *  - his hand: the tiles' set (and FADE / CHASE) changing in a track, not
+ *    on the start scene and not in the test track. From the first touch,
+ *    every section start of that play is written too (what he carried on
+ *    with, AUTO included) - so the replay is what he did, section by
+ *    section.
+ *  - the replay: only while he has not touched the colours in this play.
+ *    His hand takes over at once and for the rest of the track.
+ *  - title -> { "<section start beat>": "section|set|mode", "_t": secs },
+ *    400 tracks; FORGET in the cache forgets it with the picks.
+ * ===================================================================== */
+
+QString TrackEngine::colourMemNow() const
+{
+    return m_overrideSet.join(QLatin1Char('+')) + QLatin1Char('|') + QString::number(m_colourMode);
+}
+
+void TrackEngine::colourMemLoad()
+{
+    if (m_colMemLoaded)
+        return;
+    m_colMemLoaded = true;
+    m_colMem = QSettings().value(QStringLiteral("trackengine/colour-memory")).toMap();
+}
+
+void TrackEngine::colourMemWrite(int from, const QString &section, const QString &now)
+{
+    if (m_trackTitle.isEmpty() || from < 0 || section.isEmpty())
+        return;
+    colourMemLoad();
+    QVariantMap t = m_colMem.value(m_trackTitle).toMap();
+    // one entry per section start: a moved flag (within 8 beats) replaces the old one
+    foreach (const QString &k, t.keys())
+    {
+        bool ok = false;
+        const int b = k.toInt(&ok);
+        if (ok && qAbs(b - from) <= 8 && t.value(k).toString().section(QLatin1Char('|'), 0, 0) == section)
+            t.remove(k);
+    }
+    t.insert(QString::number(from), section + QLatin1Char('|') + now);
+    t.insert(QStringLiteral("_t"), QDateTime::currentSecsSinceEpoch());
+    m_colMem.insert(m_trackTitle, t);
+    while (m_colMem.count() > 400)
+    {
+        QString oldest;
+        qint64 at = 0;
+        for (auto it = m_colMem.constBegin(); it != m_colMem.constEnd(); ++it)
+        {
+            const qint64 tt = it.value().toMap().value(QStringLiteral("_t")).toLongLong();
+            if (oldest.isEmpty() || tt < at) { oldest = it.key(); at = tt; }
+        }
+        m_colMem.remove(oldest);
+    }
+    QSettings().setValue(QStringLiteral("trackengine/colour-memory"), m_colMem);
+}
+
+QString TrackEngine::colourMemRecall(int from, const QString &section)
+{
+    if (m_trackTitle.isEmpty() || from < 0 || section.isEmpty())
+        return QString();
+    colourMemLoad();
+    const QVariantMap t = m_colMem.value(m_trackTitle).toMap();
+    QString best;
+    int bestDist = 9;
+    for (auto it = t.constBegin(); it != t.constEnd(); ++it)
+    {
+        bool ok = false;
+        const int b = it.key().toInt(&ok);
+        if (ok == false || qAbs(b - from) >= bestDist)
+            continue;
+        const QString v = it.value().toString();
+        if (v.section(QLatin1Char('|'), 0, 0) != section)
+            continue;
+        best = v.section(QLatin1Char('|'), 1);       // "set|mode"
+        bestDist = qAbs(b - from);
+    }
+    return best;
+}
+
+void TrackEngine::colourMemApply(const QString &entry)
+{
+    // "a+b|mode" - only colours the show has and the house allows
+    QStringList set;
+    foreach (const QString &c, entry.section(QLatin1Char('|'), 0, 0).split(QLatin1Char('+'), Qt::SkipEmptyParts))
+        if (m_palette.contains(c) && engineBannedColour(c) == false && set.contains(c) == false)
+            set << c;
+    const int mode = set.count() >= 2 ? qBound(0, entry.section(QLatin1Char('|'), 1, 1).toInt(), 2) : 0;
+    if (set.count() <= 1)
+        setColourOverride(set.isEmpty() ? QString() : set.first());
+    else
+    {
+        // the set as the tiles make it - without the taste the tiles teach
+        // (it is last time's hand, not a new one)
+        m_startColour = false;
+        QString lead = set.first();
+        if (lead == QStringLiteral("white"))
+            lead = set.at(1);            // white never leads a set (review 307)
+        m_overrideSet = set;
+        m_overrideIdx = int(set.indexOf(lead));
+        foreach (const QString &pk, m_groupOrder)
+            if (m_groups.value(pk).patternDevice)
+                m_sectionMotion.remove(pk);
+        applyOverride(lead);
+        setColourMode(mode);
+        emit liveChanged();
+    }
+}
+
+void TrackEngine::colourMemoryBeat(int beat, const QString &state, bool sectionChanged)
+{
+    // from tick(), every beat: his hand is seen by what changed, whoever called
+    if (m_testTrack || m_trackTitle.isEmpty() || beat < 0 || state.isEmpty())
+        return;
+    if (m_startScene || m_startColour)
+    {
+        m_colMemLast = colourMemNow();   // the opening picture's colours are not his
+        return;
+    }
+    const QString now = colourMemNow();
+    if (sectionChanged || m_colMemSection.isEmpty() || state != m_colMemSection)
+    {
+        // a hand change on the section's own first beat belongs to it
+        if (m_colMemSection.isEmpty() == false && now != m_colMemLast)
+            m_colMemHand = true;
+        m_colMemSection = state;
+        m_colMemFrom = beat;
+        if (m_colMemHand)
+        {
+            // his play: what he carries into this section, as it is
+            colourMemWrite(beat, state, now);
+            m_colMemRecalled = false;
+        }
+        else
+        {
+            const QString want = colourMemRecall(beat, state);
+            if (want.isEmpty() == false)
+            {
+                if (want != now)
+                    colourMemApply(want);
+                m_colMemRecalled = true;
+                logSignal(QStringLiteral("sig:colour-remembered:") + state + QLatin1Char(':')
+                          + (want.section(QLatin1Char('|'), 0, 0).isEmpty() ? QStringLiteral("auto") : want));
+            }
+            else if (m_colMemRecalled)
+            {
+                // last time's colours were the section before's: back to AUTO
+                if (m_overrideSet.isEmpty() == false || m_colourMode != 0)
+                    setColourOverride(QString());
+                m_colMemRecalled = false;
+            }
+        }
+        m_colMemLast = colourMemNow();
+        return;
+    }
+    if (now != m_colMemLast)
+    {
+        // his hand, in this section: written for it, and his from now on
+        m_colMemLast = now;
+        m_colMemHand = true;
+        m_colMemRecalled = false;
+        colourMemWrite(m_colMemFrom, m_colMemSection, now);
+    }
+}
+
+void TrackEngine::colourMemoryTrack()
+{
+    // trackLoaded(), another title: last time's colours do not go on into it
+    if (m_colMemRecalled && m_colMemHand == false && (m_overrideSet.isEmpty() == false || m_colourMode != 0))
+        setColourOverride(QString());
+    m_colMemHand = false;
+    m_colMemRecalled = false;
+    m_colMemSection.clear();
+    m_colMemFrom = -1;
+    m_colMemLast = colourMemNow();
+}
+
+void TrackEngine::colourMemForget(const QString &title)
+{
+    colourMemLoad();
+    if (title.isEmpty())
+        m_colMem.clear();
+    else if (m_colMem.remove(title) == 0)
+        return;
+    QSettings().setValue(QStringLiteral("trackengine/colour-memory"), m_colMem);
+}
+/* =====================================================================
+ *  SYNC (runde 470) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/sync.inc.cpp.
+ *
+ *  Tobias, 2026-10-16 (mockup approved: "det skal fungere live saa man kan
+ *  gaa derind imens showet koerer ... huske det til naeste gang ... sync
+ *  skal ligge i LAB"): is the light on time with the sound in the room?
+ *  Round 1: 16 taps with the kick he HEARS. Round 2: 16 taps with the
+ *  strobes' white blink he SEES (the strobes alone, on the beat the engine
+ *  runs, for those 16 beats). Both carry the same habit of the finger, so
+ *  the difference is the sound against the light. USE moves every
+ *  beat-timed change of the light by it (TrackManager runs the beat that
+ *  many ms later - or, for an earlier light, that many ms before the next
+ *  beat is due), at most +-150 ms, kept through a restart. -10 / +10 /
+ *  RESET by hand. Nothing else changes: the worst a wrong number can do is
+ *  put the light off the beat, and RESET is 0 - how it always ran.
+ * ===================================================================== */
+
+static int syncMedian(QList<int> v)
+{
+    if (v.isEmpty())
+        return 0;
+    std::sort(v.begin(), v.end());
+    const int n = int(v.count());
+    return n % 2 ? v.at(n / 2) : (v.at(n / 2 - 1) + v.at(n / 2)) / 2;
+}
+
+static int syncSpreadOf(const QList<int> &v)
+{
+    // the typical distance from the round's own middle (median absolute deviation)
+    if (v.count() < 2)
+        return 0;
+    const int m = syncMedian(v);
+    QList<int> d;
+    foreach (int x, v)
+        d << qAbs(x - m);
+    return syncMedian(d);
+}
+
+static QVariantList syncList(const QList<int> &v)
+{
+    QVariantList out;
+    foreach (int x, v)
+        out << x;
+    return out;
+}
+
+bool TrackEngine::syncActive() const { return m_syncOpen; }
+int TrackEngine::syncStep() const { return m_syncStep; }
+int TrackEngine::syncTaps() const { return int(m_syncStep == 0 ? m_syncSound.count() : m_syncLight.count()); }
+QVariantList TrackEngine::syncSound() const { return syncList(m_syncSound); }
+QVariantList TrackEngine::syncLight() const { return syncList(m_syncLight); }
+int TrackEngine::syncResult() const { return m_syncResult; }
+int TrackEngine::syncSpread() const { return m_syncSpread; }
+
+int TrackEngine::syncOffset() const
+{
+    if (m_syncOffsetRead == false)
+    {
+        m_syncOffsetRead = true;
+        m_syncOffset = qBound(-ENGINE_SYNC_MAX_MS, QSettings().value(QStringLiteral("trackengine/sync-offset-ms"), 0).toInt(),
+                              ENGINE_SYNC_MAX_MS);
+    }
+    return m_syncOffset;
+}
+
+void TrackEngine::syncSetOffset(int ms)
+{
+    ms = qBound(-ENGINE_SYNC_MAX_MS, ms, ENGINE_SYNC_MAX_MS);
+    syncOffset();                        // read before written
+    if (ms == m_syncOffset)
+    {
+        emit syncChanged();
+        return;
+    }
+    m_syncOffset = ms;
+    QSettings().setValue(QStringLiteral("trackengine/sync-offset-ms"), ms);
+    logSignal(QStringLiteral("sig:sync-offset:") + QString::number(ms));
+    emit syncChanged();
+}
+
+void TrackEngine::syncOpen()
+{
+    m_syncOpen = true;
+    syncRestart();
+}
+
+void TrackEngine::syncClose()
+{
+    if (m_syncOpen == false)
+        return;
+    m_syncOpen = false;
+    syncBlinkOff();
+    m_syncStep = 0;
+    m_syncSound.clear();
+    m_syncLight.clear();
+    emit syncChanged();
+}
+
+void TrackEngine::syncRestart()
+{
+    syncBlinkOff();
+    m_syncStep = 0;
+    m_syncSound.clear();
+    m_syncLight.clear();
+    m_syncResult = 0;
+    m_syncSpread = 0;
+    emit syncChanged();
+}
+
+void TrackEngine::syncTap()
+{
+    if (m_syncOpen == false || m_syncStep >= 2)
+        return;
+    const qint64 now = m_clock.elapsed();
+    // music: a beat in the last two seconds, at a tempo
+    if (m_beatMs <= 0.0 || m_beatStartMs <= 0 || now - m_beatStartMs > 2000)
+        return;
+    qreal d = qreal(now - m_beatStartMs);
+    if (d > m_beatMs / 2.0)
+        d -= m_beatMs;                   // early for the next beat
+    // a tap far off the beat is left out
+    if (qAbs(d) > qMin(qreal(ENGINE_SYNC_FAR_MS), m_beatMs * 0.30))
+        return;
+    QList<int> &round = m_syncStep == 0 ? m_syncSound : m_syncLight;
+    round << int(qRound(d));
+    if (round.count() >= ENGINE_SYNC_TAPS)
+    {
+        m_syncStep++;
+        if (m_syncStep == 2)
+        {
+            syncBlinkOff();
+            // the sound after the light: + = the light is early, move it later
+            m_syncResult = syncMedian(m_syncSound) - syncMedian(m_syncLight);
+            m_syncSpread = qMax(syncSpreadOf(m_syncSound), syncSpreadOf(m_syncLight));
+            logSignal(QStringLiteral("sig:sync-measured:") + QString::number(m_syncResult)
+                      + QStringLiteral(":spread ") + QString::number(m_syncSpread));
+        }
+    }
+    emit syncChanged();
+}
+
+void TrackEngine::syncUse()
+{
+    if (m_syncStep != 2)
+        return;
+    syncSetOffset(syncOffset() + m_syncResult);
+    syncClose();
+}
+
+void TrackEngine::syncNudge(int ms)
+{
+    syncSetOffset(syncOffset() + qBound(-50, ms, 50));
+}
+
+void TrackEngine::syncReset()
+{
+    syncSetOffset(0);
+}
+
+void TrackEngine::syncBeat()
+{
+    // from tick(), every beat: round 2 blinks the strobes white on it
+    if (m_syncOpen == false || m_syncStep != 1)
+        return;
+    ensureTable();
+    if (m_syncBlink.isEmpty())
+    {
+        foreach (const QString &key, m_groupOrder)
+            if (m_groups.value(key).strobes && m_groupOff.contains(key) == false)
+                m_syncBlink << key;
+        if (m_syncBlink.isEmpty() && m_compositionBase.isEmpty() == false)
+            m_syncBlink << m_compositionBase;    // no strobes: the base blinks
+    }
+    foreach (const QString &key, m_syncBlink)
+        flashGroup(key, true);
+    if (m_syncBlinkTimerOn == false)
+    {
+        m_syncBlinkTimer.setSingleShot(true);
+        connect(&m_syncBlinkTimer, &QTimer::timeout, this, [this]() {
+            foreach (const QString &key, m_syncBlink)
+                flashGroup(key, false);
+        });
+        m_syncBlinkTimerOn = true;
+    }
+    m_syncBlinkTimer.start(ENGINE_SYNC_BLINK_MS);
+}
+
+void TrackEngine::syncBlinkOff()
+{
+    m_syncBlinkTimer.stop();
+    foreach (const QString &key, m_syncBlink)
+        flashGroup(key, false);
+    m_syncBlink.clear();
+}
+/* =====================================================================
+ *  YOUR HAND (runde 470) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/clockhand.inc.cpp.
+ *
+ *  Tobias, 2026-10-16 (proposal 7, mockup approved): where HIS hand puts
+ *  ENERGY, quarter hour by quarter hour, night after night - beside the
+ *  ENERGY-by-clock tiles in SETUP > ADVANCED. Only a proposal: a gold tile
+ *  is 10 % or more from the clock, a tap takes that point, USE YOURS takes
+ *  them all. The clock never changes by itself.
+ *  - counted every 200 ms while the show is on, music plays (a beat within
+ *    5 s, not the test track) and the slider is his (ENERGY by clock off);
+ *    20:00 to 02:59, the clock's 28 points
+ *  - per night (noon to noon), the last 7 nights; shown from 2 nights
+ *  - "trackengine/clock-hand": { night: "sum,count;sum,count;..." }
+ * ===================================================================== */
+
+void TrackEngine::clockHandLoad() const
+{
+    if (m_clockHandRead)
+        return;
+    m_clockHandRead = true;
+    m_clockHandStore = QSettings().value(QStringLiteral("trackengine/clock-hand")).toMap();
+}
+
+void TrackEngine::clockHandSave()
+{
+    // the last 7 nights
+    QStringList nights = m_clockHandStore.keys();
+    std::sort(nights.begin(), nights.end());
+    while (nights.count() > 7)
+        m_clockHandStore.remove(nights.takeFirst());
+    QSettings().setValue(QStringLiteral("trackengine/clock-hand"), m_clockHandStore);
+}
+
+QStringList TrackEngine::clockHandNightsAll() const
+{
+    // the nights with anything in them, oldest first
+    clockHandLoad();
+    QStringList out;
+    QStringList nights = m_clockHandStore.keys();
+    std::sort(nights.begin(), nights.end());
+    foreach (const QString &n, nights)
+    {
+        const QStringList cells = m_clockHandStore.value(n).toString().split(QLatin1Char(';'));
+        foreach (const QString &c, cells)
+            if (c.section(QLatin1Char(','), 1, 1).toLongLong() >= ENGINE_HAND_MIN_SAMPLES)
+            {
+                out << n;
+                break;
+            }
+    }
+    return out;
+}
+
+QStringList TrackEngine::clockHandNights() const
+{
+    const QStringList all = clockHandNightsAll();
+    if (all.count() < 2)
+        return QStringList();            // one night is a night, not a habit
+    QStringList out;
+    foreach (const QString &n, all)
+        out << n.mid(5);                 // "10-16"
+    return out;
+}
+
+QVariantList TrackEngine::clockHand() const
+{
+    QVariantList out;
+    const QStringList nights = clockHandNightsAll();
+    if (nights.count() < 2)
+        return out;
+    for (int q = 0; q < ENGINE_CLOCK_POINTS; q++)
+    {
+        // the average of the nights' own averages: a long night counts as one
+        qreal sum = 0.0;
+        int n = 0;
+        foreach (const QString &night, nights)
+        {
+            const QString c = m_clockHandStore.value(night).toString().split(QLatin1Char(';')).value(q);
+            const qint64 cnt = c.section(QLatin1Char(','), 1, 1).toLongLong();
+            if (cnt < ENGINE_HAND_MIN_SAMPLES)
+                continue;
+            sum += c.section(QLatin1Char(','), 0, 0).toDouble() / qreal(cnt);
+            n++;
+        }
+        out << (n > 0 ? int(qRound(sum / n)) : -1);
+    }
+    return out;
+}
+
+void TrackEngine::useClockHand(int index)
+{
+    const QVariantList hand = clockHand();
+    if (hand.count() != m_clockCurve.count() || hand.isEmpty())
+        return;
+    bool changed = false;
+    for (int q = 0; q < hand.count(); q++)
+    {
+        if (index >= 0 && q != index)
+            continue;
+        const int v = hand.at(q).toInt();
+        if (v < 0)
+            continue;
+        const int r = qBound(0, int(qRound(v / 5.0)) * 5, 100);   // the clock's own steps: 5s
+        if (m_clockCurve.at(q) != r)
+        {
+            m_clockCurve[q] = r;
+            changed = true;
+        }
+    }
+    if (changed == false)
+        return;
+    QStringList parts;
+    foreach (int p, m_clockCurve)
+        parts << QString::number(p);
+    QSettings().setValue(SETTINGS_ENGINE_CLOCKCURVE, parts.join(','));
+    logSignal(QStringLiteral("sig:clock-hand:") + (index < 0 ? QStringLiteral("all") : QString::number(index)));
+    m_roomSent = -1;
+    announceRoom();
+    emit tableChanged();
+}
+
+void TrackEngine::clockHandTick(bool showOn)
+{
+    // every 200 ms from closingTick()
+    const qint64 now = m_clock.elapsed();
+    const bool music = m_hazeBeatMs >= 0 && now - m_hazeBeatMs < 5000 && m_testTrack == false;
+    if (showOn == false || music == false || m_roomAuto || m_clockCurve.isEmpty())
+    {
+        // the music stopped or the show went off: what was counted goes to disk
+        if (m_clockHandSavedMs >= 0 && now - m_clockHandSavedMs >= 5000)
+        {
+            m_clockHandSavedMs = now;
+            clockHandFlush();
+        }
+        return;
+    }
+    const QTime t = QTime::currentTime();
+    int minutes = t.hour() * 60 + t.minute() - 20 * 60;
+    if (minutes < 0)
+        minutes += 24 * 60;
+    const int q = minutes / 15;
+    if (q < 0 || q >= ENGINE_CLOCK_POINTS)
+        return;
+    clockHandLoad();
+    const int v = qBound(0, int(qRound(m_faderNow * 100.0)), 100);
+    m_clockHandSum[q] += v;
+    m_clockHandCnt[q] += 1;
+    // to disk once a minute (and the night's cells are the sums so far)
+    if (m_clockHandSavedMs >= 0 && now - m_clockHandSavedMs < 60000)
+        return;
+    m_clockHandSavedMs = now;
+    clockHandFlush();
+}
+
+void TrackEngine::clockHandFlush()
+{
+    bool any = false;
+    for (int q = 0; q < ENGINE_CLOCK_POINTS; q++)
+        any = any || m_clockHandCnt[q] > 0;
+    if (any == false)
+        return;
+    clockHandLoad();
+    const QString night = nightKey();
+    const QString stored = m_clockHandStore.value(night).toString();
+    QStringList cells = stored.isEmpty() ? QStringList() : stored.split(QLatin1Char(';'));
+    while (cells.count() < ENGINE_CLOCK_POINTS)
+        cells << QStringLiteral("0,0");
+    for (int q = 0; q < ENGINE_CLOCK_POINTS; q++)
+    {
+        if (m_clockHandCnt[q] == 0)
+            continue;
+        const qint64 sum = cells.at(q).section(QLatin1Char(','), 0, 0).toLongLong() + m_clockHandSum[q];
+        const qint64 cnt = cells.at(q).section(QLatin1Char(','), 1, 1).toLongLong() + m_clockHandCnt[q];
+        cells[q] = QString::number(sum) + QLatin1Char(',') + QString::number(cnt);
+        m_clockHandSum[q] = 0;
+        m_clockHandCnt[q] = 0;
+    }
+    m_clockHandStore.insert(night, cells.mid(0, ENGINE_CLOCK_POINTS).join(QLatin1Char(';')));
+    clockHandSave();
+    emit clockHandChanged();
 }

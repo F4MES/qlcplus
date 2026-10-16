@@ -115,6 +115,13 @@ class QRandomGenerator;
 #define ENGINE_HAZE_NAG_LATER_MIN 30        // LATER: quiet this long
 // R469_GROUP_FLASH (track_runtime/padflash.inc.cpp)
 #define ENGINE_PAD_FLASH_MS       3000      // a held pad nobody refreshed lets go
+// R470_SYNC (track_runtime/sync.inc.cpp)
+#define ENGINE_SYNC_MAX_MS        150       // the light moved at most this, either way
+#define ENGINE_SYNC_TAPS          16        // taps in a round
+#define ENGINE_SYNC_FAR_MS        200       // a tap further off the beat is left out
+#define ENGINE_SYNC_BLINK_MS      90        // round 2: the strobes' blink
+// R470_CLOCK_HAND (track_runtime/clockhand.inc.cpp)
+#define ENGINE_HAND_MIN_SAMPLES   150       // 30 s of his hand in a quarter hour before it counts
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 // The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
 // Those lamps at a full white are painful to stand in front of, and it
@@ -594,6 +601,18 @@ class TrackEngine : public QObject
     Q_PROPERTY(int hazeNag READ hazeNag NOTIFY hazeNagChanged)
     // R469_GROUP_FLASH: the groups a flash pad holds at full white now
     Q_PROPERTY(QStringList flashGroups READ flashGroups NOTIFY flashGroupsChanged)
+    // R470_SYNC: SETUP > LAB > SYNC - is the light on time with the sound
+    Q_PROPERTY(bool syncActive READ syncActive NOTIFY syncChanged)
+    Q_PROPERTY(int syncStep READ syncStep NOTIFY syncChanged)
+    Q_PROPERTY(int syncTaps READ syncTaps NOTIFY syncChanged)
+    Q_PROPERTY(QVariantList syncSound READ syncSound NOTIFY syncChanged)
+    Q_PROPERTY(QVariantList syncLight READ syncLight NOTIFY syncChanged)
+    Q_PROPERTY(int syncResult READ syncResult NOTIFY syncChanged)
+    Q_PROPERTY(int syncSpread READ syncSpread NOTIFY syncChanged)
+    Q_PROPERTY(int syncOffset READ syncOffset NOTIFY syncChanged)
+    // R470_CLOCK_HAND: his hand's ENERGY per quarter hour, the last nights
+    Q_PROPERTY(QVariantList clockHand READ clockHand NOTIFY clockHandChanged)
+    Q_PROPERTY(QStringList clockHandNights READ clockHandNights NOTIFY clockHandChanged)
     // R467_MIC_CHECK: SETUP > LAB > MIC CHECK - it only listens
     Q_PROPERTY(bool micActive READ micActive NOTIFY micChanged)
     Q_PROPERTY(QString micDevice READ micDevice NOTIFY micChanged)
@@ -783,6 +802,28 @@ public:
     Q_INVOKABLE void flashGroup(const QString &key, bool on);
     /** every 200 ms from closingTick(): a hold nobody refreshed lets go */
     void padFlashTick();
+    /* ---- R470_SYNC (track_runtime/sync.inc.cpp) ---- */
+    bool syncActive() const;
+    int syncStep() const;
+    int syncTaps() const;
+    QVariantList syncSound() const;
+    QVariantList syncLight() const;
+    int syncResult() const;
+    int syncSpread() const;
+    /** what the light is moved by, ms (+ later): TrackManager runs the beat by it */
+    int syncOffset() const;
+    Q_INVOKABLE void syncOpen();
+    Q_INVOKABLE void syncClose();
+    Q_INVOKABLE void syncTap();
+    Q_INVOKABLE void syncRestart();
+    Q_INVOKABLE void syncUse();
+    Q_INVOKABLE void syncNudge(int ms);
+    Q_INVOKABLE void syncReset();
+    /* ---- R470_CLOCK_HAND (track_runtime/clockhand.inc.cpp) ---- */
+    QVariantList clockHand() const;
+    QStringList clockHandNights() const;
+    /** a tile of YOUR HAND (-1: USE YOURS) into ENERGY by clock */
+    Q_INVOKABLE void useClockHand(int index);
     /* ---- R467_MIC_CHECK (track_runtime/miccheck.inc.cpp) ---- */
     bool micActive() const;
     QString micDevice() const;
@@ -1159,6 +1200,8 @@ signals:
     void lastTrackChanged();             // R458_LAST_TRACK
     void hazeNagChanged();               // R467_HAZE_NAG
     void flashGroupsChanged();           // R469_GROUP_FLASH
+    void syncChanged();                  // R470_SYNC
+    void clockHandChanged();             // R470_CLOCK_HAND
     void micChanged();                   // R467_MIC_CHECK
     void micRecChanged();
     void dropSetChanged();               // R431_DROP_PICK
@@ -2073,6 +2116,47 @@ private:
     /** full white under a held FLASH WHITE or a held pad: no MASTER, trim or pulse */
     bool heldFull(const QString &key) const;
     void padFlashClear();
+    // R470_COLOUR_MEMORY (track_runtime/colourmem.inc.cpp)
+    QVariantMap m_colMem;                  // title -> { "<section start>": "section|set|mode", "_t" }
+    bool m_colMemLoaded = false;
+    bool m_colMemHand = false;             // he touched the colours in this play of the track
+    bool m_colMemRecalled = false;         // the colours now are last time's
+    QString m_colMemSection;
+    int m_colMemFrom = -1;
+    QString m_colMemLast;
+    QString colourMemNow() const;
+    void colourMemLoad();
+    void colourMemWrite(int from, const QString &section, const QString &now);
+    QString colourMemRecall(int from, const QString &section);
+    void colourMemApply(const QString &entry);
+    void colourMemoryBeat(int beat, const QString &state, bool sectionChanged);
+    void colourMemoryTrack();
+    void colourMemForget(const QString &title);
+    // R470_SYNC (track_runtime/sync.inc.cpp)
+    bool m_syncOpen = false;
+    int m_syncStep = 0;
+    QList<int> m_syncSound, m_syncLight;
+    int m_syncResult = 0;
+    int m_syncSpread = 0;
+    mutable int m_syncOffset = 0;
+    mutable bool m_syncOffsetRead = false;
+    QStringList m_syncBlink;
+    QTimer m_syncBlinkTimer;
+    bool m_syncBlinkTimerOn = false;
+    void syncSetOffset(int ms);
+    void syncBeat();
+    void syncBlinkOff();
+    // R470_CLOCK_HAND (track_runtime/clockhand.inc.cpp)
+    mutable QVariantMap m_clockHandStore;
+    mutable bool m_clockHandRead = false;
+    qint64 m_clockHandSum[ENGINE_CLOCK_POINTS] = {};
+    qint64 m_clockHandCnt[ENGINE_CLOCK_POINTS] = {};
+    qint64 m_clockHandSavedMs = -1;
+    void clockHandLoad() const;
+    void clockHandSave();
+    QStringList clockHandNightsAll() const;
+    void clockHandTick(bool showOn);
+    void clockHandFlush();
     // R467_MIC_CHECK (track_runtime/miccheck.inc.cpp)
     MicTap *m_mic = nullptr;               // a child QObject: the capture and what it heard
     bool m_micOpen = false;
