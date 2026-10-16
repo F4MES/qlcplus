@@ -989,7 +989,9 @@ Rectangle
                     Timer { id: updArm; interval: 5000; onTriggered: updChip.arm = false }
                     onShowOnChanged: if (showOn) arm = false
                     anchors.verticalCenter: parent.verticalCenter
-                    width: updCol.implicitWidth + Math.round(54 * trackViewRoot.ks)
+                    // R475_DESK_UPD: one width - SURE?'s longer line took the track's title away at 1366
+                    width: Math.round(236 * trackViewRoot.ks)
+                    property double armAt: 0
                     height: Math.max(48, Math.round(48 * trackViewRoot.ks))
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: arm ? trackViewRoot.cGold : "#141418"
@@ -1009,9 +1011,11 @@ Rectangle
                         x: Math.round((updChip.arm ? 18 : 36) * trackViewRoot.ks)
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 1
+                        width: updChip.width - updCol.x - Math.round(12 * trackViewRoot.ks)   // R475_CHIPTEXT_DESK
                         Text
                         {
                             objectName: "updateChipText"
+                            width: parent.width; elide: Text.ElideRight
                             text: updChip.st === 1 ? qsTr("UPDATE STARTED") : updChip.arm ? qsTr("SURE? - TAP AGAIN") : qsTr("UPDATE QLC+")
                             color: updChip.arm ? "#1A1408" : trackViewRoot.cGold
                             font.bold: true
@@ -1021,10 +1025,12 @@ Rectangle
                         Text
                         {
                             objectName: "updateChipSub"
-                            text: updChip.st === 1 ? qsTr("QLC+ closes and comes back by itself")
-                                : updChip.st === 2 ? qsTr("update-qlc.cmd is not on the Desktop")
-                                : (updChip.st === 3 || updChip.showOn) ? qsTr("SHOW OFF first")
-                                : updChip.arm ? qsTr("QLC+ closes, installs build %1, starts again").arg(updChip.latest)
+                            width: parent.width; elide: Text.ElideRight   // R475_CHIPSUB_DESK: SURE? over a tap's "SHOW OFF first"
+                            text: updChip.st === 1 ? qsTr("QLC+ restarts by itself")
+                                : updChip.showOn ? qsTr("SHOW OFF first")
+                                : updChip.arm ? qsTr("light out about 1 min")
+                                : updChip.st === 2 ? qsTr("update-qlc.cmd not found")
+                                : updChip.st === 3 ? qsTr("SHOW OFF first")
                                 : qsTr("build %1 is ready").arg(updChip.latest)
                             color: updChip.arm ? "#3C2D0A" : trackViewRoot.cMute
                             font.pixelSize: trackViewRoot.fs(12)
@@ -1036,7 +1042,8 @@ Rectangle
                             if (!inside || !trackManager || updChip.st === 1)
                                 return
                             if (updChip.showOn) { trackManager.startUpdate(); return }   // "SHOW OFF first"
-                            if (!updChip.arm) { updChip.arm = true; updArm.restart(); return }
+                            if (!updChip.arm) { updChip.arm = true; updChip.armAt = Date.now(); updArm.restart(); return }
+                            if (Date.now() - updChip.armAt < 400) return   // R475_CHIPTAP_DESK: a double tap is not SURE? answered
                             updChip.arm = false; updArm.stop()
                             trackManager.startUpdate()
                         }

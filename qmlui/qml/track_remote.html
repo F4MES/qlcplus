@@ -253,7 +253,8 @@ function onLine(data) {
 if (navigator.standalone) document.documentElement.classList.add('standalone');
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || mockOn) return;
-  if (ws && ws.readyState === 1) ws.send('TRACK|state');
+  // R475_PHONE_BACK: the reply gets half a second - an old lastState dropped the socket first
+  if (ws && ws.readyState === 1) { lastState = Date.now() - 1000; ws.send('TRACK|state'); }
 });
 function connect() {
   if (mockOn) return;
@@ -305,12 +306,14 @@ $('show').onclick = () => { if (!S) return; if (!S.show) send('show|1'); else su
 $('hazego').onclick = () => { tab('rig'); const f = document.querySelector('[data-f="haze"]'); if (f) f.scrollIntoView({block: 'center'}); };
 $('hazelater').onclick = () => send('hazelater');
 // R474_UPDATE: update-qlc.cmd on the PC - SHOW OFF only, SURE? (5 s)
-let updSure = 0;
+let updSure = 0, updAt = 0;
 $('updB').onclick = () => {
   if (!S) return;
   const U = S.upd || {};
-  if (S.show || !U.found || U.st === 1) { if (S.show) send('update'); return; }   // QLC+ says SHOW OFF first
-  if (!updSure) { updSure = setTimeout(() => { updSure = 0; render(); }, 5000); render(); return; }
+  // R475_PHONE_UPD: a script put on the Desktop later is found by QLC+ at the tap (it says so if not)
+  if (S.show || U.st === 1) { if (S.show) send('update'); return; }   // QLC+ says SHOW OFF first
+  if (!updSure) { updAt = Date.now(); updSure = setTimeout(() => { updSure = 0; render(); }, 5000); render(); return; }
+  if (Date.now() - updAt < 400) return;  // a double tap is not SURE? answered
   clearTimeout(updSure); updSure = 0; send('update'); render();
 };
 // R468_RATE: the finger landing is the moment judged (as the desk); a tap rates the
@@ -336,6 +339,7 @@ function aimOpen(v) {
     // R472_PHONE_RATE: nothing goes - it says so (it said "noted")
     if (!mockOn && !live()) { rateNote('NOT SENT - no connection'); return; }
     rate.v = v; rate.held = false; rate.stage = (S.stage || []).slice();
+    rate.x = e.clientX; rate.y = e.clientY;   // R475_PHONE_RATE_SWIPE
     send('ratemark');
     clearTimeout(rate.timer);
     // the list when the hold opens it: the reply to the mark has come by then
@@ -349,28 +353,40 @@ function aimOpen(v) {
   };
   el.addEventListener('pointerup', up);
   el.addEventListener('pointercancel', () => { clearTimeout(rate.timer); rate.v = 0; });
+  // R475_PHONE_RATE_MOVED: a swipe that began on it is the page's scroll - no verdict
+  el.addEventListener('pointermove', e => {
+    if (rate.v !== v || rate.held) return;
+    if (Math.abs(e.clientX - rate.x) > 10 || Math.abs(e.clientY - rate.y) > 10) { clearTimeout(rate.timer); rate.v = 0; }
+  });
 });
 $('last').onclick = () => sureTap('last', $('last'), ((S && S.last && S.last.stage) > 0) ? 'last|0' : 'last|1');
 
 /* ---------------- held buttons: BLACKOUT, STUTTER, FLASH WHITE ---------------- */
 // as the desk: down = on (or, when it is on, off); up ON the button = let go;
 // a finger slid off = locked. STUTTER: a quick tap (< 250 ms) locks it too.
+const holdReset = {};                    // R475_PHONE_LETGO: each held button's own let-go
 function holdButton(el, what, opts) {
-  let armed = false, at = 0, id = null;
+  let armed = false, at = 0, id = null, x0 = 0, y0 = 0;
   const hold = on => { armed = on; holding[what] = on; };   // R463_RM_HELD
+  // hidden and back: the button is free again (its own "armed" stayed on - BLACKOUT locked on a
+  // slide later, or the button answered no finger until the page was loaded again)
+  holdReset[what] = () => { if (armed) send(what + '|0'); hold(false); id = null; };
   el.addEventListener('pointerdown', e => {
     // R463_PAGE: a tap between the rate / hit chips is not the big button
     if (e.target.closest('[data-r],[data-k],#rates,#kinds')) return;
     if (!S || armed) return;             // R463_PAGE: a second finger does not take over the first
-    id = e.pointerId; try { el.setPointerCapture(id); } catch (err) {}
+    id = e.pointerId; x0 = e.clientX; y0 = e.clientY; try { el.setPointerCapture(id); } catch (err) {}
     if (opts.momentary) { send(what + '|1|held'); hold(true); return; }
     if (S[what]) { send(what + '|0'); hold(false); return; }
     send(what + '|1|held'); hold(true); at = Date.now();
   });
   const inside = e => { const r = el.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; };
+  // R475_PHONE_SWIPE: slid off sideways, or after a moment held, locks it - a quick swipe up or
+  // down over it (scrolling the page) is no hold at all
+  const locks = e => Date.now() - at >= 300 || Math.abs(e.clientX - x0) > Math.abs(e.clientY - y0);
   el.addEventListener('pointermove', e => {
     if (!armed || opts.momentary || e.pointerId !== id) return;
-    if (!inside(e)) { hold(false); send(what + '|1|latched'); }   // slid off: it stays
+    if (!inside(e)) { hold(false); send(what + (locks(e) ? '|1|latched' : '|0')); }   // slid off: it stays
   });
   el.addEventListener('pointerup', e => {
     if (!armed || e.pointerId !== id) return; hold(false);
@@ -404,6 +420,8 @@ function faderValue(el) {
 }
 function drawFader(el, v) {
   v = Math.max(0, Math.min(1, v));
+  el._v = v;                             // R475_PHONE_DRAW: where it stands on the page
+  if (el.closest('.grp')) ink(el, v);
   el.querySelector('.fill').style.width = (v * 100) + '%';
   const g = el.querySelector('.grip'); if (g) g.style.left = (v * 100) + '%';
   el.querySelector('.val').textContent = Math.round(v * 100) + '%';
@@ -413,22 +431,30 @@ function wireFader(el) {
   // R472_PHONE_SCROLL: a swipe up or down over a slider is the page's scroll - it set the
   // slider where the thumb landed (MASTER to 10 %, the room dark). The slider moves once the
   // finger goes sideways (6 px, more than up / down); a tap sets it where it lands
-  let last = 0, timer = null, val = 0, ptr = null, x0 = 0, y0 = 0, drag = false;
+  // R475_PHONE_DRAG: nothing is sent in a drag's first 12 px (a scroll begun a little sideways
+  // set MASTER to where the thumb was, 12 %, and ENERGY's AUTO went off); a scroll that takes it
+  // puts it back as it stood
+  let last = 0, timer = null, val = 0, ptr = null, x0 = 0, y0 = 0, drag = false, v0 = 0, xd = 0, sent = false;
   const cmd = v => { const f = el.dataset.f, p = Math.round(v * 100);
     return f.indexOf('trim:') === 0 ? 'trim|' + f.slice(5) + '|' + p : f + '|' + p; };
   const at = e => { const r = el.getBoundingClientRect(); return (e.clientX - r.left) / r.width; };
-  const flush = () => { timer = null; last = Date.now(); send(cmd(val)); };
+  const flush = () => { timer = null; last = Date.now(); sent = true; send(cmd(val)); };
   const move = e => {
     val = Math.max(0, Math.min(1, at(e))); drawFader(el, val);
+    if (drag && !sent && Math.abs(e.clientX - xd) < 12) return;
     if (!timer) timer = setTimeout(flush, Math.max(0, 80 - (Date.now() - last)));
   };
-  el.addEventListener('pointerdown', e => { ptr = e.pointerId; x0 = e.clientX; y0 = e.clientY; drag = false; busy[el.dataset.f] = Infinity; });
+  el.addEventListener('pointerdown', e => {
+    ptr = e.pointerId; x0 = e.clientX; y0 = e.clientY; drag = false; sent = false;
+    v0 = el._v !== undefined ? el._v : faderValue(el);
+    busy[el.dataset.f] = Infinity;
+  });
   el.addEventListener('pointermove', e => {
     if (e.pointerId !== ptr || busy[el.dataset.f] !== Infinity) return;
     if (!drag) {
       const dx = Math.abs(e.clientX - x0), dy = Math.abs(e.clientY - y0);
       if (!(dx > 6 && dx > dy)) return;
-      drag = true; try { el.setPointerCapture(e.pointerId); } catch (err) {}
+      drag = true; xd = e.clientX; try { el.setPointerCapture(e.pointerId); } catch (err) {}
     }
     move(e);
   });
@@ -439,7 +465,7 @@ function wireFader(el) {
     if (keep && !drag && Math.abs(e.clientY - y0) > 10) keep = false;   // a swipe that did not scroll
     if (keep) {
       if (!drag) move(e);                // a tap: where it landed
-      if (timer) { clearTimeout(timer); flush(); }
+      if (timer || !sent) { clearTimeout(timer); flush(); }   // R475_PHONE_END: a drag under 12 px is sent here
       busy[el.dataset.f] = Date.now() + 700;
     } else {
       if (timer) { clearTimeout(timer); timer = null; }
@@ -449,8 +475,17 @@ function wireFader(el) {
     drag = false;
   };
   el.addEventListener('pointerup', e => end(e, true));
-  el.addEventListener('pointercancel', e => end(e, drag));   // the page took the scroll: nothing was set
-  el.addEventListener('lostpointercapture', e => { if (drag) end(e, true); });
+  el.addEventListener('pointercancel', e => {
+    // R475_PHONE_CANCEL: the page took it for a scroll - what it sent goes back
+    if (e.pointerId === ptr && drag) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (sent) { val = v0; send(cmd(v0)); busy[el.dataset.f] = Date.now() + 700; drawFader(el, v0); ptr = null; drag = false; return; }
+    }
+    end(e, false);
+  });
+  // ... and its own capture lost ends a drag - not the name's: the finger's first capture went to
+  // the name under it, and taking it over ended every drag after its first move
+  el.addEventListener('lostpointercapture', e => { if (e.target === el && drag) end(e, true); });
 }
 document.querySelectorAll('.fader[data-f]').forEach(wireFader);
 
@@ -574,10 +609,12 @@ function render() {
     const U = S.upd || {}, nb = !!U.avail;
     if (updSure && (S.show || U.st === 1)) { clearTimeout(updSure); updSure = 0; }
     $('updT').textContent = U.st === 1 ? 'UPDATE STARTED' : nb ? 'NEW BUILD ' + U.latest + ' READY' : 'QLC+' + (U.installed ? ' · build ' + U.installed : '');
+    // R475_UPDTEXT_PHONE: SURE? says what it does - the SHOW OFF text of a tap 4 s ago was over it
     $('updS').textContent = U.st === 1 ? 'update-qlc.cmd runs on the PC - QLC+ closes and comes back by itself'
-      : U.st === 2 || !U.found ? "update-qlc.cmd is not on the PC's Desktop"
-      : (U.st === 3 || S.show) ? 'SHOW OFF first - not while the show runs'
+      : S.show ? 'SHOW OFF first - not while the show runs'
       : updSure ? 'tap again: QLC+ closes, ' + (nb ? 'installs ' + U.latest + ' ' : 'updates ') + 'and starts again - the light is out for about a minute'
+      : U.st === 2 || !U.found ? "update-qlc.cmd is not on the PC's Desktop"
+      : U.st === 3 ? 'SHOW OFF first - not while the show runs'
       : (nb ? 'installed: ' + (U.installed || '?') + ' · ' : 'no new build - it also fetches the show file and BLT\'s functions · ') + 'the update closes QLC+ for about a minute';
     cls($('updS'), 'gold', !!updSure);
     const ub = $('updB');
@@ -618,7 +655,7 @@ function render() {
     f.querySelector('.fill').style.background = onStage ? room : '';
     if (g.switchOnly) f.style.background = onStage ? room : '';
     cls(f, 'light', onStage && light);
-    { const lv = g.switchOnly ? 1 : faderValue(f); cls(f, 'lnm', lv < 0.6); cls(f, 'lval', lv < 0.75); }   // R472_PHONE_INK
+    if (g.switchOnly) ink(f, 1);         // R472_PHONE_INK - R475_PHONE_INK: per row, in drawFader()
     cls(row.querySelector('.gpad'), 'held', !!pads[g.key] || (S.gflash || []).indexOf(g.key) >= 0);
     if (g.switchOnly) f.querySelector('.val').textContent = g.enabled ? 'ON' : 'OFF';
     else if (!(busy[f.dataset.f] > Date.now())) drawFader(f, faderValue(f));
@@ -628,6 +665,15 @@ function render() {
 // (the engine lets go by itself 3 s after the last one: a phone that lost the Wi-Fi)
 const pads = {};
 const BOLT = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M14 2L5 13.5h6L9 22l10-12.5h-6L15.5 2z"/></svg>';
+// R475_INK_ROW_FN: the light text where the fill is not under the name's (or the value's) middle -
+// a fixed 60 % wrote white on yellow under a short name
+function ink(f, lv) {
+  const fr = f.getBoundingClientRect(); if (!fr.width) return;
+  const mid = el => { const r = el.getBoundingClientRect(); return ((r.left + r.right) / 2 - fr.left) / fr.width; };
+  const nm = f.querySelector('.nm'), va = f.querySelector('.val');
+  if (nm) cls(f, 'lnm', lv < mid(nm));
+  if (va) cls(f, 'lval', lv < mid(va));
+}
 function hexLight(c) {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c || ''); if (!m) return false;
   return (0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)) / 255 > 0.6;
@@ -662,7 +708,9 @@ document.addEventListener('lostpointercapture', padUp);
 const letGoAll = () => {
   Object.keys(padPtr).forEach(p => delete padPtr[p]);
   Object.keys(pads).forEach(padRelease);
+  Object.keys(holdReset).forEach(w => holdReset[w]());   // R475_ALL_LETGO_PHONE: and the buttons' own state
   Object.keys(holding).forEach(w => { if (holding[w]) { holding[w] = false; send(w + '|0'); } });
+  Object.keys(busy).forEach(k => { busy[k] = 0; });       // a slider dragged meanwhile follows QLC+ again
 };
 document.addEventListener('visibilitychange', () => { if (document.hidden) letGoAll(); });
 addEventListener('pagehide', letGoAll);
@@ -674,7 +722,7 @@ $('groups').addEventListener('click', e => {
 /* ---------------- a stand-in QLC+ for screenshots and tests (?mock=1) ---------------- */
 function mockApply(cmd) {
   const a = cmd.split('|'), c = a[0], on = a[1] === '1';
-  if (c === 'update') { S.upd.st = S.show ? 3 : 1; render(); return; }   // R474_UPDATE
+  if (c === 'update') { S.upd.st = S.show ? 3 : S.upd.found ? 1 : 2; render(); return; }   // R474_UPDATE (R475_PHONE_MOCK)
   const m = {show: () => S.show = on, energy: () => { S.roomAuto = false; S.energy = +a[1]; }, energyAuto: () => S.roomAuto = true,
     calm: () => S.calm = S.calm > 0 ? 0 : 16, hold: () => S.hold = !S.hold, blackout: () => S.blackout = on, stutter: () => S.stutter = on,
     stutterRate: () => S.stutterRate = +a[1], hit: () => { S.hitKind = +a[1]; if (+a[1] > 0) S.hitLast = +a[1]; }, flash: () => S.flash = on,
