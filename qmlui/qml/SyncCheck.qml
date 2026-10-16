@@ -36,6 +36,8 @@ Rectangle
     readonly property int spread: eng ? eng.syncSpread : 0        // how even the taps were, +- ms
     readonly property int offset: eng ? eng.syncOffset : 0        // what the light is moved by now
     readonly property bool linked: trackManager ? trackManager.playing === true : false
+    // R472_SYNC_CLOCK: SHOW OFF runs no beat - nothing to tap against
+    readonly property bool showOn: trackManager ? trackManager.autoRun === true : true
     readonly property int beatTick: trackManager ? trackManager.currentBeat : 0
     property bool beatLit: false
     onBeatTickChanged: { beatLit = true; beatOff.restart() }
@@ -166,7 +168,8 @@ Rectangle
                     x: 1400; y: 40; width: 568; spacing: 16
                     Label { text: qsTr("THE LINK'S BEAT") }
                     Rectangle { width: 568; height: 90; radius: 10; color: syncRoot.beatLit ? syncRoot.cBlue : syncRoot.cBtn
-                                Text { anchors.centerIn: parent; text: syncRoot.linked ? qsTr("BEAT") : qsTr("NO MUSIC - play a track")
+                                Text { anchors.centerIn: parent; text: !syncRoot.showOn ? qsTr("SHOW ON first - the light must run")
+                                    : syncRoot.linked ? qsTr("BEAT") : qsTr("NO MUSIC - play a track")
                                        color: syncRoot.beatLit ? "#06182A" : syncRoot.cMute; font.bold: true; font.pixelSize: 20; font.letterSpacing: 2 } }
                     Text { width: 568; wrapMode: Text.WordWrap; color: syncRoot.cMute; font.pixelSize: 16
                            text: qsTr("Taps are measured against this - the beat the CDJs say. Only the strobes blink in round 2, for its 16 beats.") }
@@ -223,7 +226,7 @@ Rectangle
                 {
                     x: 40; y: 470; spacing: 16
                     SyncTile { objectName: "syncUse"; width: 520; height: 110; on: true; tone: syncRoot.cGold; fontPx: 22
-                               text: qsTr("MOVE THE LIGHT %1").arg(syncRoot.ms(syncRoot.result))
+                               text: qsTr("MOVE THE LIGHT %1").arg(syncRoot.ms(Math.max(-150, Math.min(150, syncRoot.offset + syncRoot.result)) - syncRoot.offset))   // what USE can do: 150 ms at most
                                sub: qsTr("now %1").arg(syncRoot.ms(syncRoot.offset))
                                onTapped: if (eng) eng.syncUse() }
                     SyncTile { width: 400; height: 110; text: qsTr("KEEP %1").arg(syncRoot.ms(syncRoot.offset)); fontPx: 20; onTapped: if (eng) eng.syncClose() }

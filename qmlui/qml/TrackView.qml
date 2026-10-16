@@ -1869,7 +1869,8 @@ Rectangle
                                     : emptyBox.running ? qsTr("Beat Link Trigger is running - play a track on a CDJ")
                                     : emptyBox.bltStart === 1 ? qsTr("Starting Beat Link Trigger - it takes about half a minute")
                                     : emptyBox.bltStart === 2 ? qsTr("It did not start - use its logo on the taskbar, then play a track on a CDJ")
-                                                       : qsTr("Start it here or from its logo on the taskbar - then play a track on a CDJ")
+                                    : emptyBox.known ? qsTr("Start it here or from its logo on the taskbar - then play a track on a CDJ")
+                                                       : qsTr("Start it from its logo on the taskbar - then play a track on a CDJ")   // R472_BLT_SUB
                                 color: trackViewRoot.cMute
                                 font.pixelSize: trackViewRoot.fs(13)
                             }
@@ -2414,17 +2415,20 @@ Rectangle
                     color: trackViewRoot.cEdge
                 }
 
+                // R472_RIG_ROWS: the rows by count - a group switched on or off (the list changes)
+                // does not rebuild them, so a held pad and a drag in progress live on
+                readonly property var groupRows: trackEngine ? trackEngine.groups : []
                 Repeater
                 {
                     id: castRep
-                    model: trackEngine ? trackEngine.groups : []
+                    model: rigCard.groupRows.length
 
                     Item
                     {
                         id: grp
                         // the same fallback as before: a groups rebuild re-evaluates
                         // every binding with modelData gone
-                        property var md: modelData ? modelData : ({ key: "", enabled: true, switchOnly: false, base: false })
+                        property var md: rigCard.groupRows[index] ? rigCard.groupRows[index] : ({ key: "", enabled: true, switchOnly: false, base: false })
                         property bool lit: rigCard.litNow.indexOf(md.key) >= 0
                         property bool off: !md.enabled
                         property bool switchOnly: md.switchOnly === true

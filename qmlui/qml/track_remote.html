@@ -88,7 +88,7 @@ button{font-family:inherit;cursor:pointer}
 .b.armed{background:var(--red);color:#280808}
 .b.armed .chips span{background:#7A2020;color:#F0C8C8}.b.armed .chips span.on{background:var(--gold);color:#1A1408}
 .flash{box-shadow:inset 0 0 0 2px var(--text);background:#24242A}
-.fader{height:58px;border-radius:10px;background:#0B0B0E;position:relative;overflow:hidden;border:1px solid #1E1E24;touch-action:none}
+.fader{height:58px;border-radius:10px;background:#0B0B0E;position:relative;overflow:hidden;border:1px solid #1E1E24;touch-action:pan-y}
 .fader .fill{position:absolute;left:0;top:0;bottom:0;border-radius:9px 0 0 9px;background:#3A86C8}
 .fader .grip{position:absolute;top:6px;bottom:6px;width:10px;border-radius:3px;background:#D8E6F2;margin-left:-14px}
 .fader .name{position:absolute;left:14px;right:84px;top:0;bottom:0;display:flex;align-items:center;font-weight:800;font-size:12px;letter-spacing:.14em;white-space:nowrap;overflow:hidden}
@@ -101,6 +101,8 @@ button{font-family:inherit;cursor:pointer}
 .grp.off .gpad{opacity:.35}
 .grp .fill{background:#3A3A42}.grp .grip{background:#B0B0B8}
 .grp .fader.light .name,.grp .fader.light .val{color:#14141A}.grp .fader.light .grip{background:#14141A}
+/* R472_PHONE_INK: dark text only where the room's colour is under it */
+.grp .fader.light.lnm .name{color:var(--text)}.grp .fader.light.lval .val{color:var(--text)}
 .grp.next:before{content:"";position:absolute;left:-8px;top:6px;bottom:6px;width:3px;border-radius:2px;background:var(--red)}
 .grp .name{flex-direction:column;align-items:flex-start;justify-content:center;gap:3px}
 .grp .nm{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -288,7 +290,8 @@ function aimClose() { $('aim').className = 'aim'; clearTimeout(rate.aimTimer); }
 function aimOpen(v) {
   const g = $('aimGrid'); g.innerHTML = '';
   rate.stage.forEach(k => { const b = document.createElement('button'); b.textContent = k.toUpperCase();
-    b.onclick = () => { send('rate|' + v + '|' + k); aimClose(); rateNote((v > 0 ? 'GOOD' : 'BAD') + ' - ' + k + ' - noted'); }; g.appendChild(b); });
+    b.onclick = () => { if (!mockOn && !live()) { aimClose(); rateNote('NOT SENT - no connection'); return; }
+      send('rate|' + v + '|' + k); aimClose(); rateNote((v > 0 ? 'GOOD' : 'BAD') + ' - ' + k + ' - noted'); }; g.appendChild(b); });
   const x = document.createElement('button'); x.className = 'x'; x.textContent = 'CANCEL'; x.onclick = aimClose; g.appendChild(x);
   $('aimT').textContent = (v > 0 ? 'GOOD' : 'BAD') + ' - WHICH GROUP?';
   $('aim').className = 'aim on ' + (v > 0 ? 'up' : 'down');
@@ -298,10 +301,13 @@ function aimOpen(v) {
   const el = $(id);
   el.addEventListener('pointerdown', e => {
     if (!S || !(S.beats > 0)) return;
+    // R472_PHONE_RATE: nothing goes - it says so (it said "noted")
+    if (!mockOn && !live()) { rateNote('NOT SENT - no connection'); return; }
     rate.v = v; rate.held = false; rate.stage = (S.stage || []).slice();
     send('ratemark');
     clearTimeout(rate.timer);
-    rate.timer = setTimeout(() => { if (rate.stage.length) { rate.held = true; aimOpen(v); } }, 600);
+    // the list when the hold opens it: the reply to the mark has come by then
+    rate.timer = setTimeout(() => { rate.stage = ((S && S.stage) || rate.stage).slice(); if (rate.stage.length) { rate.held = true; aimOpen(v); } }, 600);
   });
   const up = () => {
     clearTimeout(rate.timer);
@@ -372,7 +378,10 @@ function drawFader(el, v) {
   el.classList.toggle('low', v < 0.3);     // R467_HAZE_NAG: the name readable on an empty slider
 }
 function wireFader(el) {
-  let last = 0, timer = null, val = 0;
+  // R472_PHONE_SCROLL: a swipe up or down over a slider is the page's scroll - it set the
+  // slider where the thumb landed (MASTER to 10 %, the room dark). The slider moves once the
+  // finger goes sideways (6 px, more than up / down); a tap sets it where it lands
+  let last = 0, timer = null, val = 0, ptr = null, x0 = 0, y0 = 0, drag = false;
   const cmd = v => { const f = el.dataset.f, p = Math.round(v * 100);
     return f.indexOf('trim:') === 0 ? 'trim|' + f.slice(5) + '|' + p : f + '|' + p; };
   const at = e => { const r = el.getBoundingClientRect(); return (e.clientX - r.left) / r.width; };
@@ -381,10 +390,35 @@ function wireFader(el) {
     val = Math.max(0, Math.min(1, at(e))); drawFader(el, val);
     if (!timer) timer = setTimeout(flush, Math.max(0, 80 - (Date.now() - last)));
   };
-  el.addEventListener('pointerdown', e => { busy[el.dataset.f] = Infinity; el.setPointerCapture && el.setPointerCapture(e.pointerId); move(e); });
-  el.addEventListener('pointermove', e => { if (busy[el.dataset.f] === Infinity) move(e); });
-  const up = () => { if (busy[el.dataset.f] !== Infinity) return; if (timer) { clearTimeout(timer); flush(); } busy[el.dataset.f] = Date.now() + 700; };
-  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  el.addEventListener('pointerdown', e => { ptr = e.pointerId; x0 = e.clientX; y0 = e.clientY; drag = false; busy[el.dataset.f] = Infinity; });
+  el.addEventListener('pointermove', e => {
+    if (e.pointerId !== ptr || busy[el.dataset.f] !== Infinity) return;
+    if (!drag) {
+      const dx = Math.abs(e.clientX - x0), dy = Math.abs(e.clientY - y0);
+      if (!(dx > 6 && dx > dy)) return;
+      drag = true; try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+    move(e);
+  });
+  const end = (e, keep) => {
+    if (e.pointerId !== ptr) return;
+    ptr = null;
+    if (busy[el.dataset.f] !== Infinity) return;
+    if (keep && !drag && Math.abs(e.clientY - y0) > 10) keep = false;   // a swipe that did not scroll
+    if (keep) {
+      if (!drag) move(e);                // a tap: where it landed
+      if (timer) { clearTimeout(timer); flush(); }
+      busy[el.dataset.f] = Date.now() + 700;
+    } else {
+      if (timer) { clearTimeout(timer); timer = null; }
+      busy[el.dataset.f] = 0;
+      if (S) drawFader(el, faderValue(el));
+    }
+    drag = false;
+  };
+  el.addEventListener('pointerup', e => end(e, true));
+  el.addEventListener('pointercancel', e => end(e, drag));   // the page took the scroll: nothing was set
+  el.addEventListener('lostpointercapture', e => { if (drag) end(e, true); });
 }
 document.querySelectorAll('.fader[data-f]').forEach(wireFader);
 
@@ -508,6 +542,8 @@ function render() {
   const keys = groups.map(g => g.key + (g.switchOnly ? '!' : '')).join('|');
   if (keys !== groupKeys) {
     groupKeys = keys;
+    // R472_PHONE_PADS: a drag on a row that goes is over - its slider follows the desk again
+    Object.keys(busy).forEach(k => { if (k.indexOf('trim:') === 0) delete busy[k]; });
     // R463_PAGE: a group's name as text, whatever it holds (a " broke the page)
     $('groups').innerHTML = groups.map(g =>
       '<div class="grp' + (g.switchOnly ? ' switchonly' : '') + '" data-g="' + esc(g.key) + '">' +
@@ -534,6 +570,7 @@ function render() {
     f.querySelector('.fill').style.background = onStage ? room : '';
     if (g.switchOnly) f.style.background = onStage ? room : '';
     cls(f, 'light', onStage && light);
+    { const lv = g.switchOnly ? 1 : faderValue(f); cls(f, 'lnm', lv < 0.6); cls(f, 'lval', lv < 0.75); }   // R472_PHONE_INK
     cls(row.querySelector('.gpad'), 'held', !!pads[g.key] || (S.gflash || []).indexOf(g.key) >= 0);
     if (g.switchOnly) f.querySelector('.val').textContent = g.enabled ? 'ON' : 'OFF';
     else if (!(busy[f.dataset.f] > Date.now())) drawFader(f, faderValue(f));
@@ -547,24 +584,40 @@ function hexLight(c) {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c || ''); if (!m) return false;
   return (0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)) / 255 > 0.6;
 }
+// R472_PHONE_PADS: by finger - let go when THAT finger lifts, wherever it is (a row
+// rebuilt under it, a second finger on the same pad), and when the page is hidden
+const padPtr = {};
 $('groups').addEventListener('pointerdown', e => {
   const b = e.target.closest('[data-pad]'); if (!b || !S) return;
   const k = b.dataset.pad, g = (S.groups || []).find(x => x.key === k);
   if (!g || !g.enabled || pads[k]) return;
   try { b.setPointerCapture(e.pointerId); } catch (err) {}
+  padPtr[e.pointerId] = k;
   send('gflash|' + k + '|1');
   pads[k] = setInterval(() => send('gflash|' + k + '|1'), 1000);
   cls(b, 'held', true);
 });
-const padUp = e => {
-  const b = e.target.closest('[data-pad]'); if (!b) return;
-  const k = b.dataset.pad; if (!pads[k]) return;
+function padRelease(k) {
+  if (!pads[k]) return;
   clearInterval(pads[k]); delete pads[k];
   send('gflash|' + k + '|0');
-  cls(b, 'held', false);
+  const b = $('groups').querySelector('[data-pad="' + CSS.escape(k) + '"]'); if (b) cls(b, 'held', false);
+}
+const padUp = e => {
+  const k = padPtr[e.pointerId]; if (k === undefined) return;
+  delete padPtr[e.pointerId];
+  padRelease(k);
 };
-$('groups').addEventListener('pointerup', padUp);
-$('groups').addEventListener('pointercancel', padUp);
+document.addEventListener('pointerup', padUp);
+document.addEventListener('pointercancel', padUp);
+document.addEventListener('lostpointercapture', padUp);
+const letGoAll = () => {
+  Object.keys(padPtr).forEach(p => delete padPtr[p]);
+  Object.keys(pads).forEach(padRelease);
+  Object.keys(holding).forEach(w => { if (holding[w]) { holding[w] = false; send(w + '|0'); } });
+};
+document.addEventListener('visibilitychange', () => { if (document.hidden) letGoAll(); });
+addEventListener('pagehide', letGoAll);
 $('groups').addEventListener('click', e => {
   const t = e.target.closest('[data-t]'); if (!t || !S) return;
   const g = (S.groups || []).find(x => x.key === t.dataset.t); if (g) send('group|' + g.key + '|' + (g.enabled ? 0 : 1));   // R463_PAGE

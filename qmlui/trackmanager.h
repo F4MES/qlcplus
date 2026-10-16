@@ -493,6 +493,11 @@ private:
     int m_syncRealBeat = -1;             // the last beat BLT said
     int m_syncEarlyFor = -1;             // the early timer runs the beat after this one
     int m_syncAhead = -1;                // the beat run early, before BLT said it
+    bool m_syncInPos = false;            // R472_SYNC_LOOK: updateState() from a BLT packet
+    bool m_syncLateSection = false;      // ... and the section it turned waits with the beat
+    qint64 m_bltChainMs = 0;             // R472_BLT_FRESH: when the chain of looks began
+    qint64 m_bltLaunchAskedMs = 0;       // ... and when START BLT was tapped
+    bool m_bltReprobed = false;
     int m_bltLook = 0;                   // 0 the names, 1 java's windows, 2 every window
     int m_bltStartState = 0;             // R468_START_BLT_MEM
     bool m_bltLaunchPending = false;
