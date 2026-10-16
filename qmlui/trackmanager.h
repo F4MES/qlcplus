@@ -526,6 +526,14 @@ private:
     void readUpdateInstalled();
     void setUpdateStep(int state);
     void updateCheck();
+    // R475_UPDATE_MEM: one update at a time, and update-qlc.cmd's flags
+    QTimer m_updatePoll;
+    qint64 m_updateStartedMs = 0;
+    bool m_updateSawBusy = false;
+    static QString updateDir();
+    static bool updateFlag(const QString &name, qint64 freshMs);
+    void updateShowFlag();
+    void updatePoll();
     void bltProbed(bool running);
     void setBltStart(int state);
     static QString bltShortcut();

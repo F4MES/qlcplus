@@ -129,6 +129,10 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_updateTimer.setInterval(30 * 60 * 1000);
     connect(&m_updateTimer, &QTimer::timeout, this, &TrackManager::updateCheck);
     m_updateTimer.start();
+    // R475_UPDATE_START: an update running is watched by its files; a SHOW ON left by a crash is not the show
+    m_updatePoll.setInterval(1000);
+    connect(&m_updatePoll, &QTimer::timeout, this, &TrackManager::updatePoll);
+    updateShowFlag();
     // R465_BLT_LIVE_START: is Beat Link Trigger running - now, and every 5 s
     connect(&m_bltProbeTimer, &QTimer::timeout, this, &TrackManager::probeBlt);
     m_bltProbeTimer.start(5000);
@@ -559,7 +563,14 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     // the jump is from the beat BLT said, as the loop's checks read it
     if (beat != m_currentBeat && m_syncAhead > 0 && m_currentBeat == m_syncAhead
         && m_syncRealBeat > 0 && m_syncRealBeat != m_syncAhead)
-        m_currentBeat = m_syncRealBeat;
+    {
+        // R475_SYNC_STAND: BLT still on the beat it said - a stop, a braking deck, not a jump:
+        // the early beat stands (the light ticked that beat back, then the early one twice)
+        if (beat == m_syncRealBeat)
+            beat = m_currentBeat;
+        else
+            m_currentBeat = m_syncRealBeat;
+    }
     // R235_DJ_LOOP_SEEN: the same short step back twice is a loop
     if (playing && m_playing && beat > 0 && beat < m_currentBeat && m_currentBeat - beat <= 32)
     {
@@ -1276,6 +1287,7 @@ void TrackManager::setAutoRun(bool enable)
     if (enable == m_autoRun)
         return;
     m_autoRun = enable;
+    updateShowFlag();                    // R475_UPDATE_SHOW: update-qlc.cmd never closes QLC+ with the show on
 
     // SHOW ON: clear the Virtual Console once - every function it started
     // stops and its Level sliders let go - so nothing left over from
@@ -1319,7 +1331,9 @@ void TrackManager::setAutoRun(bool enable)
     else stopLook();
     if (m_autoRun == false && m_engine != nullptr)      // R211_SHOW_OFF_ATMOS
     {
+        m_engine->atmosNext(QStringLiteral("show-off"));   // R475_ATMOS_OFF: the log's "by"
         m_engine->setHaze(0.0);
+        m_engine->atmosNext(QStringLiteral("show-off"));
         m_engine->setFan(0.0);
     }
     noteShowRunning();
@@ -2237,6 +2251,9 @@ void TrackManager::updateCheck()
         "$a = $r.assets | Where-Object { $_.name -eq 'rig-build.txt' } | Select-Object -First 1; "
         "if ($a) { $c = (Invoke-WebRequest -UseBasicParsing -Uri $a.browser_download_url).Content; "
         "if ($c -is [byte[]]) { $c = [Text.Encoding]::UTF8.GetString($c) }; Write-Output ('REV=' + ([string]$c).Trim()) }");
+    // R475_UPDATE_STDIN: no stdin - with one (QProcess always gives a pipe) "-Command" waited
+    // for its end before it ran: killed at 60 s, never a build, the chip never came
+    p->setStandardInputFile(QProcess::nullDevice());
     p->start(QStringLiteral("powershell"), QStringList() << QStringLiteral("-NoProfile") << QStringLiteral("-NonInteractive")
              << QStringLiteral("-ExecutionPolicy") << QStringLiteral("Bypass") << QStringLiteral("-Command") << script);
     // a check that hangs (no network) is stopped after a minute; finished() tidies up
@@ -2253,13 +2270,28 @@ void TrackManager::startUpdate()
         QTimer::singleShot(4000, this, [this]() { if (m_updateStep == 3) setUpdateStep(0); });
         return;
     }
+    // R475_UPDATE_ONCE: one at a time - a tap while one runs (its window says "busy") starts
+    // no second one (it fought the first over the installer, or closed QLC+ again)
+    if (m_updateStep == 1 || updateFlag(QStringLiteral("busy"), 15 * 60 * 1000))
+    {
+        setUpdateStep(1);
+        if (m_updatePoll.isActive() == false)
+        {
+            m_updateStartedMs = QDateTime::currentMSecsSinceEpoch();
+            m_updatePoll.start();
+        }
+        return;
+    }
     m_updateScript = findUpdateScript();
     bool ok = false;
 #if defined(Q_OS_WIN)
-    // a window of its own: it lives on when it closes QLC+ (and shows what it does on the PC)
+    // a window of its own: it lives on when it closes QLC+ (and shows what it does on the PC);
+    // R475_UPDATE_WINDOW: "cmd /c" in it - the window goes when the script is done ("start"
+    // ran the .cmd with /K: one more prompt window left on the PC per update)
     if (m_updateScript.isEmpty() == false)
         ok = QProcess::startDetached(QStringLiteral("cmd.exe"), QStringList() << QStringLiteral("/c") << QStringLiteral("start")
-                                     << QStringLiteral("QLC+ update") << m_updateScript);
+                                     << QStringLiteral("QLC+ update") << QStringLiteral("cmd.exe") << QStringLiteral("/c")
+                                     << m_updateScript);
 #endif
     qDebug() << "[TrackManager] update:" << (ok ? "started" : "not started") << m_updateScript;
     if (m_engine != nullptr)
@@ -2271,8 +2303,79 @@ void TrackManager::startUpdate()
         return;
     }
     setUpdateStep(1);
-    // nothing new: the script leaves QLC+ running - the button comes back
-    QTimer::singleShot(120000, this, [this]() { if (m_updateStep == 1) { setUpdateStep(0); updateCheck(); } });
+    // nothing new: the script leaves QLC+ running - the button comes back (R475_UPDATE_POLL:
+    // when its "busy" goes; 2 min for a script without it)
+    m_updateStartedMs = QDateTime::currentMSecsSinceEpoch();
+    m_updateSawBusy = false;
+    m_updatePoll.start();
+}
+
+/* R475_UPDATE_FLAGS: update-qlc.cmd's folder, %LOCALAPPDATA%\qlc-rig-update -
+ *  state.json  its record (R474)
+ *  busy        it runs (written as it starts, gone when it is done)
+ *  closing     it closes QLC+ now (2 s before CloseMainWindow)
+ *  show-on     QLC+ writes it with SHOW ON: the script leaves QLC+ running (and says so)
+ * update-qlc.cmd from 10-16 (runde 475) on; an older one on the Desktop does none of it */
+QString TrackManager::updateDir()
+{
+    const QString base = qEnvironmentVariable("LOCALAPPDATA");
+    return base.isEmpty() ? QString() : QDir(base).filePath(QStringLiteral("qlc-rig-update"));
+}
+
+bool TrackManager::updateFlag(const QString &name, qint64 freshMs)
+{
+    const QString dir = updateDir();
+    if (dir.isEmpty())
+        return false;
+    const QFileInfo fi(QDir(dir).filePath(name));
+    return fi.exists() && fi.lastModified().msecsTo(QDateTime::currentDateTime()) < freshMs;
+}
+
+void TrackManager::updateShowFlag()
+{
+    // R475_SHOWFLAG: a tap was checked for SHOW OFF, the script closes QLC+ a minute or
+    // more later (the download) - SHOW ON meanwhile is in this file, and it stops there
+    const QString dir = updateDir();
+    if (dir.isEmpty())
+        return;
+    const QString path = QDir(dir).filePath(QStringLiteral("show-on"));
+    if (m_autoRun)
+    {
+        QDir().mkpath(dir);
+        QFile f(path);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            f.write("on");
+    }
+    else if (QFileInfo::exists(path))
+        QFile::remove(path);
+}
+
+void TrackManager::updatePoll()
+{
+    // every second while UPDATE runs
+    if (m_updateStep != 1)
+    {
+        m_updatePoll.stop();
+        return;
+    }
+    const bool busy = updateFlag(QStringLiteral("busy"), 15 * 60 * 1000);
+    if (busy)
+        m_updateSawBusy = true;
+    // the script closes QLC+ now: no "save?" box (it held the close for 15 s, then the
+    // kill - the next start read it as a crash). The show file is the script's to replace
+    if (updateFlag(QStringLiteral("closing"), 60 * 1000) && m_doc != nullptr && m_doc->isModified())
+    {
+        qDebug() << "[TrackManager] update: update-qlc.cmd closes QLC+ - no save box";
+        m_doc->resetModified();
+    }
+    if (busy)
+        return;
+    if (m_updateSawBusy || QDateTime::currentMSecsSinceEpoch() - m_updateStartedMs > 120000)
+    {
+        m_updatePoll.stop();
+        setUpdateStep(0);
+        updateCheck();
+    }
 }
 // R450_TT_CPP
 /* =====================================================================
@@ -2904,6 +3007,7 @@ void TrackManager::runEngine(bool sectionChanged)
         return;
     const int prevEngineBeat = m_lastEngineBeat;     // R327_PREV_BEAT: the beat ticked before this one
     m_lastEngineBeat = beat;
+    m_syncLateSection = false;           // R475_SYNC_ONCE: this run drew the section the late beat owed
 
     QString state = currentState();
     // the state was picked on a quantised beat: the bounds, the
@@ -3118,6 +3222,7 @@ void TrackManager::runEngine(bool sectionChanged)
         beatsToNext = 0;
     }
     m_engine->setDropForced(m_overrideState == QStringLiteral("drop"));   // R361_DROP_FORCED
+    m_engine->setPressHeld(m_overrideState);   // R475_PRESS_HELD: his pick ends with a press for another kind
     {   // R363_NEXT_DROP: the next drop flag ahead - a build flagged in parts leads into it all the way
         int nextDrop = -1;
         for (int i = 0; i < m_markers.count() && m_overrideState.isEmpty(); i++)
@@ -3137,6 +3242,7 @@ void TrackManager::runEngine(bool sectionChanged)
     // bar on 1 + m_downbeat - the engine counts every bar line from what it gets
     if (tickStart == 1 && m_downbeat > 0 && beat > m_downbeat)
         tickStart = 1 + m_downbeat;
+    m_engine->setSectionStart(secStart);   // R475_COLMEM_REAL: the section's own start, before R236
     m_engine->tick(state, beat, tickStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
                    engineBpm(), levelScale, kick, high,   // R301_ENGINE_BPM

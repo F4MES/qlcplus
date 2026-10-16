@@ -1201,6 +1201,12 @@ public:
      *  (R429_SECTION_ONCE) - a sig: line, not a press. Log only. */
     void noteSectionRelease(const QString &held, const QString &now);
     void noteUpdate(const QString &script);   // R474_UPDATE: "sig:update:..." in the tracklog
+    // R475_ENGINE_PUBLIC: the section's own start before R236 shifts it (the colour memory), the
+    // SECTION press held now (the pick's end - noteSectionOverride() only logs, R335), and who
+    // the next setHaze() / setFan() is (the atmos log - "hand" when nobody says)
+    void setSectionStart(int beat) { m_realSecStart = beat; }
+    void setPressHeld(const QString &state) { m_pressHeld = state; }   // the SECTION press held, from the manager
+    void atmosNext(const QString &by) { m_atmosNextBy = by; }
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** R463_LINK_IDLE: the link went quiet or BLT left - idle(), but an armed LAST
@@ -1795,6 +1801,7 @@ public:
     QStringList m_forceSet;
     int m_forceFrom = -1;                // R438_LOOP_ACROSS: the beat his section began
     QString m_forceSection;              // ... and what kind it is
+    QString m_pressHeld;                 // R475_HELD_PRESS_MEM: the SECTION press held now (the pick's end)
     QStringList m_dropSet;               // the drop's groups, in the room's order
     int m_dropMode = 0;                  // 0 none, 1 the next drop (plan), 2 this drop
     bool m_dropTouched = false;          // he tapped: the set is his until the drop ends
@@ -2161,6 +2168,7 @@ private:
     mutable bool m_syncOffsetRead = false;
     QStringList m_syncBlink;
     QSet<QString> m_syncOwned;             // R472_SYNC_OWN: what the blink itself holds
+    int m_realSecStart = -1;               // R475_REALSTART_MEM
     int m_syncBeatNo = -1;                 // R472_SYNC_CLOCK: the link's last beat, its time, its length
     qint64 m_syncBeatAt = -1;
     qreal m_syncBeatLen = 0.0;
@@ -2189,6 +2197,7 @@ private:
     qint64 m_atmosSavedMs = -1;
     qint64 m_atmosMinuteMs = -1;
     qint64 m_atmosChangedMs = -1;          // a haze / fan change, not logged yet
+    QString m_atmosNextBy, m_atmosChangedBy;   // R475_ATMOS_WHO_MEM: who makes it, who made it
     int m_atmosLoggedHaze = -1;
     int m_atmosLoggedFan = -1;
     bool m_atmosShowWas = false;
@@ -2208,6 +2217,7 @@ private:
     int m_micDeviceIndex = -1;
     int m_micDeviceCount = 0;
     QString m_micProblem;
+    QString m_micFileProblem;            // R475_MIC_FILE: the problem is the file, not the capture
     QVariantMap m_micShown;                // the last frame, as the panel reads it
     QTimer m_micUiTimer;                   // 100 ms while the capture runs
     QList<qint64> m_micLinkBeats;          // the link's beats of the last seconds (m_clock)

@@ -5436,24 +5436,31 @@ void TrackEngine::applyAtmos(quint32 sceneId, const QList<QPair<quint32, quint32
 
 void TrackEngine::setHaze(qreal level)
 {
+    // R475_ATMOS_BY: who moves it - the engine's own calls say so first, the rest is his hand
+    const QString by = m_atmosNextBy.isEmpty() ? QStringLiteral("hand") : m_atmosNextBy;
+    m_atmosNextBy.clear();
     level = qBound(0.0, level, 1.0);
     if (qFuzzyCompare(level + 1.0, m_haze + 1.0))
         return;
     ensureTable();
     m_haze = level;
     m_atmosChangedMs = m_clock.elapsed();    // R473_ATMOS: logged once it has settled
+    m_atmosChangedBy = by;
     applyAtmos(m_hazeScene, m_hazeChannels, level);
     emit liveChanged();
 }
 
 void TrackEngine::setFan(qreal level)
 {
+    const QString by = m_atmosNextBy.isEmpty() ? QStringLiteral("hand") : m_atmosNextBy;   // R475_FAN_BY
+    m_atmosNextBy.clear();
     level = qBound(0.0, level, 1.0);
     if (qFuzzyCompare(level + 1.0, m_fan + 1.0))
         return;
     ensureTable();
     m_fan = level;
     m_atmosChangedMs = m_clock.elapsed();    // R473_ATMOS
+    m_atmosChangedBy = by;
     applyAtmos(m_fanScene, m_fanChannels, level);
     emit liveChanged();
 }
@@ -9039,7 +9046,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     crumb(QStringLiteral("beat ") + QString::number(beat) + QLatin1Char(' ') + state);   // R435_CRUMBS
     m_hazeBeatMs = m_clock.elapsed();                // R467_HAZE_NAG: music is playing
     micBeat(state, sectionChanged, bpm);             // R467_MIC_CHECK
-    colourMemoryBeat(secStart > 0 ? secStart : beat, state, sectionChanged);   // R470_COLOUR_MEMORY (R472_COLMEM_FROM: by the section's start)
+    // R470_COLOUR_MEMORY (R472_COLMEM_FROM: by the section's start - R475_MEMBY_REALSTART: its
+    // real one: in a DJ loop over the flag tick()'s is 32 beats back, his colours went to AUTO)
+    colourMemoryBeat(m_realSecStart > 0 ? m_realSecStart : (secStart > 0 ? secStart : beat), state, sectionChanged);
     syncBeat(beat, bpm);                             // R470_SYNC: round 2's blink (R472_SYNC_CLOCK: and the taps' clock)
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
@@ -11130,7 +11139,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // R472_PICK_PRESS: his set was for its section - a SECTION press for another kind holds
         // the boundary away (the pick ran on into the next section): it ends there. Not in a
         // DJ loop (R438 above), not on the crossing beat itself (below)
-        if (m_forceOn && m_forceFrom > 0 && beat > m_forceFrom && state != m_forceSection && m_loopPasses == 0)
+        // R475_PICK_PRESS: ... where another section has really begun (or with a press held for
+        // another kind) - a flag renamed under it ("drop" to "drive") is still his section. A
+        // boundary with a plan is the crossing's below
+        if (m_forceOn && m_forceFrom > 0 && beat > m_forceFrom && m_loopPasses == 0
+            && (m_dropPlanFor <= 0 || beat < m_dropPlanFor)
+            && (secStart > m_forceFrom + 8
+                || (m_pressHeld.isEmpty() == false && m_pressHeld != m_forceSection)))
         {
             m_forceOn = false;
             m_forceSet.clear();
@@ -11148,7 +11163,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_forceOn = m_dropTouched && m_dropSet.isEmpty() == false
                      && (beat - m_dropPlanFor <= 8 || state == m_planSection);
             m_forceSet = m_dropSet;
-            m_forceFrom = m_forceOn ? m_dropPlanFor : -1;   // R438_LOOP_ACROSS
+            // R438_LOOP_ACROSS (R475_PICK_FROM: a jump far into his kind - the section it landed in)
+            m_forceFrom = m_forceOn ? qMax(m_dropPlanFor, secStart) : -1;
             m_forceSection = m_planSection;
             if (m_forceOn)
                 logSignal(QStringLiteral("sig:section-pick:") + m_planSection + QStringLiteral(":")
@@ -11166,7 +11182,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_dropPlanFor = -1;
             m_planSection.clear();
         }
-        if (m_forceOn && hold == false && isCalm == false)
+        if (m_forceOn && hold == false && isCalm == false
+            && (beat >= m_forceFrom || state == m_forceSection))   // R475_PICK_BEFORE: a DJ loop back before its flag
         {
             // his set, as it is: both laser types, the animation laser under
             // 70 %, no base - only a group off for the night stays out
@@ -11195,6 +11212,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         else if (m_dropTouched && (m_planSection == nextState || qAbs(boundary - m_dropPlanFor) <= 8))
         {
             m_dropPlanFor = boundary;            // a flag moved under his plan: it follows
+            // R475_PICK_RETYPE: ... a flag retyped on it: his pick is that kind's (it lit a beat,
+            // then ended, and was remembered under the old kind)
+            if (m_planSection != nextState)
+            {
+                logSignal(QStringLiteral("sig:section-pick-retyped:") + nextState);
+                m_planSection = nextState;
+            }
         }
         else
         {
@@ -18045,7 +18069,10 @@ void TrackEngine::closingTick(bool showOn)
         emit liveChanged();
     }
     if (dim < 1.0 && m_haze > 0.0 && lastLid == false)
+    {
+        atmosNext(QStringLiteral("closing"));   // R475_ATMOS_CLOSING: the log's "by"
         setHaze(0.0);
+    }
     // Runde 221: haze set from a Virtual Console or MIDI fader never passed
     // through m_haze, so the closing left the hazer running. Once, as the
     // closing starts: the haze scene at nought over whatever set it.
@@ -18494,6 +18521,14 @@ void TrackEngine::startLook()
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
+        // R475_START_HELD: a pad held on it keeps its white - a pad let go drew the picture
+        // again over the others (the room's colour into the white, the level to the start's)
+        if (heldFull(key))
+        {
+            if (m_groupOff.contains(key) == false && g.strobes == false && g.lasers == false)
+                lit.insert(key);
+            continue;
+        }
         // the strobes and the lasers stay out of the opening picture: it is
         // the light people eat under, not a show
         if (m_groupOff.contains(key) || g.strobes || g.lasers)
@@ -23686,7 +23721,10 @@ void TrackEngine::toggleLastTrack()
         const bool wasHouse = m_lastStage >= 3;
         // R463_HOUSE_SMALL: undone while the haze was still fading - it comes back
         if (m_lastStage == 3 && m_houseHazeDone == false && m_houseHaze > 0.0)
+        {
+            atmosNext(QStringLiteral("last-track"));   // R475_ATMOS_UNDO: the log's "by"
             setHaze(m_houseHaze);
+        }
         setLastStage(0);
         m_lastTitle.clear();
         m_lastOutro = -1;
@@ -23844,7 +23882,8 @@ void TrackEngine::houseLook(qreal level)
     m_houseLevel = level;
     foreach (const QString &key, m_groupOrder)
     {
-        if (houseGroup(key) == false)
+        // R475_HOUSE_HELD: a pad held on it stays at full - its release draws the house white
+        if (houseGroup(key) == false || heldFull(key))
             continue;
         const TrackGroup &g = m_groups.value(key);
         const quint32 cf = colourFunction(key, QStringLiteral("white"));
@@ -23951,10 +23990,14 @@ void TrackEngine::lastTrackTick(bool showOn)
     // at nought at the end, for a hazer set from a Virtual Console fader
     // (runde 221) that m_haze never saw.
     if (t < ENGINE_HOUSE_IN_MS && m_houseHaze > 0.0)
+    {
+        atmosNext(QStringLiteral("last-track"));   // R475_ATMOS_FADE: the log's "by"
         setHaze(m_houseHaze * (1.0 - qreal(t) / qreal(ENGINE_HOUSE_IN_MS)));
+    }
     else if (m_houseHazeDone == false)
     {
         m_houseHazeDone = true;
+        atmosNext(QStringLiteral("last-track"));
         setHaze(0.0);
         ensureTable();
         Function *hazeFunc = m_doc != nullptr ? m_doc->function(m_hazeScene) : nullptr;
@@ -23985,7 +24028,8 @@ void TrackEngine::lastTrackTick(bool showOn)
     {
         foreach (const QString &key, m_groupOrder)
         {
-            if (houseGroup(key) && colourFunction(key, QStringLiteral("white")) != Function::invalidId()
+            if (houseGroup(key) && heldFull(key) == false      // R475_KEEP_WHILE_PAD: a pad took it
+                && colourFunction(key, QStringLiteral("white")) != Function::invalidId()
                 && m_active.contains(QStringLiteral("col:") + key) == false)
             {
                 lost = true;
@@ -24657,7 +24701,9 @@ bool TrackEngine::micRecBegin(const QString &why)
 {
     if (m_micRecUntilMs >= 0)
         return false;
-    if (micStart() == false || m_micProblem.isEmpty() == false)   // R472_MIC_RETRY: not on a dead capture
+    // R472_MIC_RETRY: not on a dead capture - R475_MIC_FILE: a file it could not write (Excel
+    // holds it) is not one: every section after it was refused until the capture restarted
+    if (micStart() == false || (m_micProblem.isEmpty() == false && m_micProblem != m_micFileProblem))
     {
         emit micChanged();
         return false;
@@ -24669,8 +24715,17 @@ bool TrackEngine::micRecBegin(const QString &why)
     if (m_micFile.open(QIODevice::Append | QIODevice::Text) == false)
     {
         m_micProblem = tr("Could not write %1").arg(m_micFile.fileName());
+        m_micFileProblem = m_micProblem;
         emit micChanged();
         return false;
+    }
+    if (m_micFileProblem.isEmpty() == false)
+    {
+        // R475_MIC_UNLOCKED: the file can be written again - the problem was only that
+        if (m_micProblem == m_micFileProblem)
+            m_micProblem.clear();
+        m_micFileProblem.clear();
+        emit micChanged();
     }
     if (fresh)
     {
@@ -24868,15 +24923,17 @@ void TrackEngine::flashGroup(const QString &key, bool on)
     const qint64 now = m_clock.elapsed();
     if (on)
     {
-        if (m_padFlash.contains(key))
-        {
-            m_padFlashMs.insert(key, now);       // "still held"
-            return;
-        }
         if (m_syncOwned.remove(key))
         {
             // R472_SYNC_OWN: his finger on a strobe the SYNC blink holds - his from now on
+            // (R475_SYNC_OWN_FIRST: asked first - the blink's key is always in m_padFlash, and
+            // the "still held" below took it: the blink let go of it under his finger)
             m_padFlashMs.insert(key, now);
+            return;
+        }
+        if (m_padFlash.contains(key))
+        {
+            m_padFlashMs.insert(key, now);       // "still held"
             return;
         }
         ensureTable();
@@ -25718,9 +25775,11 @@ static QHash<int, QVector<qint64> > atmosCells(const QString &stored)
 
 static bool atmosNightCounts(const QString &stored)
 {
+    // R475_ATMOS_WINDOW: a quarter of the window SETUP shows (20:00 - 03:00) - a rig test in
+    // the day took one of the last 2 weekends' 4 nights with nothing in the tiles
     const QHash<int, QVector<qint64> > cells = atmosCells(stored);
     for (auto it = cells.constBegin(); it != cells.constEnd(); ++it)
-        if (it.value().at(2) >= ENGINE_HAND_MIN_SAMPLES)
+        if (it.key() >= 32 && it.key() < 32 + ENGINE_CLOCK_POINTS && it.value().at(2) >= ENGINE_HAND_MIN_SAMPLES)
             return true;
     return false;
 }
@@ -25730,7 +25789,26 @@ void TrackEngine::atmosLoad() const
     if (m_atmosRead)
         return;
     m_atmosRead = true;
-    m_atmosStore = QSettings().value(QStringLiteral("trackengine/atmos-hand")).toMap();
+    // R475_ATMOS_KEYS: a key per night, "trackengine/atmos-night/<night>" - the one map of
+    // every night was written whole once a minute (the registry: up to a MB a minute).
+    // r473's map moves over once
+    QSettings s;
+    s.beginGroup(QStringLiteral("trackengine/atmos-night"));
+    foreach (const QString &n, s.childKeys())
+        m_atmosStore.insert(n, s.value(n).toString());
+    s.endGroup();
+    const QVariantMap old = s.value(QStringLiteral("trackengine/atmos-hand")).toMap();
+    if (old.isEmpty() == false)
+    {
+        for (auto it = old.constBegin(); it != old.constEnd(); ++it)
+        {
+            if (m_atmosStore.contains(it.key()))
+                continue;
+            m_atmosStore.insert(it.key(), it.value().toString());
+            s.setValue(QStringLiteral("trackengine/atmos-night/") + it.key(), it.value().toString());
+        }
+        s.remove(QStringLiteral("trackengine/atmos-hand"));
+    }
 }
 
 QStringList TrackEngine::atmosNightsFor(int view) const
@@ -25814,12 +25892,15 @@ QVariantList TrackEngine::atmosHand() const
 
 QString TrackEngine::atmosBy(bool showOn) const
 {
-    if (m_lastStage > 0)
+    // the show-on / show-off / minute lines: who has the haze now (R475_ATMOS_ROW: SHOW OFF
+    // first - the off line after 02:55 said "closing"; LAST TRACK's own haze is its house
+    // stage - armed and the outro are still his hand)
+    if (showOn == false)
+        return QStringLiteral("show-off");
+    if (m_lastStage >= 3)
         return QStringLiteral("last-track");
     if (m_closingDim < 1.0)
         return QStringLiteral("closing");
-    if (showOn == false)
-        return QStringLiteral("show-off");
     return QStringLiteral("hand");
 }
 
@@ -25880,13 +25961,17 @@ void TrackEngine::atmosTick(bool showOn)
     if (m_atmosChangedMs >= 0 && now - m_atmosChangedMs >= 1500)
     {
         m_atmosChangedMs = -1;
+        // R475_ATMOS_WHO: who made the change, as setHaze() / setFan() heard it - not the state
+        // 1.5 s on (his pre-haze before SHOW ON said "show-off", LAST TRACK's undo "hand")
+        const QString who = m_atmosChangedBy.isEmpty() ? atmosBy(showOn) : m_atmosChangedBy;
+        m_atmosChangedBy.clear();
         const int h = int(qRound(m_haze * 100.0));
         const int f = int(qRound(m_fan * 100.0));
         if (h != m_atmosLoggedHaze || f != m_atmosLoggedFan)
         {
             m_atmosLoggedHaze = h;
             m_atmosLoggedFan = f;
-            const QString by = atmosBy(showOn);
+            const QString by = who;
             atmosCsv(QStringLiteral("change"), by);
             logSignal(QStringLiteral("sig:atmos:") + QString::number(h) + QLatin1Char(':')
                       + QString::number(f) + QLatin1Char(':') + by);
@@ -25945,6 +26030,9 @@ void TrackEngine::atmosFlush()
                  + QString::number(c.at(1)) + QLatin1Char(',') + QString::number(c.at(2));
     }
     m_atmosStore.insert(night, parts.join(QLatin1Char(';')));
+    // R475_ATMOS_ONE_NIGHT: tonight's key only (a key per night)
+    QSettings settings;
+    settings.setValue(QStringLiteral("trackengine/atmos-night/") + night, m_atmosStore.value(night));
     // the last nights - a night too short to count leaves first, never tonight
     QStringList nights = m_atmosStore.keys();
     std::sort(nights.begin(), nights.end());
@@ -25957,8 +26045,9 @@ void TrackEngine::atmosFlush()
                 drop = i;
                 break;
             }
-        m_atmosStore.remove(nights.takeAt(drop));
+        const QString gone = nights.takeAt(drop);
+        m_atmosStore.remove(gone);
+        settings.remove(QStringLiteral("trackengine/atmos-night/") + gone);
     }
-    QSettings().setValue(QStringLiteral("trackengine/atmos-hand"), m_atmosStore);
     emit atmosChanged();
 }
