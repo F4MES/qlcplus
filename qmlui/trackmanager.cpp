@@ -482,6 +482,10 @@ void TrackManager::handleTrack(const QJsonObject &obj)
         m_lastSecEnd = -1;
         m_loopTop = -1;                   // R235_DJ_LOOP_RESET
         m_jumpFrom = m_jumpTo = -100;
+        m_syncRealBeat = m_syncAhead = m_syncEarlyFor = -1;   // R472_SYNC_TRACK: the old track's beats
+        m_syncLateSection = false;
+        m_syncEarly.stop();
+        m_syncLate.stop();
     }
     if (m_nextTitle == m_title)
     {
@@ -533,7 +537,11 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     // them on a section boundary, where a drop landed twice in two styles.
     // A one-beat step back within 150 ms of a step forward is that echo; a
     // real jump back is repeated by every later status and gets through.
-    if (playing && m_playing && beat == m_currentBeat - 1 && now - m_beatChangedMs < 150)
+    // R472_SYNC_ECHO: ... or the beat before one the light ran early, BLT not having said it yet
+    // (the window began at the early run: a status 150 ms after it got through as a jump back)
+    if (playing && m_playing && beat == m_currentBeat - 1
+        && (now - m_beatChangedMs < 150
+            || (m_syncAhead > 0 && m_currentBeat == m_syncAhead && m_syncRealBeat != m_syncAhead)))
         return;
     if (beat == m_currentBeat && playing == m_playing && timeMs == m_trackTimeMs)
     {
@@ -541,6 +549,11 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         return;
     }
 
+    // R472_SYNC_UNSAID: a jump while a beat ran early that BLT never said (a DJ loop's end) -
+    // the jump is from the beat BLT said, as the loop's checks read it
+    if (beat != m_currentBeat && m_syncAhead > 0 && m_currentBeat == m_syncAhead
+        && m_syncRealBeat > 0 && m_syncRealBeat != m_syncAhead)
+        m_currentBeat = m_syncRealBeat;
     // R235_DJ_LOOP_SEEN: the same short step back twice is a loop
     if (playing && m_playing && beat > 0 && beat < m_currentBeat && m_currentBeat - beat <= 32)
     {
@@ -557,7 +570,7 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     }
     else if (m_loopTop > 0 && (beat > m_loopTop || beat < m_currentBeat || playing == false))
         m_loopTop = -1;                   // played past it, jumped away, or stopped
-    if (beat != m_currentBeat)
+    if (beat != m_currentBeat || (beat == m_syncAhead && m_syncRealBeat != m_syncAhead))   // R472_SYNC_SAID: BLT says the early one
         m_beatChangedMs = now;
     // R301_POS_BPM_READ: the deck's effective tempo (pitch included), if BLT sent it
     const qreal posBpm = obj.value(QStringLiteral("bpm")).toDouble();
@@ -576,7 +589,9 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     m_trackTimeMs = timeMs;
 
     emit positionChanged();
+    m_syncInPos = true;                  // R472_SYNC_LOOK_POS: a section it turns waits for the beat
     updateState();
+    m_syncInPos = false;
     runEngineSynced();                   // R470_SYNC_RUN: by SYNC's offset
 }
 
@@ -699,6 +714,13 @@ void TrackManager::applyLook()
         // The engine owns the output in role mode. Force a fresh decision
         // rather than waiting for the next beat.
         m_lastEngineBeat = -1;
+        // R472_SYNC_LOOK_DEFER: the light later by SYNC - the section's first beat goes with
+        // its beat, on the timer (it ran on BLT's time, ahead of every other beat)
+        if (m_syncInPos && m_engine != nullptr && m_engine->syncOffset() > 0 && m_playing && m_linkStale == false)
+        {
+            m_syncLateSection = true;
+            return;
+        }
         runEngine(true);
         return;
     }
@@ -1391,20 +1413,23 @@ void TrackManager::probeBlt()
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (m_bltProbe != nullptr)
     {
-        if (now - m_bltProbeMs > (m_bltLook >= 2 ? 25000 : 8000))   // R468_BLT_LOOK_WAIT
+        if (now - m_bltProbeMs > (m_bltLook >= 1 ? 25000 : 8000))   // R468_BLT_LOOK_WAIT (R472_BLT_WAIT: every /V look)
             m_bltProbe->kill();
         return;
     }
     QProcess *p = new QProcess(this);
     m_bltProbe = p;
     m_bltProbeMs = now;
+    if (m_bltLook == 0)
+        m_bltChainMs = now;              // R472_BLT_FRESH_CHAIN
     // R468_BLT_LOOK_LAST: three looks on Windows (names, java's windows, every window), one elsewhere
+    // R472_BLT_CONST: a constant, not a capture (clang: -Wunused-lambda-capture is an error)
 #if defined(Q_OS_WIN)
-    const int lastLook = 2;
+    static constexpr int BltLastLook = 2;   // R472_BLT_NAME
 #else
-    const int lastLook = 0;
+    static constexpr int BltLastLook = 0;
 #endif
-    connect(p, &QProcess::finished, this, [this, p, lastLook](int, QProcess::ExitStatus status) {
+    connect(p, &QProcess::finished, this, [this, p](int, QProcess::ExitStatus status) {
         const QString out = QString::fromLocal8Bit(p->readAllStandardOutput()).toLower();
         if (m_bltProbe == p)
             m_bltProbe = nullptr;
@@ -1419,7 +1444,7 @@ void TrackManager::probeBlt()
                        || out.contains(QLatin1String("beat-link-trigger"))
                        || out.contains(QLatin1String("beatlinktrigger"))
                        || out.contains(QLatin1String("no dj link devices found"));
-        if (seen == false && m_bltLook < lastLook)
+        if (seen == false && m_bltLook < BltLastLook)   // R472_BLT_NAME_USE
         {
             m_bltLook++;
             QTimer::singleShot(0, this, &TrackManager::probeBlt);
@@ -1525,13 +1550,18 @@ void TrackManager::startBlt()
         m_bltStartTimer.setSingleShot(true);
         connect(&m_bltStartTimer, &QTimer::timeout, this, [this]() {
             if (m_bltRunning == false && m_bltStartState == 1)
+            {
+                m_bltLaunchPending = false;   // R472_BLT_TIMEOUT: nothing opens by itself later
                 setBltStart(2);          // a minute and no BLT: the page says so
+            }
         });
     }
     setBltStart(1);
     m_bltStartTimer.start(60000);
     // one more look first: BLT coming up by hand (the 5 s look had not seen it yet)
     // must not get a second BLT beside it - the launch waits for the answer
+    m_bltLaunchAskedMs = QDateTime::currentMSecsSinceEpoch();   // R472_BLT_FRESH_ASK
+    m_bltReprobed = false;
     m_bltLaunchPending = true;
     probeBlt();
 }
@@ -1547,6 +1577,15 @@ void TrackManager::bltProbed(bool running)
     }
     if (m_bltLaunchPending == false)
         return;
+    // R472_BLT_FRESH_LOOK: a look that began before the tap knows nothing of a BLT started by hand
+    // since (the taskbar logo, a moment before) - one more look, then the launch
+    if (m_bltChainMs < m_bltLaunchAskedMs && m_bltReprobed == false)
+    {
+        m_bltReprobed = true;
+        m_bltLook = 0;
+        QTimer::singleShot(200, this, &TrackManager::probeBlt);
+        return;
+    }
     m_bltLaunchPending = false;
     const QString target = bltShortcut();
     // a shortcut opens as a double-click on it does (the program, its folder, its arguments)
@@ -1569,7 +1608,11 @@ void TrackManager::runEngineSynced()
         m_syncEarly.setSingleShot(true);
         m_syncLate.setTimerType(Qt::PreciseTimer);
         m_syncEarly.setTimerType(Qt::PreciseTimer);
-        connect(&m_syncLate, &QTimer::timeout, this, [this]() { runEngine(false); });
+        connect(&m_syncLate, &QTimer::timeout, this, [this]() {   // R472_SYNC_LOOK_RUN
+            const bool section = m_syncLateSection;
+            m_syncLateSection = false;
+            runEngine(section);
+        });
         connect(&m_syncEarly, &QTimer::timeout, this, &TrackManager::syncEarlyBeat);
     }
     const bool newBeat = m_playing && m_currentBeat > 0 && m_currentBeat != m_syncRealBeat;
@@ -1585,7 +1628,9 @@ void TrackManager::runEngineSynced()
         return;
     }
     m_syncLate.stop();
-    runEngine(false);
+    const bool section = m_syncLateSection;   // R472_SYNC_LOOK_NOW
+    m_syncLateSection = false;
+    runEngine(section);
     if (off < 0 && newBeat && m_linkStale == false)
         syncPlanEarly(m_currentBeat, off);
     else if (newBeat || off >= 0)
@@ -1595,7 +1640,9 @@ void TrackManager::runEngineSynced()
 void TrackManager::syncPlanEarly(int beat, int afterMs)
 {
     // the beat after this one, a beat from now plus afterMs (negative: earlier)
-    const qreal bpm = engineBpm();
+    // R472_SYNC_DECK: BLT's next packet comes on the deck's own tempo (Link's can be another's)
+    const qreal bpm = (m_posBpm > 20.0 && QDateTime::currentMSecsSinceEpoch() - m_posBpmMs < 3000)
+                    ? m_posBpm : engineBpm();
     if (bpm <= 20.0)
         return;
     const int due = int(qRound(60000.0 / bpm)) + afterMs;
@@ -1610,6 +1657,7 @@ void TrackManager::syncSawBeat(int beat)
     if (m_syncAhead <= 0 || beat != m_syncAhead || beat == m_syncRealBeat || m_playing == false)
         return;
     m_syncRealBeat = beat;
+    m_beatChangedMs = QDateTime::currentMSecsSinceEpoch();   // R472_SYNC_SAW: the echo window from BLT's beat
     const int off = m_engine != nullptr ? m_engine->syncOffset() : 0;
     if (off < 0 && m_linkStale == false)
         syncPlanEarly(beat, off);
@@ -1622,10 +1670,25 @@ void TrackManager::syncEarlyBeat()
         || m_syncEarlyFor < 1 || m_currentBeat != m_syncEarlyFor || m_lastEngineBeat != m_syncEarlyFor
         || (m_beatCount > 0 && m_syncEarlyFor + 1 > m_beatCount))
         return;
+    // R472_SYNC_EDGE: never early onto another section, nor past a DJ loop's top - BLT says
+    // those (a drop landed while the DJ looped the build; the bars went home and came back lit)
+    if (m_loopTop > 0 && m_syncEarlyFor >= m_loopTop)
+        return;
+    {
+        auto grid = [this](int b) {
+            return (m_quantize > 1 && b > m_downbeat) ? ((b - 1 - m_downbeat) / m_quantize) * m_quantize + 1 + m_downbeat : b;
+        };
+        int s0 = 0, e0 = 0, s1 = 0, e1 = 0;
+        sectionBounds(grid(m_syncEarlyFor), s0, e0);
+        sectionBounds(grid(m_syncEarlyFor + 1), s1, e1);
+        if (s0 != s1 || e0 != e1 || stateAtBeat(grid(m_syncEarlyFor + 1)) != stateAtBeat(grid(m_syncEarlyFor)))
+            return;
+    }
     m_currentBeat = m_syncEarlyFor + 1;  // its real packet then finds it done
     m_syncAhead = m_currentBeat;
     // the status packets that still say the beat before are BLT's echo (R187)
     m_beatChangedMs = QDateTime::currentMSecsSinceEpoch();
+    emit positionChanged();              // R472_SYNC_EARLY_POS: the page's beat with the light
     updateState();
     runEngine(false);
     // a beat BLT does not say (it can skip one): the next early one goes on from
@@ -1997,7 +2060,9 @@ QString TrackManager::remoteCommand(const QString &line)
     {
         if (remoteArg(a, 1, &n) == false)
             return bad;
-        const int v = n >= 0 ? 1 : -1;
+        if (n == 0)
+            return bad;                  // R472_PHONE_RATE: GOOD is 1, BAD -1 - nothing else
+        const int v = n > 0 ? 1 : -1;
         const QString group = a.value(2);
         if (group.isEmpty())
             e->rate(v);

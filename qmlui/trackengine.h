@@ -2113,6 +2113,8 @@ private:
     // R469_GROUP_FLASH (track_runtime/padflash.inc.cpp)
     QSet<QString> m_padFlash;              // the groups a pad holds (also in m_flashHeld)
     QHash<QString, qint64> m_padFlashMs;   // the last "still held" (m_clock)
+    QHash<QString, quint32> m_padWasCol;   // R472_PAD_BACK: the colour scene at the press
+    QHash<QString, qreal> m_padWasColLevel;
     /** full white under a held FLASH WHITE or a held pad: no MASTER, trim or pulse */
     bool heldFull(const QString &key) const;
     void padFlashClear();
@@ -2120,6 +2122,7 @@ private:
     QVariantMap m_colMem;                  // title -> { "<section start>": "section|set|mode", "_t" }
     bool m_colMemLoaded = false;
     bool m_colMemHand = false;             // he touched the colours in this play of the track
+    bool m_colMemAfterStart = false;       // R472_COLMEM_START: the start scene was up
     bool m_colMemRecalled = false;         // the colours now are last time's
     QString m_colMemSection;
     int m_colMemFrom = -1;
@@ -2141,10 +2144,14 @@ private:
     mutable int m_syncOffset = 0;
     mutable bool m_syncOffsetRead = false;
     QStringList m_syncBlink;
+    QSet<QString> m_syncOwned;             // R472_SYNC_OWN: what the blink itself holds
+    int m_syncBeatNo = -1;                 // R472_SYNC_CLOCK: the link's last beat, its time, its length
+    qint64 m_syncBeatAt = -1;
+    qreal m_syncBeatLen = 0.0;
     QTimer m_syncBlinkTimer;
     bool m_syncBlinkTimerOn = false;
     void syncSetOffset(int ms);
-    void syncBeat();
+    void syncBeat(int beat, qreal bpm);
     void syncBlinkOff();
     // R470_CLOCK_HAND (track_runtime/clockhand.inc.cpp)
     mutable QVariantMap m_clockHandStore;

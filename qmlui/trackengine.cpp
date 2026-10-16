@@ -1656,6 +1656,7 @@ void TrackEngine::ensureTable()
             if (kept.count() >= 2 && kept.at(m_overrideIdx) == QStringLiteral("white"))
                 m_overrideIdx = (m_overrideIdx + 1) % int(kept.count());
             m_override = kept.isEmpty() ? QString() : kept.at(m_overrideIdx);
+            m_colMemLast = colourMemNow();   // R472_COLMEM_ENGINE: the palette's, not his hand
         }
     }
 
@@ -4076,9 +4077,17 @@ QStringList TrackEngine::recallPick(int boundary, const QString &section, qreal 
     QStringList out;
     if (best.isEmpty())
         return out;
+    bool cut = false;
     foreach (const QString &key, best.section(QLatin1Char('|'), 2).split(QLatin1Char('+'), Qt::SkipEmptyParts))
+    {
         if (m_groups.contains(key) && m_groupOff.contains(key) == false && out.contains(key) == false)
             out << key;
+        else
+            cut = true;
+    }
+    // R472_PICK_BASE: what is left of it is the base alone - that was not his pick
+    if (cut && out.count() == 1 && out.first() == baseGroup())
+        out.clear();
     return out;
 }
 
@@ -5798,6 +5807,16 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
     // that was on it. No tapping required.
     const bool changed = enable != (m_groupOff.contains(key) == false);
     if (enable) m_groupOff.remove(key); else m_groupOff.insert(key);
+    // R472_PAD_OFF: off for the night lets go of its pad (it came back on dark, held)
+    if (enable == false && m_padFlash.remove(key))
+    {
+        m_padFlashMs.remove(key);
+        m_padWasCol.remove(key);
+        m_padWasColLevel.remove(key);
+        m_syncOwned.remove(key);
+        m_flashHeld.remove(key);
+        emit flashGroupsChanged();
+    }
     if (enable == false && key == m_echoKey)
         stopEcho();
     // R431B_DROP_OFF: off for the night = out of the drop's set at once; an
@@ -6505,6 +6524,7 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
     if (m_colourMode != 0 && m_overrideSet.count() < 2)
     {
         m_colourMode = 0;
+        m_colMemLast = colourMemNow();   // R472_COLMEM_ENGINE: not his hand
         emit liveChanged();
     }
     int style = 0;
@@ -9010,8 +9030,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     crumb(QStringLiteral("beat ") + QString::number(beat) + QLatin1Char(' ') + state);   // R435_CRUMBS
     m_hazeBeatMs = m_clock.elapsed();                // R467_HAZE_NAG: music is playing
     micBeat(state, sectionChanged, bpm);             // R467_MIC_CHECK
-    colourMemoryBeat(beat, state, sectionChanged);   // R470_COLOUR_MEMORY
-    syncBeat();                                      // R470_SYNC: round 2's blink
+    colourMemoryBeat(secStart > 0 ? secStart : beat, state, sectionChanged);   // R470_COLOUR_MEMORY (R472_COLMEM_FROM: by the section's start)
+    syncBeat(beat, bpm);                             // R470_SYNC: round 2's blink (R472_SYNC_CLOCK: and the taps' clock)
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
     labShutdown(false);          // R410_LAB: so does the lab (the table rebuilds below)
@@ -10958,6 +10978,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
     }
+    // R472_PICK_ALONE: not in his section - his set took the alone's x1.4 lift (and its draw)
+    if (hold == false && isCalm == false
+        && (m_forceOn || (m_dropTouched && m_dropSet.isEmpty() == false && m_dropPlanFor > 0 && beat >= m_dropPlanFor)))
+        aloneBars.clear();
     // R385_BARS_FULL: two kinds - the whole-bar chase, or full light with the
     // slow lift. R401_ALONE_KIND: drawn when the alone starts, the other kind
     // than last time more often than not (it was strictly in turn)
@@ -11082,8 +11106,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // (only when the music reads as the section before again - a loop the
         // page holds as his section, R235's DJ-loop look, stays his)
         else if (m_forceOn && m_forceFrom > 0 && beat < m_forceFrom && m_dropPlanBeat >= m_forceFrom
-                 && state != m_forceSection)
+                 && state != m_forceSection
+                 && m_dropTouched == false)      // R472_PICK_LOOP: not over his pick for the section after
         {
+            m_planRemembered = false;
             m_forceOn = false;
             m_dropSet = m_forceSet;
             m_planOriginal = m_forceSet;
@@ -11092,6 +11118,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_planSection = m_forceSection;
             m_dropPlanFor = m_forceFrom;
         }
+        // R472_PICK_PRESS: his set was for its section - a SECTION press for another kind holds
+        // the boundary away (the pick ran on into the next section): it ends there. Not in a
+        // DJ loop (R438 above), not on the crossing beat itself (below)
+        if (m_forceOn && m_forceFrom > 0 && beat > m_forceFrom && state != m_forceSection && m_loopPasses == 0)
+        {
+            m_forceOn = false;
+            m_forceSet.clear();
+            m_forceFrom = -1;
+            logSignal(QStringLiteral("sig:section-pick-end:") + state);
+        }
         // the boundary the plan was for: his set takes the section (or, untouched,
         // the engine's own section starts and whatever he held before ends)
         if (m_dropPlanFor > 0 && beat >= m_dropPlanFor)
@@ -11099,7 +11135,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // R471_PICK_FAILSAFE: every group tapped out is no pick - the engine's own
             if (m_dropTouched && m_dropSet.isEmpty())
                 logSignal(QStringLiteral("sig:section-pick-empty:") + m_planSection);
-            m_forceOn = m_dropTouched && m_dropSet.isEmpty() == false;
+            // R472_PICK_KIND: a jump far past the boundary into another kind is not his section
+            m_forceOn = m_dropTouched && m_dropSet.isEmpty() == false
+                     && (beat - m_dropPlanFor <= 8 || state == m_planSection);
             m_forceSet = m_dropSet;
             m_forceFrom = m_forceOn ? m_dropPlanFor : -1;   // R438_LOOP_ACROSS
             m_forceSection = m_planSection;
@@ -11126,7 +11164,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // R471_PICK_FAILSAFE: nothing of it left (all off for the night) - the engine's cast
             QSet<QString> his;
             foreach (const QString &key, m_forceSet)
-                if (m_groups.contains(key) && m_groupOff.contains(key) == false)
+                if (m_groups.contains(key) && m_groupOff.contains(key) == false
+                    && (m_lastStage == 2 && lastTrackDark(m_groups.value(key))) == false)   // R472_PICK_LAST
                     his.insert(key);
             if (his.isEmpty() == false)
                 castSet = his;
@@ -11144,12 +11183,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_planSection.clear();
             }
         }
-        else if (m_dropTouched)
+        else if (m_dropTouched && (m_planSection == nextState || qAbs(boundary - m_dropPlanFor) <= 8))
         {
             m_dropPlanFor = boundary;            // a flag moved under his plan: it follows
         }
         else
         {
+            if (m_dropTouched)
+            {
+                // R472_PICK_KIND: the next section is another kind (a jump, a deleted flag) -
+                // his pick was for the one he saw: the engine plans this one
+                logSignal(QStringLiteral("sig:section-pick-lost:") + m_planSection);
+                m_dropTouched = false;
+                m_planRemembered = false;
+                m_planOriginal.clear();
+                m_dropPlanFor = -1;
+            }
             const bool another = m_dropPlanFor < 0 || qAbs(boundary - m_dropPlanFor) > 8
                               || m_planSection != nextState;
             // R439_TRACK_MEMORY: this track's boundary has a set he ran last time -
@@ -13808,7 +13857,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // beat - the held white went back to white + the room's colour for
         // the rest of the hold (runde 223). The flash's own white scene is
         // running; the room colour comes back on the first beat after release.
-        if (heldFull(key))
+        // (R472_PAD_LASER: only where the flash's own white runs - a laser pad keeps its look's
+        // colour, and the bars went dark under the finger)
+        if (heldFull(key) && m_active.contains(QStringLiteral("flash:") + key))
             cf = Function::invalidId();
         // colour scenes swap hard: a soft fade left the old colour adding up
         // with the new one on RGB fixtures for a bar - a blend nobody asked for
@@ -14120,6 +14171,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     applyMove(key, darkGroups.contains(key) ? 0.0 : groupLevel,
                               beat, secStart, prog, mv, patterned);
                 }
+            }
+            else
+            {
+                // R472_PAD_LEVEL: held - what this beat would give it, for the release (dark
+                // on a beat the bars move on)
+                m_moveLevel.insert(key, darkGroups.contains(key) ? 0.0 : groupLevel);
             }
             if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1 && (haveCurves == false || turn))
                 moveHit = true;
@@ -19311,11 +19368,13 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
         m_planOriginal.clear();
         m_forceFrom = -1;                // R438_LOOP_ACROSS
         m_planRemembered = false;        // R439_TRACK_MEMORY
-        colourMemoryTrack();             // R470_COLOUR_MEMORY: last time's colours stay in their track
         planRanReset();                  // R443_PLAN_LANE: the old track's sections
         if (had)
             emit dropSetChanged();
     }
+    // R470_COLOUR_MEMORY: last time's colours stay in their track - R472_COLMEM_EVERY: every
+    // new play (the same song from the other deck too: its last play's hand is not this one's)
+    colourMemoryTrack();
     // Stage time is counted every beat but only written when something else
     // triggers a save, and a whole night can pass without one. Once per track
     // bounds the loss to the track that was playing when the power went, and
@@ -23141,6 +23200,10 @@ void TrackEngine::planForgetTrack()
 {
     // FORGET FOR THIS TRACK: what he ran last time is gone, and the next
     // section is the engine's (a pick he made tonight is not undone in RIG)
+    // R472_FORGET_EMPTY: a track without a title has nothing kept - an empty title is
+    // forgetTrackMemory()'s "every track"
+    if (m_trackTitle.isEmpty())
+        return;
     forgetTrackMemory(m_trackTitle);
     if (m_planRemembered)
         planEngineDecides();
@@ -23959,18 +24022,19 @@ void TrackEngine::hazeNagTick(bool showOn)
     const bool night = hour >= ENGINE_HAZE_NAG_FROM_H || hour < ENGINE_HAZE_NAG_TO_H;
     const bool music = m_hazeBeatMs >= 0 && now - m_hazeBeatMs < 5000 && m_testTrack == false;
     const bool zero = m_haze < 0.03;
-    if (showOn == false || zero == false || hazeAvailable() == false)
+    // R472_HAZE_FAN: a hazer found by its fan alone has no level to read - no nag
+    if (showOn == false || zero == false || hazeAvailable() == false || m_hazeChannels.isEmpty())
     {
         // a new start: the count, and LATER with it
         m_hazeZeroMs = 0;
         m_hazeQuietUntil = -1;
     }
-    else if (night && music && m_lastStage == 0)
+    else if (night && music && m_lastStage == 0 && m_closingDim >= 1.0)   // R472_HAZE_CLOSE: the closing zeroes it
     {
         m_hazeZeroMs += dt;
     }
     // while the music pauses (a gap between tracks, a pause) the count holds
-    const bool watch = showOn && zero && night && music && m_lastStage == 0;
+    const bool watch = showOn && zero && night && music && m_lastStage == 0 && m_closingDim >= 1.0;
     int nag = 0;
     if (watch && m_hazeZeroMs >= qint64(ENGINE_HAZE_NAG_MIN) * 60000
         && (m_hazeQuietUntil < 0 || now >= m_hazeQuietUntil))
@@ -24149,7 +24213,10 @@ bool TrackEngine::micAuto() const
 {
     if (m_micAutoRead == false)
     {
-        m_micAutoStored = QSettings().value(SETTINGS_MIC_AUTO).toString();
+        // R472_MIC_NIGHT: EVERY SECTION TONIGHT is off at every start - a restart in the
+        // same night too. Kept in memory only; what an older build saved is let go
+        QSettings().remove(SETTINGS_MIC_AUTO);
+        m_micAutoStored.clear();
         m_micAutoRead = true;
     }
     return m_micAutoStored.isEmpty() == false && m_micAutoStored == micNightKey();
@@ -24201,13 +24268,9 @@ void TrackEngine::micNextDevice()
 
 void TrackEngine::micSetAuto(bool on)
 {
-    QSettings settings;
+    micAuto();                           // R472_MIC_NIGHT: an old saved value goes first
     m_micAutoStored = on ? micNightKey() : QString();
     m_micAutoRead = true;
-    if (on)
-        settings.setValue(SETTINGS_MIC_AUTO, m_micAutoStored);
-    else
-        settings.remove(SETTINGS_MIC_AUTO);
     micTick(m_showOnNow);
     emit micRecChanged();
 }
@@ -24288,6 +24351,9 @@ bool TrackEngine::micStart()
                            .arg(m_micDeviceName);
             crumb(QStringLiteral("mic error ") + QString::number(int(m_mic->src->error())));
             emit micChanged();
+            // R472_MIC_RETRY: the capture stops - micTick() tries it again in 10 s, and a
+            // start that works clears the words (it stood "running" on a dead device)
+            QTimer::singleShot(0, this, [this]() { micStop(); m_micTriedMs = m_clock.elapsed(); });
         }
     });
     m_mic->io = m_mic->src->start();
@@ -24523,6 +24589,7 @@ void TrackEngine::micFrame()
         m_micProblem = tr("No sound from %1 - Windows may be keeping desktop apps from the microphone "
                           "(Settings > Privacy & security > Microphone).").arg(m_micDeviceName);
         emit micChanged();
+        QTimer::singleShot(0, this, [this]() { micStop(); m_micTriedMs = m_clock.elapsed(); });   // R472_MIC_RETRY
     }
 #endif
     // the link's beats the mic heard: a mic beat from 80 ms before to 180 ms after
@@ -24580,7 +24647,7 @@ bool TrackEngine::micRecBegin(const QString &why)
 {
     if (m_micRecUntilMs >= 0)
         return false;
-    if (micStart() == false)
+    if (micStart() == false || m_micProblem.isEmpty() == false)   // R472_MIC_RETRY: not on a dead capture
     {
         emit micChanged();
         return false;
@@ -24675,6 +24742,8 @@ void TrackEngine::micBeat(const QString &state, bool sectionChanged, qreal bpm)
     if (m_mic == nullptr || m_testTrack)
         return;
     m_micLinkBeats.append(m_clock.elapsed());
+    while (m_micLinkBeats.count() > 64)  // R472_MIC_BEATS: the panel reads the last six seconds
+        m_micLinkBeats.removeFirst();
     if (sectionChanged == false || m_micRecUntilMs >= 0 || micAuto() == false || m_showOnNow == false)
         return;
     if (m_micRecsNight == micNightKey() && m_micRecs.count() >= MIC_REC_NIGHT)
@@ -24794,6 +24863,12 @@ void TrackEngine::flashGroup(const QString &key, bool on)
             m_padFlashMs.insert(key, now);       // "still held"
             return;
         }
+        if (m_syncOwned.remove(key))
+        {
+            // R472_SYNC_OWN: his finger on a strobe the SYNC blink holds - his from now on
+            m_padFlashMs.insert(key, now);
+            return;
+        }
         ensureTable();
         if (m_groups.contains(key) == false || m_groupOff.contains(key))
             return;
@@ -24801,7 +24876,11 @@ void TrackEngine::flashGroup(const QString &key, bool on)
         // the mark goes in before anything runs: slotScale() and setPart() read it
         m_padFlash.insert(key);
         m_padFlashMs.insert(key, now);
-        const bool wasHeld = m_flashHeld.contains(key);  // the FLASH button has it already
+        // the FLASH button has it already (R472_PAD_HIT: the button - a drop's hit is not his white)
+        const bool wasHeld = m_flash && m_flashHeld.contains(key);
+        // R472_PAD_BACK / R472_PAD_LASER: what it showed, for the release
+        m_padWasCol.insert(key, m_active.value(QStringLiteral("col:") + key, Function::invalidId()));
+        m_padWasColLevel.insert(key, m_activeLevel.value(QStringLiteral("col:") + key, 1.0));
         m_flashHeld.insert(key);
         if (wasHeld == false)
         {
@@ -24842,13 +24921,26 @@ void TrackEngine::flashGroup(const QString &key, bool on)
     if (m_padFlash.remove(key) == false)
         return;
     m_padFlashMs.remove(key);
+    m_syncOwned.remove(key);
     // the FLASH WHITE button still down over a strobe group: it keeps it
     if (m_flash == false || m_groups.value(key).strobes == false)
     {
         m_flashHeld.remove(key);
         stopSlot(QStringLiteral("flash:") + key, true);
         const TrackGroup &g = m_groups.value(key);
-        if (m_cast.contains(key) == false)
+        const bool laser = g.lasers || g.patternDevice;
+        // R472_PAD_LASER: the pad's exception ends with the finger - a laser that moved on
+        // this beat (or is in a dark stretch) is dark now, as the beat had it
+        const bool laserDark = laser && (m_darkUntil.value(key, -1) >= m_curBeat
+                                         || (m_curBeat >= 0 && m_aimSince.value(key, -1) >= m_curBeat));
+        if (laserDark)
+        {
+            stopSlot(QStringLiteral("col:") + key, true);
+            stopSlot(QStringLiteral("mot:") + key, true);
+            for (int i = 0; i < g.parts.count(); i++)
+                stopSlot(partSlot(key, i), true);
+        }
+        else if (m_cast.contains(key) == false)
         {
             // out of the cast: dark at once, as the button's release cuts it
             for (int i = 0; i < g.parts.count(); i++)
@@ -24862,8 +24954,26 @@ void TrackEngine::flashGroup(const QString &key, bool on)
         }
         else if (g.hasDimmer)
             setDimmer(key, m_moveLevel.value(key, 0.0));
+        // R472_PAD_BACK: no beat may come to put it back - the opening picture, the house
+        // light, or the room's colour the white stood in for
+        if (laserDark == false)
+        {
+            if (m_startScene)
+                startLook();
+            else if (m_lastStage == 3 && m_houseLevel >= 0.0)
+                houseLook(m_houseLevel);
+            else if (laser == false && m_cast.contains(key)
+                     && m_active.contains(QStringLiteral("col:") + key) == false)
+            {
+                const quint32 was = m_padWasCol.value(key, Function::invalidId());
+                if (was != Function::invalidId() && m_funcs.contains(was))
+                    run(QStringLiteral("col:") + key, was, m_padWasColLevel.value(key, 1.0), 0, true);
+            }
+        }
         reapplyLevels();
     }
+    m_padWasCol.remove(key);
+    m_padWasColLevel.remove(key);
     crumb(QStringLiteral("pad off ") + key);            // R435_CRUMBS
     emit flashGroupsChanged();
     emit liveChanged();
@@ -24887,6 +24997,9 @@ void TrackEngine::padFlashClear()
         return;
     m_padFlash.clear();
     m_padFlashMs.clear();
+    m_padWasCol.clear();
+    m_padWasColLevel.clear();
+    m_syncOwned.clear();
     emit flashGroupsChanged();
 }
 /* =====================================================================
@@ -24984,6 +25097,10 @@ void TrackEngine::colourMemApply(const QString &entry)
     foreach (const QString &c, entry.section(QLatin1Char('|'), 0, 0).split(QLatin1Char('+'), Qt::SkipEmptyParts))
         if (m_palette.contains(c) && engineBannedColour(c) == false && set.contains(c) == false)
             set << c;
+    // R472_COLMEM_WHITE: white left alone of a set (the palette lost the other) is not his room
+    if (set.count() == 1 && set.first() == QStringLiteral("white")
+        && entry.section(QLatin1Char('|'), 0, 0).split(QLatin1Char('+'), Qt::SkipEmptyParts).count() >= 2)
+        set.clear();
     const int mode = set.count() >= 2 ? qBound(0, entry.section(QLatin1Char('|'), 1, 1).toInt(), 2) : 0;
     if (set.count() <= 1)
         setColourOverride(set.isEmpty() ? QString() : set.first());
@@ -25014,13 +25131,24 @@ void TrackEngine::colourMemoryBeat(int beat, const QString &state, bool sectionC
     if (m_startScene || m_startColour)
     {
         m_colMemLast = colourMemNow();   // the opening picture's colours are not his
+        m_colMemAfterStart = true;
         return;
     }
     const QString now = colourMemNow();
+    if (m_colMemAfterStart)
+    {
+        // R472_COLMEM_START: the start scene going clears its own red - that is not his
+        // hand. The section is read again (what was remembered for it, recalled)
+        m_colMemAfterStart = false;
+        m_colMemLast = now;
+        m_colMemSection.clear();
+    }
     if (sectionChanged || m_colMemSection.isEmpty() || state != m_colMemSection)
     {
         // a hand change on the section's own first beat belongs to it
-        if (m_colMemSection.isEmpty() == false && now != m_colMemLast)
+        // (R472_COLMEM_START: the snapshot, not the section - a tap before a track's
+        // first beat is his too; a fresh start has no snapshot yet)
+        if (m_colMemLast.isEmpty() == false && now != m_colMemLast)
             m_colMemHand = true;
         m_colMemSection = state;
         m_colMemFrom = beat;
@@ -25071,6 +25199,7 @@ void TrackEngine::colourMemoryTrack()
     m_colMemRecalled = false;
     m_colMemSection.clear();
     m_colMemFrom = -1;
+    m_colMemAfterStart = false;
     m_colMemLast = colourMemNow();
 }
 
@@ -25161,6 +25290,10 @@ void TrackEngine::syncSetOffset(int ms)
     m_syncOffset = ms;
     QSettings().setValue(QStringLiteral("trackengine/sync-offset-ms"), ms);
     logSignal(QStringLiteral("sig:sync-offset:") + QString::number(ms));
+    // R472_SYNC_RESTART: a round's taps hold for the offset they were taken at - a nudge
+    // in the middle of the measurement starts it again (USE would add on top of it)
+    if (m_syncOpen && m_syncStep < 2 && (m_syncSound.isEmpty() == false || m_syncLight.isEmpty() == false))
+        syncRestart();
     emit syncChanged();
 }
 
@@ -25198,17 +25331,23 @@ void TrackEngine::syncTap()
     if (m_syncOpen == false || m_syncStep >= 2)
         return;
     const qint64 now = m_clock.elapsed();
-    // music: a beat in the last two seconds, at a tempo
-    if (m_beatMs <= 0.0 || m_beatStartMs <= 0 || now - m_beatStartMs > 2000)
+    // music: a beat in the last two seconds, at a tempo - R472_SYNC_CLOCK: every beat the
+    // link says, the start scene's and LAST TRACK's too (tick() set m_beatStartMs after them)
+    if (m_syncBeatLen <= 0.0 || m_syncBeatAt < 0 || now - m_syncBeatAt > 2000)
         return;
-    qreal d = qreal(now - m_beatStartMs);
-    if (d > m_beatMs / 2.0)
-        d -= m_beatMs;                   // early for the next beat
+    // R472_SYNC_WINDOW: the sound round is about the real beat - the light's beat is moved
+    // by the offset, so the window is centred where the kick is (the taps kept as they are)
+    const qreal shift = m_syncStep == 0 ? qreal(syncOffset()) : 0.0;
+    qreal e = qreal(now - m_syncBeatAt) + shift;
+    while (e > m_syncBeatLen / 2.0)
+        e -= m_syncBeatLen;              // early for the next beat
+    while (e < -m_syncBeatLen / 2.0)
+        e += m_syncBeatLen;
     // a tap far off the beat is left out
-    if (qAbs(d) > qMin(qreal(ENGINE_SYNC_FAR_MS), m_beatMs * 0.30))
+    if (qAbs(e) > qMin(qreal(ENGINE_SYNC_FAR_MS), m_syncBeatLen * 0.30))
         return;
     QList<int> &round = m_syncStep == 0 ? m_syncSound : m_syncLight;
-    round << int(qRound(d));
+    round << int(qRound(e - shift));
     if (round.count() >= ENGINE_SYNC_TAPS)
     {
         m_syncStep++;
@@ -25243,9 +25382,17 @@ void TrackEngine::syncReset()
     syncSetOffset(0);
 }
 
-void TrackEngine::syncBeat()
+void TrackEngine::syncBeat(int beat, qreal bpm)
 {
     // from tick(), every beat: round 2 blinks the strobes white on it
+    // R472_SYNC_CLOCK: once per beat (a second call on the same beat - a SECTION tap, a
+    // resend - is not a beat), before the start scene's and LAST TRACK's returns
+    if (beat == m_syncBeatNo)
+        return;
+    m_syncBeatNo = beat;
+    m_syncBeatAt = m_clock.elapsed();
+    if (bpm > 20.0)
+        m_syncBeatLen = 60000.0 / bpm;
     if (m_syncOpen == false || m_syncStep != 1)
         return;
     ensureTable();
@@ -25257,14 +25404,22 @@ void TrackEngine::syncBeat()
         if (m_syncBlink.isEmpty() && m_compositionBase.isEmpty() == false)
             m_syncBlink << m_compositionBase;    // no strobes: the base blinks
     }
+    // R472_SYNC_OWN: the blink lights (and lets go of) only what no finger holds
     foreach (const QString &key, m_syncBlink)
+    {
+        if (m_padFlash.contains(key))
+            continue;
         flashGroup(key, true);
+        if (m_padFlash.contains(key))
+            m_syncOwned.insert(key);
+    }
     if (m_syncBlinkTimerOn == false)
     {
         m_syncBlinkTimer.setSingleShot(true);
         connect(&m_syncBlinkTimer, &QTimer::timeout, this, [this]() {
-            foreach (const QString &key, m_syncBlink)
+            foreach (const QString &key, m_syncOwned.values())
                 flashGroup(key, false);
+            m_syncOwned.clear();
         });
         m_syncBlinkTimerOn = true;
     }
@@ -25274,8 +25429,9 @@ void TrackEngine::syncBeat()
 void TrackEngine::syncBlinkOff()
 {
     m_syncBlinkTimer.stop();
-    foreach (const QString &key, m_syncBlink)
+    foreach (const QString &key, m_syncOwned.values())     // R472_SYNC_OWN
         flashGroup(key, false);
+    m_syncOwned.clear();
     m_syncBlink.clear();
 }
 /* =====================================================================
@@ -25302,13 +25458,33 @@ void TrackEngine::clockHandLoad() const
     m_clockHandStore = QSettings().value(QStringLiteral("trackengine/clock-hand")).toMap();
 }
 
+static bool clockHandNightCounts(const QString &cells)
+{
+    // a night with a quarter hour long enough to count
+    foreach (const QString &c, cells.split(QLatin1Char(';')))
+        if (c.section(QLatin1Char(','), 1, 1).toLongLong() >= ENGINE_HAND_MIN_SAMPLES)
+            return true;
+    return false;
+}
+
 void TrackEngine::clockHandSave()
 {
-    // the last 7 nights
+    // the last 7 nights - R472_HAND_PRUNE: a night too short to show goes first
+    // (five ten-second checks pushed the two real nights out), never tonight
     QStringList nights = m_clockHandStore.keys();
     std::sort(nights.begin(), nights.end());
+    const QString tonight = nightKey();
     while (nights.count() > 7)
-        m_clockHandStore.remove(nights.takeFirst());
+    {
+        int drop = 0;
+        for (int i = 0; i < nights.count(); i++)
+            if (nights.at(i) != tonight && clockHandNightCounts(m_clockHandStore.value(nights.at(i)).toString()) == false)
+            {
+                drop = i;
+                break;
+            }
+        m_clockHandStore.remove(nights.takeAt(drop));
+    }
     QSettings().setValue(QStringLiteral("trackengine/clock-hand"), m_clockHandStore);
 }
 
@@ -25405,7 +25581,10 @@ void TrackEngine::clockHandTick(bool showOn)
     // every 200 ms from closingTick()
     const qint64 now = m_clock.elapsed();
     const bool music = m_hazeBeatMs >= 0 && now - m_hazeBeatMs < 5000 && m_testTrack == false;
-    if (showOn == false || music == false || m_roomAuto || m_clockCurve.isEmpty())
+    // R472_HAND_LIVE: not the start scene (the slider stands on an old number there) nor
+    // LAST TRACK (the cap brings it down, not his hand)
+    if (showOn == false || music == false || m_roomAuto || m_clockCurve.isEmpty()
+        || m_startScene || m_lastStage > 0)
     {
         // the music stopped or the show went off: what was counted goes to disk
         if (m_clockHandSavedMs >= 0 && now - m_clockHandSavedMs >= 5000)
@@ -25421,7 +25600,15 @@ void TrackEngine::clockHandTick(bool showOn)
         minutes += 24 * 60;
     const int q = minutes / 15;
     if (q < 0 || q >= ENGINE_CLOCK_POINTS)
+    {
+        // R472_HAND_LATE: past 03:00 - the last minute's count is written, not left
+        if (m_clockHandSavedMs >= 0 && now - m_clockHandSavedMs >= 5000)
+        {
+            m_clockHandSavedMs = now;
+            clockHandFlush();
+        }
         return;
+    }
     clockHandLoad();
     const int v = qBound(0, int(qRound(m_faderNow * 100.0)), 100);
     m_clockHandSum[q] += v;
