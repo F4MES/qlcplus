@@ -2378,7 +2378,10 @@ Rectangle
                     y: trackViewRoot.cardPad
                     width: rigCard.inW - Math.round(48 * trackViewRoot.ks)
                     elide: Text.ElideRight
-                    text: "·  " + qsTr("tap a name = in / out of the NEXT") + " " + rigCard.planName
+                    // R471_PICK_FAILSAFE: every group tapped out - the engine chooses
+                    text: trackEngine && trackEngine.dropSet.length === 0
+                          ? "·  " + qsTr("none picked - the engine chooses the NEXT") + " " + rigCard.planName
+                          : "·  " + qsTr("tap a name = in / out of the NEXT") + " " + rigCard.planName
                     color: "#F05050"
                     font.pixelSize: trackViewRoot.fs(12)
                 }

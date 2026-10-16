@@ -11096,7 +11096,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the engine's own section starts and whatever he held before ends)
         if (m_dropPlanFor > 0 && beat >= m_dropPlanFor)
         {
-            m_forceOn = m_dropTouched;
+            // R471_PICK_FAILSAFE: every group tapped out is no pick - the engine's own
+            if (m_dropTouched && m_dropSet.isEmpty())
+                logSignal(QStringLiteral("sig:section-pick-empty:") + m_planSection);
+            m_forceOn = m_dropTouched && m_dropSet.isEmpty() == false;
             m_forceSet = m_dropSet;
             m_forceFrom = m_forceOn ? m_dropPlanFor : -1;   // R438_LOOP_ACROSS
             m_forceSection = m_planSection;
@@ -11120,10 +11123,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             // his set, as it is: both laser types, the animation laser under
             // 70 %, no base - only a group off for the night stays out
-            castSet.clear();
+            // R471_PICK_FAILSAFE: nothing of it left (all off for the night) - the engine's cast
+            QSet<QString> his;
             foreach (const QString &key, m_forceSet)
                 if (m_groups.contains(key) && m_groupOff.contains(key) == false)
-                    castSet.insert(key);
+                    his.insert(key);
+            if (his.isEmpty() == false)
+                castSet = his;
         }
         hitCast(beat, castSet);          // R445_DROP_HIT: his STROBE - the strobe group on stage for the bar
         // the plan for the next section
