@@ -1715,6 +1715,13 @@ QString TrackManager::remoteState()
         for (const QVariant &row : e->onStage())
             stage.append(row.toMap().value(QStringLiteral("group")).toString());
         o.insert(QStringLiteral("stage"), stage);
+        // R469_PHONE_RIG: the lamps - on stage now, the next section's groups, the pads
+        o.insert(QStringLiteral("cast"), QJsonArray::fromStringList(e->cast()));
+        // (the drop's getters are the engine's own: read as the page reads them)
+        o.insert(QStringLiteral("dropMode"), e->property("dropMode").toInt());
+        o.insert(QStringLiteral("dropSet"), QJsonArray::fromStringList(e->property("dropSet").toStringList()));
+        o.insert(QStringLiteral("plan"), e->property("planSection").toString());
+        o.insert(QStringLiteral("gflash"), QJsonArray::fromStringList(e->flashGroups()));
         // the groups' list is a walk over the show's functions - every 2 s is plenty
         // (a toggle or a trim from the phone refreshes it at once, below)
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -1896,6 +1903,13 @@ QString TrackManager::remoteCommand(const QString &line)
         if (v < 3)
             v = 0;                           // as the desk's fader: the bottom is off
         e->setHaze(v / 100.0);
+    }
+    // ---- R469_PHONE_RIG: the group's flash pad (held: again every second)
+    else if (cmd == QStringLiteral("gflash"))
+    {
+        if (e->trims().contains(a.value(1)) == false)
+            return QStringLiteral("TRACKERR|no group ") + a.value(1);
+        e->flashGroup(a.value(1), a.value(2) == QStringLiteral("1"));
     }
     // ---- R468_RATE: GOOD / BAD, as the desk's thumbs - the finger landing is the moment
     else if (cmd == QStringLiteral("ratemark"))

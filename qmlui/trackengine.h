@@ -113,6 +113,8 @@ class QRandomGenerator;
 #define ENGINE_HAZE_NAG_FROM_H    22        // ... from 22:00 ...
 #define ENGINE_HAZE_NAG_TO_H      8         // ... to 08:00
 #define ENGINE_HAZE_NAG_LATER_MIN 30        // LATER: quiet this long
+// R469_GROUP_FLASH (track_runtime/padflash.inc.cpp)
+#define ENGINE_PAD_FLASH_MS       3000      // a held pad nobody refreshed lets go
 #define ENGINE_COOLDOWN_MS        (12 * 60 * 1000)   // a programme that ran is drawn again reluctantly for this long
 // The ceiling on WHITE on a strobe - 70 % of full (Tobias, 2026-09-22).
 // Those lamps at a full white are painful to stand in front of, and it
@@ -590,6 +592,8 @@ class TrackEngine : public QObject
     Q_PROPERTY(QString lastTrackCloseAt READ lastTrackCloseAt NOTIFY lastTrackChanged)
     // R467_HAZE_NAG: minutes the haze has stood at 0 (0 = nothing to say)
     Q_PROPERTY(int hazeNag READ hazeNag NOTIFY hazeNagChanged)
+    // R469_GROUP_FLASH: the groups a flash pad holds at full white now
+    Q_PROPERTY(QStringList flashGroups READ flashGroups NOTIFY flashGroupsChanged)
     // R467_MIC_CHECK: SETUP > LAB > MIC CHECK - it only listens
     Q_PROPERTY(bool micActive READ micActive NOTIFY micChanged)
     Q_PROPERTY(QString micDevice READ micDevice NOTIFY micChanged)
@@ -773,6 +777,12 @@ public:
     Q_INVOKABLE void hazeLater();
     /** every 200 ms from closingTick() */
     void hazeNagTick(bool showOn);
+    /* ---- R469_GROUP_FLASH (track_runtime/padflash.inc.cpp) ---- */
+    QStringList flashGroups() const;
+    /** the group's flash pad: on = held (again every second), off = let go */
+    Q_INVOKABLE void flashGroup(const QString &key, bool on);
+    /** every 200 ms from closingTick(): a hold nobody refreshed lets go */
+    void padFlashTick();
     /* ---- R467_MIC_CHECK (track_runtime/miccheck.inc.cpp) ---- */
     bool micActive() const;
     QString micDevice() const;
@@ -1148,6 +1158,7 @@ signals:
     void tableChanged();
     void lastTrackChanged();             // R458_LAST_TRACK
     void hazeNagChanged();               // R467_HAZE_NAG
+    void flashGroupsChanged();           // R469_GROUP_FLASH
     void micChanged();                   // R467_MIC_CHECK
     void micRecChanged();
     void dropSetChanged();               // R431_DROP_PICK
@@ -2056,6 +2067,12 @@ private:
     qint64 m_hazeQuietUntil = -1;          // LATER (m_clock)
     qint64 m_hazeNagLastMs = -1;
     qint64 m_hazeBeatMs = -1;              // the last beat (m_clock): is music playing
+    // R469_GROUP_FLASH (track_runtime/padflash.inc.cpp)
+    QSet<QString> m_padFlash;              // the groups a pad holds (also in m_flashHeld)
+    QHash<QString, qint64> m_padFlashMs;   // the last "still held" (m_clock)
+    /** full white under a held FLASH WHITE or a held pad: no MASTER, trim or pulse */
+    bool heldFull(const QString &key) const;
+    void padFlashClear();
     // R467_MIC_CHECK (track_runtime/miccheck.inc.cpp)
     MicTap *m_mic = nullptr;               // a child QObject: the capture and what it heard
     bool m_micOpen = false;

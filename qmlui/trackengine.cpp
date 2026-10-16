@@ -614,6 +614,7 @@ void TrackEngine::slotDocSettled()
     m_liveMove.clear();
     m_patterned.clear();
     m_flashHeld.clear();
+    padFlashClear();                     // R469_GROUP_FLASH
     m_cast.clear();
     m_baseCover.clear();                 // runde 260: only tick() says who covers the base
     m_pulseDepth.clear();
@@ -668,7 +669,7 @@ void TrackEngine::slotPulseTimer()
             // lamps (not the operator's FLASH): it blinks on the sixteenths
             // like the rest of the landing
             const TrackGroup &lg = m_groups.value(key);
-            if (m_flash == false && m_landSixteenths && blink16Now() && lg.strobes && m_beatMs > 0.0)   // R362: or the mini landing
+            if (m_flash == false && m_padFlash.contains(key) == false && m_landSixteenths && blink16Now() && lg.strobes && m_beatMs > 0.0)   // R362: or the mini landing
             {
                 any = true;
                 const qreal q = std::fmod(qMax(0.0, qreal(now - m_beatStartMs)) / m_beatMs * 4.0, 1.0);
@@ -2732,6 +2733,8 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             const TrackGroup &g = m_groups.value(key);
             if (g.strobes == false || g.generatable() == false || m_groupOff.contains(key))
                 continue;
+            if (m_padFlash.contains(key))
+                continue;                // R469_GROUP_FLASH: a pad holds it at full white already
             // An automatic hit (a colour is given) flashes only strobes that
             // are ON STAGE. Every drop landing lit the whole bank at full from
             // 30 % on the fader - where the strobes are kept out of the cast
@@ -2783,6 +2786,8 @@ void TrackEngine::genFlash(bool on, const QString &colour)
     {
         foreach (const QString &key, m_flashHeld)
         {
+            if (m_padFlash.contains(key))
+                continue;                // R469_GROUP_FLASH: the pad lets go of its own
             stopSlot("flash:" + key, true);
             if (m_cast.contains(key) == false)
             {
@@ -2791,7 +2796,7 @@ void TrackEngine::genFlash(bool on, const QString &colour)
                     stopSlot(partSlot(key, i), true);
             }
         }
-        m_flashHeld.clear();
+        m_flashHeld.intersect(m_padFlash);   // R469_GROUP_FLASH
     }
 }
 
@@ -4588,7 +4593,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // shutter on a single walking eye is the "strobing" Tobias saw); the
         // heads in every drop from 60 %; the rest from w2 0.30 (w 0.55, as
         // before). A heads-only burst is the heads'.
-        bool joins = cast.contains(key)
+        bool joins = m_padFlash.contains(key) == false && cast.contains(key)   // R469_GROUP_FLASH: a pad is steady
                      && (m_strobeHeadsOnly ? g.heads
                          // runde 357 (R357_STROBE_LAND, Tobias 10-05: "Stroberne skal
                          // ikke koere 100% lysstyrke paa andre tidspunkt end lige efter
@@ -6917,7 +6922,7 @@ void TrackEngine::slotLayerTimer()
         {
             if (m_active.contains(QStringLiteral("col:") + key) == false)
                 continue;
-            if (m_flash && m_flashHeld.contains(key))
+            if (heldFull(key))
                 continue;
             applyColourLayer(key, true);
         }
@@ -6940,7 +6945,7 @@ void TrackEngine::slotLayerTimer()
         {
             if (m_active.contains(QStringLiteral("col:") + key) == false)
                 continue;                // stopped since the beat (a flash, the cast)
-            if (m_flash && m_flashHeld.contains(key))
+            if (heldFull(key))
                 continue;
             applyColourLayer(key, true); // R371: the scene ids the beat found
         }
@@ -6949,7 +6954,7 @@ void TrackEngine::slotLayerTimer()
     // R374_MIX_GLIDE: the base between two beats
     if (m_mixGlide && m_mixGlideKey.isEmpty() == false
         && m_active.contains(QStringLiteral("col:") + m_mixGlideKey)
-        && (m_flash && m_flashHeld.contains(m_mixGlideKey)) == false)
+        && heldFull(m_mixGlideKey) == false)
         applyMixGlide(true);
 }
 
@@ -7355,7 +7360,7 @@ void TrackEngine::setFlash(bool pressed)
     }
     else
     {
-        const QSet<QString> released = m_flashHeld;
+        const QSet<QString> released = m_flashHeld - m_padFlash;   // R469_GROUP_FLASH: a pad lets go itself
         stopSlot("flash", true);
         genFlash(false);
         // The strobes on stage go back to this beat's picture NOW, not on the
@@ -7393,7 +7398,7 @@ void TrackEngine::slotBeatWatch()
     bool changed = false;
     if (m_flash == false)
     {
-        const QSet<QString> released = m_flashHeld;
+        const QSet<QString> released = m_flashHeld - m_padFlash;   // R469_GROUP_FLASH: a pad lets go itself
         if (m_active.contains(QStringLiteral("flash")) || released.isEmpty() == false)
             changed = true;
         stopSlot(QStringLiteral("flash"), true);
@@ -13794,7 +13799,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // beat - the held white went back to white + the room's colour for
         // the rest of the hold (runde 223). The flash's own white scene is
         // running; the room colour comes back on the first beat after release.
-        if (m_flash && m_flashHeld.contains(key))
+        if (heldFull(key))
             cf = Function::invalidId();
         // colour scenes swap hard: a soft fade left the old colour adding up
         // with the new one on RGB fixtures for a bar - a blend nobody asked for
@@ -14082,7 +14087,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_motionDim.remove(key);
 
             m_liveMove.insert(key, mv);                  // the shaped move, for the sub-beat steps
-            if ((m_flash && m_flashHeld.contains(key)) == false)
+            if ((heldFull(key)) == false)
             {
                 if (motionOwns)
                 {
@@ -15797,7 +15802,7 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
     if (slot.startsWith(QStringLiteral("flash:")))
     {
         const QString fg = slotGroup(slot);
-        if (m_flash && m_flashHeld.contains(fg))
+        if (heldFull(fg))
             return 1.0;
         return masterOut() * trimOf(fg);   // R440_COLOUR_LEVEL
     }
@@ -15837,8 +15842,8 @@ void TrackEngine::reapplyLevels()
             // Nor MASTER: the held button is always full (Tobias, 2026-09-24).
             const bool held = m_flashHeld.contains(group);
             const bool landFree = m_groups.value(group).strobes && landBurstNow();   // runde 357
-            const qreal trim = ((m_flash && held) || landFree) ? 1.0 : trimOf(group);   // R440_COLOUR_LEVEL
-            out *= (held ? 1.0 : pulseFactor(group)) * trim * (((m_flash && held) || landFree) ? 1.0 : masterOut());
+            const qreal trim = (heldFull(group) || landFree) ? 1.0 : trimOf(group);   // R440_COLOUR_LEVEL
+            out *= (held ? 1.0 : pulseFactor(group)) * trim * ((heldFull(group) || landFree) ? 1.0 : masterOut());
             // and the same on/off squaring setPart() does: an animation
             // laser's dimmer is a switch, and a fraction written to it is
             // rounded by the fixture in a way nobody can predict
@@ -17937,6 +17942,7 @@ void TrackEngine::closingTick(bool showOn)
         return;
     lastTrackTick(showOn);                           // R458_LAST_TRACK
     hazeNagTick(showOn);                             // R467_HAZE_NAG
+    padFlashTick();                                  // R469_GROUP_FLASH
     micTick(showOn);                                 // R467_MIC_CHECK
     const qreal dim = showOn ? closingCap() : 1.0;
     // R458: not the clock's closing - R464_HAZE_LID: only while LAST TRACK's lid is the
@@ -18743,6 +18749,7 @@ void TrackEngine::release()
     m_pulseDepth.clear();
     m_breathe.clear();
     m_flashHeld.clear();
+    padFlashClear();                     // R469_GROUP_FLASH
     m_pulseTimer.stop();
     stopEcho();
     m_report = tr("(released)");
@@ -19098,13 +19105,14 @@ void TrackEngine::idle()
             continue;                    // the masks we started four lines ago
         // a FLASH the operator is holding stays up (runde 246): idle() now
         // runs four seconds into a quiet link, not only after 30 s
-        if (m_flash && (slot == QStringLiteral("flash") || slot.startsWith(QStringLiteral("flash:"))))
+        if ((m_flash && (slot == QStringLiteral("flash") || slot.startsWith(QStringLiteral("flash:"))))
+            || (slot.startsWith(QStringLiteral("flash:")) && m_padFlash.contains(slotGroup(slot))))   // R469_GROUP_FLASH
             continue;
         // ... and so do the dimmers under it (fejljagt 09-27): genFlash()
         // puts the lit groups' dimmer parts at full, the flash scenes carry
         // only colour, and tick() never restarts a held group's parts - the
         // held white stood at dimmer 0 until the button was let go
-        if (m_flash && slot.startsWith(QStringLiteral("dim:")) && m_flashHeld.contains(slotGroup(slot)))
+        if (slot.startsWith(QStringLiteral("dim:")) && heldFull(slotGroup(slot)))   // R469_GROUP_FLASH: a pad too
             continue;
         if (slot.startsWith("str:"))
         {
@@ -19802,7 +19810,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // ... and, since 2026-09-24, MASTER too: "FLASH skal ikke foelge master,
     // den skal altid vaere fuld styrke (med dens loft)" - the ceiling is in
     // the flash scene's white. BLACKOUT still wins (run() and the masks).
-    const bool heldFlash = m_flash && m_flashHeld.contains(group);
+    const bool heldFlash = heldFull(group);   // R469_GROUP_FLASH: a held pad too
     // runde 357: the strobes in the drop's landing burst pass MASTER and the
     // trim, as the held FLASH does - the one moment Tobias allows it
     const bool landFree = g.strobes && landBurstNow();
@@ -19937,7 +19945,8 @@ void TrackEngine::stopAll()
     m_andBass = false;           // R463_PLUCK_RESET
     m_pluckSlots = 0;
     m_flash = false;
-    m_flashHeld.clear();         // release() clears it; without this the next
+    m_flashHeld.clear();
+    padFlashClear();                     // R469_GROUP_FLASH         // release() clears it; without this the next
                                  // beat skips the whole out-of-cast teardown
     m_report = tr("(stopped)");
     emit liveChanged();
@@ -24720,4 +24729,152 @@ void TrackEngine::micShutdown()
     m_micUiTimer.stop();
     if (m_micFile.isOpen())
         m_micFile.close();
+}
+/* =====================================================================
+ *  THE GROUP'S FLASH PAD (runde 469) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/padflash.inc.cpp.
+ *
+ *  Tobias, 2026-10-16 (mockup B, then the RIG's lamp design approved:
+ *  "et flash icon paa hver gruppe, saa man manuelt kan flashe de lamper"):
+ *  the group's icon on the RIG card is its flash pad. While a finger is on
+ *  it, that group alone stands at full white - full means full, as the
+ *  FLASH WHITE button: no MASTER, no group trim, no pulse. BLACKOUT still
+ *  wins (run() and setPart() see lightsOut()), and a group off for the
+ *  night does not flash.
+ *
+ *  Lasers keep what they are doing: the pad only opens the light, on the
+ *  aim and in the movement they are in (Tobias: "blinke paa den
+ *  bevaegelse/stilling de er i - de maa gerne bevaege sig mens de lyser").
+ *  m_flashHeld is what every "dark while it moves" guard already reads, so
+ *  a held laser is the one exception to "never swing a lit laser" - his.
+ *
+ *  It rides on the held FLASH's own machinery: m_flashHeld is the set that
+ *  says "full, nothing steps under it". m_padFlash says which of those a
+ *  PAD holds, so the FLASH button's release, an automatic hit's end and the
+ *  quiet-link watch leave them alone - heldFull() is the one question.
+ *
+ *  A hold is a promise to let go: the desk and the phone say "still held"
+ *  every second, and a pad no one has said that for in ENGINE_PAD_FLASH_MS
+ *  lets go by itself (a phone that lost the Wi-Fi with a thumb on a pad).
+ * ===================================================================== */
+
+QStringList TrackEngine::flashGroups() const
+{
+    QStringList out;
+    foreach (const QString &key, m_groupOrder)
+        if (m_padFlash.contains(key))
+            out << key;
+    return out;
+}
+
+bool TrackEngine::heldFull(const QString &key) const
+{
+    // the FLASH WHITE button's groups while it is down, and a pad's group
+    return m_flashHeld.contains(key) && (m_flash || m_padFlash.contains(key));
+}
+
+void TrackEngine::flashGroup(const QString &key, bool on)
+{
+    const qint64 now = m_clock.elapsed();
+    if (on)
+    {
+        if (m_padFlash.contains(key))
+        {
+            m_padFlashMs.insert(key, now);       // "still held"
+            return;
+        }
+        ensureTable();
+        if (m_groups.contains(key) == false || m_groupOff.contains(key))
+            return;
+        const TrackGroup &g = m_groups.value(key);
+        // the mark goes in before anything runs: slotScale() and setPart() read it
+        m_padFlash.insert(key);
+        m_padFlashMs.insert(key, now);
+        const bool wasHeld = m_flashHeld.contains(key);  // the FLASH button has it already
+        m_flashHeld.insert(key);
+        if (wasHeld == false)
+        {
+            // a hardware strobe burst on it ends: the pad is a steady white
+            stopSlot(QStringLiteral("str:") + key, true);
+            const bool laser = g.lasers || g.patternDevice;
+            const bool lookRuns = m_active.contains(QStringLiteral("col:") + key)
+                               || m_active.contains(QStringLiteral("mot:") + key);
+            // the white - not on a laser that is already showing its look
+            if (laser == false || lookRuns == false)
+            {
+                quint32 fid = colourFunction(key, QStringLiteral("white"));
+                if (fid == Function::invalidId() && laser)
+                    fid = colourFunction(key, m_colour);
+                if (fid != Function::invalidId())
+                {
+                    // colour channels are HTP: the room's colour steps aside, as
+                    // under FLASH WHITE, and comes back on the first beat after
+                    if (laser == false)
+                        stopSlot(QStringLiteral("col:") + key, true);
+                    run(QStringLiteral("flash:") + key, fid, 1.0, 0, true);
+                }
+            }
+            const qreal keepDepth = m_pulseDepth.value(key, 0.0);
+            const int keepBreath = m_breathe.value(key, 0);
+            m_pulseDepth.insert(key, 0.0);
+            m_breathe.insert(key, 0);
+            setDimmer(key, 1.0);
+            m_pulseDepth.insert(key, keepDepth);
+            m_breathe.insert(key, keepBreath);
+        }
+        crumb(QStringLiteral("pad ") + key);            // R435_CRUMBS
+        emit flashGroupsChanged();
+        emit liveChanged();
+        return;
+    }
+
+    if (m_padFlash.remove(key) == false)
+        return;
+    m_padFlashMs.remove(key);
+    // the FLASH WHITE button still down over a strobe group: it keeps it
+    if (m_flash == false || m_groups.value(key).strobes == false)
+    {
+        m_flashHeld.remove(key);
+        stopSlot(QStringLiteral("flash:") + key, true);
+        const TrackGroup &g = m_groups.value(key);
+        if (m_cast.contains(key) == false)
+        {
+            // out of the cast: dark at once, as the button's release cuts it
+            for (int i = 0; i < g.parts.count(); i++)
+                stopSlot(partSlot(key, i), true);
+        }
+        else if (m_motionDim.contains(key))
+        {
+            // its chase owns the dimmers again
+            for (int i = 0; i < g.parts.count(); i++)
+                stopSlot(partSlot(key, i), true);
+        }
+        else if (g.hasDimmer)
+            setDimmer(key, m_moveLevel.value(key, 0.0));
+        reapplyLevels();
+    }
+    crumb(QStringLiteral("pad off ") + key);            // R435_CRUMBS
+    emit flashGroupsChanged();
+    emit liveChanged();
+}
+
+void TrackEngine::padFlashTick()
+{
+    // every 200 ms from closingTick(): a pad nobody holds any more lets go
+    if (m_padFlash.isEmpty())
+        return;
+    const qint64 now = m_clock.elapsed();
+    foreach (const QString &key, m_padFlash.values())
+        if (now - m_padFlashMs.value(key, 0) > ENGINE_PAD_FLASH_MS)
+            flashGroup(key, false);
+}
+
+void TrackEngine::padFlashClear()
+{
+    // release(), stopAll(), a new table: the sets go, with nothing left held
+    if (m_padFlash.isEmpty())
+        return;
+    m_padFlash.clear();
+    m_padFlashMs.clear();
+    emit flashGroupsChanged();
 }
