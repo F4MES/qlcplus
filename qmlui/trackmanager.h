@@ -90,6 +90,13 @@ class TrackManager : public QObject
     Q_PROPERTY(bool bltRunning READ bltRunning NOTIFY bltRunningChanged)   // R465_BLT_LIVE_PROP
     Q_PROPERTY(bool bltKnown READ bltKnown NOTIFY bltRunningChanged)       // R468_BLT_LOOK_PROP
     Q_PROPERTY(int bltStartState READ bltStartState NOTIFY bltStartChanged)   // R468_START_BLT_PROP: 0, 1 starting, 2 it did not
+    // R474_UPDATE_PROP: the release's newest rig build, the one update-qlc.cmd installed last,
+    // update-qlc.cmd where it can be run - and UPDATE's step: 0, 1 started, 2 no script, 3 SHOW OFF first
+    Q_PROPERTY(QString updateLatest READ updateLatest NOTIFY updateChanged)
+    Q_PROPERTY(QString updateInstalled READ updateInstalled NOTIFY updateChanged)
+    Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateChanged)
+    Q_PROPERTY(QString updateScript READ updateScript NOTIFY updateChanged)
+    Q_PROPERTY(int updateStep READ updateStep NOTIFY updateChanged)
     /** No position from BLT for a while although a track was playing:
      *  the engine holds its last look instead of guessing. */
     Q_PROPERTY(bool linkStale READ linkStale NOTIFY linkChanged)
@@ -150,6 +157,12 @@ public:
     int bltStartState() const;           // R468_START_BLT_GET
     /** START BLT on the empty track: Beat Link Trigger from the taskbar's own shortcut */
     Q_INVOKABLE void startBlt();
+    QString updateLatest() const;        // R474_UPDATE_GET
+    QString updateInstalled() const;
+    bool updateAvailable() const;
+    QString updateScript() const;
+    int updateStep() const;
+    Q_INVOKABLE void startUpdate();
     bool linkStale() const;
 
     QString title() const;
@@ -284,6 +297,7 @@ signals:
     void connectedChanged();
     void bltRunningChanged();            // R465_BLT_LIVE_SIG
     void bltStartChanged();              // R468_START_BLT_SIG
+    void updateChanged();                // R474_UPDATE_SIG
     void linkChanged();
     void tempoChanged();        // R313_TEMPO_SIGNAL: engineTempo / tempoSource
     void trackChanged();
@@ -502,6 +516,16 @@ private:
     int m_bltStartState = 0;             // R468_START_BLT_MEM
     bool m_bltLaunchPending = false;
     QTimer m_bltStartTimer;
+    // R474_UPDATE_MEM (track_runtime/remote.inc.cpp)
+    QString m_updateLatest, m_updateInstalled, m_updateScript;
+    QStringList m_updateRolledBack;
+    int m_updateStep = 0;
+    QProcess *m_updateProbe = nullptr;
+    QTimer m_updateTimer;
+    static QString findUpdateScript();
+    void readUpdateInstalled();
+    void setUpdateStep(int state);
+    void updateCheck();
     void bltProbed(bool running);
     void setBltStart(int state);
     static QString bltShortcut();

@@ -1848,6 +1848,13 @@ void TrackEngine::noteSectionOverride(const QString &state, const QString &analy
                               : QStringLiteral("sig:section:") + state + QStringLiteral(":was:") + was);
 }
 
+void TrackEngine::noteUpdate(const QString &script)
+{
+    // R474_UPDATE: UPDATE from the phone or the desk - update-qlc.cmd started, or not
+    logSignal(script.isEmpty() ? QStringLiteral("sig:update:not-started") : QStringLiteral("sig:update:started"));
+    crumb(QStringLiteral("update ") + (script.isEmpty() ? QStringLiteral("-") : script));
+}
+
 void TrackEngine::noteSectionRelease(const QString &held, const QString &now)
 {
     // R429_SECTION_ONCE: "sig:section-release:<held>:now:<analysed>" - the music

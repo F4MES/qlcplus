@@ -10,6 +10,7 @@
 */
 
 #include <QJsonDocument>
+#include <QFile>                    // R474_UPDATE_INC: update-qlc's state.json
 #include <QCoreApplication>         // R459_RM_APPINC
 #include <QProcess>                 // R465_BLT_LIVE_INC
 #include <QDesktopServices>         // R468_START_BLT_INC
@@ -123,6 +124,11 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     // does not link to the Track code)
     if (QCoreApplication::instance() != nullptr)
         QCoreApplication::instance()->setProperty("trackRemote", QVariant::fromValue<QObject *>(this));
+    // R474_UPDATE_START: a newer rig build? Every 30 min, the first look 20 s after the start
+    QTimer::singleShot(20000, this, &TrackManager::updateCheck);
+    m_updateTimer.setInterval(30 * 60 * 1000);
+    connect(&m_updateTimer, &QTimer::timeout, this, &TrackManager::updateCheck);
+    m_updateTimer.start();
     // R465_BLT_LIVE_START: is Beat Link Trigger running - now, and every 5 s
     connect(&m_bltProbeTimer, &QTimer::timeout, this, &TrackManager::probeBlt);
     m_bltProbeTimer.start(5000);
@@ -1830,6 +1836,16 @@ QString TrackManager::remoteState()
         mk.append(j);
     }
     o.insert(QStringLiteral("markers"), mk);
+    // R474_UPDATE: a newer rig build, and whether update-qlc.cmd can run
+    {
+        QJsonObject upd;
+        upd.insert(QStringLiteral("latest"), m_updateLatest);
+        upd.insert(QStringLiteral("installed"), m_updateInstalled);
+        upd.insert(QStringLiteral("avail"), updateAvailable());
+        upd.insert(QStringLiteral("found"), m_updateScript.isEmpty() == false);
+        upd.insert(QStringLiteral("st"), m_updateStep);
+        o.insert(QStringLiteral("upd"), upd);
+    }
     if (m_engine != nullptr)
     {
         TrackEngine *e = m_engine;           // (groups() and palette() are not const)
@@ -2084,11 +2100,180 @@ QString TrackManager::remoteCommand(const QString &line)
             v = 0;                           // R463_RM_ARGS: as the desk's fader
         e->setFan(v / 100.0);
     }
+    else if (cmd == QStringLiteral("update"))
+        startUpdate();                       // R474_UPDATE: SHOW OFF only - it says so (st 3)
     else
         return QStringLiteral("TRACKERR|unknown command ") + cmd;
     return remoteState();
 }
 
+
+/* =====================================================================
+ *  QLC+ UPDATE (runde 474, R474_UPDATE) - in track_runtime/remote.inc.cpp,
+ *  the manager's door for the phone.
+ *
+ *  Tobias, 2026-10-16 (mockups approved): "et lille check i QLC (mobilsiden
+ *  OG QLC) der checker om der er en ny version ... viser opdater knappen (med
+ *  advarsel om at QLC lukker) ... non-intrusive" / "en lille knap paa
+ *  mobilsiden, der kalder update scriptet, saa jeg kan opdatere qlc paa
+ *  distancen" - C:\Users\User\Desktop\update-qlc.cmd.
+ *
+ *  - the check: every 30 min (the first 20 s after the start), PowerShell in
+ *    a process of its own reads rig-build.txt of the release rig-latest - the
+ *    file update-qlc.cmd itself reads; the build installed is update-qlc's
+ *    own state.json (%LOCALAPPDATA%\qlc-rig-update). Nothing waits for it.
+ *  - UPDATE: only with SHOW OFF (approved: never the light out mid-track by
+ *    accident). update-qlc.cmd runs in a window of its own on the PC
+ *    ("start"), so it lives on when it closes QLC+; it installs, puts the
+ *    show file in place and starts QLC+ again - and with nothing new it
+ *    leaves QLC+ alone.
+ *  - updateStep: 0, 1 started, 2 the script is not there (or would not
+ *    start), 3 SHOW OFF first
+ * ===================================================================== */
+
+QString TrackManager::updateLatest() const { return m_updateLatest; }
+QString TrackManager::updateInstalled() const { return m_updateInstalled; }
+QString TrackManager::updateScript() const { return m_updateScript; }
+int TrackManager::updateStep() const { return m_updateStep; }
+
+bool TrackManager::updateAvailable() const
+{
+    // a build in the release that update-qlc.cmd has not installed (nor rolled back)
+    return m_updateLatest.isEmpty() == false && m_updateLatest != m_updateInstalled
+        && m_updateRolledBack.contains(m_updateLatest) == false;
+}
+
+QString TrackManager::findUpdateScript()
+{
+    // the Desktop first (where it is on the lys-PC), then where update-qlc.cmd puts its things
+    const QString home = qEnvironmentVariable("USERPROFILE", QDir::homePath());
+    const QStringList dirs = QStringList()
+        << QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)
+        << home + QStringLiteral("/Desktop")
+        << home + QStringLiteral("/OneDrive/Desktop")
+        << home + QStringLiteral("/Downloads/qlc-update");
+    for (const QString &d : dirs)
+    {
+        if (d.isEmpty())
+            continue;
+        const QString f = QDir(d).filePath(QStringLiteral("update-qlc.cmd"));
+        if (QFileInfo::exists(f))
+            return QDir::toNativeSeparators(f);
+    }
+    return QString();
+}
+
+void TrackManager::readUpdateInstalled()
+{
+    // update-qlc.cmd's own record: { exeRev, rolledBack } (PowerShell writes it with a BOM)
+    const QString base = qEnvironmentVariable("LOCALAPPDATA");
+    if (base.isEmpty())
+        return;
+    QFile f(QDir(base).filePath(QStringLiteral("qlc-rig-update/state.json")));
+    if (f.open(QIODevice::ReadOnly) == false)
+        return;
+    QByteArray data = f.readAll();
+    if (data.startsWith("\xEF\xBB\xBF"))
+        data.remove(0, 3);
+    const QJsonObject o = QJsonDocument::fromJson(data).object();
+    m_updateInstalled = o.value(QStringLiteral("exeRev")).toVariant().toString().trimmed();
+    m_updateRolledBack.clear();
+    const QJsonValue rb = o.value(QStringLiteral("rolledBack"));
+    if (rb.isArray())
+        for (const QJsonValue &v : rb.toArray())
+            m_updateRolledBack << v.toVariant().toString().trimmed();
+    else if (rb.isString())
+        m_updateRolledBack << rb.toString().trimmed();   // ConvertTo-Json: one item is not a list
+}
+
+void TrackManager::setUpdateStep(int state)
+{
+    if (state == m_updateStep)
+        return;
+    m_updateStep = state;
+    emit updateChanged();
+}
+
+void TrackManager::updateCheck()
+{
+    m_updateScript = findUpdateScript();
+    readUpdateInstalled();
+    emit updateChanged();
+    if (m_updateProbe != nullptr)
+        return;                          // the last check still runs
+#if defined(Q_OS_WIN)
+    QProcess *p = new QProcess(this);
+    m_updateProbe = p;
+    connect(p, &QProcess::finished, this, [this, p](int, QProcess::ExitStatus) {
+        const QStringList lines = QString::fromLocal8Bit(p->readAllStandardOutput()).split(QLatin1Char('\n'));
+        if (m_updateProbe == p)
+            m_updateProbe = nullptr;
+        p->deleteLater();
+        for (const QString &line : lines)
+        {
+            if (line.trimmed().startsWith(QLatin1String("REV=")) == false)
+                continue;
+            const QString rev = line.trimmed().mid(4).trimmed();
+            if (rev.isEmpty() || rev == m_updateLatest)
+                break;
+            m_updateLatest = rev;
+            qDebug() << "[TrackManager] update: rig build" << rev << "- installed" << m_updateInstalled;
+            emit updateChanged();
+            break;
+        }
+    });
+    connect(p, &QProcess::errorOccurred, this, [this, p](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart)
+            return;                      // finished() follows the others
+        if (m_updateProbe == p)
+            m_updateProbe = nullptr;
+        p->deleteLater();
+    });
+    // the release's rig-build.txt, as update-qlc.cmd reads it (no login, TLS 1.2)
+    const QString script = QStringLiteral(
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+        "$r = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/F4MES/qlcplus/releases/tags/rig-latest' "
+        "-Headers @{ 'User-Agent' = 'qlc-rig-update' }; "
+        "$a = $r.assets | Where-Object { $_.name -eq 'rig-build.txt' } | Select-Object -First 1; "
+        "if ($a) { $c = (Invoke-WebRequest -UseBasicParsing -Uri $a.browser_download_url).Content; "
+        "if ($c -is [byte[]]) { $c = [Text.Encoding]::UTF8.GetString($c) }; Write-Output ('REV=' + ([string]$c).Trim()) }");
+    p->start(QStringLiteral("powershell"), QStringList() << QStringLiteral("-NoProfile") << QStringLiteral("-NonInteractive")
+             << QStringLiteral("-ExecutionPolicy") << QStringLiteral("Bypass") << QStringLiteral("-Command") << script);
+    // a check that hangs (no network) is stopped after a minute; finished() tidies up
+    QTimer::singleShot(60000, p, [p]() { if (p->state() != QProcess::NotRunning) p->kill(); });
+#endif
+}
+
+void TrackManager::startUpdate()
+{
+    if (m_autoRun)
+    {
+        // SHOW OFF first - the update closes QLC+ and the light with it
+        setUpdateStep(3);
+        QTimer::singleShot(4000, this, [this]() { if (m_updateStep == 3) setUpdateStep(0); });
+        return;
+    }
+    m_updateScript = findUpdateScript();
+    bool ok = false;
+#if defined(Q_OS_WIN)
+    // a window of its own: it lives on when it closes QLC+ (and shows what it does on the PC)
+    if (m_updateScript.isEmpty() == false)
+        ok = QProcess::startDetached(QStringLiteral("cmd.exe"), QStringList() << QStringLiteral("/c") << QStringLiteral("start")
+                                     << QStringLiteral("QLC+ update") << m_updateScript);
+#endif
+    qDebug() << "[TrackManager] update:" << (ok ? "started" : "not started") << m_updateScript;
+    if (m_engine != nullptr)
+        m_engine->noteUpdate(ok ? m_updateScript : QString());
+    if (ok == false)
+    {
+        setUpdateStep(2);
+        QTimer::singleShot(8000, this, [this]() { if (m_updateStep == 2) setUpdateStep(0); });
+        return;
+    }
+    setUpdateStep(1);
+    // nothing new: the script leaves QLC+ running - the button comes back
+    QTimer::singleShot(120000, this, [this]() { if (m_updateStep == 1) { setUpdateStep(0); updateCheck(); } });
+}
 // R450_TT_CPP
 /* =====================================================================
  *  TEST TRACK (runde 450) - put into trackmanager.cpp by

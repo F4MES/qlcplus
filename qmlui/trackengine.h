@@ -1200,6 +1200,7 @@ public:
     /** runde 429: a SECTION press let go by the analysis' next section
      *  (R429_SECTION_ONCE) - a sig: line, not a press. Log only. */
     void noteSectionRelease(const QString &held, const QString &now);
+    void noteUpdate(const QString &script);   // R474_UPDATE: "sig:update:..." in the tracklog
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
     /** R463_LINK_IDLE: the link went quiet or BLT left - idle(), but an armed LAST
