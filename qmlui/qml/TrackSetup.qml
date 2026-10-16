@@ -516,7 +516,7 @@ Rectangle
             color: "#1E1E21"
             radius: 6
             readonly property bool showOn: trackManager ? trackManager.autoRun : false
-            readonly property real cw: Math.max(220, Math.min(340, (width - 40 - 2 * 24) / 3))
+            readonly property real cw: Math.max(200, Math.min(340, (width - 40 - 3 * 24) / 4))   // R470_SYNC: four a row
             // R440_BARS_LAB: each card from its own summary (strobes [0], bars [1])
             readonly property var sums: trackEngine ? trackEngine.slabSummaries : []
             function sum(kind, field, dflt) { return (sums.length > kind && sums[kind][field] !== undefined) ? sums[kind][field] : dflt }
@@ -525,13 +525,13 @@ Rectangle
             Text
             {
                 x: 70; y: 17; width: parent.width - 90; elide: Text.ElideRight
-                text: qsTr("one lamp type at a time - see every look on the rig, keep it or not.  SHOW OFF only (MIC CHECK: any time).")
+                text: qsTr("one lamp type at a time - see every look on the rig, keep it or not.  SHOW OFF only (MIC CHECK, SYNC: any time).")
                 color: setupRoot.cDim; font.pixelSize: 13
             }
             Grid
             {
                 x: 20; y: 52
-                columns: 3
+                columns: 4
                 spacing: 24
                 LabCard
                 {
@@ -594,6 +594,19 @@ Rectangle
                                                                         : qsTr("only listens - nothing on the rig changes")
                     openName: "labOpen:mic"
                     onOpen: if (trackEngine) trackEngine.micOpen()
+                }
+                // R470_SYNC: the light against the sound - live, the show on is fine
+                LabCard
+                {
+                    title: qsTr("SYNC")
+                    width: labMenu.cw; showOn: false
+                    sub: qsTr("is the light on time with the sound?  ·  SHOW ON is fine")
+                    can: true
+                    line1: qsTr("two rounds of 16 taps with the music playing")
+                    line2: trackEngine && trackEngine.syncOffset !== 0 ? qsTr("the light is moved %1 ms").arg((trackEngine.syncOffset > 0 ? "+" : "") + trackEngine.syncOffset)
+                                                                     : qsTr("the light runs as it always did (0 ms)")
+                    openName: "labOpen:sync"
+                    onOpen: if (trackEngine) trackEngine.syncOpen()
                 }
                 LabCard { width: labMenu.cw; title: qsTr("WASH LAB"); sub: qsTr("the moving heads"); live: false }
             }
@@ -1333,6 +1346,64 @@ Rectangle
             }
         }
 
+        // ------------------------------------------------- R470_CLOCK_HAND
+        // where HIS hand put ENERGY at each quarter hour, the last nights - only a
+        // proposal: a gold tile differs 10 % or more; a tap takes that one point,
+        // USE YOURS takes them all. The clock never changes by itself.
+        ColumnLayout
+        {
+            objectName: "clockHand"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            visible: setupRoot.advancedOpen && trackEngine && trackEngine.clockHandNights.length > 0
+            spacing: 6
+            RowLayout
+            {
+                Layout.fillWidth: true
+                spacing: 10
+                Text { text: qsTr("YOUR HAND"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+                Text
+                {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    text: trackEngine ? qsTr("where you put ENERGY by hand, %1 nights (%2) - gold = 10 % or more from the clock, tap one to take it")
+                                          .arg(trackEngine.clockHandNights.length).arg(trackEngine.clockHandNights.join(", ")) : ""
+                    color: setupRoot.cDim; font.pixelSize: 12
+                }
+                TrackTile
+                {
+                    objectName: "clockHandUse"
+                    Layout.preferredWidth: 120; Layout.preferredHeight: 34
+                    label: qsTr("USE YOURS"); active: true; activeColor: "#E3B44F"
+                    onTapped: if (trackEngine) trackEngine.useClockHand(-1)
+                }
+            }
+            GridLayout
+            {
+                Layout.fillWidth: true
+                columns: 14; columnSpacing: 4; rowSpacing: 4
+                Repeater
+                {
+                    model: trackEngine ? trackEngine.clockHand : []
+                    TrackTile
+                    {
+                        objectName: "clockHand:" + index
+                        Layout.preferredWidth: 60
+                        Layout.preferredHeight: 34
+                        property int at: 20 * 60 + 15 * index
+                        readonly property int clock: trackEngine && trackEngine.clockCurve.length > index ? trackEngine.clockCurve[index] : 0
+                        readonly property bool apart: modelData >= 0 && Math.abs(modelData - clock) >= 10
+                        label: ("0" + (Math.floor(at / 60) % 24)).slice(-2) + ":" + ("0" + (at % 60)).slice(-2)
+                               + "\n" + (modelData >= 0 ? modelData + "%" : "-")
+                        active: apart
+                        activeColor: "#E3B44F"
+                        opacity: modelData >= 0 ? 1.0 : 0.4
+                        onTapped: if (trackEngine && apart) trackEngine.useClockHand(index)
+                    }
+                }
+            }
+        }
+
         // ------------------------------------------------- running
         Text
         {
@@ -1396,6 +1467,19 @@ Rectangle
         active: trackEngine ? trackEngine.micActive : false
         visible: active
         source: "qrc:/MicCheck.qml"
+    }
+
+    // R470_SYNC: SYNC over the whole page, as MIC CHECK
+    Loader
+    {
+        id: syncLoader
+        objectName: "syncLoader"
+        parent: setupRoot.host ? setupRoot.host : setupRoot
+        anchors.fill: parent
+        z: 1000
+        active: trackEngine ? trackEngine.syncActive : false
+        visible: active
+        source: "qrc:/SyncCheck.qml"
     }
 
     // R440_SEND: SEND TO CLAUDE - over the whole page, from ADVANCED

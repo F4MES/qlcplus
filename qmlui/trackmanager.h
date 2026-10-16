@@ -484,6 +484,15 @@ private:
     qint64 m_bltProbeMs = 0;
     bool m_bltRunning = false;
     bool m_bltKnown = false;             // R468_BLT_LOOK_MEM: a look that ran to the end said so
+    void runEngineSynced();              // R470_SYNC_MEM
+    void syncEarlyBeat();
+    void syncSawBeat(int beat);
+    void syncPlanEarly(int beat, int afterMs);
+    QTimer m_syncLate, m_syncEarly;
+    bool m_syncTimersOn = false;
+    int m_syncRealBeat = -1;             // the last beat BLT said
+    int m_syncEarlyFor = -1;             // the early timer runs the beat after this one
+    int m_syncAhead = -1;                // the beat run early, before BLT said it
     int m_bltLook = 0;                   // 0 the names, 1 java's windows, 2 every window
     int m_bltStartState = 0;             // R468_START_BLT_MEM
     bool m_bltLaunchPending = false;

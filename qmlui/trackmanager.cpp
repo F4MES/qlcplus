@@ -536,7 +536,10 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     if (playing && m_playing && beat == m_currentBeat - 1 && now - m_beatChangedMs < 150)
         return;
     if (beat == m_currentBeat && playing == m_playing && timeMs == m_trackTimeMs)
+    {
+        syncSawBeat(beat);               // R470_SYNC_SEEN: a beat run early - BLT says it now
         return;
+    }
 
     // R235_DJ_LOOP_SEEN: the same short step back twice is a loop
     if (playing && m_playing && beat > 0 && beat < m_currentBeat && m_currentBeat - beat <= 32)
@@ -574,7 +577,7 @@ void TrackManager::handlePosition(const QJsonObject &obj)
 
     emit positionChanged();
     updateState();
-    runEngine(false);
+    runEngineSynced();                   // R470_SYNC_RUN: by SYNC's offset
 }
 
 /*********************************************************************
@@ -1553,6 +1556,82 @@ void TrackManager::bltProbed(bool running)
         setBltStart(2);
     }
     // else STARTING ...: the 5 s look sees it come up (bltProbed(true) above)
+}
+
+// R470_SYNC_CPP
+void TrackManager::runEngineSynced()
+{
+    const int off = m_engine != nullptr ? m_engine->syncOffset() : 0;
+    if (m_syncTimersOn == false)
+    {
+        m_syncTimersOn = true;
+        m_syncLate.setSingleShot(true);
+        m_syncEarly.setSingleShot(true);
+        m_syncLate.setTimerType(Qt::PreciseTimer);
+        m_syncEarly.setTimerType(Qt::PreciseTimer);
+        connect(&m_syncLate, &QTimer::timeout, this, [this]() { runEngine(false); });
+        connect(&m_syncEarly, &QTimer::timeout, this, &TrackManager::syncEarlyBeat);
+    }
+    const bool newBeat = m_playing && m_currentBeat > 0 && m_currentBeat != m_syncRealBeat;
+    if (newBeat)
+        m_syncRealBeat = m_currentBeat;
+    if (m_currentBeat != m_syncAhead)
+        m_syncAhead = -1;                // another beat than the one run early (or a jump)
+    if (off > 0 && m_playing && m_linkStale == false && m_currentBeat != m_lastEngineBeat)
+    {
+        // the light later: this beat waits (a packet of the same beat does not restart it)
+        if (m_syncLate.isActive() == false)
+            m_syncLate.start(off);
+        return;
+    }
+    m_syncLate.stop();
+    runEngine(false);
+    if (off < 0 && newBeat && m_linkStale == false)
+        syncPlanEarly(m_currentBeat, off);
+    else if (newBeat || off >= 0)
+        m_syncEarly.stop();
+}
+
+void TrackManager::syncPlanEarly(int beat, int afterMs)
+{
+    // the beat after this one, a beat from now plus afterMs (negative: earlier)
+    const qreal bpm = engineBpm();
+    if (bpm <= 20.0)
+        return;
+    const int due = int(qRound(60000.0 / bpm)) + afterMs;
+    m_syncEarlyFor = beat;
+    if (due > 0)
+        m_syncEarly.start(due);
+}
+
+void TrackManager::syncSawBeat(int beat)
+{
+    // BLT says the beat that ran early: the next early one is timed from this, its real time
+    if (m_syncAhead <= 0 || beat != m_syncAhead || beat == m_syncRealBeat || m_playing == false)
+        return;
+    m_syncRealBeat = beat;
+    const int off = m_engine != nullptr ? m_engine->syncOffset() : 0;
+    if (off < 0 && m_linkStale == false)
+        syncPlanEarly(beat, off);
+}
+
+void TrackManager::syncEarlyBeat()
+{
+    // only when nothing happened in between: the same track, playing, no newer beat
+    if (m_playing == false || m_linkStale || m_engine == nullptr || m_engine->syncOffset() >= 0
+        || m_syncEarlyFor < 1 || m_currentBeat != m_syncEarlyFor || m_lastEngineBeat != m_syncEarlyFor
+        || (m_beatCount > 0 && m_syncEarlyFor + 1 > m_beatCount))
+        return;
+    m_currentBeat = m_syncEarlyFor + 1;  // its real packet then finds it done
+    m_syncAhead = m_currentBeat;
+    // the status packets that still say the beat before are BLT's echo (R187)
+    m_beatChangedMs = QDateTime::currentMSecsSinceEpoch();
+    updateState();
+    runEngine(false);
+    // a beat BLT does not say (it can skip one): the next early one goes on from
+    // here - two at most past the last beat it did say
+    if (m_currentBeat - m_syncRealBeat < 2)
+        syncPlanEarly(m_currentBeat, 0);
 }
 
 // R459_RM_CPP
