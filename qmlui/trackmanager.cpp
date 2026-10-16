@@ -13,6 +13,9 @@
 #include <QCoreApplication>         // R459_RM_APPINC
 #include <QProcess>                 // R465_BLT_LIVE_INC
 #include <QDesktopServices>         // R468_START_BLT_INC
+#include <QStandardPaths>           // R468_START_BLT_INC2: bltShortcut()'s Windows branch
+#include <QFileInfo>
+#include <QDir>
 #include <QDirIterator>
 #include <QUrl>
 #include <QJsonObject>
