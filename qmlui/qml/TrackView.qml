@@ -975,6 +975,74 @@ Rectangle
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Math.round(18 * trackViewRoot.ks)
 
+                // R474_UPDATE (Tobias 10-16, mockup approved): a newer rig build - nothing at all
+                // until there is one; SURE? (5 s); only with SHOW OFF (the manager says so)
+                Rectangle
+                {
+                    id: updChip
+                    objectName: "updateChip"
+                    visible: trackManager ? trackManager.updateAvailable === true : false
+                    readonly property int st: trackManager && trackManager.updateStep !== undefined ? trackManager.updateStep : 0
+                    readonly property bool showOn: trackManager ? trackManager.autoRun === true : false
+                    readonly property string latest: trackManager && trackManager.updateLatest ? trackManager.updateLatest : ""
+                    property bool arm: false
+                    Timer { id: updArm; interval: 5000; onTriggered: updChip.arm = false }
+                    onShowOnChanged: if (showOn) arm = false
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: updCol.implicitWidth + Math.round(54 * trackViewRoot.ks)
+                    height: Math.max(48, Math.round(48 * trackViewRoot.ks))
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: arm ? trackViewRoot.cGold : "#141418"
+                    border.width: arm ? 0 : 2
+                    border.color: trackViewRoot.cGold
+                    opacity: showOn && !arm ? 0.6 : 1.0
+                    Rectangle
+                    {
+                        visible: !updChip.arm
+                        x: Math.round(16 * trackViewRoot.ks); anchors.verticalCenter: parent.verticalCenter
+                        width: Math.round(10 * trackViewRoot.ks); height: width; radius: width / 2
+                        color: trackViewRoot.cGold
+                    }
+                    Column
+                    {
+                        id: updCol
+                        x: Math.round((updChip.arm ? 18 : 36) * trackViewRoot.ks)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 1
+                        Text
+                        {
+                            objectName: "updateChipText"
+                            text: updChip.st === 1 ? qsTr("UPDATE STARTED") : updChip.arm ? qsTr("SURE? - TAP AGAIN") : qsTr("UPDATE QLC+")
+                            color: updChip.arm ? "#1A1408" : trackViewRoot.cGold
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(16)
+                            font.letterSpacing: trackViewRoot.fs(16) * 0.06
+                        }
+                        Text
+                        {
+                            objectName: "updateChipSub"
+                            text: updChip.st === 1 ? qsTr("QLC+ closes and comes back by itself")
+                                : updChip.st === 2 ? qsTr("update-qlc.cmd is not on the Desktop")
+                                : (updChip.st === 3 || updChip.showOn) ? qsTr("SHOW OFF first")
+                                : updChip.arm ? qsTr("QLC+ closes, installs build %1, starts again").arg(updChip.latest)
+                                : qsTr("build %1 is ready").arg(updChip.latest)
+                            color: updChip.arm ? "#3C2D0A" : trackViewRoot.cMute
+                            font.pixelSize: trackViewRoot.fs(12)
+                        }
+                    }
+                    TouchInput
+                    {
+                        onReleasedAt: (x, y, inside) => {
+                            if (!inside || !trackManager || updChip.st === 1)
+                                return
+                            if (updChip.showOn) { trackManager.startUpdate(); return }   // "SHOW OFF first"
+                            if (!updChip.arm) { updChip.arm = true; updArm.restart(); return }
+                            updChip.arm = false; updArm.stop()
+                            trackManager.startUpdate()
+                        }
+                    }
+                }
+
                 // R402_BEAT_DOTS (Tobias 10-08: "kun fire beat prikker ved uret"): the beat
                 // in the bar - the one playing lit, the downbeat white - and a small
                 // pop on each beat (R402_BEAT_PULSE)

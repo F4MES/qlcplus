@@ -126,6 +126,15 @@ button{font-family:inherit;cursor:pointer}
 /* R473_PHONE_APP: on the home screen iOS blurs the strip under the clock - the track line sits clear of it */
 @media (display-mode: standalone){#app{padding-top:calc(env(safe-area-inset-top) + 16px)}}
 html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
+/* R474_UPDATE: QLC+ at the bottom of RIG - gold only when a new build is ready */
+.upd{margin-top:2px;padding:12px;border-radius:10px;background:var(--card);display:flex;align-items:center;gap:10px}
+.upd div{flex:1;min-width:0}.upd b{display:block;font-size:13px;letter-spacing:.08em}
+.upd small{display:block;font-size:11px;color:var(--mute);margin-top:3px;line-height:1.35}.upd small.gold{color:var(--gold)}
+.upd button{height:44px;border-radius:8px;padding:0 14px;font-weight:800;font-size:12px;letter-spacing:.08em;background:var(--btn);color:var(--text);border:2px solid var(--edge);flex:none}
+.upd button.new{color:var(--gold);border-color:var(--gold)}
+.upd button.sure{background:var(--gold);color:#1A1408;border-color:var(--gold)}
+.upd button.off{opacity:.4}
+.tabs button .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gold);margin-left:6px;vertical-align:2px}
 </style>
 </head>
 <body>
@@ -200,6 +209,8 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       <div class="lbl">HAZE MACHINE</div>
       <div class="fader" data-f="haze" style="margin-bottom:8px"><div class="fill" style="background:#8C8C96"></div><div class="grip"></div><div class="name" style="color:#141418">HAZE</div><div class="val"></div></div>
       <div class="fader" data-f="fan"><div class="fill" style="background:#6A8496"></div><div class="grip"></div><div class="name" style="color:#141418">FAN SPEED</div><div class="val"></div></div>
+      <div class="lbl">QLC+</div>
+      <div class="upd" id="upd"><div><b id="updT">QLC+</b><small id="updS"></small></div><button id="updB">UPDATE</button></div>
       <div class="note">The same controls as the desk - the last touch wins. A held button lets go by itself if the phone loses the Wi-Fi.</div>
     </div>
   </div>
@@ -207,7 +218,7 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
   <div class="tabs">
     <button data-p="live" class="on">LIVE</button>
     <button data-p="look">LOOK</button>
-    <button data-p="rig">RIG</button>
+    <button data-p="rig">RIG<span class="dot" style="display:none"></span></button>
   </div>
 </div>
 <script>
@@ -293,6 +304,15 @@ $('show').onclick = () => { if (!S) return; if (!S.show) send('show|1'); else su
 // R467_HAZE_NAG: HAZE = the slider (by hand, as always), LATER = quiet for 30 min
 $('hazego').onclick = () => { tab('rig'); const f = document.querySelector('[data-f="haze"]'); if (f) f.scrollIntoView({block: 'center'}); };
 $('hazelater').onclick = () => send('hazelater');
+// R474_UPDATE: update-qlc.cmd on the PC - SHOW OFF only, SURE? (5 s)
+let updSure = 0;
+$('updB').onclick = () => {
+  if (!S) return;
+  const U = S.upd || {};
+  if (S.show || !U.found || U.st === 1) { if (S.show) send('update'); return; }   // QLC+ says SHOW OFF first
+  if (!updSure) { updSure = setTimeout(() => { updSure = 0; render(); }, 5000); render(); return; }
+  clearTimeout(updSure); updSure = 0; send('update'); render();
+};
 // R468_RATE: the finger landing is the moment judged (as the desk); a tap rates the
 // whole look, a hold (0.6 s) asks which group on stage - its list as it was at the press
 const rate = {v: 0, timer: 0, held: false, stage: [], aimTimer: 0, noteTimer: 0};
@@ -549,6 +569,22 @@ function render() {
   ['start', 'column', 'down'].forEach(p => cls($('pos-' + p), 'blue', S.position === p));
   [-1, 0, 1].forEach(v => cls($('spd' + v), 'blue', S.speed === v));
 
+  // --- R474_UPDATE: QLC+ at the bottom of RIG
+  {
+    const U = S.upd || {}, nb = !!U.avail;
+    if (updSure && (S.show || U.st === 1)) { clearTimeout(updSure); updSure = 0; }
+    $('updT').textContent = U.st === 1 ? 'UPDATE STARTED' : nb ? 'NEW BUILD ' + U.latest + ' READY' : 'QLC+' + (U.installed ? ' · build ' + U.installed : '');
+    $('updS').textContent = U.st === 1 ? 'update-qlc.cmd runs on the PC - QLC+ closes and comes back by itself'
+      : U.st === 2 || !U.found ? "update-qlc.cmd is not on the PC's Desktop"
+      : (U.st === 3 || S.show) ? 'SHOW OFF first - not while the show runs'
+      : updSure ? 'tap again: QLC+ closes, ' + (nb ? 'installs ' + U.latest + ' ' : 'updates ') + 'and starts again - the light is out for about a minute'
+      : (nb ? 'installed: ' + (U.installed || '?') + ' · ' : 'no new build - it also fetches the show file and BLT\'s functions · ') + 'the update closes QLC+ for about a minute';
+    cls($('updS'), 'gold', !!updSure);
+    const ub = $('updB');
+    ub.textContent = updSure ? 'SURE?' : 'UPDATE';
+    cls(ub, 'new', nb); cls(ub, 'sure', !!updSure); cls(ub, 'off', !!S.show || !U.found || U.st === 1);
+    const dot = document.querySelector('[data-p="rig"] .dot'); if (dot) dot.style.display = nb ? '' : 'none';
+  }
   // --- RIG
   const groups = S.groups || [];
   const keys = groups.map(g => g.key + (g.switchOnly ? '!' : '')).join('|');
@@ -638,6 +674,7 @@ $('groups').addEventListener('click', e => {
 /* ---------------- a stand-in QLC+ for screenshots and tests (?mock=1) ---------------- */
 function mockApply(cmd) {
   const a = cmd.split('|'), c = a[0], on = a[1] === '1';
+  if (c === 'update') { S.upd.st = S.show ? 3 : 1; render(); return; }   // R474_UPDATE
   const m = {show: () => S.show = on, energy: () => { S.roomAuto = false; S.energy = +a[1]; }, energyAuto: () => S.roomAuto = true,
     calm: () => S.calm = S.calm > 0 ? 0 : 16, hold: () => S.hold = !S.hold, blackout: () => S.blackout = on, stutter: () => S.stutter = on,
     stutterRate: () => S.stutterRate = +a[1], hit: () => { S.hitKind = +a[1]; if (+a[1] > 0) S.hitLast = +a[1]; }, flash: () => S.flash = on,
@@ -654,7 +691,7 @@ const q = new URLSearchParams(location.search);
 if (q.get('mock')) {
   mockOn = true;
   $('offline').classList.remove('on');
-  S = {show: true, title: 'Calvin Who - Midnight Session (Extended)', state: 'build', override: '', beat: 129, beats: 392, playing: true,
+  S = {upd: {latest: '473', installed: '472', avail: true, found: true, st: 0}, show: true, title: 'Calvin Who - Midnight Session (Extended)', state: 'build', override: '', beat: 129, beats: 392, playing: true,
     bpm: 126, tempo: 'LINK', connected: true, test: false, energy: 72,
     markers: [{b: 1, t: 'intro'}, {b: 33, t: 'normal'}, {b: 81, t: 'break'}, {b: 97, t: 'build'}, {b: 165, t: 'drop'}, {b: 229, t: 'break'}, {b: 261, t: 'build'}, {b: 293, t: 'drop'}, {b: 357, t: 'outro'}],
     roomAuto: false, calm: 0, hold: false, blackout: false, stutter: false, stutterRate: 2, hitKind: 3, hitLast: 3, flash: false,
