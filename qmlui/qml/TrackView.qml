@@ -2364,6 +2364,12 @@ Rectangle
                 property var litNow: trackEngine ? trackEngine.cast : []
                 // R432_RIG_NEXT: the section the marks are for, and what a tap does
                 readonly property string planName: trackEngine && trackEngine.planSection ? trackEngine.planSection.toUpperCase() : ""
+                // R469_RIG_COLOUR: on stage = the fader in the room's colour (no "on stage" words)
+                readonly property string roomColour: trackEngine ? trackEngine.currentColour : ""
+                readonly property color stageFill: roomColour !== "" ? trackViewRoot.swatch(roomColour) : "#3D86C4"
+                readonly property bool stageLight: (0.299 * stageFill.r + 0.587 * stageFill.g + 0.114 * stageFill.b) > 0.6
+                readonly property color stageInk: stageLight ? "#14141A" : "#F2F6FA"
+                readonly property color stageGrip: stageLight ? "#14141A" : Qt.lighter(stageFill, 1.6)
                 Text
                 {
                     objectName: "rigPlanHint"
@@ -2454,19 +2460,58 @@ Rectangle
                                 onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.toggleDropGroup(grp.md.key) }
                             }
                         }
+                        // R469_GROUP_FLASH (Tobias 10-16: "ikonet ... som en knap ... med et lille flash i siden"):
+                        // the group's own icon is its flash pad - hold = that group full white
+                        Rectangle
+                        {
+                            id: grpFlash
+                            objectName: "groupFlash:" + grp.md.key
+                            x: -Math.round(4 * trackViewRoot.ks)
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.round(54 * trackViewRoot.ks); height: Math.min(grp.height - 2, width)
+                            radius: Math.round(10 * trackViewRoot.ks)
+                            property bool held: trackEngine && trackEngine.flashGroups ? trackEngine.flashGroups.indexOf(grp.md.key) >= 0 : false
+                            color: held ? "#F2F2F6" : "#24242B"
+                            ControlIcon
+                            {
+                                anchors.right: parent.right; anchors.bottom: parent.bottom
+                                anchors.rightMargin: Math.round(3 * trackViewRoot.ks); anchors.bottomMargin: Math.round(3 * trackViewRoot.ks)
+                                width: Math.round(16 * trackViewRoot.ks); height: width
+                                kind: "bolt"
+                                ink: grpFlash.held ? "#101010" : "#E3B44F"
+                            }
+                            TouchInput
+                            {
+                                id: padIn
+                                enabled: !grp.off
+                                onPressedAt: (x, y) => { if (trackEngine) trackEngine.flashGroup(grp.md.key, true) }
+                                onReleasedAt: (x, y, inside) => { if (trackEngine) trackEngine.flashGroup(grp.md.key, false) }
+                                onCanceled: { if (trackEngine) trackEngine.flashGroup(grp.md.key, false) }
+                                // the page gone with the finger still down: no release ever comes
+                                Component.onDestruction: if (down && trackEngine) trackEngine.flashGroup(grp.md.key, false)
+                            }
+                            // "still held" every second - a hold nobody says that for lets go in 3 s
+                            Timer
+                            {
+                                interval: 1000; repeat: true
+                                running: padIn.down && grpFlash.held
+                                onTriggered: if (trackEngine) trackEngine.flashGroup(grp.md.key, true)
+                            }
+                        }
                         ControlIcon
                         {
                             id: grpIcon
                             anchors.verticalCenter: parent.verticalCenter
-                            width: Math.round(26 * trackViewRoot.ks); height: width
-                            ink: grp.ink
+                            x: grpFlash.x + (grpFlash.width - width) / 2      // in the middle of the pad
+                            width: Math.round(28 * trackViewRoot.ks); height: width
+                            ink: grpFlash.held ? "#101010" : grp.ink
                             kind: grp.md.switchOnly ? "animation" : grp.md.strobes ? "strobe" : grp.md.lasers ? "laser"
                                   : grp.md.key.toLowerCase().indexOf("eyes") >= 0 ? "eyes" : "head"
                         }
                         Column
                         {
-                            anchors.left: grpIcon.right
-                            anchors.leftMargin: Math.round(12 * trackViewRoot.ks)
+                            anchors.left: grpFlash.right
+                            anchors.leftMargin: Math.round(10 * trackViewRoot.ks)
                             anchors.right: grpSwitchCell.left
                             anchors.rightMargin: Math.round(4 * trackViewRoot.ks)
                             anchors.verticalCenter: parent.verticalCenter
@@ -2497,11 +2542,11 @@ Rectangle
                                 color: grp.off ? "#5E5E68" : (grp.lit ? trackViewRoot.cGreen : "#6E6E78")
                                 // R432_RIG_NEXT (mockup C): the dot is NOW, the red words the
                                 // plan for the next section
-                                text: (grp.md.base ? "<font color='#4FA3E3'><b>BASE</b></font> · " : "")
-                                      + (grp.inDrop ? "<font color='" + (grp.lit ? "#6ECD82" : "#6E6E78") + "'>" + (grp.lit ? "●" : "○")
-                                                      + "</font> <font color='#F05050'><b>▶ " + (grp.md.base ? "" : qsTr("NEXT") + " ")
+                                visible: text !== ""                      // R469_RIG_STATUS: the name alone, centred
+                                text: (grp.md.base ? "<font color='#4FA3E3'><b>BASE</b></font>" + (grp.inDrop || grp.off ? " · " : "") : "")
+                                      + (grp.inDrop ? "<font color='#F05050'><b>▶ " + (grp.md.base ? "" : qsTr("NEXT") + " ")
                                                       + rigCard.planName + "</b></font>"
-                                         : (grp.off ? qsTr("off") : (grp.lit ? "● " + qsTr("on stage") : "○ " + qsTr("waiting"))))
+                                         : (grp.off ? qsTr("off") : ""))
                             }
                         }
 
@@ -2567,9 +2612,9 @@ Rectangle
                             height: Math.max(trackViewRoot.touchH - 8, grp.height)
                             level: grp.off ? 0 : grp.trim
                             valueText: Math.round(grp.trim * 100) + "%"
-                            fill: grp.lit ? (grp.md.base ? "#2E6FA8" : "#3D86C4") : (input.down ? "#45454E" : "#3A3A42")
-                            gripInk: grp.lit ? "#BFE3FF" : "#B0B0B8"
-                            valueOnFill: "#F2F6FA"
+                            fill: grp.lit ? rigCard.stageFill : (input.down ? "#45454E" : "#3A3A42")      // R469_RIG_COLOUR
+                            gripInk: grp.lit ? rigCard.stageGrip : "#B0B0B8"
+                            valueOnFill: grp.lit ? rigCard.stageInk : "#F2F6FA"
                             enabled: !grp.off
                             opacity: grp.off ? 0.55 : 1
                             onSetLevel: (v) =>
@@ -2590,12 +2635,12 @@ Rectangle
                             width: grp.faderW
                             height: grp.height
                             radius: Math.round(10 * trackViewRoot.ks)
-                            color: grp.off ? "#0A0A0D" : (grp.lit ? "#3D86C4" : "#3A3A42")      // R403_NO_LINES
+                            color: grp.off ? "#0A0A0D" : (grp.lit ? rigCard.stageFill : "#3A3A42")      // R403_NO_LINES   // R469_RIG_COLOUR
                             Text
                             {
                                 anchors.centerIn: parent
                                 text: grp.off ? qsTr("ON / OFF ONLY") : qsTr("ON")
-                                color: grp.off ? "#5E5E68" : "#F2F6FA"
+                                color: grp.off ? "#5E5E68" : (grp.lit ? rigCard.stageInk : "#F2F6FA")
                                 font.bold: true
                                 font.pixelSize: trackViewRoot.fs(12)
                                 font.letterSpacing: (trackViewRoot.fs(12)) * 0.12
@@ -3870,7 +3915,7 @@ Rectangle
             x: rigCard.inX; y: helpOverlay.rowY(1); width: rigCard.inW
             height: 5 * trackViewRoot.rowH + 4 * trackViewRoot.g
             verticalAlignment: Text.AlignTop
-            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling; kept through a restart the same night (until noon).<br><br><font color='#6ECD82'>● on stage</font> - lit now. ○ <b>waiting</b> - in the show, not used right now.<br><br><b>Tap a name</b> - in or out of the next section: <font color='#F05050'>▶ NEXT BREAK</font> (BUILD, DROP ...) is the engine's plan; a tap makes it yours for that whole section. The dot: lit now or waiting. The base has a toggle too.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
+            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling; kept through a restart the same night (until noon).<br><br><b>The fader lights up</b> in the room's colour while the group is on stage; grey = in the show, not used right now.<br><br><b>The icon</b> is the group's flash: hold it = that group full white (lasers in the move they are in).<br><br><b>Tap a name</b> - in or out of the next section: <font color='#F05050'>▶ NEXT BREAK</font> (BUILD, DROP ...) is the engine's plan; a tap makes it yours for that whole section. The base has a toggle too.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
         }
 
         // ---- LOOK: the explanation on each row, after its label

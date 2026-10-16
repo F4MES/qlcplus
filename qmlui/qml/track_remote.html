@@ -94,7 +94,18 @@ button{font-family:inherit;cursor:pointer}
 .fader .name{position:absolute;left:14px;right:84px;top:0;bottom:0;display:flex;align-items:center;font-weight:800;font-size:12px;letter-spacing:.14em;white-space:nowrap;overflow:hidden}
 .fader .val{position:absolute;right:26px;top:0;bottom:0;display:flex;align-items:center;font-weight:800;font-size:14px}
 .energy{height:84px}.energy .fill{background:var(--gold)}.energy .name{color:#1A1408}
-.grp{display:grid;grid-template-columns:1fr 54px;gap:8px;align-items:center;margin-bottom:8px}
+.grp{display:grid;grid-template-columns:50px 1fr 54px;gap:8px;align-items:center;margin-bottom:8px;position:relative}
+/* R469_PHONE_RIG: the pad, the fader in the room's colour on stage, the next section's line */
+.gpad{height:50px;border-radius:10px;background:var(--btn);border:0;color:var(--gold);display:flex;align-items:center;justify-content:center;touch-action:none;padding:0}
+.gpad svg{width:22px;height:22px}.gpad.held{background:#F2F2F6;color:#101010}
+.grp.off .gpad{opacity:.35}
+.grp .fill{background:#3A3A42}.grp .grip{background:#B0B0B8}
+.grp .fader.light .name,.grp .fader.light .val{color:#14141A}.grp .fader.light .grip{background:#14141A}
+.grp.next:before{content:"";position:absolute;left:-8px;top:6px;bottom:6px;width:3px;border-radius:2px;background:var(--red)}
+.grp .name{flex-direction:column;align-items:flex-start;justify-content:center;gap:3px}
+.grp .nm{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grp .sub{display:flex;gap:6px;font-size:10px;letter-spacing:.08em}.grp .sub:empty{display:none}
+.grp .sub b{padding:1px 5px;border-radius:4px;background:#141418;color:#F05050}.grp .sub i{font-style:normal;padding:1px 5px;border-radius:4px;background:#141418;color:var(--blue)}
 .grp .fader{height:50px}
 .grp .name{letter-spacing:.06em;font-size:11px;right:70px}
 .tog{height:50px;border-radius:10px;background:var(--btn);display:flex;align-items:center;justify-content:center;border:0}
@@ -177,7 +188,7 @@ button{font-family:inherit;cursor:pointer}
     <div class="page" id="p-rig">
       <div class="lbl">MASTER</div>
       <div class="fader" data-f="master" style="--c:#4FA3E3"><div class="fill" style="background:#4FA3E3"></div><div class="grip"></div><div class="name" style="color:#06182A">MASTER DIMMER</div><div class="val"></div></div>
-      <div class="lbl">GROUPS</div>
+      <div class="lbl">GROUPS <span style="font-weight:600;letter-spacing:.02em;color:var(--dim)">· lit = on stage · hold ⚡ = flash</span></div>
       <div id="groups"></div>
       <div class="lbl">HAZE MACHINE</div>
       <div class="fader" data-f="haze" style="margin-bottom:8px"><div class="fill" style="background:#8C8C96"></div><div class="grip"></div><div class="name" style="color:#141418">HAZE</div><div class="val"></div></div>
@@ -500,20 +511,60 @@ function render() {
     // R463_PAGE: a group's name as text, whatever it holds (a " broke the page)
     $('groups').innerHTML = groups.map(g =>
       '<div class="grp' + (g.switchOnly ? ' switchonly' : '') + '" data-g="' + esc(g.key) + '">' +
-      '<div class="fader" data-f="trim:' + esc(g.key) + '"><div class="fill"></div><div class="grip"></div><div class="name">' +
-      esc(g.key.toUpperCase() + (g.base ? ' · BASE' : '')) + '</div><div class="val"></div></div>' +
+      '<button class="gpad" data-pad="' + esc(g.key) + '">' + BOLT + '</button>' +     // R469_PHONE_RIG
+      '<div class="fader" data-f="trim:' + esc(g.key) + '"><div class="fill"></div><div class="grip"></div><div class="name"><span class="nm">' +
+      esc(g.key.toUpperCase()) + '</span><span class="sub"></span></div><div class="val"></div></div>' +
       '<button class="tog" data-t="' + esc(g.key) + '"><i></i></button></div>').join('');
     $('groups').querySelectorAll('.fader[data-f]').forEach(el => { if (!el.parentNode.classList.contains('switchonly')) wireFader(el); });
   }
+  // R469_PHONE_RIG: on stage = the fader in the room's (leading) colour; the next section's mark
+  const room = (COLOUR[S.colour] || ['#3D86C4'])[0];
+  const light = hexLight(room);
   groups.forEach(g => {
     const row = $('groups').querySelector('[data-g="' + CSS.escape(g.key) + '"]'); if (!row) return;
     cls(row, 'off', !g.enabled);
     cls(row.querySelector('.tog'), 'on', g.enabled);
     const f = row.querySelector('.fader');
+    const onStage = g.enabled && (S.cast || []).indexOf(g.key) >= 0;
+    const inNext = g.enabled && S.dropMode > 0 && (S.dropSet || []).indexOf(g.key) >= 0;
+    cls(row, 'stage', onStage); cls(row, 'next', inNext);
+    // the line under the name: BASE and the next section, as on the desk (dark chips: readable on any colour)
+    const sub = (g.base ? '<i>BASE</i>' : '') + (inNext ? '<b>▶ ' + (g.base ? '' : 'NEXT ') + esc(String(S.plan || '').toUpperCase()) + '</b>' : '');
+    const se = row.querySelector('.sub'); if (se.innerHTML !== sub) se.innerHTML = sub;
+    f.querySelector('.fill').style.background = onStage ? room : '';
+    if (g.switchOnly) f.style.background = onStage ? room : '';
+    cls(f, 'light', onStage && light);
+    cls(row.querySelector('.gpad'), 'held', !!pads[g.key] || (S.gflash || []).indexOf(g.key) >= 0);
     if (g.switchOnly) f.querySelector('.val').textContent = g.enabled ? 'ON' : 'OFF';
     else if (!(busy[f.dataset.f] > Date.now())) drawFader(f, faderValue(f));
   });
 }
+// R469_PHONE_RIG: the flash pads - held = that group white, "still held" every second
+// (the engine lets go by itself 3 s after the last one: a phone that lost the Wi-Fi)
+const pads = {};
+const BOLT = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M14 2L5 13.5h6L9 22l10-12.5h-6L15.5 2z"/></svg>';
+function hexLight(c) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c || ''); if (!m) return false;
+  return (0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)) / 255 > 0.6;
+}
+$('groups').addEventListener('pointerdown', e => {
+  const b = e.target.closest('[data-pad]'); if (!b || !S) return;
+  const k = b.dataset.pad, g = (S.groups || []).find(x => x.key === k);
+  if (!g || !g.enabled || pads[k]) return;
+  try { b.setPointerCapture(e.pointerId); } catch (err) {}
+  send('gflash|' + k + '|1');
+  pads[k] = setInterval(() => send('gflash|' + k + '|1'), 1000);
+  cls(b, 'held', true);
+});
+const padUp = e => {
+  const b = e.target.closest('[data-pad]'); if (!b) return;
+  const k = b.dataset.pad; if (!pads[k]) return;
+  clearInterval(pads[k]); delete pads[k];
+  send('gflash|' + k + '|0');
+  cls(b, 'held', false);
+};
+$('groups').addEventListener('pointerup', padUp);
+$('groups').addEventListener('pointercancel', padUp);
 $('groups').addEventListener('click', e => {
   const t = e.target.closest('[data-t]'); if (!t || !S) return;
   const g = (S.groups || []).find(x => x.key === t.dataset.t); if (g) send('group|' + g.key + '|' + (g.enabled ? 0 : 1));   // R463_PAGE
@@ -530,6 +581,7 @@ function mockApply(cmd) {
     colourMode: () => S.colourMode = S.colourMode === +a[1] ? 0 : +a[1], position: () => S.position = a[1] === S.position ? '' : a[1],
     speed: () => S.speed = +a[1], master: () => S.master = a[1] / 100, haze: () => S.haze = a[1] / 100, fan: () => S.fan = a[1] / 100,
     trim: () => S.trims[a[1]] = a[2] / 100, group: () => S.groups.find(g => g.key === a[1]).enabled = a[2] === '1',
+    gflash: () => { const i = S.gflash.indexOf(a[1]); if (a[2] === '1' && i < 0) S.gflash.push(a[1]); if (a[2] !== '1' && i >= 0) S.gflash.splice(i, 1); },
     last: () => S.last.stage = S.last.stage > 0 ? 0 : 1, hazelater: () => S.hazeNag = 0, ratemark: () => {}, rate: () => {}};
   if (m[c]) { m[c](); render(); }
 }
@@ -541,12 +593,13 @@ if (q.get('mock')) {
     bpm: 126, tempo: 'LINK', connected: true, test: false, energy: 72,
     markers: [{b: 1, t: 'intro'}, {b: 33, t: 'normal'}, {b: 81, t: 'break'}, {b: 97, t: 'build'}, {b: 165, t: 'drop'}, {b: 229, t: 'break'}, {b: 261, t: 'build'}, {b: 293, t: 'drop'}, {b: 357, t: 'outro'}],
     roomAuto: false, calm: 0, hold: false, blackout: false, stutter: false, stutterRate: 2, hitKind: 3, hitLast: 3, flash: false,
-    colour: 'blue', overrides: [], colourMode: 1, palette: ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white'], position: '', speed: 0,
+    colour: q.get('colour') || 'blue', overrides: [], colourMode: 1, palette: ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white'], position: '', speed: 0,
     master: 0.8, haze: q.get('nag') ? 0 : 0.4, fan: 0.6, hazeNag: +(q.get('nag') || 0),
     groups: [{key: 'Laserbars', enabled: true}, {key: 'Strobes All', enabled: true}, {key: 'Shark Zoom Wash', enabled: true, base: true},
              {key: 'Animation Laser', enabled: false, switchOnly: true}, {key: 'Mini 4 Eyes', enabled: true}],
     trims: {'Laserbars': 1, 'Strobes All': 0.5, 'Shark Zoom Wash': 1, 'Animation Laser': 1, 'Mini 4 Eyes': 0.5},
     stage: ['Laserbars', 'Shark Zoom Wash', 'Mini 4 Eyes'],
+    cast: ['Shark Zoom Wash', 'Mini 4 Eyes'], dropMode: 1, dropSet: ['Laserbars', 'Shark Zoom Wash'], plan: 'break', gflash: [],   // R469_PHONE_RIG
     last: {stage: +(q.get('last') || 0), shown: q.get('last') !== null, left: 198, closeMin: 9, closeAt: '03:00'}};
   render();
   tab(q.get('tab') || 'live');
