@@ -411,6 +411,7 @@ private:
 
     QString m_analysedState;
     QString m_overrideState;
+    int m_pressBeat = -1;                // R479_PRESS_KEEP_MEMBER: the beat of his SECTION press
 
     bool m_autoRun;
     int m_quantize;

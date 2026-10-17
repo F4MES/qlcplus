@@ -1800,7 +1800,9 @@ Rectangle
                     var best = -1
                     for (var i = 0; i < mk.length; i++)
                         if (mk[i].type === "outro") best = Math.max(best, trackViewRoot.markerBeat(i))
-                    return best > 0 ? best : Math.max(1, n - 31)
+                    // R479_LAST_WHITE_LANE: the engine's end - the music's, not the file's
+                    var end = (trackEngine && trackEngine.lastTrackEnd > 0) ? trackEngine.lastTrackEnd : n
+                    return best > 0 ? best : Math.max(1, end - 31)
                 }
                 readonly property int vf: trackViewRoot.viewFirst()
                 readonly property int vc: Math.max(1, trackViewRoot.viewCount())
@@ -1822,7 +1824,7 @@ Rectangle
                     spacing: 2
                     Text { width: parent.width; elide: Text.ElideRight; text: qsTr("LAST \u00B7 OUTRO"); color: trackViewRoot.cGold; font.bold: true; font.pixelSize: trackViewRoot.fs(11) }
                     Text { width: parent.width; elide: Text.ElideRight; text: qsTr("lasers + strobes out"); color: trackViewRoot.cGold; font.pixelSize: trackViewRoot.fs(10) }
-                    Text { width: parent.width; elide: Text.ElideRight; text: qsTr("then soft white \u2192"); color: trackViewRoot.cText; font.pixelSize: trackViewRoot.fs(10) }
+                    Text { width: parent.width; elide: Text.ElideRight; text: qsTr("full warm white at the end \u2192") /* R479_LAST_WHITE_RAIL */; color: trackViewRoot.cText; font.pixelSize: trackViewRoot.fs(10) }
                 }
             }
 
@@ -2278,7 +2280,7 @@ Rectangle
                             var parts = []
                             var lt = trackEngine ? trackEngine.lastTrack : 0     // R458_LAST_BTN
                             if (lt === 1 || lt === 2)
-                                parts.push(qsTr("LAST TRACK: lasers and strobes go out at the outro, then soft white for 5 min and dark - tap LAST TRACK again to undo"))
+                                parts.push(qsTr("LAST TRACK: warm white grows over the track (lasers out, strobes steady at the outro), full at its end or when the fader goes down, 5 min, then dark - tap LAST TRACK again to undo"))   // R479_LAST_WHITE_HINT
                             else if (lt >= 3)
                                 parts.push(qsTr("LAST TRACK: the white light goes dark by itself after 5 min - SHOW OFF ends it now"))
                             if (trackManager && trackManager.linkStale)
@@ -3969,7 +3971,7 @@ Rectangle
             {
                 model: [
                     // R455_HELP (Tobias 10-14: "Opdater nu ogsaa vores Help knap, til alt det nye")
-                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (lasers and strobes out at the outro, then soft white for 5 min, haze down, then dark). Tap twice again to undo." },
+                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (a warm white grows over the track, lasers out and strobes steady at the outro, full white at the music's end or when the DJ's fader goes down, 5 min, haze down, then dark). Tap twice again to undo." },   // R479_LAST_WHITE_HELP
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br><b>HIT</b> on a DROP flag - a hit is armed for that drop (<b>DROP HIT</b> in LIVE).<br>Warnings appear in the bar under the track." },
                     { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG." },
                     { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from its logo on the taskbar.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }

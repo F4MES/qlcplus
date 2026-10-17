@@ -104,8 +104,12 @@ class QRandomGenerator;
 #define ENGINE_LAST_WAIT_MIN      60        // the clock's closing waits this long for the last track
 #define ENGINE_LAST_OUTRO_BEATS   32        // no OUTRO flag: the last 32 beats are the outro
 #define ENGINE_LAST_END_LID       0.25      // the closing lid at the track's last beat
-#define ENGINE_HOUSE_LEVEL        0.40      // the soft white
-#define ENGINE_HOUSE_IN_MS        8000      // white up, haze down
+#define ENGINE_HOUSE_LEVEL        1.00      // R479_LAST_WHITE_DEFS (10-17): full - "rammer 100%" (was 0.40, the soft white)
+#define ENGINE_HOUSE_IN_MS        8000      // the haze down
+#define ENGINE_HOUSE_RISE_MS      2000      // the white the rest of the way up (fader down, deck stopped)
+#define ENGINE_LAST_AIR_MS        500       // the deck off air this long in the outro: the end
+#define ENGINE_LAST_AIR_MID_MS    4000      // ... before the outro (a cut for the crowd to sing is no end)
+#define ENGINE_LAST_LOUD          26        // a beat with music: a tenth of the track's own top (m_audLevel)
 #define ENGINE_HOUSE_HOLD_MS      300000    // five minutes of white
 #define ENGINE_HOUSE_OUT_MS       30000     // then down to nought
 // R467_HAZE_NAG (track_runtime/hazenag.inc.cpp)
@@ -600,6 +604,7 @@ class TrackEngine : public QObject
     Q_PROPERTY(int lastTrackLeft READ lastTrackLeft NOTIFY lastTrackChanged)
     Q_PROPERTY(int lastTrackCloseMin READ lastTrackCloseMin NOTIFY lastTrackChanged)
     Q_PROPERTY(QString lastTrackCloseAt READ lastTrackCloseAt NOTIFY lastTrackChanged)
+    Q_PROPERTY(int lastTrackEnd READ lastTrackEndBeat NOTIFY lastTrackChanged)   // R479_LAST_WHITE_PROP: the music's end
     // R467_HAZE_NAG: minutes the haze has stood at 0 (0 = nothing to say)
     Q_PROPERTY(int hazeNag READ hazeNag NOTIFY hazeNagChanged)
     // R469_GROUP_FLASH: the groups a flash pad holds at full white now
@@ -1190,6 +1195,9 @@ public:
     /** Runde 358 (R358_BRAKE): the deck's effective tempo from every status
      *  BLT sends - a brake shows as the tempo falling away under the grid's. */
     void setDeckTempo(qreal bpm);
+    /** R479_LAST_WHITE_API: the followed deck's on-air from the DJM (BLT's "air" in its
+     *  "pos", only when it has seen a mixer): 1 on air, 0 off air, -1 not known */
+    void setDeckAir(int air);
     void setDropForced(bool on) { m_dropForced = on; }   // R361_DROP_FORCED
     /** runde 322: one drop's absolute kick and bass into the history */
     void rememberDropPunch(qreal kick, qreal low);
@@ -1200,12 +1208,16 @@ public:
     /** runde 429: a SECTION press let go by the analysis' next section
      *  (R429_SECTION_ONCE) - a sig: line, not a press. Log only. */
     void noteSectionRelease(const QString &held, const QString &now);
+    /** R479_PRESS_KEEP_DECL: an analysis change right after a SECTION press kept it
+     *  (the section he pressed for) - a sig: line, not a press. Log only. */
+    void noteSectionKeep(const QString &held, const QString &now);
     void noteUpdate(const QString &script);   // R474_UPDATE: "sig:update:..." in the tracklog
     // R475_ENGINE_PUBLIC: the section's own start before R236 shifts it (the colour memory), the
     // SECTION press held now (the pick's end - noteSectionOverride() only logs, R335), and who
     // the next setHaze() / setFan() is (the atmos log - "hand" when nobody says)
     void setSectionStart(int beat) { m_realSecStart = beat; }
     void setPressHeld(const QString &state) { m_pressHeld = state; }   // the SECTION press held, from the manager
+    void setPressWas(const QString &state) { m_pressWas = state; }     // R479_BUILD_STROBE_2: the analysis' section under it
     void atmosNext(const QString &by) { m_atmosNextBy = by; }
     /** Nothing is playing but AUTO is on: run the start scene(s). */
     void idle();
@@ -1478,6 +1490,7 @@ private:
     int sectionTimbre(int from, int to);
     int m_colourBar;          // -1: a fresh track, hold the colour until a break or drop
     int m_colourSince;        // beat of the last colour change
+    bool m_colourMixHeld = false;   // R479_MIX_COLOUR: a break or drop ended the fresh-track hold while a mix blocked it
     int m_holdNow;            // bars this colour holds - drawn each change around holdBars
     bool m_holdAuto = true;   // runde 189: the fader picks the hold (64/32/16/8 bars)
     qreal m_holdStretch = 1.0;  // this colour's random stretch of it, drawn at each change
@@ -1509,6 +1522,9 @@ private:
     // without it a section change could swing a head that had just moved
     // (runde 158). Cleared with the rest in trackLoaded().
     QMap<QString, int> m_aimSince;
+    // R479_AIM_MS (night review 10-17): the same stamp on the wall clock
+    // (m_clock ms). Never cleared: a deck handover resets the beat numbers.
+    QHash<QString, qint64> m_aimMs;
     QHash<QString, int> m_darkUntil;     // group -> last beat of a planned dark stretch
     qreal m_master;
     bool m_blackout;
@@ -1802,6 +1818,7 @@ public:
     int m_forceFrom = -1;                // R438_LOOP_ACROSS: the beat his section began
     QString m_forceSection;              // ... and what kind it is
     QString m_pressHeld;                 // R475_HELD_PRESS_MEM: the SECTION press held now (the pick's end)
+    QString m_pressWas;                  // R479_BUILD_STROBE_3: the music's own section under that press
     QStringList m_dropSet;               // the drop's groups, in the room's order
     int m_dropMode = 0;                  // 0 none, 1 the next drop (plan), 2 this drop
     bool m_dropTouched = false;          // he tapped: the set is his until the drop ends
@@ -1862,6 +1879,10 @@ private:
     mutable QHash<QString, qreal> m_sectionTaste;
     mutable bool m_sectionTasteLoaded = false;
     QStringList m_planOriginal;          // the engine's plan as it stood at his first tap
+    // R479_HOLD_PICK_H (night review 10-17): his pick crossed its boundary, not yet on stage
+    // (HOLD/CALM) - its boundary and the engine's plan, for the memory and the taste
+    int m_pickOwedFor = -1;
+    QStringList m_pickOwedPlan;
     qreal sectionTaste(const QString &section, const QString &key) const;
     bool tasteOut(const QString &section, const QString &key) const;
     int tasteWeight(const QString &section, const QString &key, int weight) const;
@@ -2122,6 +2143,16 @@ private:
     bool m_houseHazeDone = false;
     qreal m_houseLevel = -1.0;
     QMap<QString, quint32> m_houseZoom;    // group -> its widest-zoom scene
+    // R479_LAST_WHITE_MEMBERS (Tobias 10-17): the warm white over the whole last track
+    QMap<QString, quint32> m_houseWarm;    // group -> its warm white (RGB only) - never in the table
+    QMap<QString, quint32> m_houseFade;    // group -> the same with its master dimmers at full
+    QSet<QString> m_houseFadeRoot;         // ... the groups whose fade scene holds a dimmer
+    int m_lastArmBeat = 0;                 // where it was armed: the white starts there
+    qint64 m_lastBeatAtMs = -1;            // the last beat drawn (m_clock): the white between beats
+    qreal m_lastWhiteP = -1.0;             // the white now, 0-1 of the house light (-1: not running)
+    qreal m_houseFrom = 0.0;               // where the house light starts from
+    qint64 m_airOffMs = -1;                // the deck off air since (m_clock); -1 on air or not known
+    qint64 m_airSeenMs = -1;               // the last "pos" that said so
     static int lastTrackMinutesNow();
     qint64 lastTrackSecsToClose() const;   // R463_LAST_SECS
     bool lastTrackHolds() const;           // R463_LAST_CLOCK
@@ -2141,6 +2172,10 @@ private:
     /** full white under a held FLASH WHITE or a held pad: no MASTER, trim or pulse */
     bool heldFull(const QString &key) const;
     void padFlashClear();
+    // R479_PAD_ONE_LASER (padflash.inc.cpp): the other laser type sits a held laser pad out
+    QSet<QString> m_padLaserOut;           // what a pad took out of the cast (HOLD gives it back)
+    bool padLaserDark(const QString &key, const QSet<QString> &cast) const;
+    void padLaserCast(QSet<QString> &castSet, bool heldCast, qreal fader, const QStringList &eligible);
     // R470_COLOUR_MEMORY (track_runtime/colourmem.inc.cpp)
     QVariantMap m_colMem;                  // title -> { "<section start>": "section|set|mode", "_t" }
     bool m_colMemLoaded = false;
@@ -2256,6 +2291,14 @@ private:
     void ensureHouseZoom();
     void houseLook(qreal level);
     void enterHouse();
+    // R479_LAST_WHITE_DECLS (lasttrack.inc.cpp)
+    void ensureHouseFade();
+    quint32 houseColour(const QString &key) const;
+    qreal lastWhiteNow() const;
+    qreal lastWhiteShow(const QString &group) const;
+    void lastWhiteDraw(qreal p);
+    void lastWhiteStop();
+    qreal lastWhiteDim(const QString &group) const;
     int m_roomSent;                        // last percent handed to the ENERGY trim
     bool m_fullAuto;
     QSet<QString> m_laserMoveDark;         // R401_LIFT_TWO_BEATS: bar figures waiting a dark beat to move
