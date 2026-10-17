@@ -817,6 +817,7 @@ void TrackEngine::slotPulseTimer()
                 // after the beat is whatever the fixture makes of it
                 if (g.patternDevice)
                     out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
+                out = qMax(out, lastWhiteDim(key));   // R479_LAST_WHITE_FLOORPULSE: as setPart()
                 m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
                 m_activeOut.insert(slot, out);
             }
@@ -1864,6 +1865,14 @@ void TrackEngine::noteSectionRelease(const QString &held, const QString &now)
               + (now.isEmpty() ? QStringLiteral("-") : now));
 }
 
+void TrackEngine::noteSectionKeep(const QString &held, const QString &now)
+{
+    // R479_PRESS_KEEP_LOG: "sig:section-keep:<held>:now:<analysed>" - the flag came
+    // right after his press and did not let it go (the section he pressed for)
+    logSignal(QStringLiteral("sig:section-keep:") + held + QStringLiteral(":now:")
+              + (now.isEmpty() ? QStringLiteral("-") : now));
+}
+
 void TrackEngine::rememberDropPunch(qreal kick, qreal low)
 {
     if (m_testTrack)
@@ -2821,7 +2830,15 @@ void TrackEngine::ensureColourScenes()
         // RGB LEDs (Tobias, 2026-09-26: "meget lyse ... skrues en smule ned")
         { "cyan", 0, 192, 192, 0 },    { "magenta", 192, 0, 192, 0 }, { "yellow", 255, 255, 0, 0 },
         { "white", 255, 255, 255, 255 }, { "orange", 255, 90, 0, 0 },  { "pink", 255, 60, 120, 0 },
-        { "purple", 140, 0, 255, 0 },  { "amber", 255, 160, 0, 0 },   { "uv", 90, 0, 255, 0 } };
+        { "purple", 140, 0, 255, 0 },  { "amber", 255, 160, 0, 0 },   { "uv", 90, 0, 255, 0 },
+        // R479_LAST_WHITE_SWATCH (Tobias 10-17): LAST TRACK's house light, "en meget MEGET
+        // varmere hvid" - red, green and blue only, no white lamp (the strobes' W is
+        // "klinisk hvid") and no amber. About 2200 K: the blackbody's sRGB there is about
+        // 255/147/44; green a touch lower because an RGB LED's green die carries the most
+        // light of the three (the reason cyan and magenta sit at 75 % above), blue kept at
+        // 40 so it reads as a white and not as the amber swatch (255/160/0). Made for every
+        // group that is no laser, used only by houseLook() and the fade - never the palette.
+        { "warmwhite", 255, 140, 40, 0 } };
 
     QMap<QString, quint32> existing;
     foreach (Function *func, m_doc->functions())
@@ -2829,6 +2846,7 @@ void TrackEngine::ensureColourScenes()
         if (func != nullptr && func->name().startsWith(ENGINE_COLOUR_PREFIX))
             existing.insert(func->name().mid(ENGINE_COLOUR_PREFIX.length()), func->id());
     }
+    m_houseWarm.clear();                 // R479_LAST_WHITE_CLEAR: made again below
 
     foreach (const QString &key, m_groupOrder)
     {
@@ -2915,6 +2933,9 @@ void TrackEngine::ensureColourScenes()
         QStringList wanted = m_palette;
         if (wanted.contains("white") == false)
             wanted.append("white");                 // the flash
+        // R479_LAST_WHITE_WANTED: LAST TRACK's warm white (made, then kept out of the table)
+        if (g.lasers == false && wanted.contains(QStringLiteral("warmwhite")) == false)
+            wanted.append(QStringLiteral("warmwhite"));
         foreach (const QString &colour, wanted)
         {
             bool have = false;
@@ -3040,6 +3061,14 @@ void TrackEngine::ensureColourScenes()
                         if (vg > ENGINE_STROBE_WHITE) vg = ENGINE_STROBE_WHITE;
                         if (vb > ENGINE_STROBE_WHITE) vb = ENGINE_STROBE_WHITE;
                         if (vw > ENGINE_STROBE_WHITE) vw = ENGINE_STROBE_WHITE;
+                    }
+                    // R479_LAST_WHITE_CAP: the warm white is a white - on a strobe under the same
+                    // 70 % ceiling, all three scaled together so it stays as warm
+                    if (colour == QStringLiteral("warmwhite") && g.strobes)
+                    {
+                        vr = vr * ENGINE_STROBE_WHITE / 255;
+                        vg = vg * ENGINE_STROBE_WHITE / 255;
+                        vb = vb * ENGINE_STROBE_WHITE / 255;
                     }
                     foreach (quint32 c, rcs) values.append(SceneValue(fid, c, uchar(vr)));
                     foreach (quint32 c, gcs) values.append(SceneValue(fid, c, uchar(vg)));
@@ -3212,6 +3241,13 @@ void TrackEngine::ensureColourScenes()
                 }
             }
 
+            // R479_LAST_WHITE_KEEPOUT: the warm white is LAST TRACK's alone - not in the table,
+            // so no colour pick, neighbour, tile or fallback of the show can ever draw it
+            if (colour == QStringLiteral("warmwhite"))
+            {
+                m_houseWarm.insert(key, scene->id());
+                continue;
+            }
             TrackFuncInfo info;
             info.id = scene->id();
             info.name = scene->name();
@@ -4514,7 +4550,15 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
             beats = 4;
             landing = true;
         }
-        else if (isBuild && prog > riserFrom && e > 0.18)
+        // R479_BUILD_STROBE (night review 10-17): the riser is the last third of a build whose
+        // END is known. A BUILD he holds over another section runs on THAT section's bounds with
+        // no next flag (R199), so prog is its clock, not the build's: pressed at 01:39:10 late in
+        // Bieber's break, prog read 0.76 on the build's first beat, and the heads and Minis
+        // strobed 51 beats straight (40 at 01:56:48, over Franky's break), outside the budget.
+        // No riser there - the drop he presses lands as before. Held over a real build the
+        // bounds are its own: as before. Once the music reaches its flag the press lets go (R429).
+        else if (isBuild && prog > riserFrom && e > 0.18
+                 && (m_pressHeld != QStringLiteral("build") || m_pressWas == QStringLiteral("build")))
         {
             qreal into = qBound(0.0, (prog - riserFrom) / qMax(0.02, 1.0 - riserFrom), 1.0);
             want = int(qRound(into * qreal(rateCount - 1) * (0.45 + 0.55 * w2)
@@ -5869,6 +5913,16 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
             m_motionDim.remove(key);
             m_pulseDepth.remove(key);
             m_breathe.remove(key);
+            // R479_BAR_AIM_2 (night review 10-17): the pos: slot was stopped
+            // above, so the bars' tilt is unknown from here. The tick forgets
+            // the aim only on the next beat (m_groupOff, the position loop);
+            // a group switched off and on again inside one beat kept
+            // m_position saying LaserUPP, so the next beat restarted the aim
+            // with the light, skipping the unknown-aim dark hold (four bars,
+            // runde 190 / fejljagt 3). Forgotten now, as laserFaderCheck() forgets
+            // an aim idle() stopped (runde 193).
+            if (g.lasers)
+                m_position.remove(key);
         }
         applyGroupOff();
     }
@@ -8575,6 +8629,24 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         // EFX sweep, which it can start, shape and stop.
         if (lasers && macroPosition(info->id))
             continue;
+        // R479_BAR_AIM (night review 10-17): ... nor one of his own TEST
+        // functions. "LasermovingTest OFFSET MORE" (392, an absolute EFX,
+        // tilt 111-123 and never still) passed laserSweepSafe as an upward
+        // aim and took the bars off LaserUPP after a group switch - the only
+        // non-home bar aim of the night. The eight "LasermovingTest ..." EFX
+        // are his busking buttons in the Virtual Console; they stay his. A
+        // "test" that starts a word or a camel-case part ("...Test", "test
+        // 2"), never "fastest"; never our own programmes or a kept LAB look.
+        if (lasers && info->generated == false && info->lab == false)
+        {
+            bool testFunc = false;
+            for (qsizetype at = info->name.indexOf(QStringLiteral("test"), 0, Qt::CaseInsensitive);
+                 at >= 0 && testFunc == false;
+                 at = info->name.indexOf(QStringLiteral("test"), at + 1, Qt::CaseInsensitive))
+                testFunc = at == 0 || info->name.at(at).isUpper() || info->name.at(at - 1).isLetter() == false;
+            if (testFunc)
+                continue;
+        }
         // the heads' ballyhoo (runde 254) is the top of the fader only: every
         // head on its own path, up to 44 units off the floor - "Først fra 95%
         // skal de være helt frie" (Tobias, runde 212)
@@ -10023,6 +10095,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         changeColour = false;
     if (changeColour || m_colourBar >= 0)
         m_colourBar = 0;
+    // R479_MIX_COLOUR_2 (night review 10-17, S5 #8): a fresh track holds its colour
+    // until its first break or drop (colourBar -1), but a mix blocks the change - and
+    // when that break or drop passes during the mix, nothing ended the hold: blue 204
+    // beats at 80 % from 02:22:43 (WISH: break at 253 in the mix, mix over at 266, no
+    // change until the drop at 365), Blodigt 02:50 the same. The section that would
+    // have ended the hold is remembered, and when the mix is over the colour clock
+    // runs as it does after any first break or drop (from the last change; a colour
+    // never changed on this track counts from here).
+    if (m_colourBar < 0 && m_mixing && sectionColour && hold == false && isCalm == false)
+        m_colourMixHeld = true;
+    else if (m_colourMixHeld && m_mixing == false)
+    {
+        m_colourMixHeld = false;
+        m_colourBar = 0;
+        if (m_colourSince < 0)
+            m_colourSince = beat;
+    }
     if (changeColour)
     {
         m_colourSince = beat;
@@ -11169,12 +11258,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (m_forceOn)
                 logSignal(QStringLiteral("sig:section-pick:") + m_planSection + QStringLiteral(":")
                           + m_forceSet.join(QLatin1Char('+')));
-            if (m_forceOn)
-                rememberPick(m_dropPlanFor, m_planSection, m_forceSet, fader);   // R439_TRACK_MEMORY
+            // R479_HOLD_PICK (night review 10-17): under HOLD (or CALM) his set waits off the
+            // stage until the release in its section - Lee Cabrera's and Prospa's picks never ran
+            // and were still saved for next time. Remembered (R439) and learned (R433) on the
+            // beat it lights (below: the crossing itself, unheld); a section held through, never
+            m_pickOwedFor = m_forceOn ? m_dropPlanFor : -1;
+            m_pickOwedPlan = m_forceOn ? m_planOriginal : QStringList();
+            if (m_forceOn && (hold || isCalm))
+                logSignal(QStringLiteral("sig:section-pick-held:") + m_planSection);
             m_planRemembered = false;
-            // R433_SECTION_TASTE: the verdicts' switch (SETUP) is the learning's too
-            if (m_forceOn && m_ratingOn)
-                learnSection(m_planSection, m_planOriginal, m_forceSet);
             m_planOriginal.clear();
             m_dropTouched = false;
             m_dropMode = 0;
@@ -11185,6 +11277,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_forceOn && hold == false && isCalm == false
             && (beat >= m_forceFrom || state == m_forceSection))   // R475_PICK_BEFORE: a DJ loop back before its flag
         {
+            // R479_HOLD_PICK_2: his set reaches the stage - what ran is what the track remembers
+            if (m_pickOwedFor > 0)
+            {
+                rememberPick(m_pickOwedFor, m_forceSection, m_forceSet, fader);   // R439_TRACK_MEMORY
+                // R433_SECTION_TASTE: the verdicts' switch (SETUP) is the learning's too
+                if (m_ratingOn)
+                    learnSection(m_forceSection, m_pickOwedPlan, m_forceSet);
+                m_pickOwedFor = -1;
+                m_pickOwedPlan.clear();
+            }
             // his set, as it is: both laser types, the animation laser under
             // 70 %, no base - only a group off for the night stays out
             // R471_PICK_FAILSAFE: nothing of it left (all off for the night) - the engine's cast
@@ -11197,6 +11299,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 castSet = his;
         }
         hitCast(beat, castSet);          // R445_DROP_HIT: his STROBE - the strobe group on stage for the bar
+        // R479_PAD_ONE_LASER (night review 10-17): never both laser types, a pad too - a held
+        // laser pad takes the other type out of the cast, after the budget (no group steps in)
+        padLaserCast(castSet, hold && still == false && isCalm == false && m_cast.isEmpty() == false,
+                     fader, eligible);
         // the plan for the next section
         const int boundary = (nextState.isEmpty() || beatsToNext <= 0) ? -1 : beat + beatsToNext;
         if (boundary < 0)
@@ -11726,6 +11832,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump || settleNow
                    || (bar > 0 && bar % 8 == 0 && beatInBar == 0 && rng->bounded(3) > 0
                        && (isBuild && m_buildDrawn) == false));
+    // R479_LOOP_ZOOM (night review 10-17): inside a DJ loop the beat numbers
+    // come round again, and the 8-bar dice above was thrown on every pass
+    // over its bar line. 00:54:15-31, a one-beat loop on bar 16 of a drop
+    // (320, 321, 320, 321): the moves were redrawn on two passes in three,
+    // and mot:Shark Zoom Wash and mot:LaserBars restarted 12 times each.
+    // A beat the loop plays again does not act on the dice (it is still
+    // thrown: the RNG's order is unchanged); a section line, a new
+    // composition, the fader and the settle still draw.
+    const bool loopRepeat = m_loopPasses > 0 && beat <= m_loopFrom;
+    // ... and a loop under a bar (R358_LOOP: the beat numbers say 1 for a two-beat one)
+    const bool loopShort = loopRepeat && m_loopTo >= 0 && m_loopFrom - m_loopTo <= 2;
+    if (loopRepeat && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump || settleNow) == false)
+        redraw = false;
     // ... and an inner flag of the same build, or the kick wait at the drop
     // flag (isBuild, "the build's look holds"), keeps the moves of the groups
     // already on stage: the same second throw, at a section line. A group
@@ -12048,6 +12167,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // and `want` is invalid anyway).
         const bool aimSettled = m_aimSince.contains(key) == false
                              || beat - m_aimSince.value(key) >= 4;
+        // R479_AIM_MS_2 (night review 10-17): ... and on the wall clock.
+        // m_aimSince counts the deck's beat numbers and trackLoaded() clears
+        // it, so at a deck handover the old track's bar-line aim was followed
+        // by the new track's first aim 131 ms later (02:02:20.040/.171; 10 of
+        // the night's 16 aims under a bar). Seven eighths of a bar at the
+        // tempo the engine has: the walk on every bar line (4 beats) still
+        // goes with room for a late beat, every handover case (all under
+        // 600 ms) is held. Only ever holds an aim, never takes one.
+        const qreal aimFloorMs = 3.5 * m_beatMs;
+        const bool aimMsSettled = m_aimMs.contains(key) == false
+                               || qreal(m_clock.elapsed() - m_aimMs.value(key)) >= aimFloorMs;
+        const quint32 aimIn = want;
         // the floor round aims every head straight down: the generated
         // "Center" position (runde 214). Without one (banned in SETUP) the
         // heads aim as they always do.
@@ -12074,7 +12205,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
         else if (want == Function::invalidId()
-            || (mayMove && sectionChanged && aimSettled && (g.lasers == false || inCast)))
+            || (mayMove && sectionChanged && aimSettled && aimMsSettled   // R479_AIM_MS_3
+                && (g.lasers == false || inCast)))
         {
             // The laser block above sends the bars home everywhere they may
             // not roam - except under HOLD, which skips it. A bar with no aim
@@ -12165,6 +12297,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && (m_fullAuto || (m_moves.value(key).ownChaser
                                && candidates(ENGINE_ROLE_MOTION, key).isEmpty()))
             && beatInBar == 0 && bar > 0 && (bar % walkBars) == 0
+            && aimMsSettled                                                             // R479_AIM_MS_4: the floor in ms too
             // the aim floor (runde 158) here too: NEXT makes a section change
             // on any beat, and its aim was followed by this walk on the next
             // bar line - two swings one to three beats apart (runde 171)
@@ -12186,6 +12319,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // step, its fade the step. It ran at its own step at every fader (the
         // EFX sweep stops while a figure runs), so 35 % and 100 % moved alike.
         // Not the laser bars: their aims are the safety rules' (runde 190).
+        // R479_AIM_MS_5: a new aim from any of the four places above stamps the clock
+        if (want != aimIn)
+            m_aimMs.insert(key, m_clock.elapsed());
         if (want != Function::invalidId())
         {
             const int fb = (g.heads && g.lasers == false) ? figureBeats(want) : 0;
@@ -12985,6 +13121,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 want = qBound(0, int(qRound(8.0 * (1.0 - rampProg))), 8);
             mode = 0;
         }
+        // R479_LOOP_ZOOM_2: a beat the DJ's loop plays again keeps the zoom
+        // drawn on its first pass - a loop over the drop's second bar line
+        // re-rolled it on every pass (the 8-bar dice is held above)
+        else if (want >= 0 && loopRepeat && redraw == false)
+        {
+            // held: want and mode as drawn
+        }
         else if (want < 0 || (hold == false && (redraw || (isDrop && dropBar == 1 && beatInBar == 0))))
         {
             int chosen = want, total = 0;
@@ -13045,6 +13188,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             idx = beatInBar == 0 ? 8 : 0;
         else if (mode == 2 && isCalm == false && still == false)
             idx = (bar % 2) == 0 ? 9 : 10;
+        // R479_LOOP_ZOOM_3: the pulse (wide on the one) and the alternating
+        // heads read the beat number, and a loop under a bar plays 320, 321,
+        // 320, 321 - Wide/Narrow on every tick: 65 zoom moves in 18 s at
+        // 00:54:15 (3.6 a second; the pulse's own pace is two a bar). Inside
+        // such a loop the zoom the heads wear stands until the deck plays on.
+        if (loopShort && (mode == 1 || mode == 2) && isCalm == false && still == false)
+        {
+            const int worn = int(zs.indexOf(m_active.value(slot, Function::invalidId())));
+            if (worn >= 0)
+                idx = worn;
+        }
         run(slot, zs.at(qBound(0, idx, int(zs.count()) - 1)), 1.0, 0, true);
     }
 
@@ -14442,6 +14596,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // full, in the hit's colour (white on a big one, whiteLand).
             if (isDrop && dropBar == 0 && (beatInBar == 0 || lateLand) && (m_dropArrivedNow || lateLand))   // runde 360: or late (R361: after its kick; R369: the landing beat)
                 genFlash(true, hue);
+            // R479_LAND_ONE (night review 10-17): "Kun det slag" (r344). The hit
+            // window is two beats wide (beatInBar < 2), so the beat after the
+            // landing was a hit as well and skipped the release in the else
+            // below: 141 of 150 landings held the whole bank for two beats,
+            // solid under 0.55, with the room's colour back under the flash.
+            // Any other hit beat lets the landing go here, as a beat with no
+            // hit does; the rest of that hit (budget, scene, echo) is unchanged.
+            else if (m_flashHeld.isEmpty() == false)
+                genFlash(false);
 
             // The laser bars answer the hit: half a beat later, once, in the
             // colour opposite the room's, for a third of a beat - an echo.
@@ -14467,6 +14630,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                             aniOnStage = true;
                     }
                 }
+                // R479_PAD_ONE_LASER_2: an animation laser pad held is on stage too - the bars'
+                // echo lit beside it
+                foreach (const QString &key, m_padFlash)
+                    if (m_groups.value(key).patternDevice)
+                        aniOnStage = true;
                 QString echoKey;
                 foreach (const QString &key, m_groupOrder)
                 {
@@ -15912,10 +16080,15 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         return 1.0;
     QString group = slotGroup(slot);
     const TrackGroup &g = m_groups.value(group);
+    // R479_LAST_WHITE_GIVE: while the last track's warm white grows over a house group, the
+    // show's colour on it gives way by as much - a fade TO white, not white added on top
+    // (the dimmers stay the show's; the white's own dimmer is HTP over them)
+    const qreal give = (slot.startsWith(QStringLiteral("col:")) || slot.startsWith(QStringLiteral("colx:")))
+                     ? lastWhiteShow(group) : 1.0;
     bool carries = m_funcs.value(fid).dimmer || g.hasDimmer == false || g.parts.isEmpty();
     if (carries == false)
-        return 1.0;
-    return masterOut() * (group.isEmpty() ? 1.0 : trimOf(group));   // R440_COLOUR_LEVEL
+        return give;
+    return masterOut() * (group.isEmpty() ? 1.0 : trimOf(group)) * give;   // R440_COLOUR_LEVEL
 }
 
 void TrackEngine::reapplyLevels()
@@ -15948,6 +16121,7 @@ void TrackEngine::reapplyLevels()
             // rounded by the fixture in a way nobody can predict
             if (m_groups.value(group).patternDevice)
                 out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
+            out = qMax(out, lastWhiteDim(group));   // R479_LAST_WHITE_FLOORLEVELS: as setPart()
         }
         else
         {
@@ -16821,7 +16995,8 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
                     fading = true;
         }
         if (g.hasDimmer == false || castSet.contains(key) || m_groupOff.contains(key)
-            || fading || m_flash)
+            || fading || m_flash
+            || m_active.contains(QStringLiteral("lastw:") + key))   // R479_LAST_WHITE_CONFLICT: LAST TRACK's own white
         {
             m_conflictBeats.remove(key);
             continue;
@@ -19514,6 +19689,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     stopEcho();
     m_mixBeat = -1;              // a mix still on now is the mix INTO this track
     m_colourBar = -1;            // hold the colour until the first break or drop
+    m_colourMixHeld = false;     // R479_MIX_COLOUR_3: that of the track before is not this one's
     // ... and a colour the mix handed over counts as changed on beat 0, so
     // the two-bar floor keeps it through a landing IN a break or a drop:
     // there it was thrown away on the first beat, all 10 landings of that
@@ -19934,6 +20110,9 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
         applied = (applied > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
+    // R479_LAST_WHITE_FLOORPART: the parts own the master dimmer (ReplaceBlend) - under the
+    // last track's warm white they hold at least its level (0 without it, and in a BLACKOUT)
+    applied = qMax(applied, lastWhiteDim(group));
     if (lightsOut())
         applied = 0.0;
 
@@ -23669,7 +23848,23 @@ int TrackEngine::lastTrackCloseMin() const
 
 int TrackEngine::lastTrackEndBeat() const
 {
-    return m_audLevel.count();
+    // R479_LAST_WHITE_ENDBEAT (Tobias 10-17: "fadede den op for langsomt, da tracket havde
+    // nogle doede sekunder i slutningen"): the MUSIC's last beat, not the file's. m_audLevel
+    // is BLT's loudness per beat over the track's own 95th percentile (0-255), so a tenth of
+    // it (26, about -20 dB) is the track's own quiet, whatever its mastering: a pad tail or
+    // a long fade-out still counts until it is all but gone, dead seconds (0-10) do not.
+    // Two such beats within three: one click or crackle in the silence is no music.
+    // Nothing loud anywhere (or no curve): the file's end, as before.
+    const int n = m_audLevel.count();
+    if (n < 8)
+        return n;
+    for (int b = n; b >= 3; b--)
+    {
+        if (m_audLevel.at(b - 1) >= ENGINE_LAST_LOUD
+            && (m_audLevel.at(b - 2) >= ENGINE_LAST_LOUD || m_audLevel.at(b - 3) >= ENGINE_LAST_LOUD))
+            return b;
+    }
+    return n;
 }
 
 int TrackEngine::lastTrackOutroBeat() const
@@ -23707,6 +23902,10 @@ void TrackEngine::setLastStage(int stage)
     if (stage == m_lastStage)
         return;
     m_lastStage = stage;
+    // R479_LAST_WHITE_STAGE: off the last track (undone, another track, SHOW OFF) or into its
+    // house light - the white over the track goes, and the show's colours are its own again
+    if ((stage == 0 || stage >= 3) && m_lastWhiteP >= 0.0)
+        lastWhiteStop();
     static const char *names[5] = { "off", "armed", "outro", "house", "dark" };
     logSignal(QStringLiteral("sig:last-track-%1").arg(QLatin1String(names[qBound(0, stage, 4)])));
     emit lastTrackChanged();
@@ -23751,6 +23950,11 @@ void TrackEngine::toggleLastTrack()
     m_lastTitle = m_trackTitle;
     m_lastOutro = -1;
     m_lastBeatNow = qMax(1, m_curBeat);
+    // R479_LAST_WHITE_ARM: the white grows from here; an old "off air" is not this track's
+    m_lastArmBeat = m_lastBeatNow;
+    m_lastBeatAtMs = m_clock.elapsed();
+    m_lastWhiteP = -1.0;
+    m_airOffMs = -1;
     setLastStage(1);
 }
 
@@ -23769,6 +23973,7 @@ void TrackEngine::lastTrackBeat(const QString &state, int beat, int secStart, qr
         return;
     }
     m_lastBeatNow = beat;
+    m_lastBeatAtMs = m_clock.elapsed();      // R479_LAST_WHITE_BEATCLOCK: the white between beats
     if (bpm > 0.0)
         m_lastBpm = bpm;
     // R463_OUTRO_FIRST: a flag later than the fallback (the last 32 beats) does not
@@ -23777,7 +23982,9 @@ void TrackEngine::lastTrackBeat(const QString &state, int beat, int secStart, qr
         && (m_lastOutro < 0 || secStart < m_lastOutro))
         m_lastOutro = qMax(1, secStart);
     const int end = lastTrackEndBeat();
-    if (end > 0 && beat >= end - 1)
+    // R479_LAST_WHITE_HOUSEAT: at the music's last beat - at the file's own end one beat
+    // before it, as ever (the deck may stop on the last one)
+    if (end > 0 && beat >= qMin(end, int(m_audLevel.count()) - 1))
     {
         enterHouse();
         return;
@@ -23873,6 +24080,195 @@ void TrackEngine::ensureHouseZoom()
         scene->setFadeInSpeed(1500);
         m_houseZoom.insert(key, scene->id());
     }
+    ensureHouseFade();                   // R479_LAST_WHITE_FADE: with the table, as the zoom
+}
+
+/* ---- R479_LAST_WHITE (Tobias 10-17): the white over the whole last track ----
+ *  "'last track' skal fade til hvid over hele tracket og saa rammer 100% naar tracket
+ *  enten slutter, eller dj'en tager faderen ned paa 0 ... en meget MEGET varmere hvid
+ *  (brug ikke den hvide paa strobelamperne der har W kanal ... hellere brug RGB hvid)".
+ *  From the tap to the music's last beat the house groups (the strobe lamps, the base,
+ *  the washes) fade linearly by beats to a warm white made of red, green and blue only
+ *  (ensureColourScenes' "warmwhite"), and stand at the house light's full at the end:
+ *  per group a hidden scene in its own slot (lastw:), HTP over the show, while the
+ *  show's colours on those groups give way by as much (slotScale). In the outro the
+ *  strobe lamps carry only this - steady, no strobe: the scene holds their strobe and
+ *  shutter channels as every generated colour scene does. The lasers are never touched. */
+
+void TrackEngine::ensureHouseFade()
+{
+    // the warm white of each house group AND its fixtures' master dimmers at full: HTP
+    // over the show, a dimmer of its own is what lets it rise where the show is dark
+    m_houseFade.clear();
+    m_houseFadeRoot.clear();
+    if (m_doc == nullptr)
+        return;
+    QMap<QString, quint32> existing;
+    foreach (Function *func, m_doc->functions())
+    {
+        if (func != nullptr && func->name().startsWith(QStringLiteral("TRACK House: ")))
+            existing.insert(func->name(), func->id());
+    }
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (houseGroup(key, true) == false || m_houseWarm.contains(key) == false)
+            continue;
+        Scene *warm = qobject_cast<Scene *>(m_doc->function(m_houseWarm.value(key)));
+        if (warm == nullptr)
+            continue;
+        QList<SceneValue> values = warm->values();
+        bool dim = false;
+        foreach (quint32 fid, m_groups.value(key).fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            const quint32 ch = dimmerChannel(fxi);
+            if (fxi == nullptr || ch == QLCChannel::invalid())
+                continue;
+            values.append(SceneValue(fid, ch, 255));
+            dim = true;
+        }
+        const QString name = QStringLiteral("TRACK House: ") + key + QStringLiteral(" Warm");
+        Scene *scene = existing.contains(name) ? qobject_cast<Scene *>(m_doc->function(existing.value(name))) : nullptr;
+        if (scene != nullptr)
+        {
+            foreach (SceneValue old, scene->values())
+                scene->unsetValue(old.fxi, old.channel);
+        }
+        else
+        {
+            scene = new Scene(m_doc);
+            scene->setName(name);
+            scene->setVisible(false);
+            if (m_doc->addFunction(scene) == false)
+            {
+                delete scene;
+                continue;
+            }
+        }
+        foreach (SceneValue sv, values)
+            scene->setValue(sv);
+        m_houseFade.insert(key, scene->id());
+        if (dim)
+            m_houseFadeRoot.insert(key);
+    }
+}
+
+quint32 TrackEngine::houseColour(const QString &key) const
+{
+    // the house light's colour: the warm white - a group with no red, green and blue has
+    // none, and keeps its white
+    const quint32 warm = m_houseWarm.value(key, Function::invalidId());
+    return warm != Function::invalidId() ? warm : colourFunction(key, QStringLiteral("white"));
+}
+
+qreal TrackEngine::lastWhiteNow() const
+{
+    // linear in beats from the tap to the music's end; between two beats by the clock
+    const int end = lastTrackEndBeat();
+    if (end <= m_lastArmBeat)
+        return 1.0;
+    qreal beat = qreal(m_lastBeatNow);
+    if (m_lastBpm > 0.0 && m_lastBeatAtMs >= 0)
+        beat += qBound(0.0, qreal(m_clock.elapsed() - m_lastBeatAtMs) * m_lastBpm / 60000.0, 1.0);
+    return qBound(0.0, (beat - qreal(m_lastArmBeat)) / qreal(end - m_lastArmBeat), 1.0);
+}
+
+qreal TrackEngine::lastWhiteShow(const QString &group) const
+{
+    // how much of the show's own colour a house group keeps under the white
+    if (m_lastWhiteP <= 0.0 || (m_lastStage != 1 && m_lastStage != 2) || group.isEmpty()
+        || m_houseFade.contains(group) == false || houseGroup(group) == false)
+        return 1.0;
+    return qBound(0.0, 1.0 - m_lastWhiteP, 1.0);
+}
+
+void TrackEngine::lastWhiteDraw(qreal p)
+{
+    // every 200 ms from lastTrackTick() while the last track plays (armed or outro). Not
+    // with AUTO off (the rig is his), under the start scene, or a self test.
+    if (m_doc == nullptr || m_fullAuto == false || m_startScene || m_testTimer.isActive())
+        return;
+    p = qBound(0.0, p, 1.0);
+    bool moved = m_lastWhiteP < 0.0 || qAbs(p - m_lastWhiteP) >= 0.004;
+    if (moved)
+        m_lastWhiteP = p;
+    foreach (const QString &key, m_groupOrder)
+    {
+        const QString slot = QStringLiteral("lastw:") + key;
+        const quint32 fid = m_houseFade.value(key, Function::invalidId());
+        // a group OFF for the night (its mask holds it), or no house group (any more)
+        if (houseGroup(key) == false || fid == Function::invalidId())
+        {
+            if (m_active.contains(slot))
+                stopSlot(slot, true);
+            continue;
+        }
+        // R475_HOUSE_HELD: a pad held on it is at full - untouched under the finger
+        if (heldFull(key))
+            continue;
+        // MASTER and the group's trim, as the house light has them (houseLook) - not the
+        // closing lid: the white is what that lid gives way to. BLACKOUT and the music's dark
+        // are run()'s (and the masks'). The scene holds the master dimmer and the colour, and
+        // the intensity scales both - the root gives the level back (as run() for a chase).
+        qreal x = qBound(0.0, m_lastWhiteP * m_master * trimOf(key), 1.0);
+        if (m_houseFadeRoot.contains(key))
+            x = std::sqrt(x);
+        Function *func = m_doc->function(fid);
+        const bool lost = m_active.value(slot, Function::invalidId()) != fid || func == nullptr
+                       || func->isRunning() == false || func->stopped();
+        if (lost || qAbs(x - m_activeLevel.value(slot, -1.0)) >= 0.004)
+        {
+            run(slot, fid, x, 0, false);
+            moved = true;
+        }
+    }
+    // ... the show's colours on them give way by as much (slotScale), and the engine's own
+    // dimmer parts carry the white's dimmer (lastWhiteDim) - the "fader moved" path
+    if (moved)
+        reapplyLevels();
+}
+
+qreal TrackEngine::lastWhiteDim(const QString &group) const
+{
+    // the engine's dimmer parts OWN a house group's master dimmers while they run
+    // (ReplaceBlend, ensureDimmerScenes): the white's own dimmer (HTP) shows only where
+    // they are stopped - so they hold at least the white's level themselves
+    const QString slot = QStringLiteral("lastw:") + group;
+    if ((m_lastStage != 1 && m_lastStage != 2) || m_lastWhiteP <= 0.0 || lightsOut()
+        || m_houseFadeRoot.contains(group) == false || m_active.contains(slot) == false)
+        return 0.0;
+    return qBound(0.0, m_activeLevel.value(slot, 0.0), 1.0);
+}
+
+void TrackEngine::lastWhiteStop()
+{
+    // undone mid-track the white fades back out; the show's colours come back to full
+    m_lastWhiteP = -1.0;
+    foreach (const QString &slot, m_active.keys())
+    {
+        if (slot.startsWith(QStringLiteral("lastw:")))
+            stopSlot(slot, false);
+    }
+    reapplyLevels();
+}
+
+void TrackEngine::setDeckAir(int air)
+{
+    // from every "pos" BLT sends (TrackManager::handlePosition). BLT says it only when it has
+    // seen a DJM, and says "off" only when no other deck is heard either - a mix handed over
+    // on the faders is the next track. We only READ it: nothing goes back to the mixer.
+    const qint64 now = m_clock.elapsed();
+    if (air == 0)
+    {
+        if (m_airOffMs < 0 || m_airSeenMs < 0 || now - m_airSeenMs > 1500)
+            m_airOffMs = now;            // a new run of "off air" - an old one that went quiet is not it
+        m_airSeenMs = now;
+    }
+    else
+    {
+        m_airOffMs = -1;
+        m_airSeenMs = -1;
+    }
 }
 
 void TrackEngine::houseLook(qreal level)
@@ -23886,7 +24282,7 @@ void TrackEngine::houseLook(qreal level)
         if (houseGroup(key) == false || heldFull(key))
             continue;
         const TrackGroup &g = m_groups.value(key);
-        const quint32 cf = colourFunction(key, QStringLiteral("white"));
+        const quint32 cf = houseColour(key);    // R479_LAST_WHITE_COLOUR: the warm white
         if (cf == Function::invalidId())
             continue;
         if (g.hasDimmer && g.parts.isEmpty() == false && m_funcs.value(cf).dimmer == false)
@@ -23908,6 +24304,8 @@ void TrackEngine::enterHouse()
 {
     if (m_lastStage >= 3 || m_doc == nullptr)
         return;
+    // R479_LAST_WHITE_FROM: the house light goes on from where the track's white stood
+    m_houseFrom = m_lastWhiteP > 0.0 ? qMin(m_lastWhiteP, qreal(ENGINE_HOUSE_LEVEL)) : 0.0;
     ensureTable();
     // R464_HOUSE_CLEAN: the colour FADE's timer (2+ colour tiles) painted the tiles
     // over the white and left the partner colour on through DARK; a music-dark or a
@@ -23930,7 +24328,7 @@ void TrackEngine::enterHouse()
     m_houseHazeDone = false;
     m_closingDim = 1.0;
     setLastStage(3);
-    houseLook(0.0);
+    houseLook(m_houseFrom);              // R479_LAST_WHITE_LOOKFROM: no dip under the white
     m_report = tr("(last track)  |  house light");
 }
 
@@ -23979,6 +24377,21 @@ void TrackEngine::lastTrackTick(bool showOn)
             emit lastTrackChanged();
         }
     }
+    // R479_LAST_WHITE_TICK: while it plays the white grows - and the DJ's fader at nought is
+    // the track's end: off air for half a second in the outro, four before it (a cut for the
+    // crowd to sing is no end; the undo is two taps either way). Only a fresh "off air".
+    if ((m_lastStage == 1 || m_lastStage == 2) && showOn)
+    {
+        const qint64 nowMs = m_clock.elapsed();
+        if (m_airOffMs >= 0 && m_airSeenMs >= 0 && nowMs - m_airSeenMs < 1500
+            && nowMs - m_airOffMs >= (m_lastStage == 2 ? ENGINE_LAST_AIR_MS : ENGINE_LAST_AIR_MID_MS))
+        {
+            logSignal(QStringLiteral("sig:last-track-fader"));
+            enterHouse();
+        }
+        else
+            lastWhiteDraw(lastWhiteNow());
+    }
     if (m_lastStage < 3)
     {
         if (m_lastStage > 0)
@@ -24005,8 +24418,11 @@ void TrackEngine::lastTrackTick(bool showOn)
             applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
     }
     qreal level;
-    if (t < ENGINE_HOUSE_IN_MS)
-        level = ENGINE_HOUSE_LEVEL * qreal(t) / qreal(ENGINE_HOUSE_IN_MS);
+    // R479_LAST_WHITE_RISE: from where the track's white stood to full in 2 s - at the music's
+    // end it is full already; a fader pulled or a deck stopped early gets there in 2 s, a
+    // light coming up and not a flash, and not a room left half-lit with the music gone
+    if (t < ENGINE_HOUSE_RISE_MS)
+        level = m_houseFrom + (ENGINE_HOUSE_LEVEL - m_houseFrom) * qreal(t) / qreal(ENGINE_HOUSE_RISE_MS);
     else if (t < ENGINE_HOUSE_HOLD_MS)
         level = ENGINE_HOUSE_LEVEL;
     else if (t < ENGINE_HOUSE_HOLD_MS + ENGINE_HOUSE_OUT_MS)
@@ -24029,7 +24445,7 @@ void TrackEngine::lastTrackTick(bool showOn)
         foreach (const QString &key, m_groupOrder)
         {
             if (houseGroup(key) && heldFull(key) == false      // R475_KEEP_WHILE_PAD: a pad took it
-                && colourFunction(key, QStringLiteral("white")) != Function::invalidId()
+                && houseColour(key) != Function::invalidId()     // R479_LAST_WHITE_KEEPCOL
                 && m_active.contains(QStringLiteral("col:") + key) == false)
             {
                 lost = true;
@@ -24979,6 +25395,24 @@ void TrackEngine::flashGroup(const QString &key, bool on)
             m_pulseDepth.insert(key, keepDepth);
             m_breathe.insert(key, keepBreath);
         }
+        // R479_PAD_ONE_LASER (night review 10-17): the other laser type goes dark now, cut as
+        // the beat's cast cuts a group that leaves it - not up to a beat later beside the pad
+        foreach (const QString &other, m_groupOrder)
+        {
+            if (m_cast.contains(other) == false || padLaserDark(other, m_cast) == false)
+                continue;
+            const TrackGroup &og = m_groups.value(other);
+            stopSlot(QStringLiteral("col:") + other, true);
+            stopSlot(QStringLiteral("mot:") + other, true);
+            for (int i = 0; i < og.parts.count(); i++)
+                stopSlot(partSlot(other, i), true);
+            m_pulseDepth.remove(other);
+            m_breathe.remove(other);
+            m_cast.remove(other);
+            m_padLaserOut.insert(other);
+            if (other == m_echoKey)
+                stopEcho();
+        }
         crumb(QStringLiteral("pad ") + key);            // R435_CRUMBS
         emit flashGroupsChanged();
         emit liveChanged();
@@ -25060,6 +25494,7 @@ void TrackEngine::padFlashTick()
 void TrackEngine::padFlashClear()
 {
     // release(), stopAll(), a new table: the sets go, with nothing left held
+    m_padLaserOut.clear();               // R479_PAD_ONE_LASER
     if (m_padFlash.isEmpty())
         return;
     m_padFlash.clear();
@@ -25068,6 +25503,72 @@ void TrackEngine::padFlashClear()
     m_padWasColLevel.clear();
     m_syncOwned.clear();
     emit flashGroupsChanged();
+}
+
+/* R479_PAD_ONE_LASER (night review 10-17): an Animation Laser pad lit while the
+ * LaserBars were lit (01:32:05, 01:37:30, 02:33:41). Never both laser types, at
+ * any energy (runde 422) - a pad too. The pad's exception is the movement (a held
+ * laser may move lit, runde 469), not the second laser type. A held laser pad is
+ * his finger and wins: the other type sits it out as the engine's own one-laser
+ * rule takes a type out - out of the cast, cut hard - and is back on the first
+ * beat after the pad lets go. His own section with both types (runde 431), or a
+ * finger on each type, is his choice and stays. */
+bool TrackEngine::padLaserDark(const QString &key, const QSet<QString> &cast) const
+{
+    if (m_padFlash.isEmpty() || m_padFlash.contains(key))
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    const bool isBars = g.lasers && g.patternDevice == false;
+    if (isBars == false && g.patternDevice == false)
+        return false;
+    foreach (const QString &pk, m_padFlash)
+    {
+        if (cast.contains(pk))
+            continue;                    // on stage already: the cast has it beside the other type or not at all
+        const TrackGroup &pg = m_groups.value(pk);
+        if ((isBars && pg.patternDevice) || (g.patternDevice && pg.lasers && pg.patternDevice == false))
+            return true;
+    }
+    return false;
+}
+
+void TrackEngine::padLaserCast(QSet<QString> &castSet, bool heldCast, qreal fader, const QStringList &eligible)
+{
+    // HOLD builds its cast from the last beat's: what a pad took out comes back when it
+    // lets go, under HOLD's own lines (the animation laser from 70 %, never both types)
+    if (heldCast)
+    {
+        foreach (const QString &key, m_padLaserOut.values())
+        {
+            if (padLaserDark(key, castSet))
+                continue;
+            m_padLaserOut.remove(key);
+            const TrackGroup &g = m_groups.value(key);
+            bool clash = false;
+            foreach (const QString &ck, castSet)
+            {
+                const TrackGroup &cg = m_groups.value(ck);
+                if ((g.patternDevice && cg.lasers && cg.patternDevice == false)
+                    || (g.patternDevice == false && cg.patternDevice))
+                    clash = true;
+            }
+            if (clash == false && eligible.contains(key) && m_groupOff.contains(key) == false
+                && (g.patternDevice == false || fader >= ENGINE_ANI_ON))
+                castSet.insert(key);
+        }
+    }
+    else
+        m_padLaserOut.clear();
+    if (m_padFlash.isEmpty())
+        return;
+    foreach (const QString &key, castSet.values())
+    {
+        if (padLaserDark(key, castSet))
+        {
+            castSet.remove(key);
+            m_padLaserOut.insert(key);
+        }
+    }
 }
 /* =====================================================================
  *  THE TRACK'S COLOURS (runde 470) - appended to trackengine.cpp by

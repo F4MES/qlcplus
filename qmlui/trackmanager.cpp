@@ -540,6 +540,11 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     // before the repeats are dropped below - a brake happens between beats
     if (m_engine != nullptr && playing)
         m_engine->setDeckTempo(obj.value(QStringLiteral("bpm")).toDouble());
+    // R479_LAST_WHITE_AIR: the deck's on-air (only from a BLT that has seen a DJM), before
+    // the repeats are dropped below - a fader pulled down repeats the beat it stood on
+    if (m_engine != nullptr)
+        m_engine->setDeckAir(obj.contains(QStringLiteral("air"))
+                             ? (obj.value(QStringLiteral("air")).toBool(true) ? 1 : 0) : -1);
     // R187_LAGGING_BEAT_GUARD: BLT sends the beat twice - from the beat packet
     // and from the player's status, five times a second - and the status
     // lags: N, then N-1 a few ms later, then N again. Each of those ran a
@@ -651,6 +656,20 @@ void TrackManager::updateState()
     // the analysis moves to its next section - then the page follows the
     // music again. Pressed what the music now became (DROP early, the drop
     // flag comes): let go without a second landing.
+    // R479_PRESS_KEEP_HOLD (night review 10-17): a press in the last beats before a
+    // flag is for the section that flag starts - an analysis change within two bars
+    // of the press keeps it (once: the music's next section lets go, R429). Five
+    // presses were let go 0.03-2.1 s after they were made. Pressed what the music
+    // became: let go below, as before.
+    if (m_overrideState.isEmpty() == false && m_overrideState != state && m_pressBeat >= 0
+        && m_currentBeat >= m_pressBeat && m_currentBeat - m_pressBeat <= 8)
+    {
+        m_pressBeat = -1;                        // one change only: the next one lets go
+        if (m_engine != nullptr)
+            m_engine->noteSectionKeep(m_overrideState, state);
+        emit stateChanged();
+        return;                                  // his press stays on stage
+    }
     const QString held = m_overrideState;
     if (held.isEmpty() == false)
     {
@@ -681,6 +700,7 @@ void TrackManager::setOverrideState(QString state)
         return;
 
     m_overrideState = state;
+    m_pressBeat = state.isEmpty() ? -1 : m_currentBeat;   // R479_PRESS_KEEP_BEAT: when he pressed
     if (m_engine != nullptr)                    // R335_SECTION_SIG: the press on the tracklog
         m_engine->noteSectionOverride(state, m_analysedState);
     emit stateChanged();
@@ -3223,6 +3243,7 @@ void TrackManager::runEngine(bool sectionChanged)
     }
     m_engine->setDropForced(m_overrideState == QStringLiteral("drop"));   // R361_DROP_FORCED
     m_engine->setPressHeld(m_overrideState);   // R475_PRESS_HELD: his pick ends with a press for another kind
+    m_engine->setPressWas(m_analysedState);    // R479_BUILD_STROBE_4: the music's own section under it (the riser)
     {   // R363_NEXT_DROP: the next drop flag ahead - a build flagged in parts leads into it all the way
         int nextDrop = -1;
         for (int i = 0; i < m_markers.count() && m_overrideState.isEmpty(); i++)
