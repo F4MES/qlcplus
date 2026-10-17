@@ -654,7 +654,11 @@ void Chaser::createRunner(quint32 startTime)
         m_runner = new ChaserRunner(doc(), this, startTime);
     }
     m_runner->moveToThread(QCoreApplication::instance()->thread());
-    m_runner->setParent(this);
+    // R477_RUNNER_NO_PARENT: no parent - this runs on the MasterTimer thread, and a child added
+    // to (or, in postRun(), removed from) a Function here changed QLC+'s QObject tree while the
+    // QML garbage collector walked it on the main thread (App -> Doc -> Functions -> children):
+    // the rig's Qt6Qml.dll crash in QV4::QObjectWrapper::markWrapper. postRun() and ~Chaser()
+    // delete the runner themselves
     m_runner->setAction(m_startupAction);
     m_startupAction.m_action = ChaserNoAction;
 }
