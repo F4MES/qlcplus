@@ -126,6 +126,7 @@ static quint32 nameScatter(const QString &name)
 #define ENGINE_CRUMBS_MAX     (2 * 1024 * 1024)   // R435_CRUMBS: rotate here
 #define ENGINE_BARS_AMOK      0.995   // runde 348: the laser bars go wild at 100 % only
 #define ENGINE_HWSTROBE_ON    0.55    // the hardware shutter's own line (runde 313)
+#define ENGINE_STROBE_LAND_ON 0.45    // R480_STROBE_BAR: no landing flash on the strobe lamps under this (the bar time)
 // runde 344, Tobias 10-03: "animationslaseren skal foerst komme i spil ved 70%"
 #define ENGINE_ANI_ON         0.70
 #define ENGINE_DARK_BARS      4
@@ -2762,6 +2763,12 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             // every strobe: that is the operator's hand.
             if (colour.isEmpty() == false && m_cast.contains(key) == false)
                 continue;
+            // R480_STROBE_BAR_2 (Tobias 10-17: "at de helt lave energier mens der er bar, ikke var
+            // strobe"): the drop's landing (the only automatic flash, a colour is given) leaves the
+            // strobe lamps alone under 45 % on the slider - last night 14 landings at 30-52 % stood the
+            // whole bank solid in the bar time. The FLASH button (no colour) is still his hand.
+            if (colour.isEmpty() == false && m_faderNow < ENGINE_STROBE_LAND_ON)
+                continue;
             // full means full: no pulse, no breath, and on the button no
             // MASTER and no group trim. slotScale() and setPart() both read
             // m_flashHeld, so the mark goes in BEFORE the colour scene is run
@@ -4457,6 +4464,36 @@ void TrackEngine::slotChopTimer()
         m_chopTimer.stop();
 }
 
+// R480_STROBE_TOP (Tobias 10-17: "mere strob i de helt hoeje energier +95 ish ... Det skal gaa helt
+// amok ved 100% ... Pas nu paa med ikke at gaa helt amok"): the slider's last stretch, on top of runde
+// 346's w2 - nought to 85 %, 0.20 at 95 %, 0.40 just under the stop and 1 at 100 % itself
+// (ENGINE_BARS_AMOK, the bars' amok line). Small everywhere but the stop.
+static qreal engineStrobeTop(qreal fader)
+{
+    if (fader >= ENGINE_BARS_AMOK)
+        return 1.0;
+    if (fader < 0.85)
+        return 0.0;
+    if (fader < 0.95)
+        return 0.20 * (fader - 0.85) / 0.10;
+    return 0.20 + 0.20 * qBound(0.0, (fader - 0.95) / 0.045, 1.0);
+}
+
+// R480_STROBE_PHASE: the drop's intense phase - its "and again" bursts, and the beat a long drop
+// settles (16 bars at every fader since ANALYSE 10g; a drop under 128 beats never settled, so its
+// bursts ran to its last bar). 8 bars + the slider (w2, as the bursts) + the drop's punch (its size,
+// runde 360, or how hard its kick is, runde 322) + the stop, and the drop's own -2..+2 bars: about
+// 8-12 bars for a soft drop at 70 %, 12-19 at 90 %, 18-26 for a big one at 100 %. 8 to 28 bars.
+int TrackEngine::dropPhaseBeats() const
+{
+    const qreal f = qBound(0.0, m_faderNow, 1.0);
+    const qreal w = qBound(0.0, (f - 0.33) / 0.67, 1.0);
+    const qreal w2 = w * w;
+    const qreal punch = qBound(0.0, qMax(m_dropSize, m_dropHard), 1.0);
+    const int bars = int(qRound(8.0 + 8.0 * w2 + 4.0 * punch * w2 + 4.0 * engineStrobeTop(f))) + m_dropPhaseRnd;
+    return 4 * qBound(8, bars, 28);
+}
+
 void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy, bool isDrop,
                               bool isBuild, qreal prog, int bar, int beatInBar, bool quiet)
 {
@@ -4483,6 +4520,10 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     const qreal w2 = w * w;
     // the stop's own last stretch: nought at 85 % on the slider, one at 100
     const qreal amok = qBound(0.0, (m_faderNow - 0.85) / 0.15, 1.0);
+    // R480_STROBE_TOP_2: the slider's last stretch (engineStrobeTop) - 0 under 85 %, 1 at 100 %
+    const qreal top = engineStrobeTop(m_faderNow);
+    // R480_STROBE_PHASE_2: the drop's "and again" bursts belong to its intense phase
+    const bool dropPhase = m_dropFrom < 0 || beat - m_dropFrom < dropPhaseBeats();
 
     // The DJ scrubbed backwards. A burst is at most four beats, so any
     // backwards jump can leave an end beat in the future - and then
@@ -4511,6 +4552,8 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     }
     int budget = ENGINE_STROBE_BUDGET_LOW
                  + int(qRound(w2 * qreal(ENGINE_STROBE_BUDGET_HIGH - ENGINE_STROBE_BUDGET_LOW)));   // w2: runde 346
+    // R480_STROBE_TOP_3: the window holds 16 -> 30 beats at 100 %, 1-3 more at 85-95 %, 3-6 at 95-99 %
+    budget += int(qRound(14.0 * top));
     auto affordable = [this, budget](int beats) { return m_strobeSpent + beats <= budget; };
 
     if (m_hitStrobeNow)
@@ -4536,6 +4579,9 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // flicker, not the club - the draw starts two rates up from w 1
         // (runde 346: from the last 15 % of the slider, the amok)
         drawn = qMax(drawn, qMin(rateCount - 1, int(qRound(2.0 * amok))));
+        // R480_STROBE_TOP_4: at 100 % only the two fastest rates
+        if (top >= 1.0)
+            drawn = qMax(drawn, rateCount - 2);
         // The riser starts earlier in the build the higher the fader is: at a
         // quarter it only arrives in the last eighth, at the top it runs the
         // last third of the build - and there it does climb, because a riser
@@ -4547,7 +4593,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         if (m_hitStrobeNow)
         {
             want = rateCount - 1;        // R445_DROP_HIT: his STROBE - the fastest, the drop's first bar
-            beats = 4;
+            beats = qMax(1, m_hitStrobeUntil - beat + 1);   // R480_HIT_BURST: the hit's own two bars
             landing = true;
         }
         // R479_BUILD_STROBE (night review 10-17): the riser is the last third of a build whose
@@ -4574,17 +4620,27 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         {
             want = drawn;                                // the drop lands
             beats = 1 + int(qRound(3.0 * w2 * (0.40 + 0.60 * m_dropSize)));   // a whole bar at the top (runde 338; w2 runde 346; the drop's size runde 360)
+            // R480_STROBE_TOP_5: past the bar near the stop, by the drop's size - a beat more on a big
+            // drop at 95 %, 3-4 beats more on a small one and up to two bars on a big one at 100 %
+            if (top > 0.0)
+                beats = qMin(8, beats + int(qRound(top * (1.0 + 3.0 * m_dropSize))) + (top >= 1.0 ? int(rng->bounded(2)) : 0));
             landing = true;
         }
         // bar >= 0 too: a drop whose kick has not arrived yet is handed a
         // NEGATIVE bar (see m_dropLand in tick). The landing above already
         // waits for it; without this the "and again" bursts fired straight
         // through the delay, which is the fake drop given away by the strobes.
-        else if (isDrop && bar >= 0 && w > 0.0 && beatInBar == 0 && roll(0.05 + 0.70 * w2)
-                 && affordable(1 + int(qRound(3.0 * w2))))
+        // R480_STROBE_PHASE_3: inside the drop's intense phase, a little more often at the top - and
+        // never straight on from the last burst (the harness at 97-100 %: the landing and three bursts
+        // back to back, 12-16 beats of strobe in one; "kun i bursts", runde 219)
+        else if (isDrop && bar >= 0 && w > 0.0 && beatInBar == 0 && (roll(0.05 + 0.70 * w2) || roll(0.25 * top))
+                 && dropPhase && beat - m_strobeUntil > 1 && affordable(1 + int(qRound(3.0 * w2))))
         {
             want = drawn;                                // and again, more of it
             beats = 1 + int(qRound(3.0 * w2));
+            // R480_STROBE_TOP_6: a beat or two longer near the stop - inside the window's budget
+            if (top > 0.0)
+                beats += qMin(int(rng->bounded(1 + int(qRound(2.0 * top)))), qMax(0, budget - m_strobeSpent - beats));
         }
         else if (isDrop == false && isBuild == false && w > 0.0
                  && (bar % qMax(2, 10 - int(qRound(8.0 * w)))) == 0
@@ -4684,7 +4740,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // not deduce a common type
         // everyone but the strobe group runs a notch slower, so the strobes
         // still lead when the whole rig joins in at the top of the fader
-        int r = qBound(0, (g.strobes || m_strobeHeadsOnly) ? m_strobeRate : qMax(0, m_strobeRate - 2),
+        int r = qBound(0, (g.strobes || m_strobeHeadsOnly || hitBurstNow(beat)) ? m_strobeRate   /* R480_HIT_RATE: his burst, all at the fastest */ : qMax(0, m_strobeRate - 2),
                        int(ids.count()) - 1);
         if (ids.at(r) == Function::invalidId())
         {
@@ -9367,6 +9423,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // a slider on exactly 30 must count as 30, not 29.999
         fader = qMin(closing, qMin(1.0, energy / (0.80 + 0.20 * qBound(0.0, sectionEnergy, 1.0)) + 1e-6));
     m_faderNow = fader;
+    m_faderReal = fader;                 // R480_HIT_REAL: his number, under a DROP HIT's amok too
     // How long the kick has been away, in beats - the vocal passage the
     // analysis did not flag as a break. Counted once per beat: a section
     // change runs tick() a second time on the same beat, and that would
@@ -9580,6 +9637,24 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     else if (isDrop && m_dropLand > 0 && dropBar == 0 && beatInBar == 0 && hold == false && m_lookState != QStringLiteral("drop"))
         sectionChanged = true;  // draw the drop look WHEN the kick lands
 
+    // R480_HIT_AMOK (Tobias 10-17: "de knapper der skal vaere til de helt store og vilde drop
+    // man kan arme og saa gaar det helt amok!"): an armed DROP HIT - the drop it lands on runs
+    // as at ENERGY 100 % for 8-12 bars, then glides back to the slider over 8 (hitAmok). Only
+    // ever up, never past the closing lid; STILL and the drop's 30 % line above stay on his
+    // number. The landing is the one m_dropArrivedNow / lateLand finds below.
+    {
+        const bool landsNow = (isDrop && dropBar == 0 && beatInBar == 0
+                               && (m_lookState != QStringLiteral("drop") || m_dropLanded == false))
+                              || lateLand;
+        const qreal hitA = hitAmok(beat, landsNow, isDrop);
+        if (hitA > 0.0)
+        {
+            fader = qMin(closing, fader + (1.0 - fader) * hitA);
+            energy = qMin(closing, energy + (1.0 - energy) * hitA);
+            m_faderNow = fader;
+        }
+    }
+
     bool preDrop = isDrop == false && dropWaiting == false && hold == false
                 && nextState == QStringLiteral("drop")
                 && beatsToNext > 0 && beatsToNext <= 4;
@@ -9715,7 +9790,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     const bool dropLong = len >= 128 || nextState == QStringLiteral("drop")
                        || (m_dropFrom >= 0 && secEnd - m_dropFrom >= 128);
     const bool settleNow = isDrop && m_dropCalm == false && m_dropFrom >= 0 && dropLong
-                        && hold == false && beat - m_dropFrom >= 64 && beatInBar == 0
+                        && hold == false && beat - m_dropFrom >= dropPhaseBeats() && beatInBar == 0   // R480_STROBE_PHASE_4: was 64
                         && m_dropGrow == false;   // runde 360: not while it grows
     if (settleNow)
         m_dropCalm = true;
@@ -10636,6 +10711,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (isBreak == false || partChanged)
             m_effects = qBound(m_effects - 1, want, m_effects + 1);
         m_effectsBeat = beat;
+        if (isDrop && m_hitAmokFrom == beat)   // R480_HIT_BUDGET: his hit lands at the full budget at once
+            m_effects = qMax(m_effects, want);
     }
     else if (faderJump)
     {
@@ -10747,6 +10824,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // R363_LATE_SIZE: a late landing is measured from its bar line - from
         // beat 2-4 the "before" window held the silence and the downbeat itself
         m_dropSize = m_dropForced ? 1.0 : dropSizeAt((dropBar == 0 && beatInBar > 0) ? beat - beatInBar : beat);
+    // R480_STROBE_PHASE_5: where the drop arrives - its own -2..+2 bars, and its hardness unknown
+    // until its kick is heard (bar 2, below)
+    if (dropArrives)
+    {
+        m_dropPhaseRnd = int(rng->bounded(5)) - 2;
+        m_dropHard = -1.0;
+    }
     // R362_BUILD_SIZE (Tobias 10-05, "builden efter det kommende drop"): the
     // drop ahead is measured as the landing will measure it (dropSizeAt), and
     // the build into a small one is smaller - shorter stab windows, no eighths
@@ -10922,7 +11006,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         m_strobesPooled = fader >= ENGINE_STROBE_ON;
         m_oneLaser = true;               // R422_ONE_LASER (Tobias 10-10): never both laser types - the line was 0.85
-        m_aniPooled = fader >= ENGINE_ANI_ON;          // runde 344
+        m_aniPooled = m_faderReal >= ENGINE_ANI_ON;    // runde 344 (R480_HIT_ANI: his slider - a hit's amok is not 70 %)
     }
     QStringList pool;
     foreach (const QString &key, eligible)
@@ -11143,7 +11227,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // and the fader (or the closing cap) brought under
             // ENGINE_STROBE_ON, the strobes kept walking (runde 171)
             if (eligible.contains(key)
-                && (m_groups.value(key).patternDevice == false || fader >= ENGINE_ANI_ON)   // runde 344
+                && (m_groups.value(key).patternDevice == false || m_faderReal >= ENGINE_ANI_ON)   // runde 344 (R480_HIT_HOLDANI)
                 && (m_groups.value(key).strobes == false || fader >= ENGINE_STROBE_ON))
                 castSet.insert(key);
         }
@@ -11603,6 +11687,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             styles << 1;
         if (fader > 0.85)                        // runde 290: the top keeps getting harder
             styles << 1 << 5;
+        // R480_STROBE_STYLE (Tobias 10-17: "varianterne for droppet ... variere lidt mere ift. hvor
+        // haardt droppet er og hvor hoej energien er"): a big drop (runde 360's size) leans hard and
+        // nervous from 70 %, a small one wide under 90 %, and the stop leans hard once more
+        if (m_dropSize >= 0.60 && fader >= 0.70)
+            styles << 1 << 5;
+        else if (m_dropSize < 0.15 && fader < 0.90)
+            styles << 2;
+        if (engineStrobeTop(fader) >= 1.0)
+            styles << 1;
         m_dropStyle = styles.at(int(rng->bounded(styles.count())));
         m_dropStyleDrawn = true;
         m_landCoin = rng->bounded(2) == 1;     // runde 287: see `landing`
@@ -11708,6 +11801,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 rememberDropPunch(k, l);
             }
             const qreal onKick = hard < 0.0 ? 1.0 : qBound(0.0, (hard - 0.25) / 0.50, 1.0);
+            m_dropHard = hard;               // R480_STROBE_PHASE_7: how hard - the drop's phase reads it
             m_strobeOnKick = rng->bounded(1000) < int(onKick * 1000.0);
             m_dropKickLocked = true;
             // ... and the strobes pick again now, at the pace just decided:
@@ -14603,6 +14697,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // solid under 0.55, with the room's colour back under the flash.
             // Any other hit beat lets the landing go here, as a beat with no
             // hit does; the rest of that hit (budget, scene, echo) is unchanged.
+            else if (hitBurstNow(beat))
+                genFlash(true, hue);     // R480_HIT_LANDBANK: his STROBE / DARK burst - the bank as at the landing, under its sixteenths
             else if (m_flashHeld.isEmpty() == false)
                 genFlash(false);
 
@@ -14699,7 +14795,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         else
         {
             stopSlot("flash", true);
-            if (m_flashHeld.isEmpty() == false)
+            if (hitBurstNow(beat))
+                genFlash(true, m_colour);   // R480_HIT_BEATBANK: ... on a beat with no hit too
+            else if (m_flashHeld.isEmpty() == false)
                 genFlash(false);
         }
     }
@@ -14712,7 +14810,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // dropBar, not bar: the landing burst waits for the kick (see m_dropLand).
     // In a drop the only thing driveStrobe reads `bar` for IS the landing.
     driveStrobe(castSet, beat, energy, isDrop && dropSettled == false, isBuild, riserFollow ? buildProg : prog, isDrop ? dropBar : bar, beatInBar,
-                m_hitStrobeNow ? (still || m_flash || m_blackout)          // R445_DROP_HIT: his STROBE strobes
+                hitBurstNow(beat) ? (still || m_flash || m_blackout)       // R445_DROP_HIT: his STROBE strobes (R480_HIT_QUIET: all its bars)
                 : (isCalm || still || dropWaiting || m_flash || m_blackout
                    || isBreak || isIntro || isOutro || exposureRest)); // nobody strobes a break/intro/outro/rest (runde 235)
 
@@ -15408,7 +15506,7 @@ TrackMove TrackEngine::drawMove(const QString &group, int tier, bool build, qrea
             if (tier == 2 && fNow >= 0.75
                 && (mv.pattern == ENGINE_PAT_CHASE || mv.pattern == ENGINE_PAT_PINGPONG
                     || mv.pattern == ENGINE_PAT_ODDEVEN)
-                && chance(0.20 + 0.40 * qBound(0.0, (fNow - 0.75) / 0.25, 1.0)))
+                && chance(0.20 + 0.40 * qBound(0.0, (fNow - 0.75) / 0.25, 1.0) + 0.20 * engineStrobeTop(fNow)))   // R480_STROBE_TOP_7: 0.80 at 100 %
             {
                 mv.stepBeats = 1;
                 mv.subSteps = 2;
@@ -23440,20 +23538,49 @@ void TrackEngine::planForgetTrack()
  *  Tobias, 2026-10-13: "Lav: 4" (ARM DROP HIT), mockup A approved - the
  *  button in the rail beside PLAN, all three hits: FLASH, STROBE, DARK -> BANG.
  *
+ *  R480_HIT_DROPHIT (Tobias 10-17): "drop hit knappens funktioner skal vaere MEGET
+ *  vildere. Som det var i gaar, fungerede de naermest bare som et normalt drop
+ *  motoren allerede laver ... de knapper der skal vaere til de helt store og
+ *  vilde drop man kan arme og saa gaar det helt amok!" Last night 8 hits fired
+ *  at ENERGY 55-81 %, and each was one beat of white or one bar of the strobe
+ *  group over the drop the engine would have run anyway.
+ *
  *  Armed, the next drop that ARRIVES (its landing - the same beat as the
  *  strobe landing, m_dropArrivedNow / m_lateLandNow) gets his hit, once:
- *    FLASH   the manual FLASH (the strobes in white) for one beat
- *    STROBE  the strobe group on stage for the drop's first bar, its landing
- *            burst at the fastest rate for the whole bar
- *    DARK    the room black for the two beats before the drop flag (BLACKOUT),
- *            then the FLASH beat on the landing - a drop that waits for its
- *            kick is dark at most six beats, then it bangs
- *  Then it disarms itself. Nothing moves: the flash and the blackout are the
- *  operator's own buttons, and the burst keeps the bars' amok rule.
+ *    every hit  the drop runs as at ENERGY 100 % - AMOK - whatever the slider
+ *               says: 8 bars, up to 12 on a big drop (the drop's size), then
+ *               back to his slider over 8 bars, beat by beat. tick() raises its
+ *               fader with hitAmok(); everything that reads the fader (the
+ *               cast's budget, the moves, the strobe curve, the bars' amok)
+ *               sees 100 %. Full amok never past bar 12 - a long drop settles
+ *               anyway (analyse 10g) - and it ends with the drop.
+ *    FLASH      the whole rig but the lasers in white on the landing (the
+ *               strobes his FLASH WHITE, the heads and the Minis through their
+ *               pads), then white on each of the next 7 beats - a third of a
+ *               beat up, then all the way down
+ *    STROBE     the whole rig but the lasers on stage, strobing at the fastest
+ *               rate for the drop's first two bars (the strobe lamps blink
+ *               the sixteenths as at a landing, the heads and Minis on their
+ *               shutter; the bars only as the amok allows them at 100 %)
+ *    DARK       the room black for the two beats before the drop flag
+ *               (BLACKOUT), then the BANG: FLASH's white on the landing and
+ *               STROBE's two bars right after it - a drop that waits for its
+ *               kick is dark at most six beats, then it bangs, and the burst
+ *               and the amok wait for the kick
+ *  Then it disarms itself. What the hit may own: its landing beat (the whole
+ *  bank full, as every drop's landing, runde 344) and its blinks / burst -
+ *  never a static bank. Nothing in the hit touches a laser: hitLights().
  * ===================================================================== */
 
 #define ENGINE_HIT_DARK_BEATS 2          // DARK: black for this many beats before the flag
 #define ENGINE_HIT_DARK_MAX   6          // ... and never longer than this (a drop waiting for its kick)
+#define ENGINE_HIT_AMOK_BARS  8          // R480_HIT_AMOK: the drop at 100 % for 8 bars ...
+#define ENGINE_HIT_AMOK_MORE  4          // ... and up to 4 more on a big drop (m_dropSize)
+#define ENGINE_HIT_GLIDE      32         // then back to his slider over 8 bars, beat by beat: the bars'
+                                         // figure follows the fader live and a 4-bar glide lifted it
+                                         // up to 2 units a beat (harness, tilt_jump_lit) - 8 keeps it to 1
+#define ENGINE_HIT_BURST      8          // STROBE / DARK: the burst, the drop's first two bars
+#define ENGINE_HIT_BLINKS     7          // FLASH: white on the beat after the landing's beat
 
 int TrackEngine::hitKind() const
 {
@@ -23494,17 +23621,181 @@ void TrackEngine::hitUndark()
         setBlackout(false);
 }
 
+bool TrackEngine::hitLights(const QString &key) const
+{
+    // R480_HIT_RIG: what a hit may light - the strobes, the heads, the Minis. Never a laser
+    // (the bars, the animation laser): they keep their own rules, the amok's at 100 %
+    if (m_groups.contains(key) == false || m_groupOff.contains(key))
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    return g.lasers == false && g.patternDevice == false && g.generatable();
+}
+
+bool TrackEngine::hitBurstNow(int beat) const
+{
+    // R480_HIT_BURST: this beat is in his STROBE / DARK burst
+    return m_hitStrobeUntil >= 0 && beat >= m_hitStrobeFrom && beat <= m_hitStrobeUntil;
+}
+
+void TrackEngine::hitWhite(bool on)
+{
+    // R480_HIT_WHITE: the whole rig but the lasers at full white - the strobes his FLASH
+    // WHITE (as the hit always was), the heads and the Minis their pads (full means full)
+    if (on)
+    {
+        if (m_flash == false)
+        {
+            setFlash(true);
+            m_hitFlashOwn = true;
+        }
+        foreach (const QString &key, m_groupOrder)
+        {
+            if (hitLights(key) == false || m_groups.value(key).strobes || m_padFlash.contains(key))
+                continue;                // the strobes are the FLASH's; a finger (or SYNC) on a pad keeps it
+            flashGroup(key, true);
+            if (m_padFlash.contains(key))
+                m_hitPads.insert(key, m_padFlashMs.value(key, 0));
+        }
+        return;
+    }
+    // off: only what the hit lit - a pad his finger said "still held" on since is his
+    for (auto it = m_hitPads.constBegin(); it != m_hitPads.constEnd(); ++it)
+        if (m_padFlash.contains(it.key()) && m_padFlashMs.value(it.key(), -1) == it.value())
+            flashGroup(it.key(), false);
+    m_hitPads.clear();
+    if (m_hitFlashOwn)
+    {
+        m_hitFlashOwn = false;
+        if (m_flash)
+            setFlash(false);
+    }
+}
+
+void TrackEngine::hitBurst(int from, int beat)
+{
+    // R480_HIT_BURST: the burst from `from` (DARK: the beat after the bang) for two bars.
+    // The whole strobe bank blinks the sixteenths at full (the landing's look, genFlash in
+    // tick's hits), the heads and Minis strobe at the fastest rate (driveStrobe)
+    m_hitStrobeFrom = from;
+    m_hitStrobeUntil = from + ENGINE_HIT_BURST - 1;
+    m_hitStrobePlayed = 0;
+    m_hitStrobeNow = (from == beat);
+    if (m_hitStrobeNow)
+    {
+        m_landBurstUntil = m_hitStrobeUntil;     // R480_HIT_BANK, as in hitStep()
+        m_landBurstFrom = m_hitStrobeFrom;
+    }
+}
+
+qreal TrackEngine::hitAmok(int beat, bool lands, bool isDrop)
+{
+    // R480_HIT_AMOK: from tick(), every beat, after the drop's landing is known and before
+    // anything reads the fader for the cast. 0 = his slider, 1 = as at ENERGY 100 %
+    m_hitStep = 0;
+    if (beat != m_hitSeenBeat)
+    {
+        m_hitStep = 1;                   // a beat played (a DJ loop's too); a second tick on it is not
+        m_hitSeenBeat = beat;
+    }
+    if (m_hitAmokOwed)
+    {
+        m_hitOwedLeft -= m_hitStep;
+        if (m_hitOwedLeft <= 0)
+            m_hitAmokOwed = false;       // the kick never came (the DJ went elsewhere)
+    }
+    m_hitOwedLand = false;
+    if (lands && m_hitAmokFrom < 0 && m_lastStage != 2 && (m_hitKind > 0 || m_hitAmokOwed))
+    {
+        m_hitOwedLand = m_hitKind == 0;  // DARK's bang came before the kick: its burst is owed here
+        m_hitAmokOwed = false;
+        m_hitAmokFrom = beat;
+        m_hitAmokPlayed = 0;
+        m_hitAmokFull = 4 * ENGINE_HIT_AMOK_BARS;     // hitStep() sizes it by the drop, this beat
+        return 1.0;
+    }
+    if (m_hitAmokFrom < 0)
+        return 0.0;
+    m_hitAmokPlayed += m_hitStep;
+    // the drop is over - a break, a jump out of it, the slider under 30 % - or LAST TRACK
+    if (isDrop == false || m_lastStage == 2)
+    {
+        hitAmokEnd();
+        return 0.0;
+    }
+    if (m_hitAmokPlayed < m_hitAmokFull)
+        return 1.0;
+    const int g = m_hitAmokPlayed - m_hitAmokFull;
+    if (g < ENGINE_HIT_GLIDE)
+        return qreal(ENGINE_HIT_GLIDE - g) / qreal(ENGINE_HIT_GLIDE + 1);
+    hitAmokEnd();
+    return 0.0;
+}
+
+void TrackEngine::hitAmokEnd()
+{
+    if (m_hitAmokFrom < 0)
+        return;
+    logSignal(QStringLiteral("sig:drop-hit-amok-end:%1").arg(m_hitAmokPlayed));
+    m_hitAmokFrom = -1;
+    m_hitAmokPlayed = 0;
+}
+
 void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int beatsToNext, qreal bpm)
 {
     m_hitStrobeNow = false;
-    if (m_hitStrobeUntil >= 0 && (beat > m_hitStrobeUntil || beat < m_hitStrobeUntil - 3))
-        m_hitStrobeUntil = -1;           // the bar is over (or the DJ jumped back out of it)
-    // the flash beat is over on the next beat
-    if (m_hitFlashBeat >= 0 && beat != m_hitFlashBeat)
+    // R480_HIT_BURST: the burst ends after its beats - counted as played, so a DJ loop over
+    // it does not keep the rig strobing - or when the DJ jumps back out of it
+    if (m_hitStrobeUntil >= 0)
+    {
+        if (beat > m_hitStrobeFrom)
+            m_hitStrobePlayed += m_hitStep;
+        if (beat > m_hitStrobeUntil || beat < m_hitStrobeFrom || m_hitStrobePlayed > m_hitStrobeUntil - m_hitStrobeFrom)
+            m_hitStrobeUntil = -1;
+        else
+            m_hitStrobeNow = (beat == m_hitStrobeFrom && m_hitStrobePlayed == 0);
+    }
+    if (m_hitStrobeNow)
+    {
+        // R480_HIT_BANK: the strobe lamps' landing freedom (and their sixteenths) for the
+        // whole burst, from its first beat - driveStrobe() sets the same after the hits
+        m_landBurstUntil = m_hitStrobeUntil;
+        m_landBurstFrom = m_hitStrobeFrom;
+    }
+    // the white beat is over on the next beat - unless FLASH's first blink takes it over
+    // (it runs on: no stop and restart of the same scenes in one turn)
+    const bool blinkNow = m_hitBlinks > 0 && m_hitStep > 0 && isDrop && m_blackout == false;
+    if (m_hitFlashBeat >= 0 && beat != m_hitFlashBeat && blinkNow == false)
     {
         m_hitFlashBeat = -1;
-        if (m_flash)
-            setFlash(false);
+        hitWhite(false);
+    }
+    // R480_HIT_WHITE: FLASH's beats after the landing - white on the beat, a third of it
+    if (m_hitBlinks > 0 && m_hitStep > 0)
+    {
+        if (blinkNow)
+        {
+            m_hitBlinks--;
+            if (m_hitFlashBeat >= 0)
+                m_hitFlashBeat = -1;     // the landing's white is still up: it is this blink
+            else
+                hitWhite(true);
+            const quint32 serial = ++m_hitBlinkSerial;
+            const int ms = int(qBound(90.0, 20000.0 / qMax(60.0, bpm), 250.0));
+            QTimer::singleShot(ms, this, [this, serial]() {
+                if (m_hitBlinkSerial == serial && m_hitFlashBeat < 0)
+                    hitWhite(false);
+            });
+        }
+        else
+            m_hitBlinks = 0;             // out of the drop: no more
+    }
+    // R480_HIT_OWED: a DARK whose bang came before the kick - its burst where the drop lands
+    if (m_hitOwedLand && m_hitAmokFrom == beat && m_hitStrobeFrom != beat)
+    {
+        m_hitOwedLand = false;
+        m_hitAmokFull = 4 * (ENGINE_HIT_AMOK_BARS + int(qRound(ENGINE_HIT_AMOK_MORE * qBound(0.0, m_dropSize, 1.0))));
+        hitBurst(beat, beat);
+        logSignal(QStringLiteral("sig:drop-hit-amok:%1").arg(m_hitAmokFull / 4));
     }
     if (m_hitKind == 0)
     {
@@ -23547,18 +23838,38 @@ void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int b
         hitUndark();
     const bool overdue = m_hitDark && beat - m_hitDarkFrom >= ENGINE_HIT_DARK_MAX;
     if (arrives == false && overdue == false)
+    {
+        // R480_HIT_AMOK: tick() saw a landing the hit did not take (it cannot - the same test):
+        // no amok without the hit
+        if (m_hitAmokFrom == beat && m_hitAmokPlayed == 0)
+            m_hitAmokFrom = -1;
         return;
+    }
     // ---- the hit ----
     const int kind = m_hitKind;
     hitUndark();
-    if (kind == 2)
+    // R480_HIT_AMOK: tick() raised the fader from this beat (the landing); the drop's size
+    // says how long. A DARK that banged before its kick: the amok and the burst wait for it
+    if (arrives)
     {
-        m_hitStrobeNow = true;
-        m_hitStrobeUntil = beat + 3;     // the drop's first bar
+        if (m_hitAmokFrom < 0)
+        {
+            m_hitAmokFrom = beat;        // not seen by tick() (it cannot be): from the next beat
+            m_hitAmokPlayed = 0;
+        }
+        m_hitAmokFull = 4 * (ENGINE_HIT_AMOK_BARS + int(qRound(ENGINE_HIT_AMOK_MORE * qBound(0.0, m_dropSize, 1.0))));
     }
-    else if (m_flash == false)
+    else
     {
-        setFlash(true);
+        m_hitAmokOwed = true;
+        m_hitOwedLeft = 36;              // the kick wait is 8 bars at most
+    }
+    if (kind == 2)
+        hitBurst(beat, beat);            // STROBE: from the landing
+    else
+    {
+        // FLASH and DARK's BANG: the landing in white, the whole rig but the lasers
+        hitWhite(true);
         m_hitFlashBeat = beat;
         // the link going quiet must not leave it on: a beat and a half at most
         const int ms = int(qBound(200.0, 90000.0 / qMax(60.0, bpm), 1500.0));
@@ -23566,25 +23877,30 @@ void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int b
             if (m_hitFlashBeat == beat)
             {
                 m_hitFlashBeat = -1;
-                if (m_flash)
-                    setFlash(false);
+                hitWhite(false);
             }
         });
+        if (kind == 1)
+            m_hitBlinks = ENGINE_HIT_BLINKS;
+        else if (arrives)
+            hitBurst(beat + 1, beat);    // DARK: STROBE's burst right after the bang
     }
     m_hitKind = 0;
     logSignal(QStringLiteral("sig:drop-hit:%1").arg(kind == 1 ? QStringLiteral("flash")
                                                    : (kind == 2 ? QStringLiteral("strobe") : QStringLiteral("dark-bang"))));
+    if (arrives)
+        logSignal(QStringLiteral("sig:drop-hit-amok:%1").arg(m_hitAmokFull / 4));
     emit hitChanged();
 }
 
 void TrackEngine::hitCast(int beat, QSet<QString> &castSet)
 {
-    // STROBE: the strobe group is on stage for the drop's first bar
+    // STROBE / DARK: the whole rig but the lasers on stage for the burst (R480_HIT_RIG)
     m_hitAdded.clear();                  // R449_HIT_NOT_DROP: what the hit added is not the drop
-    if (m_hitStrobeUntil < beat || beat < m_hitStrobeUntil - 3)
+    if (hitBurstNow(beat) == false)
         return;
     foreach (const QString &key, m_groupOrder)
-        if (m_groups.value(key).strobes && m_groupOff.contains(key) == false)
+        if (hitLights(key))
         {
             if (castSet.contains(key) == false)
                 m_hitAdded << key;
@@ -23598,12 +23914,13 @@ void TrackEngine::hitReset()
     m_hitStrobeUntil = -1;
     m_hitAdded.clear();                  // R449_HIT_NOT_DROP
     m_hitStrobeNow = false;
-    if (m_hitFlashBeat >= 0)
-    {
-        m_hitFlashBeat = -1;
-        if (m_flash)
-            setFlash(false);
-    }
+    m_hitBlinks = 0;                     // R480_HIT
+    m_hitAmokOwed = false;
+    m_hitOwedLand = false;
+    m_hitAmokFrom = -1;
+    m_hitAmokPlayed = 0;
+    m_hitFlashBeat = -1;
+    hitWhite(false);
     hitUndark();
     if (m_hitKind != 0)
     {
@@ -26178,7 +26495,7 @@ void TrackEngine::clockHandTick(bool showOn)
         return;
     }
     clockHandLoad();
-    const int v = qBound(0, int(qRound(m_faderNow * 100.0)), 100);
+    const int v = qBound(0, int(qRound(m_faderReal * 100.0)), 100);   // R480_HIT_HAND: his hand, not a hit's amok
     m_clockHandSum[q] += v;
     m_clockHandCnt[q] += 1;
     // to disk once a minute (and the night's cells are the sums so far)
