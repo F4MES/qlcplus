@@ -1860,6 +1860,28 @@ public:
     void hitCast(int beat, QSet<QString> &castSet);
     void hitUndark();
     void hitReset();
+    // R480_HIT_DECL (Tobias 10-17: "saa gaar det helt amok!") - track_runtime/drophit.inc.cpp
+    int m_hitStrobeFrom = -1;            // his burst's first beat (DARK: the beat after the bang)
+    int m_hitStrobePlayed = 0;           // ... the beats it has played (a DJ loop counts)
+    int m_hitBlinks = 0;                 // FLASH: the white beats still to come
+    quint32 m_hitBlinkSerial = 0;
+    bool m_hitFlashOwn = false;          // the FLASH WHITE is the hit's, not his finger's
+    QHash<QString, qint64> m_hitPads;    // the pads the hit lit, with their "held" stamp
+    int m_hitSeenBeat = -1;
+    int m_hitStep = 0;                   // 1 on a beat's first tick, 0 on a second one
+    int m_hitAmokFrom = -1;              // R480_HIT_AMOK: the landing the amok runs from
+    int m_hitAmokPlayed = 0;
+    int m_hitAmokFull = 32;              // beats at 100 %, then ENGINE_HIT_GLIDE back to his slider
+    bool m_hitAmokOwed = false;          // DARK banged before its kick: the amok waits for it
+    bool m_hitOwedLand = false;
+    int m_hitOwedLeft = 0;
+    qreal m_faderReal = 0.0;             // the slider as it reads, under the hit's amok
+    bool hitLights(const QString &key) const;
+    bool hitBurstNow(int beat) const;
+    void hitWhite(bool on);
+    void hitBurst(int from, int beat);
+    qreal hitAmok(int beat, bool lands, bool isDrop);
+    void hitAmokEnd();
     // R446_DROP_VARIETY (track_runtime/dropvariety.inc.cpp)
     QStringList m_prevDropSet;           // the last drop's cast where it landed (sorted)
     QString m_prevDropLead;              // ... the rhythm lead it opened with
@@ -2049,6 +2071,11 @@ private:
     qreal m_dropGrowHigh = 0.0;          // R361_GROW_BACK: the highs / level the drop grew to
     qreal m_dropGrowLevel = 0.0;
     qreal m_dropSize = 1.0;              // R360_DROP_SIZE: how big the arriving drop is, 0-1 (1 without curves)
+    // R480_STROBE_PHASE (Tobias 10-17: "jo hoejere Energi og jo stoerre er drop, desto mere strob og jo
+    // laengere tid"): how long the drop stays intense - its strobe bursts, and where a long drop settles
+    qreal m_dropHard = -1.0;             // the drop's kick + bass against the drops before (runde 322), -1 unknown
+    int m_dropPhaseRnd = 0;              // this drop's own -2..+2 bars
+    int dropPhaseBeats() const;
     qreal dropSizeAt(int beat) const;
     bool m_dropGrow = false;             // R360_DROP_GROW: the drop stepped up on an 8-bar line
     int m_dropGrowAt = -1;
