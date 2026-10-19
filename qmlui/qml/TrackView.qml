@@ -44,7 +44,15 @@ Rectangle
     readonly property real gapB: Math.max(8, Math.round(12 * ks))   // between the page's blocks
     readonly property real cardPad: Math.max(10, Math.round(18 * ks))
     readonly property real headH: Math.max(20, Math.round(28 * ks))
-    readonly property real topH: Math.max(50, Math.round(64 * ks))
+    readonly property real topH: Math.max(50, Math.round(92 * ks))   // R481_CLOCK_BAR: was 64 - the big clock
+    // R481_CLOCK (Tobias 10-19, mockup B): the time, big, in the middle of the top bar
+    property string clockHM: Qt.formatTime(new Date(), "hh:mm")
+    property string clockS: Qt.formatTime(new Date(), "ss")
+    Timer
+    {
+        interval: 1000; running: true; repeat: true
+        onTriggered: { var d = new Date(); trackViewRoot.clockHM = Qt.formatTime(d, "hh:mm"); trackViewRoot.clockS = Qt.formatTime(d, "ss") }
+    }
     readonly property real footH: Math.max(28, Math.round(36 * ks))
     readonly property real railH: Math.max(56, Math.round(68 * ks))
     readonly property real deckH: cardPad * 2 + headH + 6 * rowH + 5 * g
@@ -745,6 +753,38 @@ Rectangle
             Layout.fillWidth: true
             Layout.preferredHeight: trackViewRoot.topH
 
+            // R481_CLOCK_ITEM: centred - left of LAST TRACK / STOP TEST / OLD SHOW FILE while one
+            // shows (they sit where the middle is); the title ends at it
+            Row
+            {
+                id: bigClock
+                objectName: "bigClock"
+                readonly property real edge: lastBtn.visible ? lastBtn.x : (testStop.visible ? testStop.x
+                                             : (oldShowChip.visible ? oldShowChip.x : statusRight.x))
+                x: Math.round(Math.min((parent.width - width) / 2, edge - width - 22 * trackViewRoot.ks))
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Math.round(4 * trackViewRoot.ks)
+                Text
+                {
+                    id: bigClockHM
+                    objectName: "bigClockHM"
+                    text: trackViewRoot.clockHM
+                    color: "#FFFFFF"
+                    font.bold: true
+                    font.pixelSize: trackViewRoot.fs(70)
+                    font.family: "DejaVu Sans Mono"
+                }
+                Text
+                {
+                    anchors.baseline: bigClockHM.baseline
+                    text: ":" + trackViewRoot.clockS
+                    color: trackViewRoot.cDim
+                    font.bold: true
+                    font.pixelSize: trackViewRoot.fs(30)
+                    font.family: "DejaVu Sans Mono"
+                }
+            }
+
             Rectangle
             {
                 id: sectionPill
@@ -772,7 +812,7 @@ Rectangle
             {
                 anchors.left: sectionPill.right
                 anchors.leftMargin: Math.round(22 * trackViewRoot.ks)
-                anchors.right: lastBtn.visible ? lastBtn.left : (testStop.visible ? testStop.left : (oldShowChip.visible ? oldShowChip.left : statusRight.left))   // R458_LAST_BTN
+                anchors.right: bigClock.left   // R481_CLOCK_TITLE: the clock sits left of LAST TRACK & co. (R458_LAST_BTN)
                 anchors.rightMargin: Math.round(22 * trackViewRoot.ks)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 3
@@ -852,6 +892,26 @@ Rectangle
                 border.color: trackViewRoot.cGold
                 onStageChanged: sure = false
                 Timer { id: lastSureOff; interval: 4000; onTriggered: lastBtn.sure = false }
+                // R481_LAST_BLINK (Tobias 10-19: "giv last track knappen noget blink ... saa man ligger
+                // maerke til den"): shown and not armed, the gold fill breathes - flat, no glow
+                Rectangle
+                {
+                    id: lastBreath
+                    objectName: "lastBreath"
+                    anchors.fill: parent
+                    radius: parent.radius
+                    color: trackViewRoot.cGold
+                    opacity: 0
+                    readonly property bool on: lastBtn.visible && lastBtn.stage === 0 && !lastBtn.sure && trackViewRoot.animate
+                    onOnChanged: if (!on) opacity = 0
+                    SequentialAnimation on opacity
+                    {
+                        running: lastBreath.on
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 0; to: 0.45; duration: 800; easing.type: Easing.InOutSine }
+                        NumberAnimation { from: 0.45; to: 0; duration: 800; easing.type: Easing.InOutSine }
+                    }
+                }
                 function clock(s) { return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
                 readonly property string sub:
                 {
