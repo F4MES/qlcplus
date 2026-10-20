@@ -125,7 +125,7 @@ class QRandomGenerator;
 // 10-20: "lav
 // AUTO knappen til haze" / "Det samme princip skal gaelde for haze (husk at haze baade skal huske
 // baade fan og haze output)")
-#define ENGINE_HAZE_REST          0.70      // the haze rests at most here - only a held finger goes over (elastic)
+#define ENGINE_HAZE_REST          0.70      // default only; hazeLimit() is the saved elastic threshold
 #define ENGINE_HAZE_AUTO_STEP_MS  1200      // AUTO moves haze and fan 1 % at most this often (under the log's 1.5 s)
 #define SETTINGS_ENGINE_ATMOSROW  QStringLiteral("trackengine/atmos-row")       // HAZE & FAN BY CLOCK: "h:f,h:f,..." (-1 = none)
 #define SETTINGS_ENGINE_ATMOSOWN  QStringLiteral("trackengine/atmos-row-own")   // his points: "12,20"
@@ -625,6 +625,7 @@ class TrackEngine : public QObject
     // R484_HZ_PROP: AUTO = haze AND fan from HAZE & FAN BY CLOCK (off at every start-up; a hand on
     // HAZE or FAN SPEED ends it)
     Q_PROPERTY(bool hazeAuto READ hazeAuto WRITE setHazeAuto NOTIFY liveChanged)
+    Q_PROPERTY(int hazeLimit READ hazeLimit WRITE setHazeLimit NOTIFY liveChanged)
     // R469_GROUP_FLASH: the groups a flash pad holds at full white now
     Q_PROPERTY(QStringList flashGroups READ flashGroups NOTIFY flashGroupsChanged)
     // R470_SYNC: SETUP > LAB > SYNC - is the light on time with the sound
@@ -1183,6 +1184,9 @@ public:
     bool hazeAvailable();
     qreal haze() const;
     void setHaze(qreal level);
+    int hazeLimit() const;
+    void setHazeLimit(int percent);
+    qreal hazeRest() const;
     qreal fan() const;
     void setFan(qreal level);
 
@@ -2311,6 +2315,7 @@ private:
     qint64 m_hazeNagLastMs = -1;
     qint64 m_hazeBeatMs = -1;              // the last beat (m_clock): is music playing
     // R484_HZ_MEMBERS: haze AUTO (hazenag.inc.cpp) and HAZE & FAN BY CLOCK (clockhand.inc.cpp)
+    int m_hazeLimit = 70;                 // saved per rig, 0..100 in 5% steps
     bool m_hazeAuto = false;               // off at every start-up, as ENERGY's AUTO (R378_ROOM_OFF)
     qint64 m_hazeAutoStepMs = -1;          // its last step (m_clock)
     mutable QVector<int> m_atmosRowH;      // the row: haze % per point (-1 = none: AUTO holds)

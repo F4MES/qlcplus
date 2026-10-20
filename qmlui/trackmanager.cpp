@@ -1791,7 +1791,7 @@ static bool remoteHeldOn(TrackEngine *e, const QString &what)
     if (what == QLatin1String("stutter"))
         return e->stutter();
     if (what == QLatin1String("haze"))
-        return e->haze() > ENGINE_HAZE_REST + 0.001;   // R484_HZ_PHONE_ON: held = over its rest
+        return e->haze() > e->hazeRest() + 0.001;   // R484_HZ_PHONE_ON: held = over its rest
     return e->flashing();
 }
 
@@ -1825,7 +1825,7 @@ void TrackManager::remoteWatch()
         else if (what == QLatin1String("stutter"))
             m_engine->setStutter(false);
         else if (what == QLatin1String("haze"))
-            m_engine->setHaze(ENGINE_HAZE_REST);   // R484_HZ_PHONE_GONE: back to its rest - never off
+            m_engine->setHaze(m_engine->hazeRest());   // R484_HZ_PHONE_GONE: back to its rest - never off
         else
             m_engine->setFlash(false);
         qDebug() << "[TRACK remote] the phone went quiet - let go of" << what;
@@ -1917,6 +1917,7 @@ QString TrackManager::remoteState()
         o.insert(QStringLiteral("haze"), e->haze());
         o.insert(QStringLiteral("fan"), e->fan());
         o.insert(QStringLiteral("hazeNag"), e->hazeNag());          // R467_HAZE_NAG
+        o.insert(QStringLiteral("hazeLimit"), e->hazeLimit());
         o.insert(QStringLiteral("hazeAuto"), e->hazeAuto());        // R484_HZ_PHONE_STATE
         // R468_RATE: the groups on stage - what a held GOOD / BAD can point at
         QJsonArray stage;
@@ -2115,7 +2116,7 @@ QString TrackManager::remoteCommand(const QString &line)
         // over 70% men at den automatisk ryger tilbage til 70"): over 70 % it is a held
         // finger - the phone names "haze" in its heartbeat while it holds; silent for 1.2 s
         // (TRACK_REMOTE_GONE_MS, as the held buttons) and the haze goes back to 70 by itself
-        remoteHeld(QStringLiteral("haze"), v > int(qRound(ENGINE_HAZE_REST * 100.0)),
+        remoteHeld(QStringLiteral("haze"), v > e->hazeLimit(),
                    QStringList() << cmd << a.value(1) << QStringLiteral("held"));
     }
     // ---- R469_PHONE_RIG: the group's flash pad (held: again every second)

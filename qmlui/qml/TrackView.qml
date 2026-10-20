@@ -2691,7 +2691,7 @@ RowLayout
                     {
                         objectName: "hazeRest"
                         visible: atmosSlider.isHaze
-                        x: 3 + (parent.width - 6) * 0.7 - 1
+                        x: 3 + (parent.width - 6) * (trackEngine ? trackEngine.hazeLimit / 100 : 0.7) - 1
                         y: 3
                         width: 2
                         height: parent.height - 6
@@ -2745,7 +2745,7 @@ RowLayout
                         onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
                         // R484_HZ_CLASSIC_SPRING (Tobias 10-20: "... ryger tilbage til 70 naar man slipper
                         // faderen"): under the finger anything; let go over 70 and it is 70
-                        function springBack() { if (atmosSlider.isHaze && trackEngine && trackEngine.haze > 0.701) trackEngine.haze = 0.7 }
+                        function springBack() { if (atmosSlider.isHaze && trackEngine && trackEngine.haze > trackEngine.hazeLimit / 100 + 0.001) trackEngine.haze = trackEngine.hazeLimit / 100 }
                         onReleased: springBack()
                         onCanceled: springBack()
                     }
