@@ -21402,7 +21402,14 @@ bool TrackEngine::labOpen()
         return true;
     slabShutdown();                      // R436_STROBE_LAB: one lab at a time
     if (m_doc == nullptr || m_docTimer.isActive())
+    {
+        m_labMessage = m_doc == nullptr ? tr("laser lab: open a show first")
+                                       : tr("laser lab: the show is still loading - try OPEN again when it is ready");
+        m_report = m_labMessage;
+        emit liveChanged();
+        emit labChanged();
         return false;
+    }
     ensureTable();
     labLoad();
     labScan();
@@ -22304,6 +22311,7 @@ void TrackEngine::slabShow()
         stopSlot(cslot, true);
         slabDarkParts();
         m_slabMessage = tr("No home aim for %1 in the show - the bars stay dark").arg(m_slabGroup);
+        emit slabChanged();
         return;
     }
     // ... and lit only once the motors have had time to get there: a PLAY
@@ -22316,9 +22324,16 @@ void TrackEngine::slabShow()
             stopSlot(slot, true);
             stopSlot(cslot, true);
             slabDarkParts();
+            m_slabMessage = tr("OUTPUT DARK · Waiting for the bars to reach their home aim");
+            emit slabChanged();
             QTimer::singleShot(int(left) + 20, this, [this]() { slabShow(); });
             return;
         }
+    }
+    if (m_slabMessage == tr("OUTPUT DARK · Waiting for the bars to reach their home aim"))
+    {
+        m_slabMessage.clear();
+        emit slabChanged();
     }
     const quint32 cf = colourFunction(m_slabGroup, slabColourNow());
     if (m_slabTest)
@@ -23028,7 +23043,14 @@ bool TrackEngine::clabOpen()
     if (m_clabActive)
         return true;
     if (m_doc == nullptr || m_docTimer.isActive())
+    {
+        m_clabMessage = m_doc == nullptr ? tr("colour lab: open a show first")
+                                        : tr("colour lab: the show is still loading - try OPEN again when it is ready");
+        m_report = m_clabMessage;
+        emit liveChanged();
+        emit clabChanged();
         return false;
+    }
     ensureTable();
     clabLoad();
     labShutdown(false);                  // one lab at a time

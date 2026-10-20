@@ -53,7 +53,7 @@ Rectangle
         Text { x: card.live ? 34 : 18; y: 14; text: card.title; color: card.live ? "#EEEEEE" : "#5E5E68"; font.bold: true; font.pixelSize: 20 }
         Text { x: card.live ? 34 : 18; y: 42; width: card.width - 50; elide: Text.ElideRight; text: card.sub; color: card.live ? "#9A9AA4" : "#55555E"; font.pixelSize: 13 }
         Text { x: 22; y: 78; width: card.width - 44; elide: Text.ElideRight; text: card.line1; color: "#E0E0E6"; font.pixelSize: 13 }
-        Text { x: 22; y: 100; width: card.width - 44; elide: Text.ElideRight; text: card.line2; color: "#E0E0E6"; font.pixelSize: 13 }
+        Text { x: 22; y: 100; width: card.width - 44; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight; text: card.line2; color: "#E0E0E6"; font.pixelSize: 13 }
         Text { visible: !card.live; x: 18; y: card.height - 34; text: qsTr("proposal - not built"); color: "#55555E"; font.pixelSize: 13 }
         TrackTile
         {
@@ -535,7 +535,8 @@ Rectangle
                     sub: qsTr("the animation laser")
                     can: trackEngine ? trackEngine.labAvailable : false
                     line1: qsTr("%1 approved looks").arg(trackEngine ? trackEngine.labApprovedCount : 0)
-                    line2: qsTr("height held at yours · no tilt toward the room")
+                    line2: trackEngine && trackEngine.labMessage !== "" ? trackEngine.labMessage
+                           : qsTr("height held at yours · no tilt toward the room")
                     openName: "labOpen:laser"
                     onOpen: if (trackEngine) trackEngine.labOpen()
                 }
@@ -547,7 +548,8 @@ Rectangle
                          ? labMenu.sum(0, "group", "") + "  ·  " + labMenu.sum(0, "lamps", 0) + " " + qsTr("lamps") : qsTr("the strobes")
                     can: labMenu.sum(0, "available", false)
                     line1: qsTr("%1 calm break  ·  %2 groove  ·  %3 drop").arg(labMenu.sum(0, "counts", [0, 0, 0])[0]).arg(labMenu.sum(0, "counts", [0, 0, 0])[1]).arg(labMenu.sum(0, "counts", [0, 0, 0])[2])
-                    line2: qsTr("✕ %1 banned  ·  ✓ %2 kept").arg(labMenu.sum(0, "banned", 0)).arg(labMenu.sum(0, "good", 0))
+                    line2: trackEngine && trackEngine.slabKind === 0 && trackEngine.slabMessage !== "" ? trackEngine.slabMessage
+                           : qsTr("✕ %1 banned  ·  ✓ %2 kept").arg(labMenu.sum(0, "banned", 0)).arg(labMenu.sum(0, "good", 0))
                     openName: "labOpen:strobe"
                     onOpen: if (trackEngine) trackEngine.slabOpenKind(0)
                 }
@@ -560,7 +562,8 @@ Rectangle
                          ? labMenu.sum(1, "group", "") + "  ·  " + labMenu.sum(1, "lamps", 0) + " " + qsTr("bars") : qsTr("the laser bars")
                     can: labMenu.sum(1, "available", false)
                     line1: qsTr("%1 break  ·  %2 groove  ·  %3 drop").arg(labMenu.sum(1, "counts", [0, 0, 0])[0]).arg(labMenu.sum(1, "counts", [0, 0, 0])[1]).arg(labMenu.sum(1, "counts", [0, 0, 0])[2])
-                    line2: qsTr("✕ %1 banned  ·  ✓ %2 kept").arg(labMenu.sum(1, "banned", 0)).arg(labMenu.sum(1, "good", 0))
+                    line2: trackEngine && trackEngine.slabKind === 1 && trackEngine.slabMessage !== "" ? trackEngine.slabMessage
+                           : qsTr("✕ %1 banned  ·  ✓ %2 kept").arg(labMenu.sum(1, "banned", 0)).arg(labMenu.sum(1, "good", 0))
                     openName: "labOpen:bars"
                     onOpen: if (trackEngine) trackEngine.slabOpenKind(1)
                 }
@@ -572,7 +575,8 @@ Rectangle
                     sub: qsTr("every lamp type  ·  one colour at a time")
                     can: trackEngine ? trackEngine.clabColours.length > 0 : false
                     line1: qsTr("how bright each group is IN each colour")
-                    line2: trackEngine && trackEngine.clabChanges > 0 ? qsTr("%1 levels changed from the show file").arg(trackEngine.clabChanges)
+                    line2: trackEngine && trackEngine.clabMessage !== "" ? trackEngine.clabMessage
+                           : trackEngine && trackEngine.clabChanges > 0 ? qsTr("%1 levels changed from the show file").arg(trackEngine.clabChanges)
                                                                      : qsTr("every level as the show file made it")
                     openName: "labOpen:colour"
                     onOpen: if (trackEngine) trackEngine.clabOpen()
