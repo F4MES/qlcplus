@@ -148,6 +148,15 @@ public class BeatLinkTrigger {
         self.assertFalse(second_marker.exists())
         self.assertIsNone(first.poll())
 
+    def test_blt_missing_machine_lock_location_fails_closed(self):
+        self.env = {key: value for key, value in self.env.items() if key.lower() != 'programdata'}
+        marker = self.case / 'must not start'
+        process = self.blt(marker)
+        _, err = process.communicate(timeout=10)
+        self.assertEqual(1, process.returncode)
+        self.assertIn(b'ProgramData is missing', err)
+        self.assertFalse(marker.exists())
+
     def installer(self):
         path = HERE.parent / 'tools/install-blt-guard.ps1'
         return path if path.exists() else HERE.parent / 'rig_update/install-blt-guard.ps1'
