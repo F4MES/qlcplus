@@ -44,6 +44,8 @@
 
 #include <QElapsedTimer>
 #include "trackstagepolicy.h"
+#include "barcoverage.h" // C20261020: actual per-bar eye counts
+#include "showphrases.h"
 #include "scenevalue.h"      // B23 H3
 #include <QVariantList>
 #include <QPoint>
@@ -233,6 +235,7 @@ struct TrackFuncInfo
     qreal minLit = 0.0;       // the lowest master dimmer any step leaves any of its lamps
     qreal peakLit = 0.0;      // runde 259: the BRIGHTEST lamp in its darkest step - "at
                               // least one lamp on" (Tobias), 0..1
+    TrackBarCoverage barCoverage; // C20261020: measured steps, never a name heuristic
     qreal beamShare = 1.0;    // runde 338: litShare counted in BEAMS - a laser bar's eight
                               // eyes each count, so "one eye per bar" is 1/8, not 1
     bool fullBank = false;    // runde 338: some step has 3/4 or more of the lamps it touches
@@ -1321,6 +1324,7 @@ protected:
     qreal minLitOf(Function *func, const QSet<quint32> &touched) const;
     qreal peakLitOf(Function *func, const QSet<quint32> &touched) const;
     qreal beamShareOf(Function *func, const QSet<quint32> &touched) const;
+    TrackBarCoverage barCoverageOf(Function *func, const QSet<quint32> &touched) const;
     bool fullBankOf(Function *func, const QSet<quint32> &touched) const;
     bool canOwnDimmers(const TrackFuncInfo &info, bool onBase) const;
     bool baseCovered() const;                // runde 260: another lit lamp group runs beside the base
@@ -1563,6 +1567,18 @@ private:
     QString m_positionMode;
     QHash<QString, quint32> m_holdScenes;  // "group|mode" -> the hold scene
     /* R383_BARS_ALONE: this beat's break has the laser bars alone */
+    int m_dropFlow = 0; // C20261020: attack/breadth, chase, later climax
+    int m_previousFlow = -1;
+    int m_previousStyle = -1;
+    QString m_previousFlowTrack;
+    QString m_dropLastColour;
+    QHash<QString, QString> m_dropLastFamilies;
+    bool m_quietSpatial = false;
+    qreal m_quietSpatialBeat = 0.0;
+    bool m_hitReturning = false;
+    QString m_strobeFocus; // one automatic burst's principal group
+    bool m_barSingleDraw = false; // C20261020: single eyes are a minority of full-energy drops
+    bool m_barDetailDraw = false; // one class draw per section / energy redraw
     bool m_barsAloneNow = false;
     /* R384_ALONE_LATCH: the section started at 90 % on the slider */
     bool m_aloneArmed = false;
