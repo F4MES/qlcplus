@@ -559,7 +559,7 @@ jobs:
           java-version: '17'
 
       - name: Build BLT startup guard
-        run: python3 startup_guard/build_blt_guard.py qlc-blt-guard.jar
+        run: python3 startup_guard/compile_blt_guard.py qlc-blt-guard.jar
 
       - name: Publish rig-latest
         env:
