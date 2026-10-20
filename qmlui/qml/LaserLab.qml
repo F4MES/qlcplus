@@ -30,6 +30,14 @@ Rectangle
     readonly property var eng: trackEngine
     readonly property int pass: eng ? eng.labPass : 0
     readonly property bool kept: eng ? eng.labTagTitle !== "" : false
+    // UI7: explain the actual selection and dark state; never start output here.
+    readonly property bool hasLook: eng ? eng.labCount > 0 : false
+    readonly property bool outputDark: eng ? eng.labDark : true
+    readonly property string emptyTitle: pass === 2 ? qsTr("NO APPROVED LOOKS")
+                                         : pass === 1 ? qsTr("NO LOOKS TO VARY") : qsTr("NO ATLAS LOOKS")
+    readonly property string emptyDetail: pass === 2 ? qsTr("Keep a look in ATLAS first, then return to APPROVED.")
+                                          : pass === 1 ? qsTr("Keep a look in ATLAS first, then return to VARIANTS.")
+                                          : qsTr("The atlas is empty. Close LAB and reopen it; check the show if it stays empty.")
     readonly property color cCard: "#141418"
     readonly property color cBtn: "#202027"
     readonly property color cText: "#E9E9EE"
@@ -162,7 +170,8 @@ Rectangle
                 objectName: "labTitle"
                 x: 40; y: 60; width: 1160
                 elide: Text.ElideRight
-                text: eng ? (eng.labCount > 0 ? eng.labTitle : (labRoot.pass === 1 ? qsTr("Nothing to vary yet") : qsTr("Nothing kept yet"))) : ""
+                text: !labRoot.hasLook ? labRoot.emptyTitle
+                      : labRoot.outputDark ? qsTr("OUTPUT DARK") : eng.labTitle
                 color: labRoot.cText; font.bold: true
                 font.pixelSize: text.length > 14 ? 52 : 84
             }
@@ -171,7 +180,8 @@ Rectangle
                 objectName: "labDetail"
                 x: 44; y: 168; width: 1150
                 elide: Text.ElideRight
-                text: eng ? eng.labDetail : ""
+                text: !labRoot.hasLook ? labRoot.emptyDetail
+                      : labRoot.outputDark ? qsTr("A look is selected, but DARK is on. Tap PLAY to preview it.") : eng.labDetail
                 color: labRoot.cMute; font.pixelSize: 20
             }
             Row
@@ -233,7 +243,10 @@ Rectangle
                 x: 44; y: 494; width: 1150
                 elide: Text.ElideRight
                 visible: text !== ""
-                text: eng ? eng.labMessage : ""
+                // Real warnings (for example TOO LOW) take priority over the hint.
+                text: eng && eng.labMessage !== "" ? eng.labMessage + (labRoot.hasLook && labRoot.outputDark ? " · " + eng.labTitle : "")
+                      : !labRoot.hasLook ? qsTr("OUTPUT DARK · No look is selected.")
+                      : labRoot.outputDark ? eng.labTitle + " · " + eng.labDetail : ""
                 color: labRoot.cGold; font.bold: true; font.pixelSize: 16
             }
 
@@ -295,6 +308,7 @@ Rectangle
             Row
             {
                 x: playCard.inX; y: 56; spacing: 12
+                enabled: labRoot.hasLook
                 LabTile { objectName: "labBack"; width: (playCard.inW - 24) / 3; height: 70; text: "←  " + qsTr("BACK"); fontPx: 18; onTapped: if (eng) eng.labBack() }
                 LabTile
                 {
@@ -309,6 +323,7 @@ Rectangle
             Row
             {
                 x: playCard.inX; y: 172; spacing: 12
+                enabled: labRoot.hasLook
                 Repeater
                 {
                     model: [ qsTr("OFF"), qsTr("2 s"), qsTr("4 s"), qsTr("8 BEATS") ]
@@ -325,6 +340,7 @@ Rectangle
             Row
             {
                 id: colourRow
+                enabled: labRoot.hasLook
                 x: playCard.inX; y: 282; spacing: 12
                 readonly property var colours: eng ? eng.labColours : []
                 Repeater
@@ -345,6 +361,7 @@ Rectangle
             Row
             {
                 x: playCard.inX; y: 392; spacing: 12
+                enabled: labRoot.hasLook
                 Repeater
                 {
                     model: [ qsTr("BOTH"), qsTr("LEFT"), qsTr("RIGHT") ]
@@ -362,6 +379,7 @@ Rectangle
             LabTile
             {
                 objectName: "labBan"
+                enabled: labRoot.hasLook
                 x: playCard.inX; y: 486; width: (playCard.inW - 12) * 0.55; height: 120
                 text: "⚠  " + qsTr("TOO LOW / AUDIENCE"); tone: "#C9782C"; bar: true; fontPx: 17
                 onTapped: if (eng) eng.labBan()
@@ -369,6 +387,9 @@ Rectangle
             Rectangle
             {
                 objectName: "labStop"
+                // STOP stays reachable even if the current list becomes empty.
+                enabled: labRoot.hasLook || !labRoot.outputDark
+                opacity: enabled ? 1.0 : 0.35
                 x: playCard.inX + (playCard.inW - 12) * 0.55 + 12; y: 486
                 width: (playCard.inW - 12) * 0.45; height: 120; radius: 10
                 readonly property bool dark: eng ? eng.labDark : false
