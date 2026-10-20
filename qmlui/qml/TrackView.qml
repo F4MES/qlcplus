@@ -2685,6 +2685,19 @@ RowLayout
                     property real level: trackEngine
                                          ? (isHaze ? trackEngine.haze : trackEngine.fan) : 0
 
+                    // R484_HZ_CLASSIC_ZONE (Tobias 10-20: "faderen bliver 'elastisk' ... ryger tilbage til 70
+                    // naar man slipper faderen"): where HAZE rests - one thin line under the fill, no text
+                    Rectangle
+                    {
+                        objectName: "hazeRest"
+                        visible: atmosSlider.isHaze
+                        x: 3 + (parent.width - 6) * 0.7 - 1
+                        y: 3
+                        width: 2
+                        height: parent.height - 6
+                        color: "#3E3E3E"
+                    }
+
                     Rectangle
                     {
                         anchors.left: parent.left
@@ -2730,6 +2743,11 @@ RowLayout
                         }
                         onPressed: (mouse) => apply(mouse.x)
                         onPositionChanged: (mouse) => { if (pressed) apply(mouse.x) }
+                        // R484_HZ_CLASSIC_SPRING (Tobias 10-20: "... ryger tilbage til 70 naar man slipper
+                        // faderen"): under the finger anything; let go over 70 and it is 70
+                        function springBack() { if (atmosSlider.isHaze && trackEngine && trackEngine.haze > 0.701) trackEngine.haze = 0.7 }
+                        onReleased: springBack()
+                        onCanceled: springBack()
                     }
                 }
             }

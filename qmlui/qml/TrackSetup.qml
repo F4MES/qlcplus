@@ -1289,6 +1289,64 @@ Rectangle
             }
         }
 
+        // ------------------------------------------------- R484_EH_ROW_LEGEND
+        // Tobias 10-20: "energi skal saette by hand i advanced saadan at den saetter tidspunkterne,
+        // men vi kan 'override' ved manuelt at aendre i tidspunkt. Men laeringen skal skrives i
+        // raekken." - what the row is: gold edge = his hand's, white edge = his own (a tap);
+        // LEARN, then a tap on a point, gives it back to the learning
+        RowLayout
+        {
+            objectName: "clockLegend"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            visible: setupRoot.advancedOpen
+            spacing: 10
+            Text { text: qsTr("ENERGY BY CLOCK"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+            TrackTile
+            {
+                id: clockLearnTile
+                objectName: "clockLearn"
+                property bool armed: false
+                visible: trackEngine ? trackEngine.clockSource.indexOf(2) >= 0 : false
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 30
+                label: armed ? qsTr("TAP A POINT") : qsTr("LEARN")
+                active: armed
+                activeColor: "#E3B44F"
+                onTapped: { armed = !armed; if (armed) clockLearnArm.restart() }
+                Timer { id: clockLearnArm; interval: 6000; onTriggered: clockLearnTile.armed = false }
+            }
+            Text
+            {
+                objectName: "clockLegendSub"
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+                readonly property int view: trackEngine ? trackEngine.clockView : 0
+                readonly property var nights: trackEngine ? trackEngine.clockHandNights : []
+                text: qsTr("learned from your hand: ") + (view === 0 ? qsTr("Fri + Sat, the last 2 weekends") : view === 1 ? qsTr("every Fri + Sat") : qsTr("the other nights"))
+                      + " - " + (nights.length > 0 ? qsTr("%1 nights (%2)").arg(nights.length).arg(nights.join(", ")) : qsTr("no nights yet"))
+                      + "  ·  " + qsTr("gold edge = learned, white edge = set by you (a tap)  ·  AUTO plays it")
+                color: setupRoot.cDim
+                font.pixelSize: 12
+            }
+            // R484_EH_VIEW (Tobias 10-20: "samme valg som haze ... (efterlign haze)"): HAZE & FAN BY
+            // CLOCK's three views - which nights the row learns from (kept; the last 2 weekends first)
+            Repeater
+            {
+                model: [qsTr("LAST 2 WEEKENDS"), qsTr("ALL FRI + SAT"), qsTr("OTHER NIGHTS")]
+                TrackTile
+                {
+                    objectName: "clockView:" + index
+                    Layout.preferredWidth: 140
+                    Layout.preferredHeight: 34
+                    label: modelData
+                    active: trackEngine ? trackEngine.clockView === index : false
+                    activeColor: "#E3B44F"
+                    onTapped: if (trackEngine) trackEngine.clockView = index
+                }
+            }
+        }
+
         // ------------------------------------------------- ENERGY by clock
         // Runde 211 (Tobias, 2026-09-24): a point every fifteen minutes from
         // 20:00 to 02:45 - two rows of fourteen, the evening and the night.
@@ -1314,7 +1372,34 @@ Rectangle
                            + "\n" + modelData + "%"
                     active: trackEngine ? trackEngine.roomAuto : false
                     activeColor: "#4FA3E3"
-                    onTapped: if (trackEngine) trackEngine.cycleClockPoint(index)
+                    // R484_EH_ROW_MARK: a tap is his point (white edge); after LEARN a tap gives it back
+                    objectName: "clockPoint:" + index
+                    readonly property int source: trackEngine && trackEngine.clockSource.length > index ? trackEngine.clockSource[index] : 0
+                    onTapped:
+                    {
+                        if (!trackEngine)
+                            return
+                        if (clockLearnTile.armed)
+                        {
+                            clockLearnTile.armed = false
+                            trackEngine.learnClockPoint(index)
+                        }
+                        else
+                            trackEngine.cycleClockPoint(index)
+                    }
+                    Rectangle
+                    {
+                        objectName: "clockMark:" + index
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 2
+                        anchors.topMargin: 4
+                        anchors.bottomMargin: 4
+                        width: 5
+                        visible: parent.source > 0
+                        color: parent.source === 2 ? "#FFFFFF" : "#E3B44F"
+                    }
                 }
             }
         }

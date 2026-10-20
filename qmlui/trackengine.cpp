@@ -5779,7 +5779,16 @@ void TrackEngine::setHaze(qreal level)
     // R475_ATMOS_BY: who moves it - the engine's own calls say so first, the rest is his hand
     const QString by = m_atmosNextBy.isEmpty() ? QStringLiteral("hand") : m_atmosNextBy;
     m_atmosNextBy.clear();
+    // R484_HZ_SETHAZE / R484_HZ_AUTO_HAND: his hand on HAZE (desk or phone) takes it back from AUTO, as ENERGY -
+    // also a touch that lands where AUTO had it
+    if (by == QStringLiteral("hand") && m_hazeAuto)
+        setHazeAuto(false);
     level = qBound(0.0, level, 1.0);
+    // R484_HZ_ENGINE_CAP (Tobias 10-20: "... ryger tilbage til 70 naar man slipper faderen"):
+    // only a finger takes the haze over its rest - AUTO, LAST TRACK's fade and undo, the
+    // closing and SHOW OFF never set more than 70 %
+    if (by != QStringLiteral("hand") && level > ENGINE_HAZE_REST)
+        level = ENGINE_HAZE_REST;
     if (qFuzzyCompare(level + 1.0, m_haze + 1.0))
         return;
     ensureTable();
@@ -5794,6 +5803,9 @@ void TrackEngine::setFan(qreal level)
 {
     const QString by = m_atmosNextBy.isEmpty() ? QStringLiteral("hand") : m_atmosNextBy;   // R475_FAN_BY
     m_atmosNextBy.clear();
+    // R484_HZ_SETFAN: his hand on FAN SPEED takes both back from AUTO, as on HAZE
+    if (by == QStringLiteral("hand") && m_hazeAuto)
+        setHazeAuto(false);
     level = qBound(0.0, level, 1.0);
     if (qFuzzyCompare(level + 1.0, m_fan + 1.0))
         return;
@@ -6323,6 +6335,7 @@ void TrackEngine::toggleDropGroup(QString key)
         m_dropSet.removeAll(key);
     m_dropTouched = true;
     m_planRemembered = false;            // R439_TRACK_MEMORY: his pick now, not last time's
+    planAheadFollow();                   // R484_PL_FOLLOW: a pick made ahead follows the tap
     logSignal(QStringLiteral("sig:drop-pick:") + (in ? QStringLiteral("+") : QStringLiteral("-")) + key);
     emit dropSetChanged();
 }
@@ -11705,6 +11718,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (m_pickOwedFor > 0)
             {
                 rememberPick(m_pickOwedFor, m_forceSection, m_forceSet, fader);   // R439_TRACK_MEMORY
+                planAheadLit(m_pickOwedFor, m_forceSection);   // R484_PL_LIT: ran - a replay is the memory's
                 // R433_SECTION_TASTE: the verdicts' switch (SETUP) is the learning's too
                 if (m_ratingOn)
                     learnSection(m_forceSection, m_pickOwedPlan, m_forceSet);
@@ -11766,8 +11780,32 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                               || m_planSection != nextState;
             // R439_TRACK_MEMORY: this track's boundary has a set he ran last time -
             // it is his plan again (touched: the section runs it; learned nothing new)
-            const QStringList mem = another ? recallPick(boundary, nextState, fader) : QStringList();
-            if (mem.isEmpty() == false)
+            // R484_PL_TAKE (Tobias 10-19: "saa man kan vaelge hvilke lamper man vil have hvor"): he
+            // picked this section in PLAN while it was further ahead - now it is next, it is his
+            // plan, as a tap in RIG makes it (touched: the section runs exactly it from its first
+            // beat; remembered and learned when it lights). ENGINE DECIDES there: last time's is not
+            QStringList ahead;
+            const int aheadWas = another ? planAheadAt(boundary, nextState, &ahead) : 0;
+            const QStringList mem = (another && aheadWas != 2) ? recallPick(boundary, nextState, fader) : QStringList();
+            if (aheadWas == 1)
+            {
+                if (mem.isEmpty() == false)
+                    m_planOriginal = mem;        // R433_SECTION_TASTE: he changed last time's
+                else
+                {
+                    m_dropPlanSeed = 432u + 2654435761u * quint32(++m_dropPlanCount);
+                    m_planOriginal = planCast(nextState, fader);   // R433_SECTION_TASTE: the engine's plan
+                }
+                m_dropSet = ahead;
+                m_dropTouched = true;
+                m_planRemembered = false;
+                m_dropPlanFader = fader;
+                m_planSection = nextState;
+                m_dropMode = 1;
+                logSignal(QStringLiteral("sig:section-ahead:") + nextState + QStringLiteral(":")
+                          + ahead.join(QLatin1Char('+')));
+            }
+            else if (mem.isEmpty() == false)
             {
                 m_dropSet = mem;
                 m_planOriginal = mem;
@@ -18573,6 +18611,10 @@ void TrackEngine::loadClockCurve(const QSettings &settings)
     // 22:30) is read as it was and laid onto the quarters, so a curve set by
     // hand survives the change; it is also the default.
     m_clockCurve.clear();
+    // R484_EH_CURVE_READ: start-up and IMPORT - his own points read again, the row learns again
+    m_clockOwnRead = false;
+    m_clockLearned = 0;
+    m_clockRowFresh = false;
     // Runde 233 (Tobias, 2026-09-26: "Du må gerne ændre energy-kurven til at
     // passe bedre til hvordan jeg satte den i løbet af aftenen"): the curve
     // read off his hand on 25-26 Sep, per quarter. It replaces the curve the
@@ -18655,6 +18697,12 @@ void TrackEngine::cycleClockPoint(int index)
     // to nought. (A converted 85 went 95 -> 0 and never showed 90.)
     int v = (m_clockCurve.at(index) / 10 + 1) * 10;
     m_clockCurve[index] = v > 100 ? 0 : v;
+    // R484_EH_OWN_POINT (Tobias 10-20: "vi kan 'override' ved manuelt at aendre i tidspunkt"): a tap
+    // makes the point his - the learning never writes it again until LEARN gives it back
+    clockOwnLoad();
+    m_clockOwn |= 1u << index;
+    m_clockLearned &= ~(1u << index);
+    clockOwnSave();
     QStringList parts;
     foreach (int p, m_clockCurve)
         parts << QString::number(p);
@@ -20363,6 +20411,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
         m_planOriginal.clear();
         m_forceFrom = -1;                // R438_LOOP_ACROSS
         m_planRemembered = false;        // R439_TRACK_MEMORY
+        m_planAhead.clear();             // R484_PL_RESET: his picks ahead were the old track's
         planRanReset();                  // R443_PLAN_LANE: the old track's sections
         if (had)
             emit dropSetChanged();
@@ -21059,6 +21108,8 @@ void TrackEngine::stopAll()
 #define ENGINE_LAB_P_STEP     4       // Group Selection under a kept group: 63
 #define ENGINE_LAB_F_FIRST    2       // R425_ATLAS: the first built-in effect (CH6 0-1 is nothing)
 #define ENGINE_LAB_ONLY       6       // kept looks before the lab's own replace the borrowed busking scenes
+#define ENGINE_LAB_READ_MS    400     // R484_LL_READBACK: the frame is out by then
+#define ENGINE_LAB_LASER_ON   10      // R484_LL_READBACK: the manual's CH1 - 0-9 laser off, 10-255 on
 
 namespace
 {
@@ -21803,6 +21854,95 @@ void TrackEngine::labShow()
     m_labScene[other] = scene->id();
     m_labSide = other;
     run(slot, scene->id(), 1.0, 0, true);
+
+    // R484_LL_READBACK (Tobias 10-18: "Kunne ikke faa lazer-lab til rent faktisk at
+    // vise noget"): the lab's values were right (harness, r484) - so after PLAY it
+    // reads the laser's own channels back out of QLC+, after the Grand Master, and
+    // says which side of QLC+ the light stopped on. It only reads; nothing it
+    // finds changes a value, and the height stays his.
+    static bool readPending = false;
+    if (readPending)
+        return;
+    readPending = true;
+    QTimer::singleShot(ENGINE_LAB_READ_MS, this, [this]() {
+        readPending = false;
+        if (m_labActive == false || m_labDark || m_doc == nullptr)
+            return;
+        const QString key = labCurrentKey();
+        const QList<SceneValue> want = labSceneValues(key, m_labColour, m_labBeat, m_labLamps);
+        const bool qlcBlackout = m_doc->inputOutputMap()->blackout();
+        const bool swap = key.endsWith(QStringLiteral("/swap"));   // the lamps take turns: either one lit will do
+        QStringList seen, lit, held;
+        int height = -1;
+        QList<Universe *> ua = m_doc->inputOutputMap()->claimUniverses();
+        foreach (quint32 fx, m_labFixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fx);
+            const QHash<QString, quint32> roles = m_labChan.value(fx);
+            if (fxi == nullptr || roles.contains(QStringLiteral("dimmer")) == false
+                || int(fxi->universe()) >= ua.count() || ua.at(int(fxi->universe())) == nullptr)
+                continue;
+            const QByteArray *out = ua.at(int(fxi->universe()))->postGMValues();
+            auto read = [&](const QString &role) -> int {
+                const int at = int(fxi->address() + roles.value(role));
+                return (out != nullptr && roles.contains(role) && at < out->size()) ? int(uchar(out->at(at))) : -1;
+            };
+            int wantDim = 0;
+            foreach (const SceneValue &sv, want)
+            {
+                if (sv.fxi == fx && sv.channel == roles.value(QStringLiteral("dimmer")))
+                    wantDim = int(sv.value);
+            }
+            const int dim = read(QStringLiteral("dimmer"));
+            const int vpos = read(QStringLiteral("vpos"));
+            const QString addr = QString::number(fxi->address() + 1);
+            seen << QStringLiteral("%1=%2/%3").arg(addr).arg(dim).arg(vpos);
+            if (wantDim < ENGINE_LAB_LASER_ON && swap == false)
+                continue;                        // LEFT / RIGHT: this one is meant dark
+            if (dim < ENGINE_LAB_LASER_ON)
+                held << addr;
+            else
+                lit << addr;
+            if (height < 0)
+                height = vpos;
+        }
+        m_doc->inputOutputMap()->releaseUniverses(false);
+        QString msg, state;
+        if (qlcBlackout)
+        {
+            state = QStringLiteral("blackout");
+            msg = tr("QLC+'s own BLACKOUT is on - nothing reaches the laser");
+        }
+        else if (held.isEmpty() == false && (swap == false || lit.isEmpty()))
+        {
+            state = QStringLiteral("held");
+            msg = tr("QLC+ holds the laser's dimmer at 0 (DMX %1) - Simple Desk, Grand Master or a console button")
+                      .arg(held.join(QStringLiteral(" + ")));
+        }
+        else if (lit.isEmpty() == false)
+        {
+            state = QStringLiteral("sent");
+            msg = tr("Sent: laser ON at DMX %1, height %2. Nothing in the room? Haze, the laser's key/power, DMX mode")
+                      .arg(lit.join(QStringLiteral(" + "))).arg(height);
+        }
+        else
+            return;
+        // his own messages (the end of the list, ...) are not written over
+        static QString lastMsg, lastLog;
+        if (m_labMessage.isEmpty() || m_labMessage == lastMsg)
+        {
+            m_labMessage = msg;
+            lastMsg = msg;
+            emit labChanged();
+        }
+        // the tracklog: once per look and state, not once per beat
+        const QString what = state + QLatin1Char(':') + key;
+        if (what != lastLog)
+        {
+            lastLog = what;
+            logSignal(QStringLiteral("sig:lab-dmx:") + what + QLatin1Char(':') + seen.join(QLatin1Char(' ')));
+        }
+    });
 }
 
 void TrackEngine::labShowCandidate()
@@ -22186,6 +22326,7 @@ void TrackEngine::labStop()
     if (m_labActive == false)
         return;
     m_labDark = !m_labDark;                // STOP, and R411_OPEN_DARK's PLAY
+    logSignal(m_labDark ? QStringLiteral("sig:lab-stop") : QStringLiteral("sig:lab-play"));   // R484_LL_PLAYLOG: was PLAY pressed - the log could not say (10-17)
     m_labMessage = m_labDark ? tr("Stopped - \u25b6 PLAY lights it again") : QString();
     labRestartTimers();
     labShow();
@@ -24116,6 +24257,7 @@ QVariantList TrackEngine::planLaneOf(const QVariantList &sections, int cur)
         const QString type = sec.value(QStringLiteral("type")).toString();
         QString mode;
         QStringList keys;
+        bool ahead = false;              // R484_PL_LANE: a later section - his to pick in PLAN
         if (cur > 0 && end <= cur)
         {
             mode = QStringLiteral("ran");
@@ -24144,13 +24286,25 @@ QVariantList TrackEngine::planLaneOf(const QVariantList &sections, int cur)
         }
         else
         {
-            keys = recallPick(start, type, m_planFaderNow);
-            if (keys.isEmpty() == false)
-                mode = QStringLiteral("mem");
+            // R484_PL_LANE_LATER (Tobias 10-19: "gennem hele tracket fremad"): his pick for it
+            // first, then last time's, then the engine's guess. A section at the track's first
+            // beat never comes as a next one: it is not his to pick
+            ahead = start > qMax(cur, 1);
+            const int was = planAheadAt(start, type, &keys);
+            if (was == 1)
+                mode = QStringLiteral("his");
             else
             {
-                mode = QStringLiteral("guess");
-                keys = planGuess(type, start);
+                keys.clear();
+                if (was == 0)
+                    keys = recallPick(start, type, m_planFaderNow);
+                if (keys.isEmpty() == false)
+                    mode = QStringLiteral("mem");
+                else
+                {
+                    mode = QStringLiteral("guess");
+                    keys = planGuess(type, start);
+                }
             }
         }
         QVariantMap row;
@@ -24159,6 +24313,7 @@ QVariantList TrackEngine::planLaneOf(const QVariantList &sections, int cur)
         row.insert(QStringLiteral("type"), type);
         row.insert(QStringLiteral("mode"), mode);
         row.insert(QStringLiteral("next"), i == next);
+        row.insert(QStringLiteral("ahead"), ahead);   // R484_PL_LANE_ROW: the card asks planRowsAt
         row.insert(QStringLiteral("chips"), planChips(keys));
         out << row;
     }
@@ -24169,12 +24324,18 @@ QVariantList TrackEngine::planRows()
 {
     // the popup over the next section: every group of the night, in or out,
     // and the rule the engine itself would keep (his pick may break it)
-    QVariantList out;
     if (m_dropMode == 0)
-        return out;
+        return QVariantList();
+    return planRowsOf(m_dropSet);
+}
+
+QVariantList TrackEngine::planRowsOf(const QStringList &set) const
+{
+    // R484_PL_ROWS: the card's rows for a set - the next section's plan, or a later one's
+    QVariantList out;
     const QString base = baseGroup();
     bool aniIn = false, barsIn = false;
-    foreach (const QString &key, m_dropSet)
+    foreach (const QString &key, set)
     {
         const TrackGroup g = m_groups.value(key);
         aniIn = aniIn || g.patternDevice;
@@ -24185,7 +24346,7 @@ QVariantList TrackEngine::planRows()
         if (m_groups.contains(key) == false || m_groupOff.contains(key))
             continue;
         const TrackGroup g = m_groups.value(key);
-        const bool in = m_dropSet.contains(key);
+        const bool in = set.contains(key);   // R484_PL_ROWS_IN
         QString note;
         if (key == base)
             note = tr("BASE");
@@ -24217,6 +24378,7 @@ void TrackEngine::planEngineDecides()
     m_planOriginal.clear();
     m_dropSet = planCast(m_planSection, m_planFaderNow);
     m_dropPlanFader = m_planFaderNow;
+    planAheadFollow();                   // R484_PL_DECIDES: a pick made ahead is the engine's too
     logSignal(QStringLiteral("sig:plan-engine:") + m_planSection + QStringLiteral(":")
               + m_dropSet.join(QLatin1Char('+')));
     emit dropSetChanged();
@@ -24234,6 +24396,146 @@ void TrackEngine::planForgetTrack()
     if (m_planRemembered)
         planEngineDecides();
     emit planLaneChanged();
+}
+
+/* ---- R484_PL_AHEAD: a LATER section's lamps (Tobias 10-19: "goer det muligt at man kan
+ *  aendre planen gennem hele tracket fremad, saa man kan vaelge hvilke lamper man vil have
+ *  hvor"). His pick waits here, by the section's flag (same kind, within 8 beats), until
+ *  the plan block plans that boundary as the next one: then it is the RIG's touched plan
+ *  and every rule of a tap in RIG holds (his set from the first beat to the last, both
+ *  laser types, the animation laser under 70 %, no base; a group off for the night out;
+ *  HOLD and CALM win; R433 learns and R439 remembers when it lights). A section that has
+ *  begun is not his to change here. ---- */
+int TrackEngine::planAheadKey(int boundary, const QString &section) const
+{
+    int best = -1, dist = ENGINE_PLAN_NEAR + 1;
+    for (auto it = m_planAhead.constBegin(); it != m_planAhead.constEnd(); ++it)
+        if (qAbs(it.key() - boundary) < dist && it.value().section(QLatin1Char('|'), 0, 0) == section)
+        {
+            best = it.key();
+            dist = qAbs(it.key() - boundary);
+        }
+    return best;
+}
+
+int TrackEngine::planAheadAt(int boundary, const QString &section, QStringList *set) const
+{
+    const int k = planAheadKey(boundary, section);
+    if (k < 0)
+        return 0;
+    const QString keys = m_planAhead.value(k).section(QLatin1Char('|'), 1);
+    if (keys == QStringLiteral("*"))
+        return 2;
+    if (set != nullptr)
+    {
+        // in the room's order; a group off for the night (or gone from the show) is out
+        set->clear();
+        const QStringList his = keys.split(QLatin1Char('+'), Qt::SkipEmptyParts);
+        foreach (const QString &key, m_groupOrder)
+            if (his.contains(key) && m_groups.contains(key) && m_groupOff.contains(key) == false)
+                *set << key;
+    }
+    return 1;
+}
+
+QStringList TrackEngine::planAheadShown(int boundary, const QString &section)
+{
+    // what the lane shows for a later section: his, else last time's, else the guess
+    QStringList keys;
+    const int was = planAheadAt(boundary, section, &keys);
+    if (was == 1)
+        return keys;
+    keys.clear();
+    if (was == 0)
+        keys = recallPick(boundary, section, m_planFaderNow);
+    if (keys.isEmpty())
+        keys = planGuess(section, boundary);
+    return keys;
+}
+
+bool TrackEngine::planIsRig(int boundary) const
+{
+    // the boundary the RIG's plan is for (the lane's own test for the next section)
+    return m_dropMode != 0 && m_dropPlanFor > 0 && qAbs(m_dropPlanFor - boundary) <= ENGINE_PLAN_NEAR;
+}
+
+bool TrackEngine::planAheadOpen(int boundary) const
+{
+    // still to come: past the track's first beat and past the beat the plan block last ran on
+    return boundary > 1 && boundary > m_dropPlanBeat;
+}
+
+QVariantList TrackEngine::planRowsAt(int boundary, const QString &section)
+{
+    if (planIsRig(boundary))
+        return planRows();
+    if (section.isEmpty() || planAheadOpen(boundary) == false)
+        return QVariantList();
+    return planRowsOf(planAheadShown(boundary, section));
+}
+
+void TrackEngine::togglePlanAt(int boundary, const QString &section, const QString &key)
+{
+    if (planIsRig(boundary))
+    {
+        toggleDropGroup(key);            // it became the next one under his finger: the RIG's plan
+        return;
+    }
+    if (section.isEmpty() || planAheadOpen(boundary) == false
+        || m_groups.contains(key) == false || m_groupOff.contains(key))
+        return;
+    const QStringList set = planAheadShown(boundary, section);
+    const bool in = set.contains(key) == false;
+    QStringList out;
+    foreach (const QString &k, m_groupOrder)
+        if (k == key ? in : set.contains(k))
+            out << k;
+    const int old = planAheadKey(boundary, section);
+    if (old >= 0)
+        m_planAhead.remove(old);
+    m_planAhead.insert(old >= 0 ? old : boundary, section + QLatin1Char('|') + out.join(QLatin1Char('+')));
+    logSignal(QStringLiteral("sig:plan-ahead:") + section + QLatin1Char('@') + QString::number(boundary)
+              + QLatin1Char(':') + (in ? QStringLiteral("+") : QStringLiteral("-")) + key);
+    emit planLaneChanged();
+}
+
+void TrackEngine::planEngineDecidesAt(int boundary, const QString &section)
+{
+    if (planIsRig(boundary))
+    {
+        planEngineDecides();
+        return;
+    }
+    if (section.isEmpty() || planAheadOpen(boundary) == false)
+        return;
+    // the engine's - and last time's pick does not come back for it on this play
+    const int old = planAheadKey(boundary, section);
+    if (old >= 0)
+        m_planAhead.remove(old);
+    m_planAhead.insert(old >= 0 ? old : boundary, section + QStringLiteral("|*"));
+    logSignal(QStringLiteral("sig:plan-ahead-engine:") + section + QLatin1Char('@') + QString::number(boundary));
+    emit planLaneChanged();
+}
+
+void TrackEngine::planAheadFollow()
+{
+    // a tap in RIG (or ENGINE DECIDES) on a plan he made ahead: the pick follows, so a DJ
+    // jump back before the section plans it again as he left it
+    if (m_dropPlanFor <= 0)
+        return;
+    const int k = planAheadKey(m_dropPlanFor, m_planSection);
+    if (k < 0)
+        return;
+    m_planAhead.insert(k, m_planSection + QLatin1Char('|')
+                          + (m_dropTouched ? m_dropSet.join(QLatin1Char('+')) : QStringLiteral("*")));
+}
+
+void TrackEngine::planAheadLit(int boundary, const QString &section)
+{
+    // his pick has lit its section - from here it is the track's memory (R439), as a tap in RIG
+    const int k = planAheadKey(boundary, section);
+    if (k >= 0)
+        m_planAhead.remove(k);
 }
 /* =====================================================================
  *  DROP HIT (runde 445, N12) - appended to trackengine.cpp by
@@ -24962,6 +25264,10 @@ void TrackEngine::toggleLastTrack()
             setHaze(m_houseHaze);
         }
         setLastStage(0);
+        // R484_LF_UNDO: undone by hand - no fallback on this track (an auto one undone would
+        // come straight back, the faders still down)
+        m_lastUndoTitle = m_lastTitle.isEmpty() ? m_trackTitle : m_lastTitle;
+        m_fadersDownMs = -1;
         m_lastTitle.clear();
         m_lastOutro = -1;
         if (wasHouse)
@@ -25308,6 +25614,57 @@ void TrackEngine::setDeckAir(int air)
     }
 }
 
+void TrackEngine::setDeckFaders(int onAir)
+{
+    // R484_LF_FADERS: from every "pos" (TrackManager::handlePosition), as setDeckAir. BLT counts
+    // the players the DJM has on air - whether they play or not - and says it only once it has
+    // seen a DJM; no "faders" (an older BLT, no mixer) is -1, and -1 is never "down".
+    const qint64 now = m_clock.elapsed();
+    if (onAir == 0)
+    {
+        if (m_fadersDownMs < 0 || m_fadersSeenMs < 0 || now - m_fadersSeenMs > 1500)
+            m_fadersDownMs = now;        // a new run - an old one that went quiet is not it
+        m_fadersSeenMs = now;
+    }
+    else
+    {
+        m_fadersDownMs = -1;
+        m_fadersSeenMs = -1;
+    }
+}
+
+void TrackEngine::lastTrackAuto(bool showOn)
+{
+    // R484_LF_AUTO (Tobias 10-19: "Hvis last track ikke er aktiveret, og dj'en har taget alle
+    // faders ned i mere 3 sekunder i tidsrummet hvor last track er viser, maa den gerne kalde
+    // last track og skrue op for lyset med det samme (fallback hvis dj'en glemmer at trykke)").
+    // From lastTrackTick(), every 200 ms, after the button's window is worked out. Only:
+    // - not armed (stage 0), SHOW ON, the button shown (its window, a track, no TEST TRACK);
+    // - AUTO on, no start scene, no self test (the light is the engine's to change);
+    // - not undone by hand on this very track;
+    // - BLT has seen a DJM and says no player is on air ("faders" 0) - fresh, and without a
+    //   break for more than ENGINE_LAST_AUTO_MS. No "faders" (no mixer, an older BLT): never.
+    // Then the button's own arm and, at once, the house light - the "fader pulled" path: the
+    // white up in 2 s (ENGINE_HOUSE_RISE_MS), haze down over 8 s, the lasers dark (stopAll).
+    if (m_lastStage != 0)
+        return;
+    if (m_lastUndoTitle.isEmpty() == false && m_lastUndoTitle != m_trackTitle)
+        m_lastUndoTitle.clear();         // another track: the undo was for that one
+    if (showOn == false || m_lastShown == false || m_testTrack || m_trackTitle.isEmpty()
+        || m_fullAuto == false || m_startScene || m_testTimer.isActive()
+        || m_trackTitle == m_lastUndoTitle || lastTrackEndBeat() <= 0)
+        return;
+    const qint64 now = m_clock.elapsed();
+    if (m_fadersDownMs < 0 || m_fadersSeenMs < 0 || now - m_fadersSeenMs >= 1500
+        || now - m_fadersDownMs <= qint64(ENGINE_LAST_AUTO_MS))
+        return;
+    logSignal(QStringLiteral("sig:last-track-auto"));
+    m_fadersDownMs = -1;
+    toggleLastTrack();                   // the button's arm (sig:last-track-armed)
+    if (m_lastStage == 1)
+        enterHouse();                    // as a fader pulled on an armed one (sig:last-track-house)
+}
+
 void TrackEngine::houseLook(qreal level)
 {
     // the soft white on the strobe lamps and the wash, the start scene's aim
@@ -25414,6 +25771,7 @@ void TrackEngine::lastTrackTick(bool showOn)
             emit lastTrackChanged();
         }
     }
+    lastTrackAuto(showOn);               // R484_LF_TICK: every fader down, not armed - the fallback
     // R479_LAST_WHITE_TICK: while it plays the white grows - and the DJ's fader at nought is
     // the track's end: off air for half a second in the outro, four before it (a cut for the
     // crowd to sing is no end; the undo is two taps either way). Only a fresh "off air".
@@ -25522,13 +25880,14 @@ void TrackEngine::hazeLater()
 void TrackEngine::hazeNagTick(bool showOn)
 {
     // every 200 ms from closingTick()
+    hazeAutoTick(showOn);                // R484_HZ_AUTO_TICK: AUTO first - the nag sees its haze
     const qint64 now = m_clock.elapsed();
     const qint64 dt = m_hazeNagLastMs < 0 ? 0 : qBound(qint64(0), now - m_hazeNagLastMs, qint64(2000));
     m_hazeNagLastMs = now;
     const int hour = QTime::currentTime().hour();
     const bool night = hour >= ENGINE_HAZE_NAG_FROM_H || hour < ENGINE_HAZE_NAG_TO_H;
     const bool music = m_hazeBeatMs >= 0 && now - m_hazeBeatMs < 5000 && m_testTrack == false;
-    const bool zero = m_haze < 0.03;
+    const bool zero = m_haze < 0.03 && m_hazeAuto == false;   // R484_HZ_AUTO_NAG: AUTO's 0 is its choice - no nag
     // R472_HAZE_FAN: a hazer found by its fan alone has no level to read - no nag
     if (showOn == false || zero == false || hazeAvailable() == false || m_hazeChannels.isEmpty())
     {
@@ -25553,6 +25912,94 @@ void TrackEngine::hazeNagTick(bool showOn)
         m_hazeNag = nag;
         emit hazeNagChanged();
         emit liveChanged();              // the warnings line
+    }
+}
+
+/* =====================================================================
+ *  HAZE AUTO (runde 482, R484_HZ_AUTO) - Tobias 2026-10-20: "Baade haze og
+ *  energi skal selvfoelgelig foerst foelge haanden naar de er sat til 'AUTO'
+ *  med knappen i UI'et, ellers styrer man selv ... Det samme princip skal
+ *  gaelde for haze (husk at haze baade skal huske baade fan og haze output -
+ *  og at der skal oprettes en 'AUTO' knap til haze)".
+ *
+ *  AUTO off (always at start-up, as ENERGY's AUTO): his hand, as ever.
+ *  AUTO on: haze AND fan go to the point of HAZE & FAN BY CLOCK for the
+ *  quarter hour now (SETUP > ADVANCED; his hand learned into it, his own
+ *  points kept - clockhand.inc.cpp).
+ *  - 1 % a step each, a step at most every ENGINE_HAZE_AUTO_STEP_MS; the haze
+ *    never over 70 % (setHaze caps every call not by his hand)
+ *  - a point without a value (or outside 20:00 - 03:00): that one holds
+ *  - only with the show on, not under LAST TRACK (armed or later), not in the
+ *    clock's closing, not in the test track: those take the haze down and win
+ *  - his hand on HAZE or FAN SPEED (desk or phone) turns it off - setHaze() /
+ *    setFan() - the AUTO tile turns it on again
+ *  - the tracklog: "sig:haze-auto:1/0", and "sig:atmos:<h>:<f>:auto"; the
+ *    learning skips AUTO's time, as it skips LAST TRACK (atmosTick)
+ * ===================================================================== */
+
+bool TrackEngine::hazeAuto() const { return m_hazeAuto; }
+
+void TrackEngine::setHazeAuto(bool on)
+{
+    if (on == m_hazeAuto)
+        return;
+    m_hazeAuto = on;
+    m_hazeAutoStepMs = -1;
+    logSignal(QStringLiteral("sig:haze-auto:") + (on ? QStringLiteral("1") : QStringLiteral("0")));
+    emit liveChanged();
+}
+
+void TrackEngine::hazeAutoTick(bool showOn)
+{
+    if (m_hazeAuto == false)
+        return;
+    if (showOn == false || m_lastStage > 0 || m_closingDim < 1.0 || m_testTrack || hazeAvailable() == false)
+        return;
+    const qint64 now = m_clock.elapsed();
+    if (m_hazeAutoStepMs >= 0 && now - m_hazeAutoStepMs < ENGINE_HAZE_AUTO_STEP_MS)
+        return;
+    m_hazeAutoStepMs = now;
+    // the row's point for the quarter hour now: 0 = 20:00 ... 27 = 02:45
+    const QTime t = QTime::currentTime();
+    int m = t.hour() * 60 + t.minute() - 20 * 60;
+    if (m < 0)
+        m += 24 * 60;
+    const int i = m / 15;
+    if (i >= ENGINE_CLOCK_POINTS)
+        return;                          // outside the row: both hold
+    atmosRowLoad();
+    // one step toward a point's value; the bottom 3 % is off, as on the sliders
+    auto step = [](int at, int want) {
+        if (want < 3)
+            want = 0;
+        if (at == want)
+            return at;
+        int next = at + (want > at ? 1 : -1);
+        if (want == 0 && next < 3)
+            next = 0;
+        return next;
+    };
+    const int wantH = m_atmosRowH.value(i, -1);
+    if (wantH >= 0 && m_hazeChannels.isEmpty() == false)
+    {
+        const int at = int(qRound(m_haze * 100.0));
+        const int next = step(at, qMin(wantH, int(qRound(ENGINE_HAZE_REST * 100.0))));
+        if (next != at)
+        {
+            atmosNext(QStringLiteral("auto"));   // the log's "by" - and setHaze() knows it is not his hand
+            setHaze(next / 100.0);
+        }
+    }
+    const int wantF = m_atmosRowF.value(i, -1);
+    if (wantF >= 0 && m_fanChannels.isEmpty() == false)
+    {
+        const int at = int(qRound(m_fan * 100.0));
+        const int next = step(at, qMin(wantF, 100));
+        if (next != at)
+        {
+            atmosNext(QStringLiteral("auto"));
+            setFan(next / 100.0);
+        }
     }
 }
 /* =====================================================================
@@ -27049,6 +27496,14 @@ void TrackEngine::syncBlinkOff()
  *  ENERGY-by-clock tiles in SETUP > ADVANCED. Only a proposal: a gold tile
  *  is 10 % or more from the clock, a tap takes that point, USE YOURS takes
  *  them all. The clock never changes by itself.
+ *  R484_EH_HEAD (Tobias 10-20: "energi skal saette by hand i advanced saadan at den saetter
+ *  tidspunkterne, men vi kan 'override' ... Men laeringen skal skrives i raekken"): the learned
+ *  value IS the clock point now - written while ENERGY by clock is off, never under it; a point
+ *  he taps is his and stays his ("trackengine/clockcurve-own") until LEARN. R484_EH_VIEW / _KEYS
+ *  ("samme valg som haze ... efterlign haze"): as HAZE & FAN BY CLOCK - the nights its view picks
+ *  (last 2 weekends / every Fri + Sat / the other nights, "trackengine/clock-view"), a point two
+ *  of them know (30 s each) is their averages' average in 5s; a key per night
+ *  ("trackengine/clock-night/<night>"), kept as long as the haze's (ENGINE_ATMOS_NIGHTS).
  *  - counted every 200 ms while the show is on, music plays (a beat within
  *    5 s, not the test track) and the slider is his (ENERGY by clock off);
  *    20:00 to 02:59, the clock's 28 points
@@ -27061,7 +27516,27 @@ void TrackEngine::clockHandLoad() const
     if (m_clockHandRead)
         return;
     m_clockHandRead = true;
-    m_clockHandStore = QSettings().value(QStringLiteral("trackengine/clock-hand")).toMap();
+    // R484_EH_KEYS_LOAD (Tobias 10-20: "sidste 2 uger eller all time ... efterlign haze"): a key per
+    // night, "trackengine/clock-night/<night>", as R475_ATMOS_KEYS - the one map of the last 7
+    // nights (R470) moves over once
+    QSettings s;
+    m_clockHandStore.clear();
+    s.beginGroup(QStringLiteral("trackengine/clock-night"));
+    foreach (const QString &n, s.childKeys())
+        m_clockHandStore.insert(n, s.value(n).toString());
+    s.endGroup();
+    const QVariantMap old = s.value(QStringLiteral("trackengine/clock-hand")).toMap();
+    if (old.isEmpty() == false)
+    {
+        for (auto it = old.constBegin(); it != old.constEnd(); ++it)
+        {
+            if (m_clockHandStore.contains(it.key()))
+                continue;
+            m_clockHandStore.insert(it.key(), it.value().toString());
+            s.setValue(QStringLiteral("trackengine/clock-night/") + it.key(), it.value().toString());
+        }
+        s.remove(QStringLiteral("trackengine/clock-hand"));
+    }
 }
 
 static bool clockHandNightCounts(const QString &cells)
@@ -27075,12 +27550,16 @@ static bool clockHandNightCounts(const QString &cells)
 
 void TrackEngine::clockHandSave()
 {
-    // the last 7 nights - R472_HAND_PRUNE: a night too short to show goes first
+    // R484_EH_KEYS_SAVE: tonight's key only; the last ENGINE_ATMOS_NIGHTS nights, as HAZE & FAN
+    // (all Fri + Sat needs more than 7) - R472_HAND_PRUNE: a night too short to show goes first
     // (five ten-second checks pushed the two real nights out), never tonight
+    QSettings settings;
+    const QString tonight = nightKey();
+    if (m_clockHandStore.contains(tonight))
+        settings.setValue(QStringLiteral("trackengine/clock-night/") + tonight, m_clockHandStore.value(tonight).toString());
     QStringList nights = m_clockHandStore.keys();
     std::sort(nights.begin(), nights.end());
-    const QString tonight = nightKey();
-    while (nights.count() > 7)
+    while (nights.count() > ENGINE_ATMOS_NIGHTS)
     {
         int drop = 0;
         for (int i = 0; i < nights.count(); i++)
@@ -27089,9 +27568,10 @@ void TrackEngine::clockHandSave()
                 drop = i;
                 break;
             }
-        m_clockHandStore.remove(nights.takeAt(drop));
+        const QString gone = nights.takeAt(drop);
+        m_clockHandStore.remove(gone);
+        settings.remove(QStringLiteral("trackengine/clock-night/") + gone);
     }
-    QSettings().setValue(QStringLiteral("trackengine/clock-hand"), m_clockHandStore);
 }
 
 QStringList TrackEngine::clockHandNightsAll() const
@@ -27114,40 +27594,237 @@ QStringList TrackEngine::clockHandNightsAll() const
     return out;
 }
 
-QStringList TrackEngine::clockHandNights() const
+// R484_EH_VIEW_NIGHTS (Tobias 10-20: "samme valg som haze med om det er sidste 2 uger eller all
+// time ... (efterlign haze)"): the nights as atmosNightsFor() picks them, and HAZE & FAN BY
+// CLOCK's rule for a point - two of them know it, 30 s each
+static bool atmosWeekend(const QString &night);   // HAZE & FAN's, below: a Fri / Sat evening
+
+static QStringList clockHandNightsFor(const QVariantMap &store, int view)
 {
-    const QStringList all = clockHandNightsAll();
-    if (all.count() < 2)
-        return QStringList();            // one night is a night, not a habit
+    // the nights with a quarter long enough to count, oldest first:
+    // 0 = the last 2 weekends (its 4 newest Fri / Sat), 1 = every Fri / Sat, 2 = the other nights
+    QStringList nights = store.keys();
+    std::sort(nights.begin(), nights.end());
     QStringList out;
-    foreach (const QString &n, all)
-        out << n.mid(5);                 // "10-16"
+    foreach (const QString &n, nights)
+    {
+        if (clockHandNightCounts(store.value(n).toString()) == false)
+            continue;
+        if ((view == 2) == atmosWeekend(n))
+            continue;
+        out << n;
+    }
+    if (view == 0)
+        out = out.mid(qMax(0, int(out.count()) - 4));
     return out;
 }
 
-QVariantList TrackEngine::clockHand() const
+static QVector<qreal> clockHandMeans(const QVariantMap &store, const QStringList &nights)
 {
-    QVariantList out;
-    const QStringList nights = clockHandNightsAll();
-    if (nights.count() < 2)
-        return out;
+    // per point the average of the nights' own averages (a long night counts as one) - -1 where
+    // fewer than two nights have 30 s of it
+    QVector<qreal> out(ENGINE_CLOCK_POINTS, -1.0);
     for (int q = 0; q < ENGINE_CLOCK_POINTS; q++)
     {
-        // the average of the nights' own averages: a long night counts as one
         qreal sum = 0.0;
         int n = 0;
         foreach (const QString &night, nights)
         {
-            const QString c = m_clockHandStore.value(night).toString().split(QLatin1Char(';')).value(q);
+            const QString c = store.value(night).toString().split(QLatin1Char(';')).value(q);
             const qint64 cnt = c.section(QLatin1Char(','), 1, 1).toLongLong();
             if (cnt < ENGINE_HAND_MIN_SAMPLES)
                 continue;
             sum += c.section(QLatin1Char(','), 0, 0).toDouble() / qreal(cnt);
             n++;
         }
-        out << (n > 0 ? int(qRound(sum / n)) : -1);
+        if (n >= 2)
+            out[q] = sum / n;
     }
     return out;
+}
+
+QStringList TrackEngine::clockHandNights() const
+{
+    // the view's nights, "10-16" (the legend's count)
+    clockHandLoad();
+    QStringList out;
+    foreach (const QString &n, clockHandNightsFor(m_clockHandStore, m_clockView))
+        out << n.mid(5);
+    return out;
+}
+
+QVariantList TrackEngine::clockHand() const
+{
+    // what the view's nights say per point, % - -1 where two nights do not know it
+    clockHandLoad();
+    QVariantList out;
+    foreach (qreal m, clockHandMeans(m_clockHandStore, clockHandNightsFor(m_clockHandStore, m_clockView)))
+        out << (m >= 0.0 ? int(qRound(m)) : -1);
+    return out;
+}
+
+// R484_EH_INTO_ROW: YOUR HAND written into ENERGY by clock's row
+#define SETTINGS_ENGINE_CLOCKOWN QStringLiteral("trackengine/clockcurve-own")   // his points: "12,20"
+#define SETTINGS_ENGINE_CLOCKVIEW QStringLiteral("trackengine/clock-view")      // the nights it learns from
+#define SETTINGS_ENGINE_CLOCKBASE QStringLiteral("trackengine/clockcurve-base")   // R484_EH_BASE: a learned point's value before it
+static_assert(ENGINE_CLOCK_POINTS <= 32, "R484_EH: his points and the learned ones are bits");
+
+void TrackEngine::clockOwnLoad() const
+{
+    if (m_clockOwnRead)
+        return;
+    m_clockOwnRead = true;
+    m_clockOwn = 0;
+    foreach (const QString &s, QSettings().value(SETTINGS_ENGINE_CLOCKOWN).toString().split(QLatin1Char(','), Qt::SkipEmptyParts))
+    {
+        bool ok = false;
+        const int q = s.trimmed().toInt(&ok);
+        if (ok && q >= 0 && q < ENGINE_CLOCK_POINTS)
+            m_clockOwn |= 1u << q;
+    }
+}
+
+void TrackEngine::clockOwnSave() const
+{
+    QStringList parts;
+    for (int q = 0; q < ENGINE_CLOCK_POINTS; q++)
+        if ((m_clockOwn >> q) & 1u)
+            parts << QString::number(q);
+    QSettings().setValue(SETTINGS_ENGINE_CLOCKOWN, parts.join(QLatin1Char(',')));
+}
+
+QVariantList TrackEngine::clockSource() const
+{
+    clockOwnLoad();
+    QVariantList out;
+    for (int q = 0; q < m_clockCurve.count() && q < ENGINE_CLOCK_POINTS; q++)
+        out << (((m_clockOwn >> q) & 1u) ? 2 : (((m_clockLearned >> q) & 1u) ? 1 : 0));
+    return out;
+}
+
+void TrackEngine::clockHandIntoRow(int only)
+{
+    // every point two of the view's nights know (30 s each, as HAZE & FAN BY CLOCK) and he has
+    // not set himself takes their averages' average, in the clock's own steps (5s, as USE YOURS
+    // and the haze: the row stays readable, a minute's drift of a point or two does not rewrite
+    // it); a point they do not know gets back the value it had before it was learned (R484_EH_BASE),
+    // and one never learned keeps its value - ENERGY always has one; only = one
+    // point (LEARN), -1 = all. The callers keep it off ENERGY by clock's run (LEARN excepted:
+    // his own tap, as a tap on a point always was).
+    if (m_clockCurve.count() != ENGINE_CLOCK_POINTS)
+        return;
+    clockOwnLoad();
+    clockHandLoad();
+    const QVector<qreal> mean = clockHandMeans(m_clockHandStore, clockHandNightsFor(m_clockHandStore, m_clockView));
+    quint32 learned = 0;
+    bool changed = false;
+    // R484_EH_BASE (rows cross-check 10-20, Tobias: "knapperne faktisk virker ... med at bruge de
+    // korrekte data"): a point holds a learned value only while the view's nights know it. The
+    // value it had before the learning is kept ("trackengine/clockcurve-base", "q:v,...") and comes
+    // back when they do not - LAST 2 WEEKENDS -> OTHER NIGHTS -> LAST 2 WEEKENDS left the weekdays'
+    // 50 at 22:15 / 22:30 and AUTO played them on a weekend
+    QMap<int, int> base;
+    foreach (const QString &b, QSettings().value(SETTINGS_ENGINE_CLOCKBASE).toString().split(QLatin1Char(','), Qt::SkipEmptyParts))
+    {
+        bool okQ = false, okV = false;
+        const int bq = b.section(QLatin1Char(':'), 0, 0).toInt(&okQ);
+        const int bv = b.section(QLatin1Char(':'), 1, 1).toInt(&okV);
+        if (okQ && okV && bq >= 0 && bq < ENGINE_CLOCK_POINTS)
+            base.insert(bq, qBound(0, bv, 100));
+    }
+    bool baseChanged = false;
+    for (int q = 0; q < ENGINE_CLOCK_POINTS; q++)
+    {
+        if ((m_clockOwn >> q) & 1u)
+        {
+            baseChanged = base.remove(q) > 0 || baseChanged;   // his value now - no learning under it
+            continue;
+        }
+        if (only >= 0 && q != only)
+        {
+            if (mean.at(q) >= 0.0)
+                learned |= 1u << q;
+            continue;
+        }
+        if (mean.at(q) < 0.0)
+        {
+            if (base.contains(q))          // was learned, the view's nights do not know it: back
+            {
+                if (m_clockCurve.at(q) != base.value(q))
+                {
+                    m_clockCurve[q] = base.value(q);
+                    changed = true;
+                }
+                base.remove(q);
+                baseChanged = true;
+            }
+            continue;
+        }
+        learned |= 1u << q;
+        if (base.contains(q) == false)
+        {
+            base.insert(q, m_clockCurve.at(q));
+            baseChanged = true;
+        }
+        const int r = qBound(0, int(qRound(mean.at(q) / 5.0)) * 5, 100);
+        if (m_clockCurve.at(q) != r)
+        {
+            m_clockCurve[q] = r;
+            changed = true;
+        }
+    }
+    if (baseChanged)
+    {
+        QStringList bs;
+        for (auto it = base.constBegin(); it != base.constEnd(); ++it)
+            bs << QString::number(it.key()) + QLatin1Char(':') + QString::number(it.value());
+        QSettings().setValue(SETTINGS_ENGINE_CLOCKBASE, bs.join(QLatin1Char(',')));
+    }
+    if (only >= 0)
+        learned = (m_clockLearned & ~(1u << only)) | (learned & (1u << only));
+    const bool marks = learned != m_clockLearned;
+    m_clockLearned = learned;
+    if (changed)
+    {
+        QStringList parts;
+        foreach (int p, m_clockCurve)
+            parts << QString::number(p);
+        QSettings().setValue(SETTINGS_ENGINE_CLOCKCURVE, parts.join(','));
+        logSignal(QStringLiteral("sig:clock-learn:") + (only < 0 ? QStringLiteral("row") : QString::number(only)));
+        m_roomSent = -1;
+        announceRoom();                    // nothing unless ENERGY by clock runs (LEARN's own tap)
+    }
+    if (changed || marks)
+        emit tableChanged();
+}
+
+void TrackEngine::learnClockPoint(int index)
+{
+    if (index < 0 || index >= m_clockCurve.count() || index >= ENGINE_CLOCK_POINTS)
+        return;
+    clockOwnLoad();
+    if (((m_clockOwn >> index) & 1u) == 0)
+        return;
+    m_clockOwn &= ~(1u << index);
+    clockOwnSave();
+    logSignal(QStringLiteral("sig:clock-own-back:") + QString::number(index));
+    clockHandIntoRow(index);
+    emit tableChanged();
+}
+
+int TrackEngine::clockView() const { return m_clockView; }
+
+void TrackEngine::setClockView(int view)
+{
+    // R484_EH_VIEW: as setAtmosView (R484_HZ_ROW_VIEW) - kept, and the row learns from the
+    // nights at once (his tap, as a tap on a point; his own points stay)
+    view = qBound(0, view, 2);
+    if (view == m_clockView)
+        return;
+    m_clockView = view;
+    QSettings().setValue(SETTINGS_ENGINE_CLOCKVIEW, view);
+    clockHandIntoRow(-1);
+    emit clockHandChanged();
 }
 
 void TrackEngine::useClockHand(int index)
@@ -27186,6 +27863,19 @@ void TrackEngine::clockHandTick(bool showOn)
 {
     // every 200 ms from closingTick()
     const qint64 now = m_clock.elapsed();
+    // R484_EH_ROW_FIRST: the row learns once the curve is read (start-up, IMPORT) - never while
+    // ENERGY by clock runs (off at every start-up, R378)
+    if (m_clockRowFresh == false && m_roomAuto == false)
+    {
+        m_clockRowFresh = true;
+        const int v = QSettings().value(SETTINGS_ENGINE_CLOCKVIEW, 0).toInt();   // R484_EH_VIEW: read back
+        if (v >= 0 && v <= 2 && v != m_clockView)
+        {
+            m_clockView = v;
+            emit clockHandChanged();
+        }
+        clockHandIntoRow(-1);
+    }
     const bool music = m_hazeBeatMs >= 0 && now - m_hazeBeatMs < 5000 && m_testTrack == false;
     // R472_HAND_LIVE: not the start scene (the slider stands on an old number there) nor
     // LAST TRACK (the cap brings it down, not his hand)
@@ -27252,6 +27942,10 @@ void TrackEngine::clockHandFlush()
     m_clockHandStore.insert(night, cells.mid(0, ENGINE_CLOCK_POINTS).join(QLatin1Char(';')));
     clockHandSave();
     emit clockHandChanged();
+    // R484_EH_ROW_FLUSH (Tobias 10-20: "laeringen skal skrives i raekken"): what was learned goes
+    // into the row - only with ENERGY by clock off, so the row AUTO plays never moves under it
+    if (m_roomAuto == false)
+        clockHandIntoRow(-1);
 }
 
 /* =====================================================================
@@ -27379,6 +28073,10 @@ void TrackEngine::setAtmosView(int view)
     if (view == m_atmosView)
         return;
     m_atmosView = view;
+    // R484_HZ_ROW_VIEW: the nights HAZE & FAN BY CLOCK learns from - kept, and the row
+    // learns from them at once (his tap; his own points stay)
+    QSettings().setValue(SETTINGS_ENGINE_ATMOSVIEW, view);
+    atmosIntoRow(-1);
     emit atmosChanged();
 }
 
@@ -27440,6 +28138,8 @@ QString TrackEngine::atmosBy(bool showOn) const
         return QStringLiteral("last-track");
     if (m_closingDim < 1.0)
         return QStringLiteral("closing");
+    if (m_hazeAuto)
+        return QStringLiteral("auto");   // R484_HZ_AUTO_BY: the minute lines say who has it
     return QStringLiteral("hand");
 }
 
@@ -27470,7 +28170,7 @@ void TrackEngine::atmosCsv(const QString &why, const QString &by)
     const qreal bpm = m_beatMs > 0.0 ? 60000.0 / m_beatMs : 0.0;
     const QString line = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
         + QLatin1Char(',') + why + QLatin1Char(',') + by
-        + QLatin1Char(',') + QString::number(int(qRound(m_haze * 100.0)))
+        + QLatin1Char(',') + QString::number(int(qRound(qMin(m_haze, ENGINE_HAZE_REST) * 100.0)))   // R484_HZ_LEARN_CSV: the rest, not a held burst
         + QLatin1Char(',') + QString::number(int(qRound(m_fan * 100.0)))
         + QLatin1Char(',') + QString::number(int(qRound(m_faderNow * 100.0)))
         + QLatin1Char(',') + QString::number(int(qRound(m_master * 100.0)))
@@ -27485,6 +28185,19 @@ void TrackEngine::atmosTick(bool showOn)
 {
     // every 200 ms from closingTick(): the log, and his hand into the night's quarters
     const qint64 now = m_clock.elapsed();
+    // R484_HZ_ROW_FIRST: after start-up the row learns once (AUTO is off then) - and the view
+    // it learns from is read back
+    if (m_atmosRowFresh == false && m_hazeAuto == false)
+    {
+        m_atmosRowFresh = true;
+        const int v = QSettings().value(SETTINGS_ENGINE_ATMOSVIEW, 0).toInt();
+        if (v >= 0 && v <= 2 && v != m_atmosView)
+        {
+            m_atmosView = v;
+            emit atmosChanged();
+        }
+        atmosIntoRow(-1);
+    }
     if (m_testTrack)
         return;
     // R482_HAZE_START (night review r478 S2: "Genstart saetter haze til 0 uden lograekke"):
@@ -27518,7 +28231,7 @@ void TrackEngine::atmosTick(bool showOn)
         // 1.5 s on (his pre-haze before SHOW ON said "show-off", LAST TRACK's undo "hand")
         const QString who = m_atmosChangedBy.isEmpty() ? atmosBy(showOn) : m_atmosChangedBy;
         m_atmosChangedBy.clear();
-        const int h = int(qRound(m_haze * 100.0));
+        const int h = int(qRound(qMin(m_haze, ENGINE_HAZE_REST) * 100.0));   // R484_HZ_LEARN_SIG: the rest, not a held burst
         const int f = int(qRound(m_fan * 100.0));
         if (h != m_atmosLoggedHaze || f != m_atmosLoggedFan)
         {
@@ -27540,8 +28253,12 @@ void TrackEngine::atmosTick(bool showOn)
     // his hand only: LAST TRACK and the clock's closing drive the haze themselves
     if (m_lastStage > 0 || m_closingDim < 1.0 || hazeAvailable() == false)
         return;
+    // R484_HZ_AUTO_LEARN: AUTO's haze is not his hand - not learned, as LAST TRACK is not
+    // (the fan's quarter waits with it: one count for both)
+    if (m_hazeAuto)
+        return;
     const int q = atmosQuarter(QTime::currentTime());
-    m_atmosHazeSum[q] += int(qRound(m_haze * 100.0));
+    m_atmosHazeSum[q] += int(qRound(qMin(m_haze, ENGINE_HAZE_REST) * 100.0));   // R484_HZ_LEARN_REST: the rest, not a held burst
     m_atmosFanSum[q] += int(qRound(m_fan * 100.0));
     m_atmosCnt[q] += 1;
     if (m_atmosSavedMs >= 0 && now - m_atmosSavedMs < 60000)
@@ -27602,6 +28319,181 @@ void TrackEngine::atmosFlush()
         m_atmosStore.remove(gone);
         settings.remove(QStringLiteral("trackengine/atmos-night/") + gone);
     }
+    emit atmosChanged();
+    // R484_HZ_ROW_FLUSH: the minute's learning into the row - never while AUTO plays it
+    if (m_hazeAuto == false)
+        atmosIntoRow(-1);
+}
+
+/* ---------------------------------------------------------------------
+ *  HAZE & FAN BY CLOCK (runde 482, R484_HZ_ROW) - Tobias 10-20: "energi skal
+ *  saette by hand i advanced saadan at den saetter tidspunkterne, men vi kan
+ *  'override' ved manuelt at aendre i tidspunkt. Men laeringen skal skrives i
+ *  raekken. Det samme princip skal gaelde for haze (husk at haze baade skal
+ *  huske baade fan og haze output ...)".
+ *  - the row: ENERGY by clock's 28 points (20:00 - 02:45), a haze and a fan
+ *    value each, "trackengine/atmos-row" (EXPORT / IMPORT carry it)
+ *  - written from his hand: the nights SETUP's view picks (the last 2
+ *    weekends unless he picks another, "trackengine/atmos-view"); a point
+ *    two nights know (30 s in the quarter each) gets their average, in 5s
+ *    (the haze 70 at most); a point no two nights know is empty (AUTO holds)
+ *  - when: the first tick after start-up, every minute's flush, a new view -
+ *    never while AUTO plays the row
+ *  - his: a tap on a point's H or F (+10) makes the point his, both values;
+ *    learning never writes it again ("trackengine/atmos-row-own") until
+ *    LEARN + a tap gives it back
+ *  Only data here: AUTO (hazenag.inc.cpp) plays it.
+ * --------------------------------------------------------------------- */
+static_assert(ENGINE_CLOCK_POINTS <= 32, "R484_HZ_ROW: his points are bits");
+
+void TrackEngine::atmosRowLoad() const
+{
+    if (m_atmosRowRead)
+        return;
+    m_atmosRowRead = true;
+    QSettings s;
+    m_atmosRowH = QVector<int>(ENGINE_CLOCK_POINTS, -1);
+    m_atmosRowF = QVector<int>(ENGINE_CLOCK_POINTS, -1);
+    const QStringList pts = s.value(SETTINGS_ENGINE_ATMOSROW).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (int i = 0; i < pts.count() && i < ENGINE_CLOCK_POINTS; i++)
+    {
+        bool okH = false, okF = false;
+        const int h = pts.at(i).section(QLatin1Char(':'), 0, 0).toInt(&okH);
+        const int f = pts.at(i).section(QLatin1Char(':'), 1, 1).toInt(&okF);
+        m_atmosRowH[i] = okH ? qBound(-1, h, int(qRound(ENGINE_HAZE_REST * 100.0))) : -1;
+        m_atmosRowF[i] = okF ? qBound(-1, f, 100) : -1;
+    }
+    m_atmosOwn = 0;
+    foreach (const QString &p, s.value(SETTINGS_ENGINE_ATMOSOWN).toString().split(QLatin1Char(','), Qt::SkipEmptyParts))
+    {
+        bool ok = false;
+        const int i = p.trimmed().toInt(&ok);
+        if (ok && i >= 0 && i < ENGINE_CLOCK_POINTS)
+            m_atmosOwn |= 1u << i;
+    }
+}
+
+void TrackEngine::atmosRowSave() const
+{
+    QStringList pts, own;
+    for (int i = 0; i < ENGINE_CLOCK_POINTS; i++)
+    {
+        pts << QString::number(m_atmosRowH.value(i, -1)) + QLatin1Char(':') + QString::number(m_atmosRowF.value(i, -1));
+        if ((m_atmosOwn >> i) & 1u)
+            own << QString::number(i);
+    }
+    QSettings s;
+    s.setValue(SETTINGS_ENGINE_ATMOSROW, pts.join(QLatin1Char(',')));
+    s.setValue(SETTINGS_ENGINE_ATMOSOWN, own.join(QLatin1Char(',')));
+}
+
+QVariantList TrackEngine::atmosCurve() const
+{
+    atmosRowLoad();
+    QVariantList out;
+    for (int i = 0; i < ENGINE_CLOCK_POINTS; i++)
+    {
+        QVariantMap p;
+        p.insert(QStringLiteral("h"), m_atmosRowH.value(i, -1));
+        p.insert(QStringLiteral("f"), m_atmosRowF.value(i, -1));
+        p.insert(QStringLiteral("src"), ((m_atmosOwn >> i) & 1u) ? 2 : (((m_atmosLearned >> i) & 1u) ? 1 : 0));
+        out << p;
+    }
+    return out;
+}
+
+void TrackEngine::atmosIntoRow(int only)
+{
+    // only = one point (LEARN), -1 = the row
+    atmosRowLoad();
+    QList<QHash<int, QVector<qint64> > > all;
+    foreach (const QString &n, atmosNightsFor(m_atmosView))
+        all << atmosCells(m_atmosStore.value(n).toString());
+    const int rest = int(qRound(ENGINE_HAZE_REST * 100.0));
+    quint32 learned = 0;
+    bool changed = false;
+    for (int i = 0; i < ENGINE_CLOCK_POINTS; i++)
+    {
+        const quint32 bit = 1u << i;
+        if (m_atmosOwn & bit)
+            continue;
+        if (only >= 0 && i != only)
+        {
+            learned |= m_atmosLearned & bit;
+            continue;
+        }
+        qreal hs = 0.0, fs = 0.0;
+        int n = 0;
+        foreach (const auto &cells, all)
+        {
+            const QVector<qint64> c = cells.value(32 + i);          // 20:00 is the night's quarter 32
+            if (c.count() != 3 || c.at(2) < ENGINE_HAND_MIN_SAMPLES)
+                continue;
+            hs += qreal(c.at(0)) / qreal(c.at(2));
+            fs += qreal(c.at(1)) / qreal(c.at(2));
+            n++;
+        }
+        int h = -1, f = -1;
+        if (n >= 2)
+        {
+            learned |= bit;
+            h = qBound(0, int(qRound(hs / n / 5.0)) * 5, rest);
+            f = qBound(0, int(qRound(fs / n / 5.0)) * 5, 100);
+        }
+        if (h != m_atmosRowH.at(i) || f != m_atmosRowF.at(i))
+        {
+            m_atmosRowH[i] = h;
+            m_atmosRowF[i] = f;
+            changed = true;
+        }
+    }
+    const bool marks = learned != m_atmosLearned;
+    m_atmosLearned = learned;
+    if (changed)
+    {
+        atmosRowSave();
+        logSignal(QStringLiteral("sig:atmos-learn:") + (only < 0 ? QStringLiteral("row") : QString::number(only)));
+    }
+    if (changed || marks)
+        emit atmosChanged();
+}
+
+void TrackEngine::cycleAtmosPoint(int index, int which)
+{
+    // R484_HZ_ROW_OWN (Tobias 10-20: "vi kan 'override' ved manuelt at aendre i tidspunkt"):
+    // H +10 up to 70, then 0 - F +10 up to 100, then 0; the point (both values) is his now
+    if (index < 0 || index >= ENGINE_CLOCK_POINTS)
+        return;
+    atmosRowLoad();
+    if (which == 0)
+    {
+        int v = m_atmosRowH.at(index) < 0 ? 0 : m_atmosRowH.at(index) + 10;
+        m_atmosRowH[index] = v > int(qRound(ENGINE_HAZE_REST * 100.0)) ? 0 : v;
+    }
+    else
+    {
+        int v = m_atmosRowF.at(index) < 0 ? 0 : m_atmosRowF.at(index) + 10;
+        m_atmosRowF[index] = v > 100 ? 0 : v;
+    }
+    m_atmosOwn |= 1u << index;
+    m_atmosLearned &= ~(1u << index);
+    atmosRowSave();
+    logSignal(QStringLiteral("sig:atmos-own:") + QString::number(index) + QLatin1Char(':')
+              + QString::number(m_atmosRowH.at(index)) + QLatin1Char(':') + QString::number(m_atmosRowF.at(index)));
+    emit atmosChanged();
+}
+
+void TrackEngine::learnAtmosPoint(int index)
+{
+    if (index < 0 || index >= ENGINE_CLOCK_POINTS)
+        return;
+    atmosRowLoad();
+    if (((m_atmosOwn >> index) & 1u) == 0)
+        return;
+    m_atmosOwn &= ~(1u << index);
+    atmosRowSave();
+    logSignal(QStringLiteral("sig:atmos-own-back:") + QString::number(index));
+    atmosIntoRow(index);                 // his hand's average - or empty: AUTO holds there
     emit atmosChanged();
 }
 /* 2026-10-20 fresh suggestions 5/6/7/9. No QML, no new light controls. */
