@@ -18,6 +18,7 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDataStream>
 #include <QStandardPaths>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -348,6 +349,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
 
 TrackEngine::~TrackEngine()
 {
+    qualityFinish(QStringLiteral("shutdown"));
     stopAll();
     micShutdown();                       // R467_MIC_CHECK
     crumbsEnd();                         // R435_CRUMBS
@@ -427,6 +429,8 @@ void TrackEngine::slotFadeTimer()
 
 void TrackEngine::slotDocChanged()
 {
+    qualityFinish(QStringLiteral("show-edited"));
+    m_recentOutput.clear();
     labShutdown(false);                  // R410_LAB: an edit or a load under the lab
     m_labScene[0] = m_labScene[1] = 0xFFFFFFFFu;
     // a function or fixture went: the index's m_doc->function() test is stale
@@ -744,12 +748,13 @@ void TrackEngine::slotPulseTimer()
         }
         // eighths and sixteenths: the pattern steps between the beats
         TrackMove mv = m_liveMove.value(key);
-        if (mv.subSteps > 1 && m_patterned.value(key, false) && m_beatMs > 0.0)
+        const bool barOverlap = m_fullAuto && m_groups.value(key).lasers
+                             && !m_groups.value(key).patternDevice && mv.pattern == ENGINE_PAT_CHASE;
+        if ((mv.subSteps > 1 || barOverlap) && m_patterned.value(key, false) && m_beatMs > 0.0)
         {
             any = true;
             qreal within = qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999);
             int sub = int(within * mv.subSteps);
-            int step = m_beatIndex * mv.subSteps + sub + mv.phase;
             // every sub-step is a hit of its own: without this the pulse
             // decayed from the beat, and on a bare chase the eighths and
             // sixteenths landed at 37, 14 and 5 per cent - a trail, not steps
@@ -763,7 +768,7 @@ void TrackEngine::slotPulseTimer()
                 m_subStepSeen.insert(key, sub);
                 m_pulseStart.insert(key, now);
             }
-            QVector<qreal> mask = patternMask(key, mv, step, 1.0);
+            QVector<qreal> mask = livePatternMask(key, mv, m_beatIndex + within, 1.0);
             qreal level = m_moveLevel.value(key, 0.0);
             for (int i = 0; i < mask.count(); i++)
             {
@@ -1382,6 +1387,7 @@ void TrackEngine::ensureTable()
         info.path = func->path(true);
         info.type = int(t);
         info.step = steps.contains(func->id());
+        info.outputKey = programmeOutputKey(func);
 
         QString n = (info.name + " " + info.path).toLower();
         // "Preset Red" is not a reset: strip the word before the junk test
@@ -1871,6 +1877,7 @@ void TrackEngine::noteUpdate(const QString &script)
 
 void TrackEngine::noteShow(bool on)
 {
+    if (!on) qualityFinish(QStringLiteral("show-off"));
     // R482_LOG_HAND_IMPL (night review r478): SHOW ON / OFF - the desk's switch or the phone's
     // (a sig:remote:show line beside it says which). 00:30:14 SHOW OFF was only in the atmos file
     logSignal(on ? QStringLiteral("sig:show-on") : QStringLiteral("sig:show-off"));
@@ -7359,6 +7366,7 @@ void TrackEngine::setMaster(qreal level)
     if (qFuzzyCompare(level + 1.0, m_master + 1.0))
         return;
     m_master = level;
+    qualitySignal(QStringLiteral("sig:master"));
 
     // everything that is lit, not just the hidden dimmer scenes: a group whose
     // colour scene carries the intensity, or that has no dimmer channel at
@@ -7621,6 +7629,7 @@ void TrackEngine::setSpeed(int speed)
     if (speed == m_speed)
         return;
     m_speed = speed;
+    qualitySignal(QStringLiteral("sig:speed"));
     // running chases keep their old step until restarted: restart them
     foreach (const QString &slot, m_active.keys())
     {
@@ -7645,6 +7654,7 @@ void TrackEngine::setFlash(bool pressed)
     if (pressed == m_flash)
         return;
     m_flash = pressed;
+    if (pressed) qualitySignal(QStringLiteral("sig:flash"));
 
     if (pressed)
     {
@@ -8641,7 +8651,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             pool.append(info);
     }
 
-    return pickWeighted(pool, cursor);
+    return pickMotionWeighted(pool, cursor);
 }
 
 QString TrackEngine::firstRoomColour() const
@@ -14525,6 +14535,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                      : (mayOwn ? glBase : 1.0);
                 run("mot:" + key, mf, motLevel, motionDivision, hard || motColourCut);
                 m_recentUse.insert(mf, m_clock.elapsed());     // the cooldown starts from its last beat
+                if (!mi.outputKey.isEmpty())
+                    m_recentOutput.insert(mi.outputKey, m_clock.elapsed());
             }
         }
         else
@@ -14665,7 +14677,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_pulseStrength.insert(key, strength);
                 m_subStepSeen.insert(key, 0);
             }
-            if (depth > 0.0 || mv.breatheBars > 0 || mv.subSteps > 1)
+            if (depth > 0.0 || mv.breatheBars > 0 || mv.subSteps > 1
+                || (m_fullAuto && g.lasers && !g.patternDevice && mv.pattern == ENGINE_PAT_CHASE))
                 anyPulse = true;
             m_pulseDepth.insert(key, depth);
             m_breathe.insert(key, darkGroups.contains(key) ? 0 : mv.breatheBars);
@@ -15360,6 +15373,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_logEvent = ev.join('+');
     }
     logBeat(state, beat, level, energy, sectionEnergy);
+    qualityBeat();
     m_hardStart = false;                 // runde 356: only this tick's own starts
     m_report = QString("%1  |  %2%3  |  %4%5%6%7")
         .arg(moveNames.isEmpty() ? (silent ? tr("(silence)") : tr("(no groups)"))
@@ -16247,12 +16261,10 @@ void TrackEngine::applyMove(const QString &group, qreal level, int beat, int sec
 
     m_moveLevel.insert(group, level);
     // the step on the beat; the sub-beat steps come from the pulse timer
-    int step = move.subSteps > 1 ? (beat - secStart) * move.subSteps + move.phase
-                                 : (beat - secStart) / qMax(1, move.stepBeats) + move.phase;
     TrackMove eff = move;
     if (patterned == false)
         eff.pattern = ENGINE_PAT_STATIC;
-    QVector<qreal> mask = patternMask(group, eff, step, prog);
+    QVector<qreal> mask = livePatternMask(group, eff, beat - secStart, prog);
     for (int i = 0; i < n; i++)
         setPart(group, i, level * mask.at(i));
 }
@@ -17215,8 +17227,14 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             // down and the size a unit up on the same beat put the lowest point
             // two units down at once, lit - 2.01 with the fine channel). One or
             // the other a beat: the size first, the centre on the next
-            if (y > cur && h > int(efx->height()))
+            if (y > cur && h != int(efx->height()))
                 y = cur;
+            // C20261020_GROW_ONE: raising the centre while growing the
+            // height also added two units in one frame (+ a fine step).
+            // Raise first, then grow; never exceed the allowed lower edge.
+            else if (y < cur && h > int(efx->height()))
+                h = int(efx->height());
+            const bool coupledShrink = y < cur && h < int(efx->height());
             // ... and a lift of two units or more is a reposition: dark for
             // the beat (runde 303, bane B's headless B23 R2 - the fader from
             // 100 to 50 % lifted the bars 8 units lit; REGLER: mørke ved
@@ -17241,7 +17259,7 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             // the figure stands, the next beat it moves in the dark, the beat
             // after it is lit again
             const int jump = qAbs(cur - y) + qAbs(int(efx->height()) - h);
-            const bool moveDark = (lifted || jump >= 3) && m_flashHeld.contains(group) == false;
+            const bool moveDark = (lifted || jump >= 3 || coupledShrink) && m_flashHeld.contains(group) == false;
             if (moveDark && m_laserMoveDark.contains(group) == false)
             {
                 const TrackGroup &lg = m_groups.value(group);
@@ -17618,6 +17636,7 @@ void TrackEngine::advanceLook()
 
 void TrackEngine::logSignal(const QString &tag)
 {
+    qualitySignal(tag);
     // The section kind rides along: the state column is where it normally
     // lives, and a marker takes that column over. Without it a verdict cannot
     // be put in the right bucket by anything reading the log afterwards -
@@ -18431,10 +18450,19 @@ void TrackEngine::laserFaderCheck(qreal slider)
                         stopSlot(partSlot(key, i), true);
                     m_cast.remove(key);
                     const quint32 efxId = m_sweepFunc.value(key, Function::invalidId());
-                    QTimer::singleShot(60, this, [this, efxId, y]() {
+                    // C20261020_FADER_GAP: 60 ms before the command is not a
+                    // dark settling interval AFTER it. A nearby beat could
+                    // relight on the first frame carrying the new tilt.
+                    // Reuse the existing two-beat dark re-aim sequence.
+                    m_darkUntil.insert(key, qMax(m_darkUntil.value(key, -1), m_lastBeat + 2));
+                    QTimer::singleShot(60, this, [this, efxId, y, key]() {
                         EFX *later = m_doc ? qobject_cast<EFX *>(m_doc->function(efxId)) : nullptr;
-                        if (later != nullptr && int(later->yOffset()) > y)
+                        if (later != nullptr && m_active.value(QStringLiteral("efx:") + key, Function::invalidId()) == efxId
+                            && int(later->yOffset()) > y)
+                        {
                             later->setYOffset(y);
+                            m_darkUntil.insert(key, qMax(m_darkUntil.value(key, -1), m_lastBeat + 1));
+                        }
                     });
                 }
                 else if (lift > 0)
@@ -19178,6 +19206,7 @@ bool TrackEngine::logEnabled() const { return m_logEnabled; }
 
 void TrackEngine::setLogEnabled(bool on)
 {
+    if (!on) qualityFinish(QStringLiteral("logging-off"));
     m_logEnabled = on;
     QSettings().setValue(SETTINGS_ENGINE_LOG, on);
     if (on == false && m_log.isOpen())
@@ -19693,6 +19722,7 @@ void TrackEngine::linkIdle()
 
 void TrackEngine::idle()
 {
+    qualityFinish(QStringLiteral("idle"));
     clearMusicDark();
     m_quietSpatial = false;
     m_hitReturning = false;                    // runde 356: a stopped deck is not a silent beat
@@ -19966,6 +19996,8 @@ void TrackEngine::setNextKey(const QString &key)
 
 void TrackEngine::trackLoaded(const QString &title, const QString &key)
 {
+    if (title != m_trackTitle)
+        qualityFinish(QStringLiteral("track-change"));
     // a NEXT pressed on the old track's last beat is about that track: kept,
     // the new track's first beat drew a fresh colour over the one the mix
     // handed over (runde 300, bane B's B19)
@@ -26023,6 +26055,7 @@ void TrackEngine::flashGroup(const QString &key, bool on)
         const TrackGroup &g = m_groups.value(key);
         // the mark goes in before anything runs: slotScale() and setPart() read it
         m_padFlash.insert(key);
+        qualitySignal(QStringLiteral("sig:pad-flash:") + key);
         m_padFlashMs.insert(key, now);
         // the FLASH button has it already (R472_PAD_HIT: the button - a drop's hit is not his white)
         const bool wasHeld = m_flash && m_flashHeld.contains(key);
@@ -27230,4 +27263,228 @@ void TrackEngine::atmosFlush()
         settings.remove(QStringLiteral("trackengine/atmos-night/") + gone);
     }
     emit atmosChanged();
+}
+/* 2026-10-20 fresh suggestions 5/6/7/9. No QML, no new light controls. */
+
+QByteArray TrackEngine::programmeOutputKey(Function *function) const
+{
+    if (function == nullptr || m_doc == nullptr)
+        return QByteArray();
+    const bool sceneType = function->type() == Function::SceneType;
+    const bool chaseType = function->type() == Function::ChaserType;
+    if (!sceneType && !chaseType)
+        return QByteArray(); // EFX, sequences and nested/dynamic effects stay distinct
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::WriteOnly);
+    auto timing = [&](Function *f) {
+        stream << qint32(f->type()) << qint32(f->tempoType())
+               << qint32(f->runOrder()) << qint32(f->direction())
+               << quint32(f->fadeInSpeed()) << quint32(f->duration())
+               << quint32(f->fadeOutSpeed()) << qint32(f->blendMode());
+    };
+    auto sceneValues = [&](Scene *scene) {
+        if (scene == nullptr || scene->type() != Function::SceneType)
+            return false;
+        timing(scene);
+        // Scene::values() is QMap<SceneValue,uchar>::keys(); operator< orders
+        // fixture then channel. Rebuilding that same tree for every chase
+        // step was redundant and added ~1.9 s to the index on this show.
+        const QList<SceneValue> channels = valuesOf(scene);
+        stream << quint32(channels.size());
+        quint64 previous = 0;
+        bool first = true;
+        for (const SceneValue &value : channels)
+        {
+            const quint64 address = (quint64(value.fxi) << 32) | value.channel;
+            if (!first && address <= previous)
+                return false; // conservative if the underlying ordering ever changes
+            stream << address << quint8(value.value);
+            previous = address;
+            first = false;
+        }
+        return true;
+    };
+    if (sceneType)
+    {
+        if (!sceneValues(qobject_cast<Scene *>(function)))
+            return QByteArray();
+    }
+    else
+    {
+        Chaser *chase = qobject_cast<Chaser *>(function);
+        if (chase == nullptr || chase->steps().isEmpty())
+            return QByteArray();
+        timing(chase);
+        stream << qint32(chase->fadeInMode()) << qint32(chase->durationMode())
+               << qint32(chase->fadeOutMode()) << chase->overlapMode()
+               << quint32(chase->steps().size());
+        for (const ChaserStep &step : chase->steps())
+        {
+            stream << quint32(step.fadeIn) << quint32(step.hold)
+                   << quint32(step.fadeOut) << quint32(step.duration);
+            if (!step.values.isEmpty() || !sceneValues(qobject_cast<Scene *>(m_doc->function(step.fid))))
+                return QByteArray();
+        }
+    }
+    return QCryptographicHash::hash(data, QCryptographicHash::Sha256);
+}
+
+quint32 TrackEngine::pickMotionWeighted(const QList<TrackFuncInfo *> &pool, int cursor) const
+{
+    QHash<quint32,int> copies;
+    QList<TrackFuncInfo *> unique;
+    for (TrackFuncInfo *info : pool)
+    {
+        if (!copies.contains(info->id)) unique.append(info);
+        copies[info->id] += 1;
+    }
+    QList<TrackProgrammeTicket> tickets;
+    for (TrackFuncInfo *info : unique)
+    {
+        const int weight = copies.value(info->id) * (m_ratingOn ? rateWeight(*info) : 1);
+        const qint64 last = qMax(m_recentUse.value(info->id, -1), m_recentOutput.value(info->outputKey, -1));
+        tickets.append({info->id, info->outputKey, weight, last});
+    }
+    return trackProgrammeDraw(tickets, cursor, m_cooldownMs < 0 ? m_clock.elapsed() : m_cooldownMs,
+                              ENGINE_COOLDOWN_MS, Function::invalidId());
+}
+
+QVector<qreal> TrackEngine::livePatternMask(const QString &group, const TrackMove &move, qreal beat, qreal prog) const
+{
+    beat = qMax(0.0, beat);
+    int step = (move.subSteps > 1 ? int(std::floor(beat * move.subSteps))
+                                  : int(beat) / qMax(1, move.stepBeats)) + move.phase;
+    const TrackGroup &g = m_groups.value(group);
+    const bool phrased = m_fullAuto && !g.patternDevice && move.pattern == ENGINE_PAT_CHASE;
+    const TrackChaseFrame frame = trackChaseFrame(beat, move.stepBeats, move.subSteps, move.phase);
+    if (phrased) step = frame.step;
+    QVector<qreal> mask = patternMask(group, move, step, prog);
+    if (phrased && g.lasers && frame.trail > 0.0)
+    {
+        // Whole fixtures only: each added bar keeps all eight eyes. Output
+        // still passes through setPart's dimmer/kill/trim and dark-aim guards.
+        const QVector<qreal> previous = patternMask(group, move, frame.previous, prog);
+        for (int i=0; i<int(mask.size()); ++i)
+            mask[i] = qMax(mask.at(i), previous.at(i) * frame.trail);
+    }
+    return mask;
+}
+
+void TrackEngine::qualityBeat()
+{
+    if (!m_logEnabled || m_testTrack || m_trackTitle.isEmpty())
+        return;
+    if (m_qualityTrack.isEmpty()) m_qualityTrack = m_trackTitle;
+    m_qualityCounts[QStringLiteral("sample_beats")] += 1;
+    QMap<QString,QByteArray> now;
+    QSet<QString> singles;
+    for (const QString &group : m_cast)
+    {
+        if (m_groupOff.contains(group)) continue;
+        const quint32 fid = m_active.value(QStringLiteral("mot:") + group, Function::invalidId());
+        QByteArray key;
+        if (fid != Function::invalidId())
+        {
+            const TrackFuncInfo &info = m_funcs.value(fid);
+            key = info.outputKey.isEmpty() ? QByteArray("id:") + QByteArray::number(fid) : info.outputKey.toHex();
+            if (m_groups.value(group).lasers && !m_groups.value(group).patternDevice
+                && info.barCoverage.known && info.barCoverage.minEyes == 1
+                && !lightsOut() && m_activeOut.value(QStringLiteral("mot:") + group, 0.0) > 0.0)
+                singles.insert(group);
+        }
+        else if (m_patterned.value(group, false))
+        {
+            const TrackMove &move = m_liveMove.value(group);
+            key = QByteArray("generated:") + QByteArray::number(move.pattern) + ':'
+                + QByteArray::number(move.stepBeats) + ':' + QByteArray::number(move.subSteps)
+                + ':' + QByteArray::number(move.width) + ':' + QByteArray::number(int(move.bare));
+        }
+        else key = QByteArray("steady");
+        now.insert(group,key);
+        if (m_qualityLast.value(group) != key)
+        {
+            m_qualityCounts[QStringLiteral("figure_entries")] += 1;
+            if (m_qualitySeen.value(group).contains(key))
+                m_qualityCounts[QStringLiteral("repeated_figure_entries")] += 1;
+            m_qualitySeen[group].insert(key);
+        }
+    }
+    QByteArray look = m_colour.toUtf8().toHex() + '|';
+    for (auto it=now.constBegin(); it!=now.constEnd(); ++it)
+        look += it.key().toUtf8().toHex() + '=' + it.value() + ';';
+    if (look != m_qualityLook)
+        m_qualityCounts[QStringLiteral("look_entries")] += 1;
+    for (const QString &group : singles)
+    {
+        m_qualityCounts[QStringLiteral("single_eye_programme_beats")] += 1;
+        if (!m_qualitySingle.contains(group) || m_qualityLast.value(group) != now.value(group))
+            m_qualityCounts[QStringLiteral("single_eye_entries")] += 1;
+    }
+    m_qualityLook = look;
+    m_qualityLast = now;
+    m_qualitySingle = singles;
+}
+
+void TrackEngine::qualitySignal(const QString &tag)
+{
+    if (m_qualityWriting || !m_logEnabled || m_testTrack || m_qualityTrack.isEmpty()) return;
+    const QStringList manual = { QStringLiteral("next"), QStringLiteral("trim"), QStringLiteral("group-on"),
+        QStringLiteral("group-off"), QStringLiteral("drop-pick"), QStringLiteral("colour"),
+        QStringLiteral("colour-auto"), QStringLiteral("colour-mode"), QStringLiteral("section"),
+        QStringLiteral("section-auto"), QStringLiteral("energy"), QStringLiteral("energy-auto"),
+        QStringLiteral("blackout"), QStringLiteral("blackout-off"), QStringLiteral("stutter"),
+        QStringLiteral("stutter-off"), QStringLiteral("stutter-rate"), QStringLiteral("hold"),
+        QStringLiteral("hold-off"), QStringLiteral("calm"), QStringLiteral("calm-off"),
+        QStringLiteral("position"), QStringLiteral("drop-hit-arm"), QStringLiteral("flash"),
+        QStringLiteral("pad-flash"), QStringLiteral("master"), QStringLiteral("speed") };
+    bool counted = false;
+    if (tag.startsWith(QStringLiteral("rate")))
+    {
+        m_qualityCounts[QStringLiteral("manual_rating")] += 1;
+        counted = true;
+    }
+    else if (tag.startsWith(QStringLiteral("sig:")) && manual.contains(tag.section(':',1,1)))
+    {
+        const QString kind = tag.section(':',1,1);
+        if (kind == QStringLiteral("master") || kind == QStringLiteral("trim"))
+        {
+            const QString gesture = kind == QStringLiteral("trim") ? tag.section(':',1,2) : kind;
+            const qint64 now = m_clock.elapsed();
+            const bool continuing = m_qualityGestureAt.contains(gesture) && now - m_qualityGestureAt.value(gesture) < 1500;
+            m_qualityGestureAt.insert(gesture,now);
+            if (continuing) return;
+        }
+        m_qualityCounts[QStringLiteral("manual_") + kind] += 1;
+        counted = true;
+    }
+    if (counted) m_qualityCounts[QStringLiteral("manual_interventions")] += 1;
+    // Remote wrappers and automatic section/colour/atmos events do not add
+    // another intervention to their underlying command's count.
+}
+
+void TrackEngine::qualityFinish(const QString &reason)
+{
+    if (m_qualityTrack.isEmpty() || m_qualityWriting) return;
+    m_qualityWriting = true;
+    if (m_logEnabled && !m_testTrack)
+    {
+        const QStringList required = { QStringLiteral("sample_beats"), QStringLiteral("look_entries"),
+            QStringLiteral("figure_entries"), QStringLiteral("repeated_figure_entries"),
+            QStringLiteral("single_eye_entries"), QStringLiteral("single_eye_programme_beats"),
+            QStringLiteral("manual_interventions") };
+        for (const QString &key : required)
+            if (!m_qualityCounts.contains(key)) m_qualityCounts.insert(key,0);
+        QStringList fields;
+        for (auto it=m_qualityCounts.constBegin(); it!=m_qualityCounts.constEnd(); ++it)
+            fields << it.key() + '=' + QString::number(it.value());
+        logSignal(QStringLiteral("sig:track-quality:v1:reason=") + reason + ':' + fields.join(':'));
+    }
+    m_qualityTrack.clear();
+    m_qualityCounts.clear();
+    m_qualityLast.clear();
+    m_qualitySeen.clear();
+    m_qualityLook.clear();
+    m_qualitySingle.clear();
+    m_qualityGestureAt.clear();
+    m_qualityWriting = false;
 }

@@ -46,6 +46,7 @@
 #include "trackstagepolicy.h"
 #include "barcoverage.h" // C20261020: actual per-bar eye counts
 #include "showphrases.h"
+#include "programlottery.h"
 #include "scenevalue.h"      // B23 H3
 #include <QVariantList>
 #include <QPoint>
@@ -236,6 +237,7 @@ struct TrackFuncInfo
     qreal peakLit = 0.0;      // runde 259: the BRIGHTEST lamp in its darkest step - "at
                               // least one lamp on" (Tobias), 0..1
     TrackBarCoverage barCoverage; // C20261020: measured steps, never a name heuristic
+    QByteArray outputKey;    // C20261020_FRESH: exact static output/timing; empty for opaque effects
     qreal beamShare = 1.0;    // runde 338: litShare counted in BEAMS - a laser bar's eight
                               // eyes each count, so "one eye per bar" is 1/8, not 1
     bool fullBank = false;    // runde 338: some step has 3/4 or more of the lamps it touches
@@ -1087,6 +1089,8 @@ public:
     /** One from the shortlist, the cursor walking it as it always has - but
      *  the better-rated standing in it more than once. */
     quint32 pickWeighted(const QList<TrackFuncInfo *> &ok, int cursor) const;
+    QByteArray programmeOutputKey(Function *function) const;
+    quint32 pickMotionWeighted(const QList<TrackFuncInfo *> &pool, int cursor) const;
     int room() const;
     void setRoom(int room);
     bool roomAuto() const;
@@ -1307,6 +1311,7 @@ protected:
     void ensureSweeps();
     void ensureZoomScenes();
     QVector<qreal> patternMask(const QString &group, const TrackMove &move, int step, qreal prog) const;
+    QVector<qreal> livePatternMask(const QString &group, const TrackMove &move, qreal beat, qreal prog) const;
     /** drive: a groove high in the track's own range - the size and pace curves
      *  are read half way towards the drop's. See tick(), isDrive. */
     TrackSweep drawSweep(int tier, bool build, qreal prog, qreal energy, int heads,
@@ -1417,6 +1422,9 @@ protected:
      *  operator did something. Same columns as a beat, so one parser reads
      *  both, and the funcs column already says what was on stage. */
     void logSignal(const QString &tag);
+    void qualityBeat();
+    void qualitySignal(const QString &tag);
+    void qualityFinish(const QString &reason);
 
     /* running */
     void run(const QString &slot, quint32 fid, qreal level, int division, bool hard);
@@ -1512,6 +1520,7 @@ private:
     QString m_nextColour;     // drawn when a mix begins: the colour the incoming track arrives in
     QList<int> m_clockCurve;  // ENGINE_CLOCK_POINTS percents, see SETTINGS_ENGINE_CLOCKCURVE
     QHash<quint32, qint64> m_recentUse;   // programme -> clock ms it last ran (the cooldown)
+    QHash<QByteArray, qint64> m_recentOutput; // identical outputs share their cooldown
     qint64 m_cooldownMs;      // the clock reading the cooldown is judged against: frozen per section
     bool m_accentWasWhite;    // the last accent was white: the next one is not
     bool m_hatsOut;           // the strobes sit out: no hi-hats in the music right now
@@ -1661,6 +1670,14 @@ private:
     // constructor's list they would have to sit in declaration order too, and
     // -Wreorder is an error in CI.
     QString m_trackTitle;     // what is playing, for the log's track column
+    QString m_qualityTrack;
+    QMap<QString, int> m_qualityCounts;
+    QMap<QString, QByteArray> m_qualityLast;
+    QMap<QString, QSet<QByteArray>> m_qualitySeen;
+    QByteArray m_qualityLook;
+    QSet<QString> m_qualitySingle;
+    QMap<QString, qint64> m_qualityGestureAt;
+    bool m_qualityWriting = false;
     QHash<QString, int> m_trimLogged;   // group -> beat: one trim line per beat
     bool m_ratingOn = false;            // do the verdicts count? OFF by default
     /** The section the look on stage was CHOSEN for. Not the same as
