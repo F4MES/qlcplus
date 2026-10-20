@@ -234,7 +234,11 @@ let S = null, ws = null, mockOn = false;
 const sent = window.__sent = [];          // R463_PAGE: what was sent - in ?mock=1 only (it grew all night)
 const busy = {};                         // a fader under a finger is not redrawn from the state
 const holding = {};                      // R463_RM_HELD: what a finger holds on THIS phone
-const restHeld = {};                     // R484_HZ_PHONE_HELD: a slider over its rest under a finger here (haze: 70)
+const restHeld = {};
+function hazeLimitPercent() {
+  const value = S && Number.isFinite(S.hazeLimit) ? S.hazeLimit : 70;
+  return Math.max(0, Math.min(100, value));
+}                     // R484_HZ_PHONE_HELD: a slider over its rest under a finger here (haze: 70)
 let lastState = 0;                       // when QLC+ last answered
 
 /* ---------------- the line to QLC+ ---------------- */
@@ -443,7 +447,7 @@ function wireFader(el) {
   // pan-y the browser had a say in every drag (iOS waited, took it for a scroll, cancelled).
   // A swipe up or down over it still scrolls: this page scrolls itself, with the throw
   let last = 0, timer = null, val = 0, ptr = null, x0 = 0, y0 = 0, mode = 0, sent = false, raf = 0;
-  const rest = el.dataset.rest ? +el.dataset.rest / 100 : 1;   // R484_HZ_PHONE_REST: the haze rests at 70 (elastic above)
+  const rest = () => el.dataset.f === 'haze' ? hazeLimitPercent() / 100 : (el.dataset.rest ? +el.dataset.rest / 100 : 1);   // R484_HZ_PHONE_REST: the haze rests at 70 (elastic above)
   let st0 = 0, vy = 0, ly = 0, lt = 0;
   const pages = el.closest('.pages');
   const cmd = v => { const f = el.dataset.f, p = Math.round(v * 100);
@@ -452,7 +456,7 @@ function wireFader(el) {
   const flush = () => {
     timer = null; last = Date.now(); sent = true;
     // R484_HZ_PHONE_FLUSH: over its rest under the finger - the heartbeat names it until the lift
-    if (rest < 1) { if (ptr !== null && val > rest) restHeld[el.dataset.f] = Math.round(rest * 100); else delete restHeld[el.dataset.f]; }
+    if (ptr !== null && val > rest()) restHeld[el.dataset.f] = Math.round(rest() * 100); else delete restHeld[el.dataset.f];
     send(cmd(val));
   };
   const draw = () => { raf = 0; drawFader(el, val); };
@@ -494,14 +498,14 @@ function wireFader(el) {
       if (keep && performance.now() - lt < 80) pageThrow(pages, -vy);
     } else if (keep) {
       if (mode === 0) val = Math.max(0, Math.min(1, at(e)));   // a tap: where it landed
-      const sprang = val > rest;                               // R484_HZ_PHONE_SPRING: let go over 70 - back to 70
-      if (sprang) val = rest;
+      const sprang = val > rest();                               // R484_HZ_PHONE_SPRING: let go over 70 - back to 70
+      if (sprang) val = rest();
       drawFader(el, val);
       if (timer || !sent || sprang) { clearTimeout(timer); flush(); }
       busy[el.dataset.f] = Date.now() + 700;
-    } else if (sent && val > rest) {
+    } else if (sent && val > rest()) {
       // R484_HZ_PHONE_CANCEL: the phone took the touch over 70 (a call) - back to 70, as a lift
-      clearTimeout(timer); val = rest; flush(); drawFader(el, val);
+      clearTimeout(timer); val = rest(); flush(); drawFader(el, val);
       busy[el.dataset.f] = Date.now() + 700;
     } else {
       // the phone took the touch (a call): what was sent stays, the rest follows QLC+
@@ -578,6 +582,14 @@ function render() {
   // R468_RATE: nothing to rate without a track
   $('rateUp').classList.toggle('off', !(S.beats > 0)); $('rateDown').classList.toggle('off', !(S.beats > 0));
   // R467_HAZE_NAG
+  const hazeFader = document.querySelector('[data-f="haze"]');
+  if (hazeFader) {
+    const limit = hazeLimitPercent();
+    hazeFader.dataset.rest = String(limit);
+    const marker = hazeFader.querySelector('.rest');
+    if (marker) marker.style.left = limit + '%';
+    if (Object.prototype.hasOwnProperty.call(restHeld, 'haze')) restHeld.haze = limit;
+  }
   const nag = +(S.hazeNag || 0);
   $('hazenag').className = 'nag' + (nag > 0 ? ' on' : '');
   $('hazenagt').textContent = 'HAZE AT 0 · ' + nag + ' MIN';
@@ -765,7 +777,7 @@ const letGoAll = () => {
   Object.keys(holdReset).forEach(w => holdReset[w]());   // R475_ALL_LETGO_PHONE: and the buttons' own state
   Object.keys(holding).forEach(w => { if (holding[w]) { holding[w] = false; send(w + '|0'); } });
   Object.keys(busy).forEach(k => { busy[k] = 0; });       // a slider dragged meanwhile follows QLC+ again
-  Object.keys(restHeld).forEach(f => { send(f + '|' + restHeld[f]); delete restHeld[f]; });   // R484_HZ_PHONE_LETGO: hidden over 70 - back to 70
+  Object.keys(restHeld).forEach(f => { send(f + '|' + (f === 'haze' ? hazeLimitPercent() : restHeld[f])); delete restHeld[f]; });   // R484_HZ_PHONE_LETGO: hidden over 70 - back to 70
 };
 document.addEventListener('visibilitychange', () => { if (document.hidden) letGoAll(); });
 addEventListener('pagehide', letGoAll);
@@ -800,7 +812,7 @@ if (q.get('mock')) {
     markers: [{b: 1, t: 'intro'}, {b: 33, t: 'normal'}, {b: 81, t: 'break'}, {b: 97, t: 'build'}, {b: 165, t: 'drop'}, {b: 229, t: 'break'}, {b: 261, t: 'build'}, {b: 293, t: 'drop'}, {b: 357, t: 'outro'}],
     roomAuto: false, calm: 0, hold: false, blackout: false, stutter: false, stutterRate: 2, hitKind: 3, hitLast: 3, flash: false,
     colour: q.get('colour') || 'blue', overrides: [], colourMode: 1, palette: ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white'], position: '', speed: 0,
-    master: 0.8, haze: q.get('nag') ? 0 : 0.4, hazeAuto: q.get('hazeauto') === '1' /* R484_HZ_PHONE_MOCK_S */, fan: 0.6, hazeNag: +(q.get('nag') || 0),
+    master: 0.8, haze: q.get('nag') ? 0 : 0.4, hazeLimit: 70, hazeAuto: q.get('hazeauto') === '1' /* R484_HZ_PHONE_MOCK_S */, fan: 0.6, hazeNag: +(q.get('nag') || 0),
     groups: [{key: 'Laserbars', enabled: true}, {key: 'Strobes All', enabled: true}, {key: 'Shark Zoom Wash', enabled: true, base: true},
              {key: 'Animation Laser', enabled: false, switchOnly: true}, {key: 'Mini 4 Eyes', enabled: true}],
     trims: {'Laserbars': 1, 'Strobes All': 0.5, 'Shark Zoom Wash': 1, 'Animation Laser': 1, 'Mini 4 Eyes': 0.5},

@@ -1440,6 +1440,39 @@ Rectangle
         // written into ENERGY BY CLOCK's row now - its legend says how many nights; the gold
         // row and USE YOURS are gone
 
+        RowLayout
+        {
+            objectName: "hazeLimitRow"
+            Layout.fillWidth: true
+            visible: setupRoot.advancedOpen && trackEngine && trackEngine.hazeAvailable
+            Layout.preferredHeight: 48
+            spacing: 10
+            Text { text: qsTr("HAZE LIMIT"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4; Layout.preferredWidth: 165 }
+            TrackTile {
+                objectName: "hazeLimitMinus"
+                Layout.preferredWidth: 48; Layout.preferredHeight: 40
+                label: "−"; enabled: trackEngine && trackEngine.hazeLimit > 0
+                onTapped: if (trackEngine) trackEngine.hazeLimit = Math.max(0, trackEngine.hazeLimit - 5)
+            }
+            Text {
+                objectName: "hazeLimitValue"
+                text: (trackEngine ? trackEngine.hazeLimit : 70) + "%"
+                color: "#EEEEEE"; font.pixelSize: 20; font.bold: true
+                horizontalAlignment: Text.AlignHCenter; Layout.preferredWidth: 70
+            }
+            TrackTile {
+                objectName: "hazeLimitPlus"
+                Layout.preferredWidth: 48; Layout.preferredHeight: 40
+                label: "+"; enabled: trackEngine && trackEngine.hazeLimit < 100
+                onTapped: if (trackEngine) trackEngine.hazeLimit = Math.min(100, trackEngine.hazeLimit + 5)
+            }
+            Text {
+                Layout.leftMargin: 12; Layout.fillWidth: true
+                text: qsTr("Release the fader to return here. Hold above it for extra haze.")
+                color: "#9A9A9A"; font.pixelSize: 13
+            }
+            Text { text: qsTr("5% steps · saved"); color: "#9A9A9A"; font.pixelSize: 12 }
+        }
         // ------------------------------------------------- R473_ATMOS
         // HAZE & FAN BY CLOCK (R484_HZ_SETUP_ROW, Tobias 10-20: "Det samme princip skal gaelde for
         // haze"): was HAZE & FAN BY HAND (R473) - the row AUTO plays. His hand is learned into it

@@ -253,6 +253,10 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     , m_forceNext(false)
 {
     QSettings settings;
+    bool hazeLimitOk = false;
+    const int savedHazeLimit = settings.value(QStringLiteral("trackengine/haze-limit"),
+                                             int(qRound(ENGINE_HAZE_REST * 100.0))).toInt(&hazeLimitOk);
+    m_hazeLimit = hazeLimitOk ? ((qBound(0, savedHazeLimit, 100) + 2) / 5) * 5 : 70;
     m_logEnabled = settings.value(SETTINGS_ENGINE_LOG, true).toBool();
     // runde 317: the kick/bass of the last tracks played, "kick:low:title"
     // each (the title after the second colon, so a colon in it is kept)
@@ -5786,9 +5790,9 @@ void TrackEngine::setHaze(qreal level)
     level = qBound(0.0, level, 1.0);
     // R484_HZ_ENGINE_CAP (Tobias 10-20: "... ryger tilbage til 70 naar man slipper faderen"):
     // only a finger takes the haze over its rest - AUTO, LAST TRACK's fade and undo, the
-    // closing and SHOW OFF never set more than 70 %
-    if (by != QStringLiteral("hand") && level > ENGINE_HAZE_REST)
-        level = ENGINE_HAZE_REST;
+    // closing and SHOW OFF never set more than the saved limit
+    if (by != QStringLiteral("hand") && level > hazeRest())
+        level = hazeRest();
     if (qFuzzyCompare(level + 1.0, m_haze + 1.0))
         return;
     ensureTable();
@@ -25927,7 +25931,7 @@ void TrackEngine::hazeNagTick(bool showOn)
  *  quarter hour now (SETUP > ADVANCED; his hand learned into it, his own
  *  points kept - clockhand.inc.cpp).
  *  - 1 % a step each, a step at most every ENGINE_HAZE_AUTO_STEP_MS; the haze
- *    never over 70 % (setHaze caps every call not by his hand)
+ *    never over the saved limit (setHaze caps every call not by his hand)
  *  - a point without a value (or outside 20:00 - 03:00): that one holds
  *  - only with the show on, not under LAST TRACK (armed or later), not in the
  *    clock's closing, not in the test track: those take the haze down and win
@@ -25936,6 +25940,28 @@ void TrackEngine::hazeNagTick(bool showOn)
  *  - the tracklog: "sig:haze-auto:1/0", and "sig:atmos:<h>:<f>:auto"; the
  *    learning skips AUTO's time, as it skips LAST TRACK (atmosTick)
  * ===================================================================== */
+
+int TrackEngine::hazeLimit() const { return m_hazeLimit; }
+qreal TrackEngine::hazeRest() const { return m_hazeLimit / 100.0; }
+
+void TrackEngine::setHazeLimit(int percent)
+{
+    const int next = ((qBound(0, percent, 100) + 2) / 5) * 5;
+    if (next == m_hazeLimit)
+        return;
+    m_hazeLimit = next;
+    QSettings().setValue(QStringLiteral("trackengine/haze-limit"), next);
+    m_hazeAutoStepMs = -1;
+    // Lowering a setting is not the operator teaching a new hand level.
+    // Keep AUTO and all saved clock points; only the current output is capped.
+    if (m_haze > hazeRest())
+    {
+        atmosNext(QStringLiteral("limit"));
+        setHaze(hazeRest());
+    }
+    logSignal(QStringLiteral("sig:haze-limit:") + QString::number(next));
+    emit liveChanged();
+}
 
 bool TrackEngine::hazeAuto() const { return m_hazeAuto; }
 
@@ -25983,7 +26009,7 @@ void TrackEngine::hazeAutoTick(bool showOn)
     if (wantH >= 0 && m_hazeChannels.isEmpty() == false)
     {
         const int at = int(qRound(m_haze * 100.0));
-        const int next = step(at, qMin(wantH, int(qRound(ENGINE_HAZE_REST * 100.0))));
+        const int next = step(at, qMin(wantH, hazeLimit()));
         if (next != at)
         {
             atmosNext(QStringLiteral("auto"));   // the log's "by" - and setHaze() knows it is not his hand
@@ -28170,7 +28196,7 @@ void TrackEngine::atmosCsv(const QString &why, const QString &by)
     const qreal bpm = m_beatMs > 0.0 ? 60000.0 / m_beatMs : 0.0;
     const QString line = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
         + QLatin1Char(',') + why + QLatin1Char(',') + by
-        + QLatin1Char(',') + QString::number(int(qRound(qMin(m_haze, ENGINE_HAZE_REST) * 100.0)))   // R484_HZ_LEARN_CSV: the rest, not a held burst
+        + QLatin1Char(',') + QString::number(int(qRound(qMin(m_haze, hazeRest()) * 100.0)))   // R484_HZ_LEARN_CSV: the rest, not a held burst
         + QLatin1Char(',') + QString::number(int(qRound(m_fan * 100.0)))
         + QLatin1Char(',') + QString::number(int(qRound(m_faderNow * 100.0)))
         + QLatin1Char(',') + QString::number(int(qRound(m_master * 100.0)))
@@ -28231,7 +28257,7 @@ void TrackEngine::atmosTick(bool showOn)
         // 1.5 s on (his pre-haze before SHOW ON said "show-off", LAST TRACK's undo "hand")
         const QString who = m_atmosChangedBy.isEmpty() ? atmosBy(showOn) : m_atmosChangedBy;
         m_atmosChangedBy.clear();
-        const int h = int(qRound(qMin(m_haze, ENGINE_HAZE_REST) * 100.0));   // R484_HZ_LEARN_SIG: the rest, not a held burst
+        const int h = int(qRound(qMin(m_haze, hazeRest()) * 100.0));   // R484_HZ_LEARN_SIG: the rest, not a held burst
         const int f = int(qRound(m_fan * 100.0));
         if (h != m_atmosLoggedHaze || f != m_atmosLoggedFan)
         {
@@ -28258,7 +28284,7 @@ void TrackEngine::atmosTick(bool showOn)
     if (m_hazeAuto)
         return;
     const int q = atmosQuarter(QTime::currentTime());
-    m_atmosHazeSum[q] += int(qRound(qMin(m_haze, ENGINE_HAZE_REST) * 100.0));   // R484_HZ_LEARN_REST: the rest, not a held burst
+    m_atmosHazeSum[q] += int(qRound(qMin(m_haze, hazeRest()) * 100.0));   // R484_HZ_LEARN_REST: the rest, not a held burst
     m_atmosFanSum[q] += int(qRound(m_fan * 100.0));
     m_atmosCnt[q] += 1;
     if (m_atmosSavedMs >= 0 && now - m_atmosSavedMs < 60000)
@@ -28336,7 +28362,7 @@ void TrackEngine::atmosFlush()
  *  - written from his hand: the nights SETUP's view picks (the last 2
  *    weekends unless he picks another, "trackengine/atmos-view"); a point
  *    two nights know (30 s in the quarter each) gets their average, in 5s
- *    (the haze 70 at most); a point no two nights know is empty (AUTO holds)
+ *    (targets are retained up to100; AUTO applies HAZE LIMIT); a point no two nights know is empty (AUTO holds)
  *  - when: the first tick after start-up, every minute's flush, a new view -
  *    never while AUTO plays the row
  *  - his: a tap on a point's H or F (+10) makes the point his, both values;
@@ -28360,7 +28386,7 @@ void TrackEngine::atmosRowLoad() const
         bool okH = false, okF = false;
         const int h = pts.at(i).section(QLatin1Char(':'), 0, 0).toInt(&okH);
         const int f = pts.at(i).section(QLatin1Char(':'), 1, 1).toInt(&okF);
-        m_atmosRowH[i] = okH ? qBound(-1, h, int(qRound(ENGINE_HAZE_REST * 100.0))) : -1;
+        m_atmosRowH[i] = okH ? qBound(-1, h, 100) : -1; // retain points above a temporary limit
         m_atmosRowF[i] = okF ? qBound(-1, f, 100) : -1;
     }
     m_atmosOwn = 0;
@@ -28409,7 +28435,7 @@ void TrackEngine::atmosIntoRow(int only)
     QList<QHash<int, QVector<qint64> > > all;
     foreach (const QString &n, atmosNightsFor(m_atmosView))
         all << atmosCells(m_atmosStore.value(n).toString());
-    const int rest = int(qRound(ENGINE_HAZE_REST * 100.0));
+    const int rest = 100; // retain historical targets; AUTO applies the current limit
     quint32 learned = 0;
     bool changed = false;
     for (int i = 0; i < ENGINE_CLOCK_POINTS; i++)
@@ -28461,14 +28487,14 @@ void TrackEngine::atmosIntoRow(int only)
 void TrackEngine::cycleAtmosPoint(int index, int which)
 {
     // R484_HZ_ROW_OWN (Tobias 10-20: "vi kan 'override' ved manuelt at aendre i tidspunkt"):
-    // H +10 up to 70, then 0 - F +10 up to 100, then 0; the point (both values) is his now
+    // H +10 up to the saved limit (including a final 5), then 0; F +10 to 100.
     if (index < 0 || index >= ENGINE_CLOCK_POINTS)
         return;
     atmosRowLoad();
     if (which == 0)
     {
-        int v = m_atmosRowH.at(index) < 0 ? 0 : m_atmosRowH.at(index) + 10;
-        m_atmosRowH[index] = v > int(qRound(ENGINE_HAZE_REST * 100.0)) ? 0 : v;
+        const int at = m_atmosRowH.at(index);
+        m_atmosRowH[index] = at < 0 ? 0 : (at >= hazeLimit() ? 0 : qMin(at + 10, hazeLimit()));
     }
     else
     {

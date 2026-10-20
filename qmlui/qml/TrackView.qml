@@ -3180,7 +3180,7 @@ Rectangle
                         // tilbage til 70 naar man slipper faderen"): let go (or taken away) over 70 - 70.
                         // A hand on it ends AUTO, as on ENERGY (the engine does it too)
                         id: hazeFader
-                        rest: 0.7                        // ENGINE_HAZE_REST
+                        rest: trackEngine ? trackEngine.hazeLimit / 100 : 0.7
                         onPressed: if (trackEngine && trackEngine.hazeAuto === true) trackEngine.hazeAuto = false
                         function springBack() { if (trackEngine && trackEngine.haze > hazeFader.rest + 0.001) trackEngine.haze = hazeFader.rest }
                         Connections
@@ -4154,7 +4154,7 @@ Rectangle
                 { l: "POSITION",     b: "Hold the heads in one position. <b>AUTO</b>: the engine moves them." },
                 { l: "COLOUR",       b: "Tap colours to make your own mix. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },
                 { l: "COLOUR MODE",  b: "<b>FADE</b>: the mix glides over. <b>CHASE</b>: it steps on the kick. <b>SPEED</b>: the pace of moves and chases." },
-                { l: "HAZE MACHINE", b: "Haze and fan by hand. <b>HAZE</b> is elastic over 70 % (the thin line): hold it anywhere above, let go and it springs back to 70. <b>AUTO</b>: haze and fan follow HAZE & FAN BY CLOCK (SETUP, ADVANCED) - learned from your hand; your hand on either takes them back." }   // R484_HZ_HELP
+                { l: "HAZE MACHINE", b: "Haze and fan by hand. <b>HAZE</b> is elastic above HAZE LIMIT (SETUP, ADVANCED): hold above the thin line for extra haze, then release to return to the limit. <b>AUTO</b>: haze and fan follow HAZE & FAN BY CLOCK (SETUP, ADVANCED) - learned from your hand; your hand on either takes them back." }   // R484_HZ_HELP
             ]
             Item
             {
