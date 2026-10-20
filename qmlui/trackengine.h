@@ -1930,6 +1930,18 @@ public:
     QStringList dropPicks(const QStringList &priority, int effects) const;
     void dropVariety(QStringList &priority, int effects, const QString &base, bool strobeFirst);
     void dropRemember(bool isDrop, const QSet<QString> &castSet);
+    // R483_NEXT_DECL (Tobias 10-20, "3": 57 of 263 NEXT within 4 s of the one before - the
+    // staff flipping through). The looks NEXT threw away in this section, last four: not again
+    QString m_nextRejState;                          // the section kind they were thrown away in
+    QString m_nextRejTitle;                          // ... and the track
+    QList<QStringList> m_nextRejCasts;               // their casts (sorted)
+    QStringList m_nextRejColours;                    // their colours (the AUTO draw's, not his)
+    QHash<QString, QList<int>> m_nextRejPatterns;    // group -> generated patterns thrown away
+    QHash<QString, QStringList> m_nextRejFamilies;   // group -> programme families thrown away
+    QStringList m_nextSkipped;                       // what the last NEXT's draw stepped round (sig:look-skip)
+    void nextRemember();
+    void nextForget();
+    bool nextVariety(QStringList &priority, int effects, const QString &base, bool strobeFirst);
 private:
     bool m_bigDrop = false;              // R357_KICK_BACK: this drop arrived big
     int m_kickBackLast = -100;
