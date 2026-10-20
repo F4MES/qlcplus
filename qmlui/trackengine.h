@@ -1215,6 +1215,11 @@ public:
      *  (the section he pressed for) - a sig: line, not a press. Log only. */
     void noteSectionKeep(const QString &held, const QString &now);
     void noteUpdate(const QString &script);   // R474_UPDATE: "sig:update:..." in the tracklog
+    // R482_LOG_HAND_DECL (night review r478: "Telefon-, SHOW ON/OFF- og ENERGY-handlinger
+    // logges ikke"): sig: lines in the tracklog - log only, nothing on stage changes
+    void noteShow(bool on);                              // sig:show-on / sig:show-off
+    void noteEnergyHand(int from, int to);               // sig:energy:<from>><to>, once it has settled
+    void noteRemote(const QString &cmd, const QString &args);   // sig:remote:<cmd>[:<args>], a drag once
     // R475_ENGINE_PUBLIC: the section's own start before R236 shifts it (the colour memory), the
     // SECTION press held now (the pick's end - noteSectionOverride() only logs, R335), and who
     // the next setHaze() / setFan() is (the atmos log - "hand" when nobody says)
@@ -2279,6 +2284,13 @@ private:
     int m_atmosLoggedHaze = -1;
     int m_atmosLoggedFan = -1;
     bool m_atmosShowWas = false;
+    // R482_LOG_HAND_MEM: ENERGY by hand not logged yet (from, to, when it last moved) and the
+    // phone's drags (when a command last came)
+    int m_energyHandFrom = -1;
+    int m_energyHandTo = -1;
+    qint64 m_energyHandMs = -1;
+    QHash<QString, qint64> m_remoteLogMs;
+    void energyHandTick();
     int m_atmosView = 0;
     QFile m_atmosFile;
     QString m_atmosFileNight;
