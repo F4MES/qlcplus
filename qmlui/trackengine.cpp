@@ -8534,6 +8534,20 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         if (other.count() >= 2)
             ok = other;
     }
+    // R483_NEXT_FAMILY: nor a figure NEXT threw away in this section (the last-family rule
+    // above only knows the one just left) - soft, the menu is never emptied
+    const QStringList nextFams = m_nextRejFamilies.value(group);
+    if (nextFams.isEmpty() == false)
+    {
+        QList<TrackFuncInfo *> other;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (nextFams.contains(info->family) == false)
+                other.append(info);
+        }
+        if (other.count() >= 2)
+            ok = other;
+    }
 
     // Composition also applies to real show programmes, not just the masks.
     // Foundation/support favour broad, slow pictures; only the rhythmic lead
@@ -9248,7 +9262,18 @@ QString TrackEngine::drawColour(const QStringList &pool, int keyBias, QRandomGen
     foreach (const QString &c, pool)
     {
         int n = (c == QLatin1String("green")) ? 1 : 3;
-        if (keyBias >= 0 && (keyBias == 0 ? cold : warm).contains(c))
+        // R483_COLOUR_FAV (Tobias 10-20: "roed og blaa er vores favoritter"): red and
+        // blue lead the room's draw. 10-17/18 they did not: the taste had red, blue AND
+        // magenta at its 2.5 ceiling (his tiles: 28 of 39 red), and 94 % of the automatic
+        // beats were in a minor key, where cold counts three times - red 19.7 % of the
+        // automatic beats, blue 27.5, magenta 26.7. Weights only: the pool (no A-B-A, not
+        // the colour it is in, the drops' contrast, HARMONY in a mix) is as before, and
+        // his tiles, the colour memory, the repeat, the start scene and LAST TRACK's
+        // white never come through here.
+        const int favourite = (c == QLatin1String("red")) ? 3 : ((c == QLatin1String("blue")) ? 2 : 1);
+        // R483_COLOUR_FAV_KEY: a favourite is on both sides of the wheel - a minor track
+        // does not push red down, a major one not blue
+        if (keyBias >= 0 && ((keyBias == 0 ? cold : warm).contains(c) || favourite > 1))
             n *= 3;
         // R460_TIMBRE (Tobias 10-15, idea 9): the section's sound - a bright one leans
         // to the light colours, a dark one to the deep ones. The room's draw only.
@@ -9259,6 +9284,7 @@ QString TrackEngine::drawColour(const QStringList &pool, int keyBias, QRandomGen
         // runde 357 (R357_TASTE, Tobias: "lad motoren laere mine valg"): his
         // taste from the colour tiles, in tenths of a ticket
         n = qMax(1, int(qRound(qreal(n) * 10.0 * colourTaste(c))));
+        n *= favourite;                  // R483_COLOUR_FAV_TICKETS: red x3, blue x2, on top of the taste
         for (int i = 0; i < n; i++)
             weighted << c;
     }
@@ -9623,6 +9649,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // of night is already in the energy that arrives here
     announceRoom();
 
+    // R483_NEXT_FORGET: the looks NEXT threw away belong to this section kind in this track
+    if (m_nextRejState.isEmpty() == false && (state != m_nextRejState || m_trackTitle != m_nextRejTitle))
+        nextForget();
+    // R483_NEXT_SKIP_LOG: what the last NEXT's draw stepped round, once, on the row of the
+    // look it landed on ("sig:look-skip", not "sig:next...": the reports count those as presses)
+    if (m_nextSkipped.isEmpty() == false)
+    {
+        logSignal(QStringLiteral("sig:look-skip:") + m_nextSkipped.join(QLatin1Char('+')));
+        m_nextSkipped.clear();
+    }
     // NEXT: treat this beat as a fresh section with a fresh colour
     bool forceNext = m_forceNext;
     m_forceNext = false;
@@ -10480,6 +10516,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // C20261020: contrast at a scheduled AUTO drop colour change only.
         if (isDrop && m_previousFlowTrack == m_trackTitle && pool.count() > 1)
             pool.removeAll(m_dropLastColour);
+        // R483_NEXT_COLOUR: nor one NEXT threw away in this section (41 of 262 offers on
+        // 10-17/18) - while another is left; his tiles and the colour memory are not drawn here
+        foreach (const QString &c, m_nextRejColours)
+        {
+            if (pool.count() > 1 && pool.contains(c))
+            {
+                pool.removeAll(c);
+                if (forceNext && m_nextSkipped.contains(QStringLiteral("colour")) == false)
+                    m_nextSkipped << QStringLiteral("colour");
+            }
+        }
         if (pool.count() > 1)
             pool.removeAll(m_leftColour);
         m_leftColour = m_colour;
@@ -11362,6 +11409,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the same track not opened by the same group - inside the budget above
     if (isDrop && hold == false && isCalm == false && m_forceOn == false)
         dropVariety(priority, effects, base, strobeLead);
+    // R483_NEXT_CAST: not a cast NEXT threw away twice in this section - not under HOLD or
+    // CALM, not in his own set (RIG / PLAN) or a drop he picked
+    if (hold == false && isCalm == false && m_forceOn == false && m_dropTouched == false
+        && nextVariety(priority, effects, base, strobeLead)
+        && forceNext && m_nextSkipped.contains(QStringLiteral("cast")) == false)
+        m_nextSkipped << QStringLiteral("cast");
     // Runde 235: one laser type at a time below the top of the fader - the
     // bars or the animation laser, whichever the order put first; the next
     // group in line takes the other's place. On 25-26 Sep Tobias switched a
@@ -12250,14 +12303,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // samples below overwrite m_moves
         const bool wasOwn = m_moves.contains(key) && m_moves.value(key).ownChaser;
         QList<int> history = m_moveHistory.value(key);
+        const QList<int> nextPats = m_nextRejPatterns.value(key);   // R483_NEXT_PATTERN
+        bool nextPatSkip = false;
         TrackMove fresh;
         int total = 0;
         int samples = m_fullAuto && m_ratingOn ? 6 : 1;
         for (int sample = 0; sample < samples; sample++)
         {
             TrackMove candidate = drawMove(key, tier, isBuild, energy, key == base, prog);
-            for (int attempt = 0; attempt < 4 && candidate.pattern != ENGINE_PAT_STATIC && history.contains(candidate.pattern); attempt++)
+            // R483_NEXT_PATTERN_DRAW: ... nor a pattern NEXT threw away in this section
+            for (int attempt = 0; attempt < 4 && candidate.pattern != ENGINE_PAT_STATIC
+                 && (history.contains(candidate.pattern) || nextPats.contains(candidate.pattern)); attempt++)
+            {
+                if (history.contains(candidate.pattern) == false)
+                    nextPatSkip = true;
                 candidate = drawMove(key, tier, isBuild, energy, key == base, prog);
+            }
             if (m_fullAuto)
                 candidate = composeMove(key, candidate, tier);
             m_moves.insert(key, candidate);
@@ -12266,6 +12327,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (sample == 0 || rng->bounded(total) < weight)
                 fresh = candidate;
         }
+        if (nextPatSkip && forceNext && m_nextSkipped.contains(QStringLiteral("pattern")) == false)
+            m_nextSkipped << QStringLiteral("pattern");      // R483_NEXT_PATTERN_LOG
         // what it was drawn at (runde 264): a group joining mid-section draws
         // at this beat's energy, not at m_movesEnergy's
         if (isDrop && m_dropFlow == 1 && m_groups.value(key).patternDevice == false
@@ -17631,7 +17694,155 @@ void TrackEngine::advanceLook()
     if (m_lastState.isEmpty())
         return;
     m_forceNext = true;
+    nextRemember();                      // R483_NEXT_MEM: what was on stage is not offered again
     emit liveChanged();
+}
+
+void TrackEngine::nextRemember()
+{
+    // R483_NEXT_MEM (Tobias 10-20, "3"). Night 10-17/18: 263 NEXT, 122 of them in drops with the
+    // whole cast (bars or animation laser + Minis + wash + strobes), 57 within 4 s of the one
+    // before. NEXT already changes the colour (94 %) and the patterns (83 % of the groups), but
+    // with a memory of one look only: in the same section 41 of 262 offers came back in a
+    // colour he had already thrown away, 67 with a cast he had thrown away twice, and 15 % of
+    // the groups' patterns were one already rejected. So: the last four looks NEXT (or a thumb
+    // down that moves on) threw away in this section - cast, colour, patterns, programme
+    // families. Forgotten when the section kind or the track changes (tick) and at SHOW OFF.
+    if (m_nextRejState != m_lastState || m_nextRejTitle != m_trackTitle)
+        nextForget();
+    m_nextRejState = m_lastState;
+    m_nextRejTitle = m_trackTitle;
+    const int keep = 4;
+    QStringList cast;
+    foreach (const QString &key, m_cast)
+        cast << key;
+    cast.sort();
+    m_nextRejCasts << cast;
+    while (m_nextRejCasts.count() > keep)
+        m_nextRejCasts.removeFirst();
+    // his colour (a tile, the track's colour memory) is his: only the AUTO draw's is filed
+    if (m_override.isEmpty() && m_colour.isEmpty() == false)
+    {
+        m_nextRejColours << m_colour;
+        while (m_nextRejColours.count() > keep)
+            m_nextRejColours.removeFirst();
+    }
+    foreach (const QString &key, cast)
+    {
+        const int pat = m_moves.contains(key) ? m_moves.value(key).pattern : ENGINE_PAT_STATIC;
+        if (pat != ENGINE_PAT_STATIC)
+        {
+            QList<int> &pats = m_nextRejPatterns[key];
+            pats << pat;
+            while (pats.count() > keep)
+                pats.removeFirst();
+        }
+        const quint32 fid = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        if (m_funcs.contains(fid) && m_funcs.value(fid).family.isEmpty() == false)
+        {
+            QStringList &fams = m_nextRejFamilies[key];
+            fams << m_funcs.value(fid).family;
+            while (fams.count() > keep)
+                fams.removeFirst();
+        }
+    }
+}
+
+void TrackEngine::nextForget()
+{
+    // R483_NEXT_MEM: a new section kind, a new track, SHOW OFF
+    m_nextRejState.clear();
+    m_nextRejTitle.clear();
+    m_nextRejCasts.clear();
+    m_nextRejColours.clear();
+    m_nextRejPatterns.clear();
+    m_nextRejFamilies.clear();
+}
+
+bool TrackEngine::nextVariety(QStringList &priority, int effects, const QString &base, bool strobeFirst)
+{
+    // R483_NEXT_VARIETY: a cast NEXT has thrown away TWICE in this section (once in one colour
+    // and programme set, once in another) is not drawn a third time: one real group gives its
+    // place to the next real group in the drawn order - as R446's drop variety A, the same
+    // number of places, so the ENERGY slider still decides the size. In a drop with the whole
+    // cast that is the other laser type (the one-laser rule runs after this and keeps only the
+    // first; the animation laser is only in `priority` from 70 %). The strobes' lead keeps
+    // its place, a Mini is never moved up (it never leads and uses no place) - with no other
+    // real group it sits out instead. The draw is a pure function of the order and the
+    // memory, so every beat of the section lands on the same answer. No better order: as it was
+    // (NEXT still turns the colour and the patterns).
+    if (priority.count() < 2 || effects <= 0 || m_nextRejCasts.count() < 2)
+        return false;
+    QStringList known = priority;
+    if (base.isEmpty() == false && known.contains(base) == false)
+        known << base;
+    auto setOf = [&base](const QStringList &picks) -> QStringList {
+        QStringList s = picks;
+        if (base.isEmpty() == false && s.contains(base) == false)
+            s << base;
+        s.sort();
+        return s;
+    };
+    // how often a set was thrown away - read on the groups this order can place (a break's
+    // washes outside the budget are not the order's to change)
+    auto seen = [this, &known](const QStringList &set) -> int {
+        int n = 0;
+        foreach (const QStringList &rej, m_nextRejCasts)
+        {
+            QStringList f;
+            foreach (const QString &k, rej)
+                if (known.contains(k))
+                    f << k;
+            if (f == set)
+                n++;
+        }
+        return n;
+    };
+    const QStringList picks = dropPicks(priority, effects);
+    const int seenNow = seen(setOf(picks));
+    if (seenNow < 2)
+        return false;
+    const int first = (strobeFirst && m_groups.value(priority.first()).strobes) ? 1 : 0;
+    QStringList best;
+    int bestSeen = seenNow;
+    for (int i = int(priority.count()) - 1; i >= first && bestSeen > 0; i--)
+    {
+        if (picks.contains(priority.at(i)) == false || smallWash(priority.at(i)))
+            continue;
+        for (int j = i + 1; j < priority.count() && bestSeen > 0; j++)
+        {
+            if (smallWash(priority.at(j)) || picks.contains(priority.at(j)))
+                continue;
+            QStringList trial = priority;
+            trial.move(j, i);
+            const QStringList tp = dropPicks(trial, effects);
+            if (tp.count() != picks.count())
+                continue;
+            const int s = seen(setOf(tp));
+            if (s < bestSeen)
+            {
+                bestSeen = s;
+                best = trial;
+            }
+        }
+    }
+    if (best.isEmpty())
+    {
+        for (int j = 0; j < priority.count(); j++)
+        {
+            if (smallWash(priority.at(j)) == false || picks.contains(priority.at(j)) == false)
+                continue;
+            QStringList trial = priority;
+            trial.move(j, trial.count() - 1);        // out of reach of the budget, never in front
+            if (seen(setOf(dropPicks(trial, effects))) < bestSeen)
+                best = trial;
+            break;
+        }
+    }
+    if (best.isEmpty())
+        return false;
+    priority = best;
+    return true;
 }
 
 void TrackEngine::logSignal(const QString &tag)
@@ -19370,6 +19581,7 @@ void TrackEngine::release()
     m_restUntil = -1;
     m_calmUntil = 0;             // CALM goes with the show (stopAll() says so too; r199)
     m_forceNext = false;
+    nextForget();                // R483_NEXT_RELEASE: the looks NEXT threw away go with the show
     m_andBass = false;           // R463_PLUCK_RESET
     m_pluckSlots = 0;
     // the opening picture goes with everything else - and its tile with it:
