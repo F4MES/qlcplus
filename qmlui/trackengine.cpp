@@ -1885,6 +1885,10 @@ void TrackEngine::noteShow(bool on)
     // R482_LOG_HAND_IMPL (night review r478): SHOW ON / OFF - the desk's switch or the phone's
     // (a sig:remote:show line beside it says which). 00:30:14 SHOW OFF was only in the atmos file
     logSignal(on ? QStringLiteral("sig:show-on") : QStringLiteral("sig:show-off"));
+    // R485_A7_SHOW_OFF (Tobias 10-20: "Efter SHOW OFF ... skal du selv trykke haze-AUTO igen.
+    // Hazeren starter aldrig af sig selv"): SHOW OFF turns haze AUTO off, not only pauses it
+    if (!on)
+        setHazeAuto(false);
 }
 
 void TrackEngine::noteEnergyHand(int from, int to)
@@ -1935,6 +1939,13 @@ void TrackEngine::noteRemote(const QString &cmd, const QString &args)
         {
             key += QLatin1Char(':');
             key += safe;                                    // per group and press / release
+            // R485_A5_GFLASH_TAP: a release ends the gesture - written, and a press after it is a new
+            // one (the page repeats only a held press, once a second)
+            if (safe.endsWith(QLatin1String(":0")))
+            {
+                m_remoteLogMs.remove(key.left(key.size() - 1) + QLatin1Char('1'));
+                m_remoteLogMs.remove(key);
+            }
         }
         const qint64 now = m_clock.elapsed();
         const qint64 last = m_remoteLogMs.value(key, -1);
@@ -9726,6 +9737,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // NEXT: treat this beat as a fresh section with a fresh colour
     bool forceNext = m_forceNext;
     m_forceNext = false;
+    m_nextFiled = false;                 // R485_A5_NEXT_ONCE_TICK: the next NEXT rejects the look this beat draws
     // ENERGY at zero is the restaurant: the base stands in its colour and
     // nothing moves or changes - no pulse, no patterns, no colour rotation,
     // no positions. A hold the slider imposes.
@@ -11793,7 +11805,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             const QStringList mem = (another && aheadWas != 2) ? recallPick(boundary, nextState, fader) : QStringList();
             if (aheadWas == 1)
             {
-                if (mem.isEmpty() == false)
+                // R485_A6_SAW: the plan he changed while it was ahead - what the lane showed him
+                const QString aheadEntry = m_planAhead.value(planAheadKey(boundary, nextState));
+                if (aheadEntry.count(QLatin1Char('|')) >= 2)
+                    m_planOriginal = aheadEntry.section(QLatin1Char('|'), 2, 2).split(QLatin1Char('+'), Qt::SkipEmptyParts);
+                else if (mem.isEmpty() == false)
                     m_planOriginal = mem;        // R433_SECTION_TASTE: he changed last time's
                 else
                 {
@@ -14735,7 +14751,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // never free-running shutter frequency or arbitrary milliseconds.
                 if (g.lasers && !g.patternDevice && mi.barCoverage.denseChase()
                     && mi.type == int(Function::ChaserType) && hold == false)
-                    motionDivision = m_faderNow >= 0.90 && isDrop ? 500 : 1000;
+                {
+                    // R485_A2_DENSE_PACE: a ceiling where a rule or his hand slows the
+                    // bars (support >= 2 beats a step, half time, SETUP/SPEED), not an override
+                    const int densePace = m_faderNow >= 0.90 && isDrop ? 500 : 1000;
+                    const bool slowed = division > 0 || m_speed < 0 || m_halfTime
+                                     || (m_fullAuto && tier > 0 && key != m_rhythmLead);
+                    motionDivision = slowed ? qMax(densePace, motionDivision) : densePace;
+                }
                 // C20261020_HIT_RETURN: held chases follow the same musical
                 // pace as generated masks, without changing their programme.
                 if (m_hitReturning && g.lasers == false && g.patternDevice == false && hold == false
@@ -17860,6 +17883,11 @@ void TrackEngine::advanceLook()
 
 void TrackEngine::nextRemember()
 {
+    // R485_A5_NEXT_ONCE: a NEXT before the beat that takes the last one has the same look on
+    // stage - filed once, or one look was "a cast thrown away twice"
+    if (m_nextFiled && m_nextRejState == m_lastState && m_nextRejTitle == m_trackTitle)
+        return;
+    m_nextFiled = true;
     // R483_NEXT_MEM (Tobias 10-20, "3"). Night 10-17/18: 263 NEXT, 122 of them in drops with the
     // whole cast (bars or animation laser + Minis + wash + strobes), 57 within 4 s of the one
     // before. NEXT already changes the colour (94 %) and the patterns (83 % of the groups), but
@@ -21873,7 +21901,10 @@ void TrackEngine::labShow()
         if (m_labActive == false || m_labDark || m_doc == nullptr)
             return;
         const QString key = labCurrentKey();
-        const QList<SceneValue> want = labSceneValues(key, m_labColour, m_labBeat, m_labLamps);
+        // R485_A3_SWAP_SIDE: a lamp counts if it is lit on this beat or the next, so the
+        // swap lamp LEFT / RIGHT keeps dark is never read as held
+        const QList<SceneValue> want = labSceneValues(key, m_labColour, m_labBeat, m_labLamps)
+                                       + labSceneValues(key, m_labColour, m_labBeat + 1, m_labLamps);
         const bool qlcBlackout = m_doc->inputOutputMap()->blackout();
         const bool swap = key.endsWith(QStringLiteral("/swap"));   // the lamps take turns: either one lit will do
         QStringList seen, lit, held;
@@ -21895,13 +21926,13 @@ void TrackEngine::labShow()
             foreach (const SceneValue &sv, want)
             {
                 if (sv.fxi == fx && sv.channel == roles.value(QStringLiteral("dimmer")))
-                    wantDim = int(sv.value);
+                    wantDim = qMax(wantDim, int(sv.value));   // R485_A3_SWAP_SIDE
             }
             const int dim = read(QStringLiteral("dimmer"));
             const int vpos = read(QStringLiteral("vpos"));
             const QString addr = QString::number(fxi->address() + 1);
             seen << QStringLiteral("%1=%2/%3").arg(addr).arg(dim).arg(vpos);
-            if (wantDim < ENGINE_LAB_LASER_ON && swap == false)
+            if (wantDim < ENGINE_LAB_LASER_ON)   // R485_A3_SWAP_SIDE
                 continue;                        // LEFT / RIGHT: this one is meant dark
             if (dim < ENGINE_LAB_LASER_ON)
                 held << addr;
@@ -21917,7 +21948,8 @@ void TrackEngine::labShow()
             state = QStringLiteral("blackout");
             msg = tr("QLC+'s own BLACKOUT is on - nothing reaches the laser");
         }
-        else if (held.isEmpty() == false && (swap == false || lit.isEmpty()))
+        // R485_A3_SWAP_ONE: one swap lamp reading dark may be on its dark beat - no verdict
+        else if (held.isEmpty() == false && (swap == false || (lit.isEmpty() && held.count() > 1)))
         {
             state = QStringLiteral("held");
             msg = tr("QLC+ holds the laser's dimmer at 0 (DMX %1) - Simple Desk, Grand Master or a console button")
@@ -24427,7 +24459,7 @@ int TrackEngine::planAheadAt(int boundary, const QString &section, QStringList *
     const int k = planAheadKey(boundary, section);
     if (k < 0)
         return 0;
-    const QString keys = m_planAhead.value(k).section(QLatin1Char('|'), 1);
+    const QString keys = m_planAhead.value(k).section(QLatin1Char('|'), 1, 1);   // R485_A6_SAW: "section|his|saw"
     if (keys == QStringLiteral("*"))
         return 2;
     if (set != nullptr)
@@ -24460,7 +24492,10 @@ QStringList TrackEngine::planAheadShown(int boundary, const QString &section)
 bool TrackEngine::planIsRig(int boundary) const
 {
     // the boundary the RIG's plan is for (the lane's own test for the next section)
-    return m_dropMode != 0 && m_dropPlanFor > 0 && qAbs(m_dropPlanFor - boundary) <= ENGINE_PLAN_NEAR;
+    // R485_A6_RIG_NEAR: the plan's beat is its flag or the grid step after it, never before - a
+    // LATER flag within 8 beats (a short build before a drop) is a later section, not the RIG's
+    return m_dropMode != 0 && m_dropPlanFor > 0 && boundary <= m_dropPlanFor
+        && m_dropPlanFor - boundary <= ENGINE_PLAN_NEAR;
 }
 
 bool TrackEngine::planAheadOpen(int boundary) const
@@ -24495,9 +24530,15 @@ void TrackEngine::togglePlanAt(int boundary, const QString &section, const QStri
         if (k == key ? in : set.contains(k))
             out << k;
     const int old = planAheadKey(boundary, section);
+    // R485_A6_SAW: what the lane showed at his first change (the guess or last time's, at the
+    // slider then) is the plan R433 learns against when the section comes - as a RIG tap's
+    const QString was = old >= 0 ? m_planAhead.value(old) : QString();
+    const QString saw = was.count(QLatin1Char('|')) >= 2 ? was.section(QLatin1Char('|'), 2, 2)
+                                                        : set.join(QLatin1Char('+'));
     if (old >= 0)
         m_planAhead.remove(old);
-    m_planAhead.insert(old >= 0 ? old : boundary, section + QLatin1Char('|') + out.join(QLatin1Char('+')));
+    m_planAhead.insert(old >= 0 ? old : boundary, section + QLatin1Char('|') + out.join(QLatin1Char('+'))
+                                                  + QLatin1Char('|') + saw);
     logSignal(QStringLiteral("sig:plan-ahead:") + section + QLatin1Char('@') + QString::number(boundary)
               + QLatin1Char(':') + (in ? QStringLiteral("+") : QStringLiteral("-")) + key);
     emit planLaneChanged();
@@ -24531,7 +24572,9 @@ void TrackEngine::planAheadFollow()
     if (k < 0)
         return;
     m_planAhead.insert(k, m_planSection + QLatin1Char('|')
-                          + (m_dropTouched ? m_dropSet.join(QLatin1Char('+')) : QStringLiteral("*")));
+                          + (m_dropTouched ? m_dropSet.join(QLatin1Char('+')) : QStringLiteral("*"))
+                          + (m_dropTouched ? QString(QLatin1Char('|') + m_planOriginal.join(QLatin1Char('+')))
+                                           : QString()));   // R485_A6_SAW: and the plan he changed
 }
 
 void TrackEngine::planAheadLit(int boundary, const QString &section)
@@ -25724,6 +25767,9 @@ void TrackEngine::enterHouse()
     m_houseMs = m_clock.elapsed();
     m_houseHaze = m_haze;
     m_houseHazeDone = false;
+    // R485_A7_HOUSE (Tobias 10-20: "Efter ... LAST TRACK skal du selv trykke haze-AUTO igen"):
+    // the house light turns haze AUTO off - undone, SHOW OFF / ON or DARK's noon never start it
+    setHazeAuto(false);
     m_closingDim = 1.0;
     setLastStage(3);
     houseLook(m_houseFrom);              // R479_LAST_WHITE_LOOKFROM: no dip under the white

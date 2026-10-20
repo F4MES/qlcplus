@@ -52,6 +52,13 @@ New-Item -ItemType Directory -Force -Path (Split-Path $state) | Out-Null
 
 function Say($text, $colour = "Gray") { Write-Host $text -ForegroundColor $colour }
 
+# R475_FLAGS (runde 475): beside state.json - "busy" while this runs (QLC+'s UPDATE starts no
+# second one), "closing" just before QLC+ is closed (it skips its "save?" box), and "show-on",
+# which QLC+ writes with SHOW ON: then QLC+ is left running
+$busyFlag    = Join-Path (Split-Path $state) "busy"
+$closingFlag = Join-Path (Split-Path $state) "closing"
+$showOnFlag  = Join-Path (Split-Path $state) "show-on"
+
 function Read-State {
     # runde 467: + history (every build installed, newest last) and rolledBack (the
     # builds rollback-qlc.cmd took away - not installed again by themselves)
@@ -113,6 +120,11 @@ function Find-Shortcut {
 function Close-Qlc {
     $procs = Get-QlcProcesses
     if ($procs.Count -eq 0) { return $false }
+    # R475_SHOW_ON: never with the show on - before the countdown and after it
+    if (Test-Path $showOnFlag) {
+        Say "SHOW is ON in QLC+ - QLC+ left running. SHOW OFF, then UPDATE again." "Red"
+        exit 3
+    }
     if ($Ask) {
         if ((Read-Host "QLC+ is running - close it and update? (y/n)") -notmatch '^[yYjJ]') { throw "stopped - QLC+ left running" }
     } else {
@@ -122,6 +134,13 @@ function Close-Qlc {
         }
         Write-Host ""
     }
+    if (Test-Path $showOnFlag) {
+        Say "SHOW is ON in QLC+ - QLC+ left running. SHOW OFF, then UPDATE again." "Red"
+        exit 3
+    }
+    # R475_CLOSING: QLC+ skips its "save?" box (the show file is replaced below)
+    Set-Content -Path $closingFlag -Value $PID
+    Start-Sleep -Seconds 2
     # politely first (its own window close), then for good after 15 s
     foreach ($p in $procs) { try { [void]$p.CloseMainWindow() } catch { } }
     $deadline = (Get-Date).AddSeconds(15)
@@ -135,6 +154,8 @@ function Close-Qlc {
     return $true
 }
 
+Set-Content -Path $busyFlag -Value $PID      # R475_BUSY: gone in the finally at the end
+try {
 Say "QLC+ rig update ($Repo, $Tag)" "Cyan"
 try {
     $release = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" `
@@ -280,3 +301,7 @@ if ($guardJar -and $guardInstaller) {
     }
 }
 Say "Done." "Cyan"
+} finally {
+    # R475_END_BUSY: also after an exit, an error or Ctrl+C
+    Remove-Item -Path $busyFlag, $closingFlag -ErrorAction SilentlyContinue
+}
