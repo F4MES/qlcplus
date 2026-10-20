@@ -2009,6 +2009,7 @@ public:
     QHash<QString, QList<int>> m_nextRejPatterns;    // group -> generated patterns thrown away
     QHash<QString, QStringList> m_nextRejFamilies;   // group -> programme families thrown away
     QStringList m_nextSkipped;                       // what the last NEXT's draw stepped round (sig:look-skip)
+    bool m_nextFiled = false;                        // R485_A5_NEXT_ONCE_MEM: this look is filed - no beat took the NEXT yet
     void nextRemember();
     void nextForget();
     bool nextVariety(QStringList &priority, int effects, const QString &base, bool strobeFirst);

@@ -1219,7 +1219,7 @@ void TrackManager::setEnergyTrim(int percent)
         return;
     // R482_LOG_ENERGY_HAND: a hand (the desk's slider or the phone), not the clock - announceRoom()
     // sets roomPercent before it moves the trim. One sig:energy line once the drag has settled
-    if (m_engine != nullptr && percent != m_engine->roomPercent())
+    if (m_engine != nullptr && (m_engine->roomAuto() == false || percent != m_engine->roomPercent()))   // R485_A5_ENERGY_HAND
         m_engine->noteEnergyHand(m_energyTrim, percent);
     m_energyTrim = percent;
     // a hand on the slider takes ROOM off the clock - except when the
