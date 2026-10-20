@@ -4,6 +4,39 @@
 #include <algorithm>
 #include <cmath>
 
+// Generated CHASEs share an eight-bar direction, with a continuous turn at
+// the boundary. Saved chasers, ping-pong and laser positions never use this.
+struct TrackChaseFrame
+{
+    int step = 0;
+    int previous = 0;
+    double trail = 0.0;
+};
+
+inline TrackChaseFrame trackChaseFrame(double beat, int stepBeats, int subSteps, int phase)
+{
+    beat = std::max(0.0, beat);
+    const double rate = subSteps > 1 ? double(subSteps) : 1.0 / std::max(1, stepBeats);
+    const int phrase = int(std::floor(beat / 32.0));
+    const double local = (beat - phrase * 32.0) * rate;
+    const int tick = int(std::floor(local + 1e-9));
+    const int direction = (phrase % 2) == 0 ? 1 : -1;
+    const int turn = int(std::lround(32.0 * rate));
+    TrackChaseFrame frame;
+    frame.step = phase + (direction > 0 ? tick : turn - tick);
+    frame.previous = frame.step - direction;
+    // At each turn the endpoint is unchanged for one step, so there is no
+    // extra jump/flash just because the direction changes.
+    if (phrase > 0 && tick == 0)
+        frame.previous = frame.step + direction;
+    const double fraction = std::max(0.0, local - tick);
+    // At most a quarter beat, and at most a quarter of a fast step.
+    const double overlap = std::min(0.25, 0.25 * rate);
+    if ((phrase > 0 || tick > 0) && fraction < overlap)
+        frame.trail = 0.45 * (1.0 - fraction / overlap);
+    return frame;
+}
+
 // 0: attack then breadth, 1: rhythmic chase, 2: later climax.
 inline double trackDropActivity(int flow, int bars)
 {
