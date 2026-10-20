@@ -3,6 +3,24 @@ name: QLCplus Github Actions CI Build
 on: ["push", "pull_request", "workflow_dispatch"]   # workflow_dispatch: a build by hand (runde 407)
 
 jobs:
+  startup-guards:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cmake -S startup_guard -B guard-build
+      - run: cmake --build guard-build --config Release
+      - run: python startup_guard/test_guards.py --probe-dir guard-build
+
   build-linux:
     #if: false
     runs-on: ubuntu-22.04
@@ -520,7 +538,7 @@ jobs:
   # track-layout only: the rig runs the v2 page.
   release-rig:
     if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/track-layout' }}
-    needs: build-windows
+    needs: [build-windows, startup-guards]
     runs-on: ubuntu-22.04
     name: Rig release (track-layout)
     permissions:
@@ -534,6 +552,14 @@ jobs:
         with:
           pattern: QLC+-build-v5-*
           path: dl
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build BLT startup guard
+        run: python3 startup_guard/build_blt_guard.py qlc-blt-guard.jar
 
       - name: Publish rig-latest
         env:
@@ -551,7 +577,7 @@ jobs:
           else
             gh release create rig-latest --target "$GITHUB_SHA" --prerelease --title "Rig build (track-layout)" --notes "$NOTES"
           fi
-          gh release upload rig-latest QLC-rig-setup.exe rig-build.txt tools/update-qlc.cmd tools/rollback-qlc.cmd --clobber
+          gh release upload rig-latest QLC-rig-setup.exe rig-build.txt tools/update-qlc.cmd tools/rollback-qlc.cmd qlc-blt-guard.jar tools/install-blt-guard.ps1 --clobber
 
   build-macos:
     runs-on: macos-15

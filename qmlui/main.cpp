@@ -1,3 +1,5 @@
+#include "../startup_guard/qlcsingleinstance.h"
+
 /*
   Q Light Controller Plus
   main.cpp
@@ -48,6 +50,11 @@ void printVersion()
 
 int main(int argc, char *argv[])
 {
+    // RIG_SINGLE_INSTANCE: before QApplication, settings, windows or outputs.
+    QlcSingleInstance rigInstance;
+    if (!rigInstance.allowed())
+        return rigInstance.exitCode();
+
     // R426_QML_GC_FULL: the QML garbage collector runs in one pass, as before
     // Qt 6.8. Its incremental slices (Qt 6.8+) are the prime suspect for the
     // rig's crashes in Qt6Qml.dll right after a look change (9 in 3 nights,

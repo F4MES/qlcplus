@@ -254,4 +254,29 @@ if ($rb) {
     try { Fetch $rb $rbPath; Say "If this build misbehaves: double-click $rbPath" }
     catch { Say "  rollback-qlc.cmd could not be fetched: $($_.Exception.Message)" "Yellow" }
 }
+# ---- BLT startup guard: installed in its native launcher, never its shared functions ----
+$guardJar = Get-Asset $release "qlc-blt-guard.jar"
+$guardInstaller = Get-Asset $release "install-blt-guard.ps1"
+if ($guardJar -and $guardInstaller) {
+    $guardJarPath = Join-Path $work "qlc-blt-guard.jar"
+    $guardScriptPath = Join-Path $work "install-blt-guard.ps1"
+    try {
+        Fetch $guardJar $guardJarPath
+        Fetch $guardInstaller $guardScriptPath
+        try { & $guardScriptPath -JarPath $guardJarPath }
+        catch [System.UnauthorizedAccessException] {
+            # Program Files installations need Windows' normal UAC approval.
+            $quotedScript = $guardScriptPath.Replace("'", "''")
+            $quotedJar = $guardJarPath.Replace("'", "''")
+            $command = "try { & '$quotedScript' -JarPath '$quotedJar'; exit 0 } catch { Write-Error `$_; exit 1 }"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+            $installer = Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded)
+            if ($installer.ExitCode -ne 0) { throw "BLT guard installation failed ($($installer.ExitCode))." }
+        }
+        Say "BLT guard ready. Fully close and restart BLT once to activate it." "Green"
+    } catch {
+        Say "BLT guard NOT installed: $($_.Exception.Message)" "Yellow"
+        Say "QLC+ was updated. Close BLT and run UPDATE again, or use install-blt-guard.ps1 -AppPath for a portable copy." "Yellow"
+    }
+}
 Say "Done." "Cyan"
