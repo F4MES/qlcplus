@@ -20,9 +20,10 @@ public final class BltGuardMain {
     public static void main(String[] args) throws Throwable {
         try {
             String shared = System.getenv("ProgramData");
-            Path base = shared == null || shared.isEmpty()
-                ? Paths.get(System.getProperty("user.home"), ".qlc-rig")
-                : Paths.get(shared, "qlc-rig");
+            if (shared == null || shared.isEmpty()) {
+                throw new IllegalStateException("ProgramData is missing; cannot acquire the PC lock");
+            }
+            Path base = Paths.get(shared, "qlc-rig");
             Files.createDirectories(base);
             channel = FileChannel.open(base.resolve("blt-instance.lock"),
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
