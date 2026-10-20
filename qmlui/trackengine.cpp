@@ -595,6 +595,15 @@ void TrackEngine::slotDocSettled()
         applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
     if (m_fan > 0.0 && fanFunc != nullptr && fanFunc->name() == ENGINE_FAN_SCENE)
         applyAtmos(m_fanScene, m_fanChannels, 0.0);
+    // R482_HAZE_RESET (night review r478 S2 #2): the hazer and the fan put at nought here
+    // (above) had no setHaze()/setFan(), so no line in the atmos log or the tracklog. Noted as
+    // a change by "reset" - atmosTick() writes it once it has settled, as a hand's change.
+    // Logged only: nothing is set back up, the haze stays by hand.
+    if (m_haze > 0.0 || m_fan > 0.0)
+    {
+        m_atmosChangedMs = m_clock.elapsed();
+        m_atmosChangedBy = QStringLiteral("reset");
+    }
     m_haze = 0.0;
     m_fan = 0.0;
     m_flash = false;
@@ -1858,6 +1867,77 @@ void TrackEngine::noteUpdate(const QString &script)
     // R474_UPDATE: UPDATE from the phone or the desk - update-qlc.cmd started, or not
     logSignal(script.isEmpty() ? QStringLiteral("sig:update:not-started") : QStringLiteral("sig:update:started"));
     crumb(QStringLiteral("update ") + (script.isEmpty() ? QStringLiteral("-") : script));
+}
+
+void TrackEngine::noteShow(bool on)
+{
+    // R482_LOG_HAND_IMPL (night review r478): SHOW ON / OFF - the desk's switch or the phone's
+    // (a sig:remote:show line beside it says which). 00:30:14 SHOW OFF was only in the atmos file
+    logSignal(on ? QStringLiteral("sig:show-on") : QStringLiteral("sig:show-off"));
+}
+
+void TrackEngine::noteEnergyHand(int from, int to)
+{
+    // R482_LOG_ENERGY: ENERGY by hand (the desk's slider or the phone's). A drag is a value per
+    // frame - one line once it has stood still for 1.5 s (energyHandTick(), as the atmos log
+    // does with a haze drag), from where the hand took it to where it left it
+    if (m_energyHandMs < 0)
+        m_energyHandFrom = from;
+    m_energyHandTo = to;
+    m_energyHandMs = m_clock.elapsed();
+}
+
+void TrackEngine::energyHandTick()
+{
+    if (m_energyHandMs < 0 || m_clock.elapsed() - m_energyHandMs < 1500)
+        return;
+    m_energyHandMs = -1;
+    if (m_energyHandTo != m_energyHandFrom)       // up and back to where it was: nothing to say
+        logSignal(QStringLiteral("sig:energy:%1>%2").arg(m_energyHandFrom).arg(m_energyHandTo));
+}
+
+void TrackEngine::noteRemote(const QString &cmd, const QString &args)
+{
+    // R482_LOG_REMOTE (night review r478: the phone left no trace - its taps were logged as
+    // the desk's, only MASTER's whole hundredths gave it away): a line per command the phone
+    // carried out. A drag (ENERGY, MASTER, a trim, HAZE, FAN) and a held group pad send a line
+    // per frame / second: the same one again within 2 s of the last is the same gesture, not
+    // written - where it ended is in the engine's own lines (sig:energy, sig:trim, sig:atmos).
+    // Taps (NEXT, BLACKOUT, colours ...) are written every time.
+    QString safe;
+    const QString cut = args.left(40);
+    for (const QChar c : cut)
+        safe += (c.isLetterOrNumber() || c == QLatin1Char(':') || c == QLatin1Char('-') || c == QLatin1Char('.')
+                 || c == QLatin1Char(' ') || c == QLatin1Char('_') || c == QLatin1Char('+')) ? c : QChar(QLatin1Char('_'));
+    const bool drag = cmd == QLatin1String("energy") || cmd == QLatin1String("master")
+                   || cmd == QLatin1String("trim") || cmd == QLatin1String("haze")
+                   || cmd == QLatin1String("fan") || cmd == QLatin1String("gflash");
+    if (drag)
+    {
+        QString key = cmd;
+        if (cmd == QLatin1String("trim"))
+        {
+            key += QLatin1Char(':');
+            key += safe.section(QLatin1Char(':'), 0, 0);    // per group
+        }
+        else if (cmd == QLatin1String("gflash"))
+        {
+            key += QLatin1Char(':');
+            key += safe;                                    // per group and press / release
+        }
+        const qint64 now = m_clock.elapsed();
+        const qint64 last = m_remoteLogMs.value(key, -1);
+        m_remoteLogMs.insert(key, now);
+        if (last >= 0 && now - last < 2000)
+            return;
+    }
+    QString line = QStringLiteral("sig:remote:") + cmd;
+    if (safe.isEmpty() == false)
+    {
+        line += QLatin1Char(':');
+        line += safe;
+    }
+    logSignal(line);
 }
 
 void TrackEngine::noteSectionRelease(const QString &held, const QString &now)
@@ -18122,6 +18202,8 @@ void TrackEngine::setRoomAuto(bool on)
     if (on == m_roomAuto)
         return;
     m_roomAuto = on;
+    // R482_LOG_ENERGY_AUTO: ENERGY by clock switched - a line, as his other switches
+    logSignal(on ? QStringLiteral("sig:energy-auto:on") : QStringLiteral("sig:energy-auto:off"));
     saveNight();
     if (on)
     {
@@ -18541,6 +18623,7 @@ void TrackEngine::closingTick(bool showOn)
     clockHandTick(showOn);                           // R470_CLOCK_HAND
     micTick(showOn);                                 // R467_MIC_CHECK
     atmosTick(showOn);                               // R473_ATMOS: the log, his hand on the hazer
+    energyHandTick();                                // R482_LOG_ENERGY_TICK: ENERGY by hand, once settled
     const qreal dim = showOn ? closingCap() : 1.0;
     // R458: not the clock's closing - R464_HAZE_LID: only while LAST TRACK's lid is the
     // one that applies (closingCap's own test); after the clock's hour the room went
@@ -27031,6 +27114,20 @@ void TrackEngine::atmosTick(bool showOn)
     const qint64 now = m_clock.elapsed();
     if (m_testTrack)
         return;
+    // R482_HAZE_START (night review r478 S2: "Genstart saetter haze til 0 uden lograekke"):
+    // a start - a restart, or after a crash - has the hazer at 0 with no hand on it (the engine
+    // comes up with m_haze 0, and the "TRACK Haze" scene writes nothing until it is touched).
+    // 00:37:28 it stood at 0 for 2.5 min at peak time and no line said so: the next hand move
+    // was the first. The run's first line now says where it really is - the line before it in
+    // the night's log is where the last run left it. Logged only: the haze stays by hand.
+    if (m_atmosLoggedHaze < 0)
+    {
+        m_atmosLoggedHaze = int(qRound(m_haze * 100.0));
+        m_atmosLoggedFan = int(qRound(m_fan * 100.0));
+        atmosCsv(QStringLiteral("start"), QStringLiteral("start"));
+        logSignal(QStringLiteral("sig:atmos:") + QString::number(m_atmosLoggedHaze) + QLatin1Char(':')
+                  + QString::number(m_atmosLoggedFan) + QStringLiteral(":start"));
+    }
     // the show going on and off: a line each
     if (showOn != m_atmosShowWas)
     {

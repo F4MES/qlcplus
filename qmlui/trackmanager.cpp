@@ -1212,6 +1212,10 @@ void TrackManager::setEnergyTrim(int percent)
 {
     if (percent == m_energyTrim || percent < 0 || percent > 200)
         return;
+    // R482_LOG_ENERGY_HAND: a hand (the desk's slider or the phone), not the clock - announceRoom()
+    // sets roomPercent before it moves the trim. One sig:energy line once the drag has settled
+    if (m_engine != nullptr && percent != m_engine->roomPercent())
+        m_engine->noteEnergyHand(m_energyTrim, percent);
     m_energyTrim = percent;
     // a hand on the slider takes ROOM off the clock - except when the
     // clock itself is what moved it (announceRoom sets roomPercent first)
@@ -1308,6 +1312,8 @@ void TrackManager::setAutoRun(bool enable)
         return;
     m_autoRun = enable;
     updateShowFlag();                    // R475_UPDATE_SHOW: update-qlc.cmd never closes QLC+ with the show on
+    if (m_engine != nullptr)
+        m_engine->noteShow(m_autoRun);   // R482_LOG_SHOW: sig:show-on / sig:show-off in the tracklog
 
     // SHOW ON: clear the Virtual Console once - every function it started
     // stops and its Level sliders let go - so nothing left over from
@@ -2138,6 +2144,11 @@ QString TrackManager::remoteCommand(const QString &line)
         startUpdate();                       // R474_UPDATE: SHOW OFF only - it says so (st 3)
     else
         return QStringLiteral("TRACKERR|unknown command ") + cmd;
+    // R482_LOG_REMOTE_CALL (night review r478: the phone left no trace in the log): a
+    // sig:remote line per command carried out - not "state" (the heartbeat, returned above),
+    // not a refused one (returned above), not "ratemark" (the finger landing before "rate")
+    if (cmd != QLatin1String("ratemark"))
+        e->noteRemote(cmd, QStringList(a.mid(1, 2)).join(QLatin1Char(':')));
     return remoteState();
 }
 
