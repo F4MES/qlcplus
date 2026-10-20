@@ -98,9 +98,10 @@ Rectangle
     readonly property int beatInBar: currentBeat > 0
         ? (((currentBeat - 1 - (trackManager ? (trackManager.downbeat || 0) : 0)) % 4) + 4) % 4 : -1
 
-    // runde 396: the four AUTO tiles in one - lit as their own tiles are lit
+    // ALL AUTO also restores HAZE/FAN AUTO when the show has a hazer (Tobias 20-10).
     readonly property bool allAutoOn: trackEngine && trackManager
         && trackEngine.roomAuto
+        && (!trackEngine.hazeAvailable || trackEngine.hazeAuto)
         && trackManager.overrideState === ""
         && trackEngine.positionMode === ""
         && trackEngine.colourMode === 0 && (trackEngine.colourOverride === "" || trackEngine.colourOverrides.length > 1)
@@ -108,6 +109,7 @@ Rectangle
     {
         if (!trackEngine || !trackManager) return
         trackEngine.roomAuto = true
+        if (trackEngine.hazeAvailable) trackEngine.hazeAuto = true
         trackManager.overrideState = ""
         trackEngine.positionMode = ""
         trackEngine.colourOverride = ""        // AUTO colour - and FADE / CHASE off with it
@@ -4147,7 +4149,7 @@ Rectangle
         Repeater
         {
             model: [
-                { l: "ENERGY",       b: "How hard the show plays - your hand takes over. <b>AUTO</b>: the clock moves it through the night. <b>ALL AUTO</b> (above, when one is off) puts all four back." },
+                { l: "ENERGY",       b: "How hard the show plays - your hand takes over. <b>AUTO</b>: the clock moves it through the night. <b>ALL AUTO</b> (above, when one is off) puts them all back, including HAZE & FAN." },
                 { l: "SECTION",      b: "Force a section until the music reaches its next one - then it follows the music again. The one the music is in is filled. Tap it again or <b>AUTO</b> to let go now." },   // R429_SECTION_ONCE
                 { l: "POSITION",     b: "Hold the heads in one position. <b>AUTO</b>: the engine moves them." },
                 { l: "COLOUR",       b: "Tap colours to make your own mix. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },
