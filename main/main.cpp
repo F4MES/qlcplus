@@ -1,3 +1,5 @@
+#include "../startup_guard/qlcsingleinstance.h"
+
 /*
   Q Light Controller
   main.cpp
@@ -303,6 +305,11 @@ bool parseArgs()
  */
 int main(int argc, char** argv)
 {
+    // RIG_SINGLE_INSTANCE: before QApplication, settings, windows or outputs.
+    QlcSingleInstance rigInstance;
+    if (!rigInstance.allowed())
+        return rigInstance.exitCode();
+
     /* Create the Qt core application object */
     QApplication qapp(argc, argv);
 

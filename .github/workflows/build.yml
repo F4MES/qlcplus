@@ -3,6 +3,24 @@ name: QLCplus Github Actions CI Build
 on: ["push", "pull_request", "workflow_dispatch"]   # workflow_dispatch: a build by hand (runde 407)
 
 jobs:
+  startup-guards:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cmake -S startup_guard -B guard-build
+      - run: cmake --build guard-build --config Release
+      - run: python startup_guard/test_guards.py --probe-dir guard-build
+
   build-linux:
     #if: false
     runs-on: ubuntu-22.04
