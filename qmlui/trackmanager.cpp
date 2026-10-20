@@ -545,6 +545,11 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     if (m_engine != nullptr)
         m_engine->setDeckAir(obj.contains(QStringLiteral("air"))
                              ? (obj.value(QStringLiteral("air")).toBool(true) ? 1 : 0) : -1);
+    // R484_LF_FADERS: how many players the DJM has on air - 0 is every fader down, LAST
+    // TRACK's fallback (only from a BLT that has seen a DJM; a READ, nothing goes back)
+    if (m_engine != nullptr)
+        m_engine->setDeckFaders(obj.contains(QStringLiteral("faders"))
+                                ? obj.value(QStringLiteral("faders")).toInt(1) : -1);
     // R187_LAGGING_BEAT_GUARD: BLT sends the beat twice - from the beat packet
     // and from the player's status, five times a second - and the status
     // lags: N, then N-1 a few ms later, then N again. Each of those ran a
@@ -1785,6 +1790,8 @@ static bool remoteHeldOn(TrackEngine *e, const QString &what)
         return e->blackout();
     if (what == QLatin1String("stutter"))
         return e->stutter();
+    if (what == QLatin1String("haze"))
+        return e->haze() > ENGINE_HAZE_REST + 0.001;   // R484_HZ_PHONE_ON: held = over its rest
     return e->flashing();
 }
 
@@ -1817,6 +1824,8 @@ void TrackManager::remoteWatch()
             m_engine->setBlackout(false);
         else if (what == QLatin1String("stutter"))
             m_engine->setStutter(false);
+        else if (what == QLatin1String("haze"))
+            m_engine->setHaze(ENGINE_HAZE_REST);   // R484_HZ_PHONE_GONE: back to its rest - never off
         else
             m_engine->setFlash(false);
         qDebug() << "[TRACK remote] the phone went quiet - let go of" << what;
@@ -1908,6 +1917,7 @@ QString TrackManager::remoteState()
         o.insert(QStringLiteral("haze"), e->haze());
         o.insert(QStringLiteral("fan"), e->fan());
         o.insert(QStringLiteral("hazeNag"), e->hazeNag());          // R467_HAZE_NAG
+        o.insert(QStringLiteral("hazeAuto"), e->hazeAuto());        // R484_HZ_PHONE_STATE
         // R468_RATE: the groups on stage - what a held GOOD / BAD can point at
         QJsonArray stage;
         for (const QVariant &row : e->onStage())
@@ -2101,6 +2111,12 @@ QString TrackManager::remoteCommand(const QString &line)
         if (v < 3)
             v = 0;                           // as the desk's fader: the bottom is off
         e->setHaze(v / 100.0);
+        // R484_HZ_PHONE_HOLD (Tobias 10-20: "midlertidigt kan holde den paa en hvilken som helst vaerdi
+        // over 70% men at den automatisk ryger tilbage til 70"): over 70 % it is a held
+        // finger - the phone names "haze" in its heartbeat while it holds; silent for 1.2 s
+        // (TRACK_REMOTE_GONE_MS, as the held buttons) and the haze goes back to 70 by itself
+        remoteHeld(QStringLiteral("haze"), v > int(qRound(ENGINE_HAZE_REST * 100.0)),
+                   QStringList() << cmd << a.value(1) << QStringLiteral("held"));
     }
     // ---- R469_PHONE_RIG: the group's flash pad (held: again every second)
     else if (cmd == QStringLiteral("gflash"))
@@ -2129,6 +2145,8 @@ QString TrackManager::remoteCommand(const QString &line)
             e->rateGroup(v, group);
         }
     }
+    else if (cmd == QStringLiteral("hazeAuto"))
+        e->setHazeAuto(true);                // R484_HZ_PHONE_AUTO: as the desk's tile - a hand on HAZE ends it
     else if (cmd == QStringLiteral("hazelater"))
         e->hazeLater();                      // R467_HAZE_NAG: quiet for 30 min - the haze stays by hand
     else if (cmd == QStringLiteral("fan"))

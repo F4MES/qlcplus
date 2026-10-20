@@ -1320,6 +1320,64 @@ Rectangle
             }
         }
 
+        // ------------------------------------------------- R484_EH_ROW_LEGEND
+        // Tobias 10-20: "energi skal saette by hand i advanced saadan at den saetter tidspunkterne,
+        // men vi kan 'override' ved manuelt at aendre i tidspunkt. Men laeringen skal skrives i
+        // raekken." - what the row is: gold edge = his hand's, white edge = his own (a tap);
+        // LEARN, then a tap on a point, gives it back to the learning
+        RowLayout
+        {
+            objectName: "clockLegend"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            visible: setupRoot.advancedOpen
+            spacing: 10
+            Text { text: qsTr("ENERGY BY CLOCK"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+            TrackTile
+            {
+                id: clockLearnTile
+                objectName: "clockLearn"
+                property bool armed: false
+                visible: trackEngine ? trackEngine.clockSource.indexOf(2) >= 0 : false
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 30
+                label: armed ? qsTr("TAP A POINT") : qsTr("LEARN")
+                active: armed
+                activeColor: "#E3B44F"
+                onTapped: { armed = !armed; if (armed) clockLearnArm.restart() }
+                Timer { id: clockLearnArm; interval: 6000; onTriggered: clockLearnTile.armed = false }
+            }
+            Text
+            {
+                objectName: "clockLegendSub"
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+                readonly property int view: trackEngine ? trackEngine.clockView : 0
+                readonly property var nights: trackEngine ? trackEngine.clockHandNights : []
+                text: qsTr("learned from your hand: ") + (view === 0 ? qsTr("Fri + Sat, the last 2 weekends") : view === 1 ? qsTr("every Fri + Sat") : qsTr("the other nights"))
+                      + " - " + (nights.length > 0 ? qsTr("%1 nights (%2)").arg(nights.length).arg(nights.join(", ")) : qsTr("no nights yet"))
+                      + "  ·  " + qsTr("gold edge = learned, white edge = set by you (a tap)  ·  AUTO plays it")
+                color: setupRoot.cDim
+                font.pixelSize: 12
+            }
+            // R484_EH_VIEW (Tobias 10-20: "samme valg som haze ... (efterlign haze)"): HAZE & FAN BY
+            // CLOCK's three views - which nights the row learns from (kept; the last 2 weekends first)
+            Repeater
+            {
+                model: [qsTr("LAST 2 WEEKENDS"), qsTr("ALL FRI + SAT"), qsTr("OTHER NIGHTS")]
+                TrackTile
+                {
+                    objectName: "clockView:" + index
+                    Layout.preferredWidth: 140
+                    Layout.preferredHeight: 34
+                    label: modelData
+                    active: trackEngine ? trackEngine.clockView === index : false
+                    activeColor: "#E3B44F"
+                    onTapped: if (trackEngine) trackEngine.clockView = index
+                }
+            }
+        }
+
         // ------------------------------------------------- ENERGY by clock
         // Runde 211 (Tobias, 2026-09-24): a point every fifteen minutes from
         // 20:00 to 02:45 - two rows of fourteen, the evening and the night.
@@ -1345,84 +1403,73 @@ Rectangle
                            + "\n" + modelData + "%"
                     active: trackEngine ? trackEngine.roomAuto : false
                     activeColor: "#4FA3E3"
-                    onTapped: if (trackEngine) trackEngine.cycleClockPoint(index)
-                }
-            }
-        }
-
-        // ------------------------------------------------- R470_CLOCK_HAND
-        // where HIS hand put ENERGY at each quarter hour, the last nights - only a
-        // proposal: a gold tile differs 10 % or more; a tap takes that one point,
-        // USE YOURS takes them all. The clock never changes by itself.
-        ColumnLayout
-        {
-            objectName: "clockHand"
-            Layout.fillWidth: true
-            Layout.fillHeight: false
-            visible: setupRoot.advancedOpen && trackEngine && trackEngine.clockHandNights.length > 0
-            spacing: 6
-            RowLayout
-            {
-                Layout.fillWidth: true
-                spacing: 10
-                Text { text: qsTr("YOUR HAND"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
-                Text
-                {
-                    Layout.fillWidth: true
-                    elide: Text.ElideRight
-                    text: trackEngine ? qsTr("where you put ENERGY by hand, %1 nights (%2) - gold = 10 % or more from the clock, tap one to take it")
-                                          .arg(trackEngine.clockHandNights.length).arg(trackEngine.clockHandNights.join(", ")) : ""
-                    color: setupRoot.cDim; font.pixelSize: 12
-                }
-                TrackTile
-                {
-                    objectName: "clockHandUse"
-                    Layout.preferredWidth: 120; Layout.preferredHeight: 34
-                    label: qsTr("USE YOURS"); active: true; activeColor: "#E3B44F"
-                    onTapped: if (trackEngine) trackEngine.useClockHand(-1)
-                }
-            }
-            GridLayout
-            {
-                Layout.fillWidth: true
-                columns: 14; columnSpacing: 4; rowSpacing: 4
-                Repeater
-                {
-                    model: trackEngine ? trackEngine.clockHand : []
-                    TrackTile
+                    // R484_EH_ROW_MARK: a tap is his point (white edge); after LEARN a tap gives it back
+                    objectName: "clockPoint:" + index
+                    readonly property int source: trackEngine && trackEngine.clockSource.length > index ? trackEngine.clockSource[index] : 0
+                    onTapped:
                     {
-                        objectName: "clockHand:" + index
-                        Layout.preferredWidth: 60
-                        Layout.preferredHeight: 34
-                        property int at: 20 * 60 + 15 * index
-                        readonly property int clock: trackEngine && trackEngine.clockCurve.length > index ? trackEngine.clockCurve[index] : 0
-                        readonly property bool apart: modelData >= 0 && Math.abs(modelData - clock) >= 10
-                        label: ("0" + (Math.floor(at / 60) % 24)).slice(-2) + ":" + ("0" + (at % 60)).slice(-2)
-                               + "\n" + (modelData >= 0 ? modelData + "%" : "-")
-                        active: apart
-                        activeColor: "#E3B44F"
-                        opacity: modelData >= 0 ? 1.0 : 0.4
-                        onTapped: if (trackEngine && apart) trackEngine.useClockHand(index)
+                        if (!trackEngine)
+                            return
+                        if (clockLearnTile.armed)
+                        {
+                            clockLearnTile.armed = false
+                            trackEngine.learnClockPoint(index)
+                        }
+                        else
+                            trackEngine.cycleClockPoint(index)
+                    }
+                    Rectangle
+                    {
+                        objectName: "clockMark:" + index
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 2
+                        anchors.topMargin: 4
+                        anchors.bottomMargin: 4
+                        width: 5
+                        visible: parent.source > 0
+                        color: parent.source === 2 ? "#FFFFFF" : "#E3B44F"
                     }
                 }
             }
         }
 
+        // ------------------------------------------------- R470_CLOCK_HAND
+        // R484_EH_ROW_MERGED (Tobias 10-20: "laeringen skal skrives i raekken"): YOUR HAND is
+        // written into ENERGY BY CLOCK's row now - its legend says how many nights; the gold
+        // row and USE YOURS are gone
+
         // ------------------------------------------------- R473_ATMOS
-        // HAZE & FAN BY HAND: what his hand does with the hazer, quarter hour by quarter
-        // hour (Tobias 10-16, mockup approved) - only to look at: nothing runs by itself
+        // HAZE & FAN BY CLOCK (R484_HZ_SETUP_ROW, Tobias 10-20: "Det samme princip skal gaelde for
+        // haze"): was HAZE & FAN BY HAND (R473) - the row AUTO plays. His hand is learned into it
+        // (gold edge); a tap on H or F is his (white edge), LEARN + a tap gives it back
         ColumnLayout
         {
             objectName: "atmosHand"
             Layout.fillWidth: true
             Layout.fillHeight: false
-            visible: setupRoot.advancedOpen && trackEngine && trackEngine.atmosKnown === true
+            visible: setupRoot.advancedOpen && trackEngine && (trackEngine.atmosKnown === true || trackEngine.hazeAvailable === true)
             spacing: 6
             RowLayout
             {
                 Layout.fillWidth: true
                 spacing: 10
-                Text { text: qsTr("HAZE & FAN BY HAND"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+                Text { text: qsTr("HAZE & FAN BY CLOCK"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+                TrackTile
+                {
+                    id: atmosLearnTile
+                    objectName: "atmosLearn"
+                    property bool armed: false
+                    visible: trackEngine && trackEngine.atmosCurve ? trackEngine.atmosCurve.some(function(p) { return p.src === 2 }) : false
+                    Layout.preferredWidth: 110
+                    Layout.preferredHeight: 30
+                    label: armed ? qsTr("TAP A POINT") : qsTr("LEARN")
+                    active: armed
+                    activeColor: "#E3B44F"
+                    onTapped: { armed = !armed; if (armed) atmosLearnArm.restart() }
+                    Timer { id: atmosLearnArm; interval: 6000; onTriggered: atmosLearnTile.armed = false }
+                }
                 Text
                 {
                     objectName: "atmosSub"
@@ -1430,9 +1477,9 @@ Rectangle
                     elide: Text.ElideRight
                     readonly property int view: trackEngine ? trackEngine.atmosView : 0
                     readonly property var nights: trackEngine ? trackEngine.atmosNights : []
-                    text: (view === 0 ? qsTr("Fri + Sat, the last 2 weekends") : view === 1 ? qsTr("every Fri + Sat") : qsTr("the other nights"))
+                    text: qsTr("learned from your hand: ") + (view === 0 ? qsTr("Fri + Sat, the last 2 weekends") : view === 1 ? qsTr("every Fri + Sat") : qsTr("the other nights"))
                           + " - " + (nights.length > 0 ? qsTr("%1 nights (%2)").arg(nights.length).arg(nights.join(", ")) : qsTr("no nights yet"))
-                          + "  ·  " + qsTr("H = haze, F = fan  ·  only learning: the haze is yours until AUTO")
+                          + "  ·  " + qsTr("gold edge = learned, white edge = set by you (tap H or F)  ·  AUTO plays it")
                     color: setupRoot.cDim; font.pixelSize: 12
                 }
                 Repeater
@@ -1441,7 +1488,7 @@ Rectangle
                     TrackTile
                     {
                         objectName: "atmosView:" + index
-                        Layout.preferredWidth: 150; Layout.preferredHeight: 34
+                        Layout.preferredWidth: 140; Layout.preferredHeight: 34
                         label: modelData
                         active: trackEngine ? trackEngine.atmosView === index : false
                         activeColor: "#E3B44F"
@@ -1455,18 +1502,52 @@ Rectangle
                 columns: 14; columnSpacing: 4; rowSpacing: 4
                 Repeater
                 {
-                    model: trackEngine ? trackEngine.atmosHand : []
+                    model: trackEngine ? trackEngine.atmosCurve : []
                     TrackTile
                     {
+                        id: atmosPoint
                         objectName: "atmosHand:" + index
-                        Layout.preferredWidth: 60
+                        Layout.preferredWidth: 84         // "H60 F100" beside the edge - wider than ENERGY's 60
                         Layout.preferredHeight: 34
                         property int at: 20 * 60 + 15 * index
-                        readonly property bool has: modelData !== undefined && modelData.h >= 0
+                        readonly property int h: modelData !== undefined ? modelData.h : -1
+                        readonly property int f: modelData !== undefined ? modelData.f : -1
+                        readonly property int src: modelData !== undefined ? modelData.src : 0
+                        readonly property bool has: h >= 0 || f >= 0
                         label: ("0" + (Math.floor(at / 60) % 24)).slice(-2) + ":" + ("0" + (at % 60)).slice(-2)
-                               + "\n" + (has ? "H" + modelData.h + " F" + modelData.f : "-")
-                        active: false
-                        opacity: has ? 1.0 : 0.4
+                               + "\n" + (has ? "H" + (h >= 0 ? h : "-") + " F" + (f >= 0 ? f : "-") : "-")
+                        active: has
+                        activeColor: "#8C8C96"
+                        opacity: has ? 1.0 : 0.45
+                        function tap(which)
+                        {
+                            if (!trackEngine)
+                                return
+                            if (atmosLearnTile.armed)
+                            {
+                                atmosLearnTile.armed = false
+                                trackEngine.learnAtmosPoint(index)
+                            }
+                            else
+                                trackEngine.cycleAtmosPoint(index, which)
+                        }
+                        // the same marks as ENERGY BY CLOCK (R484_EH): gold = learned, white = his
+                        Rectangle
+                        {
+                            objectName: "atmosMark:" + index
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.leftMargin: 2
+                            anchors.topMargin: 4
+                            anchors.bottomMargin: 4
+                            width: 5
+                            visible: atmosPoint.src > 0
+                            color: atmosPoint.src === 2 ? "#FFFFFF" : "#E3B44F"
+                        }
+                        // the left half is H, the right half F
+                        MouseArea { objectName: "atmosH:" + index; x: 0; width: parent.width / 2; height: parent.height; onClicked: atmosPoint.tap(0) }
+                        MouseArea { objectName: "atmosF:" + index; x: parent.width / 2; width: parent.width / 2; height: parent.height; onClicked: atmosPoint.tap(1) }
                     }
                 }
             }

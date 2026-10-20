@@ -143,6 +143,7 @@ Rectangle
     readonly property real laneH: Math.max(30, Math.round(38 * ks))
     property var planModel: []
     property bool planCardOpen: false
+    property int planCardBeat: -1                    // R484_PL_PAGE: the section the card is for (its flag)
     property bool bltGuideOpen: false                // R452_EMPTY: the (i) guide over the empty track
     property var planCardRows: []
     function planRefresh()
@@ -153,11 +154,11 @@ Rectangle
         for (var i = 0; i < mk.length; i++)
             secs.push({ beat: mk[i].beat, end: i + 1 < mk.length ? mk[i + 1].beat : beatCount + 1, type: mk[i].type })
         planModel = trackEngine.planLaneOf(secs, trackManager.currentBeat)
-        var nx = planNext()
+        var nx = planCardSec()          // R484_PL_REFRESH: the card's own section, next or later
         if (planCardOpen && (nx === null || !planEditable(nx)))
             planCardOpen = false
         if (planCardOpen)
-            planCardRows = trackEngine.planRows()
+            planCardRows = planRowsOf(nx)
     }
     // R445_DROP_HIT: the next DROP flag ahead of the track (-1: none)
     function nextDropBeat()
@@ -176,13 +177,39 @@ Rectangle
             if (planModel[j].next) return planModel[j]
         return null
     }
-    // only the next section can be changed - it is the RIG's plan
-    function planEditable(sec) { return sec !== null && sec.next && (sec.mode === "next" || sec.mode === "his" || sec.mode === "mem") }
-    function planOpenCard()
+    // the next section is the RIG's plan; R484_PL_EDITABLE (Tobias 10-19: "goer det muligt at man
+    // kan aendre planen gennem hele tracket fremad"): a later one ("ahead") is his to pick too -
+    // the engine plays it when it comes. A section that has begun is not
+    function planEditable(sec) { return sec !== null && (sec.ahead === true || (sec.next && (sec.mode === "next" || sec.mode === "his" || sec.mode === "mem"))) }
+    function planCardSec()
     {
-        if (!trackEngine || !planEditable(planNext())) return
-        planCardRows = trackEngine.planRows()
+        for (var j = 0; j < planModel.length; j++)
+            if (planModel[j].beat === planCardBeat) return planModel[j]
+        return null
+    }
+    function planRowsOf(sec) { return sec.ahead === true ? trackEngine.planRowsAt(sec.beat, sec.type) : trackEngine.planRows() }
+    function planOpenCard(sec)
+    {
+        if (!trackEngine || !planEditable(sec)) return
+        planCardBeat = sec.beat
+        planCardRows = planRowsOf(sec)
         planCardOpen = true
+    }
+    // a tap on a section: its card - on the open one's section, CLOSE
+    function planTap(sec) { if (planCardOpen && planCardBeat === sec.beat) planCardOpen = false; else planOpenCard(sec) }
+    function planToggle(key)
+    {
+        var sec = planCardSec()
+        if (!trackEngine || sec === null) return
+        if (sec.ahead === true) trackEngine.togglePlanAt(sec.beat, sec.type, key)
+        else trackEngine.toggleDropGroup(key)
+    }
+    function planDecides()
+    {
+        var sec = planCardSec()
+        if (!trackEngine || sec === null) return
+        if (sec.ahead === true) trackEngine.planEngineDecidesAt(sec.beat, sec.type)
+        else trackEngine.planEngineDecides()
     }
     function kindColour(kind)
     {
@@ -603,6 +630,10 @@ Rectangle
         property alias inputName: fdInput.objectName
         signal setLevel(real v)
         signal pressed()
+        // R484_HZ_REST_PROP (Tobias 10-20: "haze +70 procent ikke vaere en knap ... faderen bliver 'elastisk' ... ryger tilbage til 70 naar man slipper faderen"):
+        // an elastic slider that rests at most here (HAZE: 0.7) - a thin line marks it.
+        // -1 = none: every other fader as before
+        property real rest: -1
         // R402_GLIDE: what the fader SHOWS glides to its level when something
         // other than the finger moves it (ENERGY's AUTO clock, a VC fader) -
         // under the finger it follows at once. The value is never animated
@@ -616,6 +647,19 @@ Rectangle
         clip: true
         function at(x) { return Math.max(0, Math.min(1, (x - 3) / (width - 6))) }
 
+        // R484_HZ_REST_ZONE: where an elastic slider rests - one thin line, under the fill, no text
+        // and no box (Tobias 10-20: "ikke vaere en knap")
+        Rectangle
+        {
+            id: fdRest
+            objectName: fd.objectName + "Rest"
+            visible: fd.rest >= 0 && fd.rest < 1
+            x: 3 + (parent.width - 6) * Math.max(0, fd.rest) - 1
+            y: 3
+            width: 2
+            height: parent.height - 6
+            color: "#3E3E46"
+        }
         Rectangle
         {
             visible: fd.shown > 0
@@ -1785,7 +1829,7 @@ Rectangle
                         width: Math.max(0, Math.min(planLaneBox.width, x1) - x)
                         height: parent.height
                         clip: true
-                        Rectangle { anchors.fill: parent; visible: sec.tappable; color: trackViewRoot.planCardOpen ? "#24242C" : "#18181E" }
+                        Rectangle { anchors.fill: parent; visible: sec.tappable; color: trackViewRoot.planCardOpen && trackViewRoot.planCardBeat === sec.md.beat ? "#24242C" : "#18181E" }   // R484_PL_LANE_BG: the card's section
                         Rectangle { visible: sec.x0 >= 0; width: 2; height: parent.height; color: trackViewRoot.markerColor(sec.md.type) }
                         Row
                         {
@@ -1839,7 +1883,7 @@ Rectangle
                         TouchInput
                         {
                             enabled: sec.tappable
-                            onReleasedAt: (x, y, inside) => { if (inside) { if (trackViewRoot.planCardOpen) trackViewRoot.planCardOpen = false; else trackViewRoot.planOpenCard() } }
+                            onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.planTap(sec.md) }   // R484_PL_LANE_TAP: this section's card
                         }
                     }
                 }
@@ -3097,6 +3141,18 @@ Rectangle
                         text: parent.hazeNag > 0 ? qsTr("HAZE AT 0") + "\n" + qsTr("%1 MIN").arg(parent.hazeNag) : "HAZE MACHINE"
                         color: parent.hazeNag > 0 ? "#E3B44F" : trackViewRoot.cMute
                     }
+                    // R484_HZ_AUTO_TILE (Tobias 10-20: "der skal oprettes en 'AUTO' knap til haze"): AUTO =
+                    // haze AND fan play HAZE & FAN BY CLOCK (SETUP > ADVANCED); a hand on either takes
+                    // them back, as ENERGY. LATER has this place while the nag shows
+                    Btn
+                    {
+                        objectName: "hazeAuto"
+                        visible: parent.hazeNag <= 0
+                        x: lookCard.autoX; y: deck.rowY(5); width: lookCard.autoW; height: trackViewRoot.rowH
+                        text: qsTr("AUTO"); icon: "autoColour"; autoKind: true
+                        active: trackEngine ? trackEngine.hazeAuto === true : false
+                        onTapped: if (trackEngine) trackEngine.hazeAuto = true
+                    }
                     Btn
                     {
                         objectName: "hazeLater"
@@ -3117,6 +3173,20 @@ Rectangle
                         fill: "#8A8A8A"
                         gripInk: "#C8C8C8"
                         onSetLevel: (v) => { if (v < 0.03) v = 0; if (trackEngine) trackEngine.haze = v }
+                        // R484_HZ_SPRING (Tobias 10-20: "faderen bliver 'elastisk' at man midlertidigt kan
+                        // holde den paa en hvilken som helst vaerdi over 70% men at den automatisk ryger
+                        // tilbage til 70 naar man slipper faderen"): let go (or taken away) over 70 - 70.
+                        // A hand on it ends AUTO, as on ENERGY (the engine does it too)
+                        id: hazeFader
+                        rest: 0.7                        // ENGINE_HAZE_REST
+                        onPressed: if (trackEngine && trackEngine.hazeAuto === true) trackEngine.hazeAuto = false
+                        function springBack() { if (trackEngine && trackEngine.haze > hazeFader.rest + 0.001) trackEngine.haze = hazeFader.rest }
+                        Connections
+                        {
+                            target: hazeFader.input
+                            function onReleasedAt(x, y, inside) { hazeFader.springBack() }
+                            function onCanceled() { hazeFader.springBack() }
+                        }
                     }
                     Fader
                     {
@@ -3130,6 +3200,7 @@ Rectangle
                         fill: "#6A8AA0"
                         gripInk: "#A8C4D8"
                         onSetLevel: (v) => { if (v < 0.03) v = 0; if (trackEngine) trackEngine.fan = v }
+                        onPressed: if (trackEngine && trackEngine.hazeAuto === true) trackEngine.hazeAuto = false   // R484_HZ_FAN_HAND: a hand ends AUTO
                     }
                 }
             }
@@ -3670,7 +3741,7 @@ Rectangle
         objectName: "planCard"
         visible: trackViewRoot.planShown && trackViewRoot.planCardOpen && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
         z: 50
-        readonly property var nx: trackViewRoot.planNext()
+        readonly property var nx: trackViewRoot.planCardSec()   // R484_PL_CARD: the next section or a later one
         readonly property real pad: Math.round(16 * trackViewRoot.ks)
         width: Math.min(trackViewRoot.width - 2 * pad, Math.round(680 * trackViewRoot.ks))
         // where the next section starts, under the lane (read again when the page moves)
@@ -3715,8 +3786,10 @@ Rectangle
                 {
                     var nx = planCard.nx
                     if (!nx) return ""
-                    var who = nx.mode === "his" ? qsTr("YOURS") : (nx.mode === "mem" ? qsTr("REMEMBERED") : qsTr("ENGINE'S PLAN"))
-                    return qsTr("NEXT %1").arg(nx.type.toUpperCase()) + "  \u00B7  " + who + "  \u00B7  " + qsTr("tap a name = in / out")
+                    var who = nx.mode === "his" ? qsTr("YOURS") : (nx.mode === "mem" ? qsTr("REMEMBERED") : (nx.mode === "guess" ? qsTr("ENGINE'S GUESS") : qsTr("ENGINE'S PLAN")))
+                    // R484_PL_TITLE: a later section names its bar
+                    var what = nx.next ? qsTr("NEXT %1").arg(nx.type.toUpperCase()) : qsTr("%1 AT BAR %2").arg(nx.type.toUpperCase()).arg(trackViewRoot.barOf(nx.beat))
+                    return what + "  \u00B7  " + who + "  \u00B7  " + qsTr("tap a name = in / out")
                 }
             }
             Repeater
@@ -3763,7 +3836,7 @@ Rectangle
                     }
                     TouchInput
                     {
-                        onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.toggleDropGroup(modelData.key) }
+                        onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.planToggle(modelData.key) }   // R484_PL_ROW_TAP
                     }
                 }
             }
@@ -3778,7 +3851,7 @@ Rectangle
                     fontPx: trackViewRoot.fs(12)
                     text: qsTr("ENGINE DECIDES")
                     enabled: planCard.nx !== null && (planCard.nx.mode === "his" || planCard.nx.mode === "mem")
-                    onTapped: if (trackEngine) trackEngine.planEngineDecides()
+                    onTapped: trackViewRoot.planDecides()   // R484_PL_ENGINE_BTN: the next section's or the later one's
                 }
                 Btn
                 {
@@ -4033,7 +4106,7 @@ Rectangle
                     // R455_HELP (Tobias 10-14: "Opdater nu ogsaa vores Help knap, til alt det nye")
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (a warm white grows over the track, lasers out and strobes steady at the outro, full white at the music's end or when the DJ's fader goes down, 5 min, haze down, then dark). Tap twice again to undo." },   // R479_LAST_WHITE_HELP
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br><b>HIT</b> on a DROP flag - a hit is armed for that drop (<b>DROP HIT</b> in LIVE).<br>Warnings appear in the bar under the track." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section to change it - the same plan as RIG." },
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section - or any later one - to pick its lamps: the next one is the same plan as RIG, a later one becomes it when its turn comes. A section that has begun can not be changed." },   // R484_PL_HELP
                     { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from its logo on the taskbar.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column
@@ -4079,7 +4152,7 @@ Rectangle
                 { l: "POSITION",     b: "Hold the heads in one position. <b>AUTO</b>: the engine moves them." },
                 { l: "COLOUR",       b: "Tap colours to make your own mix. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },
                 { l: "COLOUR MODE",  b: "<b>FADE</b>: the mix glides over. <b>CHASE</b>: it steps on the kick. <b>SPEED</b>: the pace of moves and chases." },
-                { l: "HAZE MACHINE", b: "Haze and fan - always by hand, the engine never touches them." }
+                { l: "HAZE MACHINE", b: "Haze and fan by hand. <b>HAZE</b> is elastic over 70 % (the thin line): hold it anywhere above, let go and it springs back to 70. <b>AUTO</b>: haze and fan follow HAZE & FAN BY CLOCK (SETUP, ADVANCED) - learned from your hand; your hand on either takes them back." }   // R484_HZ_HELP
             ]
             Item
             {

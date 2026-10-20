@@ -112,6 +112,7 @@ class QRandomGenerator;
 #define ENGINE_HOUSE_RISE_MS      2000      // the white the rest of the way up (fader down, deck stopped)
 #define ENGINE_LAST_AIR_MS        500       // the deck off air this long in the outro: the end
 #define ENGINE_LAST_AIR_MID_MS    4000      // ... before the outro (a cut for the crowd to sing is no end)
+#define ENGINE_LAST_AUTO_MS       3000      // R484_LF_DEFS (10-19): every fader down MORE than this, not armed: LAST TRACK ("i mere 3 sekunder")
 #define ENGINE_LAST_LOUD          26        // a beat with music: a tenth of the track's own top (m_audLevel)
 #define ENGINE_HOUSE_HOLD_MS      300000    // five minutes of white
 #define ENGINE_HOUSE_OUT_MS       30000     // then down to nought
@@ -120,6 +121,15 @@ class QRandomGenerator;
 #define ENGINE_HAZE_NAG_FROM_H    22        // ... from 22:00 ...
 #define ENGINE_HAZE_NAG_TO_H      8         // ... to 08:00
 #define ENGINE_HAZE_NAG_LATER_MIN 30        // LATER: quiet this long
+// R484_HZ_DEFS (Tobias 10-20: "haze +70 procent ikke vaere en knap ... faderen bliver 'elastisk' ... ryger tilbage til 70 naar man slipper faderen";
+// 10-20: "lav
+// AUTO knappen til haze" / "Det samme princip skal gaelde for haze (husk at haze baade skal huske
+// baade fan og haze output)")
+#define ENGINE_HAZE_REST          0.70      // the haze rests at most here - only a held finger goes over (elastic)
+#define ENGINE_HAZE_AUTO_STEP_MS  1200      // AUTO moves haze and fan 1 % at most this often (under the log's 1.5 s)
+#define SETTINGS_ENGINE_ATMOSROW  QStringLiteral("trackengine/atmos-row")       // HAZE & FAN BY CLOCK: "h:f,h:f,..." (-1 = none)
+#define SETTINGS_ENGINE_ATMOSOWN  QStringLiteral("trackengine/atmos-row-own")   // his points: "12,20"
+#define SETTINGS_ENGINE_ATMOSVIEW QStringLiteral("trackengine/atmos-view")      // the nights the row learns from
 // R469_GROUP_FLASH (track_runtime/padflash.inc.cpp)
 #define ENGINE_PAD_FLASH_MS       3000      // a held pad nobody refreshed lets go
 // R470_SYNC (track_runtime/sync.inc.cpp)
@@ -612,6 +622,9 @@ class TrackEngine : public QObject
     Q_PROPERTY(int lastTrackEnd READ lastTrackEndBeat NOTIFY lastTrackChanged)   // R479_LAST_WHITE_PROP: the music's end
     // R467_HAZE_NAG: minutes the haze has stood at 0 (0 = nothing to say)
     Q_PROPERTY(int hazeNag READ hazeNag NOTIFY hazeNagChanged)
+    // R484_HZ_PROP: AUTO = haze AND fan from HAZE & FAN BY CLOCK (off at every start-up; a hand on
+    // HAZE or FAN SPEED ends it)
+    Q_PROPERTY(bool hazeAuto READ hazeAuto WRITE setHazeAuto NOTIFY liveChanged)
     // R469_GROUP_FLASH: the groups a flash pad holds at full white now
     Q_PROPERTY(QStringList flashGroups READ flashGroups NOTIFY flashGroupsChanged)
     // R470_SYNC: SETUP > LAB > SYNC - is the light on time with the sound
@@ -626,11 +639,19 @@ class TrackEngine : public QObject
     // R470_CLOCK_HAND: his hand's ENERGY per quarter hour, the last nights
     Q_PROPERTY(QVariantList clockHand READ clockHand NOTIFY clockHandChanged)
     Q_PROPERTY(QStringList clockHandNights READ clockHandNights NOTIFY clockHandChanged)
+    // R484_EH_PROP: per clock point, where its value comes from - 0 the clock, 1 learned from his hand, 2 his own
+    Q_PROPERTY(QVariantList clockSource READ clockSource NOTIFY tableChanged)
+    // R484_EH_VIEW (Tobias 10-20: "energi skal have samme valg som haze"): the nights the row learns
+    // from - 0 the last 2 weekends, 1 every Fri + Sat, 2 the other nights (as atmosView)
+    Q_PROPERTY(int clockView READ clockView WRITE setClockView NOTIFY clockHandChanged)
     // R473_ATMOS: HAZE & FAN BY HAND - 20:00-03:00, { h, f } per quarter (-1 = nothing yet)
     Q_PROPERTY(QVariantList atmosHand READ atmosHand NOTIFY atmosChanged)
     Q_PROPERTY(QStringList atmosNights READ atmosNights NOTIFY atmosChanged)
     Q_PROPERTY(bool atmosKnown READ atmosKnown NOTIFY atmosChanged)
     Q_PROPERTY(int atmosView READ atmosView WRITE setAtmosView NOTIFY atmosChanged)
+    // R484_HZ_ROW_PROP: HAZE & FAN BY CLOCK, 20:00 - 02:45: { h, f, src } per point (-1 = none;
+    // src 0 nothing, 1 learned from his hand, 2 his own)
+    Q_PROPERTY(QVariantList atmosCurve READ atmosCurve NOTIFY atmosChanged)
     // R467_MIC_CHECK: SETUP > LAB > MIC CHECK - it only listens
     Q_PROPERTY(bool micActive READ micActive NOTIFY micChanged)
     Q_PROPERTY(QString micDevice READ micDevice NOTIFY micChanged)
@@ -814,6 +835,16 @@ public:
     Q_INVOKABLE void hazeLater();
     /** every 200 ms from closingTick() */
     void hazeNagTick(bool showOn);
+    /* ---- R484_HZ_API: haze AUTO (track_runtime/hazenag.inc.cpp), its row in clockhand.inc.cpp ---- */
+    bool hazeAuto() const;
+    void setHazeAuto(bool on);
+    /** every 200 ms (from hazeNagTick): haze and fan toward the row's point, a step at a time */
+    void hazeAutoTick(bool showOn);
+    QVariantList atmosCurve() const;
+    /** a tap on a point's H (which 0) or F (which 1): +10 - the point is his from then on */
+    Q_INVOKABLE void cycleAtmosPoint(int index, int which);
+    /** his point given back to the learning (LEARN) */
+    Q_INVOKABLE void learnAtmosPoint(int index);
     /* ---- R469_GROUP_FLASH (track_runtime/padflash.inc.cpp) ---- */
     QStringList flashGroups() const;
     /** the group's flash pad: on = held (again every second), off = let go */
@@ -840,6 +871,12 @@ public:
     /* ---- R470_CLOCK_HAND (track_runtime/clockhand.inc.cpp) ---- */
     QVariantList clockHand() const;
     QStringList clockHandNights() const;
+    /* ---- R484_EH_API (Tobias 10-20: "energi skal saette by hand i advanced ... men vi kan 'override'") ---- */
+    QVariantList clockSource() const;
+    /** a point of his own (a tap on it) given back to the learning */
+    Q_INVOKABLE void learnClockPoint(int index);
+    int clockView() const;
+    void setClockView(int view);
     /** a tile of YOUR HAND (-1: USE YOURS) into ENERGY by clock */
     Q_INVOKABLE void useClockHand(int index);
     /* ---- R473_ATMOS (track_runtime/clockhand.inc.cpp) ---- */
@@ -891,6 +928,12 @@ public:
     Q_INVOKABLE QVariantList planRows();
     Q_INVOKABLE void planEngineDecides();
     Q_INVOKABLE void planForgetTrack();
+    /** R484_PL_API (Tobias 10-19: "gennem hele tracket fremad"): a LATER section's card -
+     *  its rows, a name in / out, ENGINE DECIDES. The next section's boundary goes to the
+     *  RIG's plan (planRows / toggleDropGroup / planEngineDecides) as before */
+    Q_INVOKABLE QVariantList planRowsAt(int boundary, const QString &section);
+    Q_INVOKABLE void togglePlanAt(int boundary, const QString &section, const QString &key);
+    Q_INVOKABLE void planEngineDecidesAt(int boundary, const QString &section);
     /* ---- R440_SEND (track_runtime/sendclaude.inc.cpp) ---- */
     Q_INVOKABLE QVariantList sendItems();
     Q_INVOKABLE bool sendMake(const QStringList &ids);
@@ -1205,6 +1248,9 @@ public:
     /** R479_LAST_WHITE_API: the followed deck's on-air from the DJM (BLT's "air" in its
      *  "pos", only when it has seen a mixer): 1 on air, 0 off air, -1 not known */
     void setDeckAir(int air);
+    /** R484_LF_API: how many players' channels the DJM has on air (BLT's "faders" in its
+     *  "pos", only when it has seen a mixer): 0 every fader down, -1 not known */
+    void setDeckFaders(int onAir);
     void setDropForced(bool on) { m_dropForced = on; }   // R361_DROP_FORCED
     /** runde 322: one drop's absolute kick and bass into the history */
     void rememberDropPunch(qreal kick, qreal low);
@@ -1890,6 +1936,19 @@ public:
     QString planShortOf(const QString &key) const;
     QVariantList planChips(const QStringList &keys) const;
     QStringList planGuess(const QString &section, int boundary);
+    // R484_PL_MEMBERS: his picks for later sections of this play, by the section's flag -
+    // boundary beat -> "section|a+b" ("section|" all out, "section|*" ENGINE DECIDES). Not
+    // saved: the section's crossing makes it the RIG's touched plan, and what lights is
+    // remembered (R439) and learned (R433) there, as a tap in RIG. A new track clears it
+    QMap<int, QString> m_planAhead;
+    int planAheadKey(int boundary, const QString &section) const;
+    int planAheadAt(int boundary, const QString &section, QStringList *set) const;   // 0 none, 1 his, 2 engine
+    QStringList planAheadShown(int boundary, const QString &section);
+    bool planIsRig(int boundary) const;
+    bool planAheadOpen(int boundary) const;
+    void planAheadFollow();
+    void planAheadLit(int boundary, const QString &section);
+    QVariantList planRowsOf(const QStringList &set) const;
     bool m_testTrack = false;            // R450_TEST_TRACK: learns nothing, logs nothing
     // R445_DROP_HIT
     int m_hitKind = 0;
@@ -2237,6 +2296,9 @@ private:
     qreal m_houseFrom = 0.0;               // where the house light starts from
     qint64 m_airOffMs = -1;                // the deck off air since (m_clock); -1 on air or not known
     qint64 m_airSeenMs = -1;               // the last "pos" that said so
+    qint64 m_fadersDownMs = -1;            // R484_LF_MEMBERS: every fader down since (m_clock); -1 up or not known
+    qint64 m_fadersSeenMs = -1;            // ... the last "pos" that said so
+    QString m_lastUndoTitle;               // ... the track LAST TRACK was undone on by hand: no fallback on it
     static int lastTrackMinutesNow();
     qint64 lastTrackSecsToClose() const;   // R463_LAST_SECS
     bool lastTrackHolds() const;           // R463_LAST_CLOCK
@@ -2248,6 +2310,18 @@ private:
     qint64 m_hazeQuietUntil = -1;          // LATER (m_clock)
     qint64 m_hazeNagLastMs = -1;
     qint64 m_hazeBeatMs = -1;              // the last beat (m_clock): is music playing
+    // R484_HZ_MEMBERS: haze AUTO (hazenag.inc.cpp) and HAZE & FAN BY CLOCK (clockhand.inc.cpp)
+    bool m_hazeAuto = false;               // off at every start-up, as ENERGY's AUTO (R378_ROOM_OFF)
+    qint64 m_hazeAutoStepMs = -1;          // its last step (m_clock)
+    mutable QVector<int> m_atmosRowH;      // the row: haze % per point (-1 = none: AUTO holds)
+    mutable QVector<int> m_atmosRowF;      // ... and the fan
+    mutable quint32 m_atmosOwn = 0;        // bit i: point i is his - learning leaves it
+    mutable bool m_atmosRowRead = false;
+    quint32 m_atmosLearned = 0;            // bit i: point i holds his hand's average
+    bool m_atmosRowFresh = false;          // the row has learned since start-up
+    void atmosRowLoad() const;
+    void atmosRowSave() const;
+    void atmosIntoRow(int only);
     // R469_GROUP_FLASH (track_runtime/padflash.inc.cpp)
     QSet<QString> m_padFlash;              // the groups a pad holds (also in m_flashHeld)
     QHash<QString, qint64> m_padFlashMs;   // the last "still held" (m_clock)
@@ -2302,6 +2376,15 @@ private:
     qint64 m_clockHandSum[ENGINE_CLOCK_POINTS] = {};
     qint64 m_clockHandCnt[ENGINE_CLOCK_POINTS] = {};
     qint64 m_clockHandSavedMs = -1;
+    // R484_EH_MEMBERS: YOUR HAND written into ENERGY by clock's row (track_runtime/clockhand.inc.cpp)
+    mutable quint32 m_clockOwn = 0;        // bit q: point q is his - a tap set it; learning leaves it
+    mutable bool m_clockOwnRead = false;
+    quint32 m_clockLearned = 0;            // bit q: point q holds his hand's value
+    bool m_clockRowFresh = false;          // the row has learned since the curve was read
+    int m_clockView = 0;                   // the nights it learns from (R484_EH_VIEW)
+    void clockOwnLoad() const;
+    void clockOwnSave() const;
+    void clockHandIntoRow(int only);
     void clockHandLoad() const;
     void clockHandSave();
     QStringList clockHandNightsAll() const;
@@ -2390,6 +2473,7 @@ private:
     void lastWhiteDraw(qreal p);
     void lastWhiteStop();
     qreal lastWhiteDim(const QString &group) const;
+    void lastTrackAuto(bool showOn);       // R484_LF_DECLS (lasttrack.inc.cpp)
     int m_roomSent;                        // last percent handed to the ENERGY trim
     bool m_fullAuto;
     QSet<QString> m_laserMoveDark;         // R401_LIFT_TWO_BEATS: bar figures waiting a dark beat to move

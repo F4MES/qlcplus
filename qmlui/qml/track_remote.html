@@ -95,6 +95,8 @@ button{font-family:inherit;cursor:pointer}
 .fader .grip{position:absolute;top:6px;bottom:6px;width:10px;border-radius:3px;background:#D8E6F2;margin-left:-14px}
 .fader .name{position:absolute;left:14px;right:84px;top:0;bottom:0;display:flex;align-items:center;font-weight:800;font-size:12px;letter-spacing:.14em;white-space:nowrap;overflow:hidden}
 .fader .val{position:absolute;right:26px;top:0;bottom:0;display:flex;align-items:center;font-weight:800;font-size:14px}
+/* R484_HZ_PHONE_CSS: where the elastic haze rests (70 %) - a thin line under the fill, no text, no box */
+.fader .rest{position:absolute;top:6px;bottom:6px;width:2px;margin-left:-1px;background:#3A3A42;pointer-events:none}
 .energy{height:84px}.energy .fill{background:var(--gold)}.energy .name{color:#1A1408}
 .grp{display:grid;grid-template-columns:50px 1fr 54px;gap:8px;align-items:center;margin-bottom:8px;position:relative}
 /* R469_PHONE_RIG: the pad, the fader in the room's colour on stage, the next section's line */
@@ -207,7 +209,8 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       <div class="lbl">GROUPS <span style="font-weight:600;letter-spacing:.02em;color:var(--dim)">· lit = on stage · hold ⚡ = flash</span></div>
       <div id="groups"></div>
       <div class="lbl">HAZE MACHINE</div>
-      <div class="fader" data-f="haze" style="margin-bottom:8px"><div class="fill" style="background:#8C8C96"></div><div class="grip"></div><div class="name" style="color:#141418">HAZE</div><div class="val"></div></div>
+      <div class="fader" data-f="haze" data-rest="70" style="margin-bottom:8px"><!-- R484_HZ_PHONE_ZONE --><div class="rest" style="left:70%"></div><div class="fill" style="background:#8C8C96"></div><div class="grip"></div><div class="name" style="color:#141418">HAZE</div><div class="val"></div></div>
+      <div class="grid g2" style="margin-bottom:8px"><button class="b sm" data-c="hazeAuto">AUTO<span class="sub">HAZE + FAN by clock</span></button></div><!-- R484_HZ_PHONE_AUTO_BTN -->
       <div class="fader" data-f="fan"><div class="fill" style="background:#6A8496"></div><div class="grip"></div><div class="name" style="color:#141418">FAN SPEED</div><div class="val"></div></div>
       <div class="lbl">QLC+</div>
       <div class="upd" id="upd"><div><b id="updT">QLC+</b><small id="updS"></small></div><button id="updB">UPDATE</button></div>
@@ -231,6 +234,7 @@ let S = null, ws = null, mockOn = false;
 const sent = window.__sent = [];          // R463_PAGE: what was sent - in ?mock=1 only (it grew all night)
 const busy = {};                         // a fader under a finger is not redrawn from the state
 const holding = {};                      // R463_RM_HELD: what a finger holds on THIS phone
+const restHeld = {};                     // R484_HZ_PHONE_HELD: a slider over its rest under a finger here (haze: 70)
 let lastState = 0;                       // when QLC+ last answered
 
 /* ---------------- the line to QLC+ ---------------- */
@@ -267,7 +271,7 @@ function connect() {
 setInterval(() => {
   if (mockOn) return;
   // the state - and the heartbeat: it names what a finger still holds here
-  const held = Object.keys(holding).filter(k => holding[k]);
+  const held = Object.keys(holding).filter(k => holding[k]).concat(Object.keys(restHeld));   // R484_HZ_PHONE_BEAT: and the haze over 70
   send('state' + (held.length ? '|' + held.join(',') : ''));
   // R463_PAGE: a socket open but silent for 1.5 s (Wi-Fi gone without a close) is dead
   if (ws && ws.readyState === 1 && lastState && Date.now() - lastState > 1500) {
@@ -439,12 +443,18 @@ function wireFader(el) {
   // pan-y the browser had a say in every drag (iOS waited, took it for a scroll, cancelled).
   // A swipe up or down over it still scrolls: this page scrolls itself, with the throw
   let last = 0, timer = null, val = 0, ptr = null, x0 = 0, y0 = 0, mode = 0, sent = false, raf = 0;
+  const rest = el.dataset.rest ? +el.dataset.rest / 100 : 1;   // R484_HZ_PHONE_REST: the haze rests at 70 (elastic above)
   let st0 = 0, vy = 0, ly = 0, lt = 0;
   const pages = el.closest('.pages');
   const cmd = v => { const f = el.dataset.f, p = Math.round(v * 100);
     return f.indexOf('trim:') === 0 ? 'trim|' + f.slice(5) + '|' + p : f + '|' + p; };
   const at = e => { const r = el.getBoundingClientRect(); return (e.clientX - r.left) / r.width; };
-  const flush = () => { timer = null; last = Date.now(); sent = true; send(cmd(val)); };
+  const flush = () => {
+    timer = null; last = Date.now(); sent = true;
+    // R484_HZ_PHONE_FLUSH: over its rest under the finger - the heartbeat names it until the lift
+    if (rest < 1) { if (ptr !== null && val > rest) restHeld[el.dataset.f] = Math.round(rest * 100); else delete restHeld[el.dataset.f]; }
+    send(cmd(val));
+  };
   const draw = () => { raf = 0; drawFader(el, val); };
   const move = e => {
     val = Math.max(0, Math.min(1, at(e)));
@@ -484,8 +494,14 @@ function wireFader(el) {
       if (keep && performance.now() - lt < 80) pageThrow(pages, -vy);
     } else if (keep) {
       if (mode === 0) val = Math.max(0, Math.min(1, at(e)));   // a tap: where it landed
+      const sprang = val > rest;                               // R484_HZ_PHONE_SPRING: let go over 70 - back to 70
+      if (sprang) val = rest;
       drawFader(el, val);
-      if (timer || !sent) { clearTimeout(timer); flush(); }
+      if (timer || !sent || sprang) { clearTimeout(timer); flush(); }
+      busy[el.dataset.f] = Date.now() + 700;
+    } else if (sent && val > rest) {
+      // R484_HZ_PHONE_CANCEL: the phone took the touch over 70 (a call) - back to 70, as a lift
+      clearTimeout(timer); val = rest; flush(); drawFader(el, val);
       busy[el.dataset.f] = Date.now() + 700;
     } else {
       // the phone took the touch (a call): what was sent stays, the rest follows QLC+
@@ -587,6 +603,7 @@ function render() {
   // --- LIVE
   document.querySelectorAll('.fader[data-f]').forEach(el => { if (!(busy[el.dataset.f] > Date.now())) drawFader(el, faderValue(el)); });
   cls(document.querySelector('[data-c="energyAuto"]'), 'on', S.roomAuto);
+  cls(document.querySelector('[data-c="hazeAuto"]'), 'on', S.hazeAuto === true);   // R484_HZ_PHONE_AUTO_DRAW
   const calm = $('calm'); cls(calm, 'on', S.calm > 0); calm.firstChild.textContent = 'CALM';
   cls($('holdb'), 'gold', S.hold);
   cls($('stutter'), 'gold', S.stutter);
@@ -748,6 +765,7 @@ const letGoAll = () => {
   Object.keys(holdReset).forEach(w => holdReset[w]());   // R475_ALL_LETGO_PHONE: and the buttons' own state
   Object.keys(holding).forEach(w => { if (holding[w]) { holding[w] = false; send(w + '|0'); } });
   Object.keys(busy).forEach(k => { busy[k] = 0; });       // a slider dragged meanwhile follows QLC+ again
+  Object.keys(restHeld).forEach(f => { send(f + '|' + restHeld[f]); delete restHeld[f]; });   // R484_HZ_PHONE_LETGO: hidden over 70 - back to 70
 };
 document.addEventListener('visibilitychange', () => { if (document.hidden) letGoAll(); });
 addEventListener('pagehide', letGoAll);
@@ -766,7 +784,8 @@ function mockApply(cmd) {
     section: () => S.override = a[1] === S.override ? '' : a[1], colourAuto: () => S.overrides = [],
     colour: () => { const i = S.overrides.indexOf(a[1]); i >= 0 ? S.overrides.splice(i, 1) : S.overrides.push(a[1]); },
     colourMode: () => S.colourMode = S.colourMode === +a[1] ? 0 : +a[1], position: () => S.position = a[1] === S.position ? '' : a[1],
-    speed: () => S.speed = +a[1], master: () => S.master = a[1] / 100, haze: () => S.haze = a[1] / 100, fan: () => S.fan = a[1] / 100,
+    speed: () => S.speed = +a[1], master: () => S.master = a[1] / 100, haze: () => { S.haze = a[1] / 100; S.hazeAuto = false; }, fan: () => { S.fan = a[1] / 100; S.hazeAuto = false; },
+    hazeAuto: () => S.hazeAuto = true,   // R484_HZ_PHONE_MOCK
     trim: () => S.trims[a[1]] = a[2] / 100, group: () => S.groups.find(g => g.key === a[1]).enabled = a[2] === '1',
     gflash: () => { const i = S.gflash.indexOf(a[1]); if (a[2] === '1' && i < 0) S.gflash.push(a[1]); if (a[2] !== '1' && i >= 0) S.gflash.splice(i, 1); },
     last: () => S.last.stage = S.last.stage > 0 ? 0 : 1, hazelater: () => S.hazeNag = 0, ratemark: () => {}, rate: () => {}};
@@ -781,7 +800,7 @@ if (q.get('mock')) {
     markers: [{b: 1, t: 'intro'}, {b: 33, t: 'normal'}, {b: 81, t: 'break'}, {b: 97, t: 'build'}, {b: 165, t: 'drop'}, {b: 229, t: 'break'}, {b: 261, t: 'build'}, {b: 293, t: 'drop'}, {b: 357, t: 'outro'}],
     roomAuto: false, calm: 0, hold: false, blackout: false, stutter: false, stutterRate: 2, hitKind: 3, hitLast: 3, flash: false,
     colour: q.get('colour') || 'blue', overrides: [], colourMode: 1, palette: ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white'], position: '', speed: 0,
-    master: 0.8, haze: q.get('nag') ? 0 : 0.4, fan: 0.6, hazeNag: +(q.get('nag') || 0),
+    master: 0.8, haze: q.get('nag') ? 0 : 0.4, hazeAuto: q.get('hazeauto') === '1' /* R484_HZ_PHONE_MOCK_S */, fan: 0.6, hazeNag: +(q.get('nag') || 0),
     groups: [{key: 'Laserbars', enabled: true}, {key: 'Strobes All', enabled: true}, {key: 'Shark Zoom Wash', enabled: true, base: true},
              {key: 'Animation Laser', enabled: false, switchOnly: true}, {key: 'Mini 4 Eyes', enabled: true}],
     trims: {'Laserbars': 1, 'Strobes All': 0.5, 'Shark Zoom Wash': 1, 'Animation Laser': 1, 'Mini 4 Eyes': 0.5},
