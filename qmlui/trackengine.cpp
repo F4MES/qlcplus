@@ -4772,6 +4772,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         }
         if (want >= 0)
         {
+            m_barStrobeDraw = rng->bounded(100) < 15; // chase is the bars' first choice
             m_strobeFocus.clear(); // C20261020: choose from actually eligible groups below
             m_strobeRate = want;
             m_strobeUntil = beat + beats - 1;
@@ -4849,10 +4850,27 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
                          // (pulseFactor) - the shutter's own rate is a guess with no
                          // Hz in the fixture definition, the beat clock is not
                          : (g.strobes ? beat <= m_landBurstUntil && m_landSixteenths == false
-                            : (g.lasers ? (isDrop && (m_faderNow >= ENGINE_BARS_AMOK                // runde 348
-                                                         || (m_faderNow >= 0.90 && barsWide(key))))    // runde 352
+                            : (g.lasers ? (isDrop && m_faderNow >= 1.0 - 1e-9 && m_barStrobeDraw) // C20261020 full stop only
                                : (g.heads ? ((isDrop && m_faderNow >= 0.60) || w2 > 0.30)
                                   : w2 > 0.30))));
+        if (g.lasers && !g.patternDevice)
+        {
+            const quint32 motion = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+            if (motion != Function::invalidId())
+            {
+                const TrackBarCoverage &coverage = m_funcs.value(motion).barCoverage;
+                joins = joins && coverage.known && coverage.whole
+                     && coverage.minTotalEyes == int(g.fixtures.size()) * 8;
+            }
+            else
+            {
+                const TrackMove mv = m_liveMove.value(key);
+                const QVector<qreal> mask = livePatternMask(key, mv, m_beatIndex, 1.0);
+                joins = joins && mv.pattern == ENGINE_PAT_STATIC && !mask.isEmpty()
+                     && std::all_of(mask.begin(), mask.end(), [](qreal v) { return v >= 0.99; });
+            }
+            joins = joins && !m_darkUntil.contains(key) && !lightsOut();
+        }
         if (on == false || joins == false || ids.isEmpty()
             || (focusBurst && m_strobeFocus.isEmpty() == false && key != m_strobeFocus)
             || m_groupOff.contains(key) || g.generatable() == false)
@@ -5378,8 +5396,9 @@ TrackBarCoverage TrackEngine::barCoverageOf(Function *func, const QSet<quint32> 
     }
     else
         steps.append(func->id());
-    QHash<quint32, quint32> wheels, dimmers;
+    QHash<quint32, quint32> wheels, dimmers, shutters;
     QHash<quint32, QSet<quint32> > eyes;
+    QHash<quint32, QList<quint32> > orderedEyes;
     static const QRegularExpression eyeName(QStringLiteral("(colou?r|eye)\\s*\\d+"),
                                             QRegularExpression::CaseInsensitiveOption);
     foreach (quint32 fid, touched)
@@ -5396,11 +5415,16 @@ TrackBarCoverage TrackEngine::barCoverageOf(Function *func, const QSet<quint32> 
                 wheel = ch;
             if (qc != nullptr && qc->name().contains(eyeName))
                 channels.insert(ch);
+            if (qc != nullptr && qc->preset() == QLCChannel::ShutterStrobeSlowFast)
+                shutters.insert(fid, ch);
         }
         if (channels.count() == 8 && wheel != QLCChannel::invalid())
         {
             wheels.insert(fid, wheel);
             eyes.insert(fid, channels);
+            QList<quint32> ordered = channels.values();
+            std::sort(ordered.begin(), ordered.end());
+            orderedEyes.insert(fid, ordered);
             dimmers.insert(fid, dimmerChannel(fxi));
         }
     }
@@ -5412,10 +5436,15 @@ TrackBarCoverage TrackEngine::barCoverageOf(Function *func, const QSet<quint32> 
         if (scene == nullptr)
             return TrackBarCoverage(); // opaque EFX: generated whole-bar look instead
         QHash<quint32, int> dim, wheel, eyeCount;
+        QHash<quint32, unsigned> eyeMasks;
         foreach (const SceneValue &sv, valuesOf(scene))
         {
             if (wheels.contains(sv.fxi) == false)
                 continue;
+            // This rig's ShutterStrobeSlowFast preset is open at zero.
+            // Authored bursts cannot bypass the full-bank-only driver.
+            if (shutters.contains(sv.fxi) && sv.channel == shutters.value(sv.fxi) && sv.value > 0)
+                out.shutter = true;
             if (sv.channel == dimmers.value(sv.fxi, QLCChannel::invalid()))
                 dim.insert(sv.fxi, int(sv.value));
             if (sv.channel == wheels.value(sv.fxi))
@@ -5423,18 +5452,26 @@ TrackBarCoverage TrackEngine::barCoverageOf(Function *func, const QSet<quint32> 
             if (eyes.value(sv.fxi).contains(sv.channel))
             {
                 if (sv.value > 0)
+                {
                     eyeCount[sv.fxi] += 1;
+                    eyeMasks[sv.fxi] |= 1u << orderedEyes.value(sv.fxi).indexOf(sv.channel);
+                }
             }
         }
         std::vector<int> lit;
-        foreach (quint32 fid, wheels.keys())
+        std::vector<unsigned> masks;
+        QList<quint32> orderedBars = wheels.keys();
+        std::sort(orderedBars.begin(), orderedBars.end());
+        foreach (quint32 fid, orderedBars)
         {
             // Main colour overrides individual eyes. Explicit colour 0 plus
             // eight zero eyes is DARK, never "eight eyes" (old beamShare bug).
             lit.push_back(trackBarEyes(dim.value(fid, 255), wheel.contains(fid),
                                        wheel.value(fid, -1), eyeCount.value(fid, 0)));
+            masks.push_back(lit.back() == 0 ? 0u : (lit.back() == 8 ? 255u : eyeMasks.value(fid)));
         }
         out.add(lit);
+        out.addMasks(masks);
     }
     return out;
 }
@@ -8618,7 +8655,17 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
                 detail.append(info);
         }
         if (m_barDetailDraw && detail.isEmpty() == false)
-            ok = detail;
+        {
+            QList<TrackFuncInfo *> dense;
+            foreach (TrackFuncInfo *info, detail)
+                if (info->barCoverage.denseChase()) dense.append(info);
+            // Keep the optional single-eye draw at a full-energy DROP/HIT.
+            // Everywhere else prefer moving groups of 2-4 adjacent eyes.
+            if (dense.isEmpty() == false && (m_faderNow < 1.0 - 1e-9 || m_barSingleDraw == false))
+                ok = dense;
+            else
+                ok = detail;
+        }
         else if (whole.isEmpty() == false)
             ok = whole;
         else
@@ -12188,6 +12235,41 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_rhythmLead = lead;
     }
 
+    // C20261020_DIALOGUE: one four-bar phrase, one section in four at most
+    // by draw, never consecutive sections, and only with bars + heads already lit.
+    const bool dialogueAllowed = m_fullAuto && !hold && !isCalm && !still && !m_mixing
+                              && !m_forceOn && !m_dropTouched && !forceNext
+                              && !isBuild && !isBreak && fader >= 0.50 && m_hitAmokFrom < 0;
+    if (sectionChanged)
+    {
+        const bool previous = m_dialoguePrevious;
+        m_dialogueStart = -1;
+        m_dialogueCall.clear(); m_dialogueAnswer.clear();
+        m_dialoguePrevious = false;
+        if (dialogueAllowed && !previous && (secEnd <= secStart || secEnd - secStart >= 32)
+            && rng->bounded(4) == 0)
+        {
+            foreach (const QString &key, castSorted)
+            {
+                const TrackGroup &dg = m_groups.value(key);
+                if (dg.lasers && !dg.patternDevice) m_dialogueCall = key;
+                if (dg.heads && !smallWash(key)) m_dialogueAnswer = key;
+            }
+            if (!m_dialogueCall.isEmpty() && !m_dialogueAnswer.isEmpty())
+            {
+                m_dialogueStart = secStart + 16; // after the landing, two bars each
+                m_dialoguePrevious = true;
+            }
+        }
+    }
+    if (!dialogueAllowed || (m_dialogueStart >= 0 && (beat < secStart || beat >= m_dialogueStart + 16))
+        || (!m_dialogueCall.isEmpty() && (!castSet.contains(m_dialogueCall) || !castSet.contains(m_dialogueAnswer))))
+    {
+        m_dialogueStart = -1;
+        m_dialogueCall.clear(); m_dialogueAnswer.clear();
+    }
+    m_dialogueBeat = beat;
+
     /* ---- moves: every group in the cast draws how it moves this section.
      *      Long sections redraw every 16 bars, half the time. A pattern the
      *      group ran in its last two sections is not drawn again if the
@@ -12219,6 +12301,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // R447_HEADS_ROUND: the music turned on this bar line (or in the bar before)
     if (turn)
         m_musicTurnBeat = beat;
+    if (m_musicTurnBeat > beat && (sectionChanged || hold || isCalm || m_mixing || forceNext))
+        m_musicTurnBeat = -1; // cancel a staged turn when context/hands take over
     const bool musicTurnNow = beatInBar == 0 && m_musicTurnBeat >= 0 && beat >= m_musicTurnBeat && beat - m_musicTurnBeat <= 3;
     bool redraw = hold == false
                && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump || settleNow
@@ -12244,6 +12328,26 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // FULL AUTO the drop flag is a part change and re-composes the roles, so
     // the wait draws there as before; an inner build flag does not.)
     const bool buildKeeps = isBuild && m_buildDrawn && faderJump == false && compositionChanged == false;
+    // C20261020_STAGGER: only a soft, mid-section AUTO redraw. A section,
+    // NEXT, cast, ENERGY hand, settle or safety decision still acts now.
+    const bool softContext = !sectionChanged && !compositionChanged && !m_moves.isEmpty()
+                          && !faderJump && !settleNow && !forceNext;
+    if (!softContext || hold || isCalm || m_mixing || loopRepeat)
+        m_softRedrawBeat = -1;
+    const bool stagedRedraw = m_softRedrawBeat >= 0 && beat >= m_softRedrawBeat
+                           && beat - m_softRedrawBeat < 4 && beatInBar == 0;
+    if (m_softRedrawBeat >= 0 && beat > m_softRedrawBeat + 3)
+        m_softRedrawBeat = -1;
+    if (stagedRedraw)
+    {
+        redraw = true;
+        m_softRedrawBeat = -1;
+    }
+    if (redraw && softContext && changeColour && !isBuild && !hold && !isCalm && !m_mixing)
+    {
+        redraw = false;
+        m_softRedrawBeat = beat + 4;
+    }
     // R447_HEADS_ROUND: a redraw that is only the 8-bar dice (no section line,
     // no new composition, no hand on the fader)
     const bool clockRedraw = redraw && (sectionChanged || compositionChanged || m_moves.isEmpty()
@@ -13372,8 +13476,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // not redraw it; the music turning does, once it has been round.
         if (g.heads && g.lasers == false && m_sweep.contains(key) && m_sweep.value(key).shape >= 0)
         {
-            const bool turnDraws = musicTurnNow && hold == false && isCalm == false && isBuild == false
+            bool turnDraws = musicTurnNow && hold == false && isCalm == false && isBuild == false
                                 && headsRoundDone(key, beat);
+            if (turnDraws && changeColour && softContext && !isCalm && !m_mixing)
+            {
+                m_musicTurnBeat = beat + 4; // colour now, completed head figure next bar
+                turnDraws = false;
+            }
             if (fresh && clockRedraw && buildKeeps == false && turnDraws == false)
                 fresh = false;
             else if (fresh == false && turnDraws)
@@ -14580,6 +14689,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 if (g.strobes && motionDivision > 0
                     && (mi.type == int(Function::ChaserType) || mi.type == int(Function::SequenceType)))
                     motionDivision = qMax(tier == 2 ? 500 : 1000, motionDivision);
+                // C20261020_DENSE_PACE: 2-4 adjacent eyes step on beats/eighths,
+                // never free-running shutter frequency or arbitrary milliseconds.
+                if (g.lasers && !g.patternDevice && mi.barCoverage.denseChase()
+                    && mi.type == int(Function::ChaserType) && hold == false)
+                    motionDivision = m_faderNow >= 0.90 && isDrop ? 500 : 1000;
                 // C20261020_HIT_RETURN: held chases follow the same musical
                 // pace as generated masks, without changing their programme.
                 if (m_hitReturning && g.lasers == false && g.patternDevice == false && hold == false
@@ -15374,6 +15488,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (turn) ev << "turn";
         if (turnaround) ev << (haveCurves ? "music-fill" : "clock-fill");
         if (changeColour) ev << (turnUp ? "colour-on-turn" : (holdUp ? "colour-on-clock" : "colour"));
+        if (stagedRedraw) ev << "figure-after-colour";
+        if (m_softRedrawBeat == beat + 4) ev << "figure-staged";
+        if (m_dialogueStart >= 0 && beat >= m_dialogueStart && beat < m_dialogueStart + 16)
+            ev << (beat < m_dialogueStart + 8 ? "phrase-call" : "phrase-answer");
         if (m_mixGlide) ev << QString("mix-glide%1").arg(int(qRound(100.0 * m_mixGlideP)));   // runde 374
         if (m_layerStyle == 1) ev << "colour-fade";          // runde 370
         else if (m_layerStyle == 2) ev << "colour-chase";
@@ -20216,6 +20334,11 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     m_forceNext = false;
     m_fallFrom = -1;                     // R464_RESEND_FALL: a new track (a resend of the same keeps its fall)
     clearMusicDark();                    // runde 356
+    m_softRedrawBeat = -1;
+    m_dialogueStart = m_dialogueBeat = -1;
+    m_dialogueCall.clear(); m_dialogueAnswer.clear();
+    m_dialoguePrevious = false; // C20261020_MUSICAL reset
+    m_musicTurnBeat = -1;
     newTrackMemory(title);               // runde 358: no loop; the drops of another track are forgotten
     // R435_CRUMBS: the trail names the track; the last run's crash goes in the log
     crumb(QStringLiteral("track ") + title);
@@ -20827,6 +20950,11 @@ void TrackEngine::stopAll()
 {
     m_beatWatch.stop();
     hitReset();                          // R445_DROP_HIT
+    m_softRedrawBeat = -1;
+    m_dialogueStart = m_dialogueBeat = -1;
+    m_dialogueCall.clear(); m_dialogueAnswer.clear();
+    m_dialoguePrevious = false; // C20261020_MUSICAL reset
+    m_musicTurnBeat = -1;
     m_sequenceGroups.clear();
     m_restUntil = -1;
     if (m_testTimer.isActive())
@@ -23238,7 +23366,7 @@ qreal TrackEngine::trimOf(const QString &group) const
     // colour it shows. In COLOUR LAB the night's fader is left out - the lab
     // compares the groups as the show file made them.
     const qreal night = m_clabActive ? 1.0 : m_groupTrim.value(group, 1.0);
-    return night * colourLevel(group);
+    return night * colourLevel(group) * dialogueGain(group); // C20261020_DIALOGUE
 }
 
 QStringList TrackEngine::clabColours() const
@@ -27699,4 +27827,16 @@ void TrackEngine::qualityFinish(const QString &reason)
     m_qualitySingle.clear();
     m_qualityGestureAt.clear();
     m_qualityWriting = false;
+}
+
+qreal TrackEngine::dialogueGain(const QString &group) const
+{
+    // Never alter a held control, HIT, landing, blackout or shutter burst.
+    if (m_dialogueStart < 0 || m_flash || heldFull(group) || m_hitAmokFrom >= 0 || m_hold || m_calmUntil > m_lastBeat
+        || m_blackout || !m_fullAuto || m_mixing || m_forceOn
+        || m_dialogueBeat <= m_strobeUntil)
+        return 1.0;
+    const bool call = group == m_dialogueCall, answer = group == m_dialogueAnswer;
+    if (!call && !answer) return 1.0;
+    return trackDialogueGain(m_dialogueBeat - m_dialogueStart, call, group == m_compositionBase);
 }

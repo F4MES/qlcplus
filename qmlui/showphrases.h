@@ -63,4 +63,12 @@ inline int trackHitReturnPace(double energy, double originalEnergy)
         return 1;
     return energy >= 0.75 ? 1 : (energy >= 0.50 ? 2 : 4);
 }
+// A single question/answer phrase: two bars, then two bars. The other
+// group stays present; the base always keeps at least 70 % of its own level.
+inline double trackDialogueGain(int playedBeat, bool call, bool base)
+{
+    if (playedBeat < 0 || playedBeat >= 16) return 1.0;
+    const bool leading = (playedBeat < 8) == call;
+    return leading ? 1.0 : (base ? 0.70 : 0.45);
+}
 #endif

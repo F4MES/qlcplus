@@ -17,6 +17,10 @@ inline int trackBarEyes(int dimmer, bool wheelWritten, int wheel, int eyeCount)
 
 struct TrackBarCoverage
 {
+    bool shutter = false;       // authored hardware bursts stay out of AUTO
+    bool compact = true;
+    bool moving = false;
+    std::vector<unsigned> previousMasks;
     bool known = false;
     bool whole = true;
     int minEyes = 8;             // minimum on any LIT bar; dark bars are allowed
@@ -41,9 +45,31 @@ struct TrackBarCoverage
             minTotalEyes = std::min(minTotalEyes, total);
     }
 
+    void addMasks(const std::vector<unsigned> &masks)
+    {
+        if (!previousMasks.empty() && previousMasks != masks) moving = true;
+        previousMasks = masks;
+        for (unsigned mask : masks)
+        {
+            if (mask == 0) continue;
+            int count = 0, edges = 0;
+            for (int i = 0; i < 8; ++i)
+            {
+                count += (mask >> i) & 1u;
+                edges += ((mask >> i) & 1u) != ((mask >> ((i + 1) % 8)) & 1u);
+            }
+            compact = compact && count >= 2 && count <= 4 && edges == 2;
+        }
+    }
+
+    bool denseChase() const
+    {
+        return known && !shutter && compact && moving && minEyes >= 2 && minTotalEyes >= 10;
+    }
+
     bool allows(double energy, bool drop) const
     {
-        if (!known || peakEyes == 0)
+        if (!known || shutter || peakEyes == 0)
             return false;
         if (whole)
             return true;
@@ -65,7 +91,7 @@ inline int trackBarDetailChance(double energy)
     if (energy < 0.75)
         return 0;
     const double ramp = std::min(1.0, std::max(0.0, (energy - 0.75) / 0.25));
-    return 15 + int(50.0 * ramp);
+    return 35 + int(50.0 * ramp); // still 15 % whole-bar variety at the stop
 }
 
 #endif

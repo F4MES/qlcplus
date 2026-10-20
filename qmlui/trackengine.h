@@ -1593,6 +1593,13 @@ private:
     QString m_strobeFocus; // one automatic burst's principal group
     bool m_barSingleDraw = false; // C20261020: single eyes are a minority of full-energy drops
     bool m_barDetailDraw = false; // one class draw per section / energy redraw
+    bool m_barStrobeDraw = false; // C20261020_MUSICAL: rare, only a fully lit bank
+    int m_softRedrawBeat = -1;    // a small figure change follows colour by a bar
+    int m_dialogueStart = -1;
+    int m_dialogueBeat = -1;
+    bool m_dialoguePrevious = false; // never two neighbouring sections
+    QString m_dialogueCall, m_dialogueAnswer;
+    qreal dialogueGain(const QString &group) const;
     bool m_barsAloneNow = false;
     /* R384_ALONE_LATCH: the section started at 90 % on the slider */
     bool m_aloneArmed = false;
