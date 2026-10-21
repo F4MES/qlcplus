@@ -1184,6 +1184,7 @@ void TrackEngine::ensureTable()
     // because it is cleared before any of the work starts.
     m_building = true;
     m_dirty = false;
+    m_savedProgramCache.clear(); m_savedProgramIndex.clear(); // SAVED_LOOKS_IDENTITY
     invalidateCandidates();          // m_funcs is about to be cleared and refilled
     m_eyeCache.clear();              // runde 338: the fixtures may have changed
     m_dimmerCache.clear();
@@ -1720,7 +1721,7 @@ void TrackEngine::ensureTable()
     // R436_SHOW_CHECK / R436_STROBE_LAB: what the new table says - told on the
     // next turn of the event loop, never from inside a getter that built it
     updateShowCheck();
-    QTimer::singleShot(0, this, [this]() { emit showCheckChanged(); emit slabChanged(); emit tasteChanged(); emit clabChanged(); });   // R437_TASTE_REFRESH, R440_COLOUR_LAB
+    QTimer::singleShot(0, this, [this]() { emit showCheckChanged(); emit slabChanged(); emit tasteChanged(); emit clabChanged(); emit savedLooksChanged(); });   // R437_TASTE_REFRESH, R440_COLOUR_LAB
     qDebug() << "[TrackEngine]" << m_groups.count() << "groups," << m_funcs.count()
              << "functions, palette" << m_palette;
 }
@@ -6255,7 +6256,7 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
     saveRoles();
     if (m_startScene)
         startLook();                     // the opening picture follows the switches
-    emit tableChanged();
+    emit tableChanged(); emit savedLooksChanged();
     emit liveChanged();          // the cast panel's lit border follows at once (r199)
 }
 
@@ -6332,6 +6333,7 @@ bool TrackEngine::smallWash(const QString &key) const
 
 void TrackEngine::toggleDropGroup(QString key)
 {
+    savedCancelAt(m_dropPlanFor); // SAVED_LOOKS_RIG_HAND
     // R431_DROP_PICK: a tap on a group's name in RIG - out of the drop, or in.
     // From the first tap the set is his until the drop is over.
     if (m_dropMode == 0 || m_groups.contains(key) == false || m_groupOff.contains(key))
@@ -6605,6 +6607,7 @@ bool TrackEngine::fullAuto() const { return m_fullAuto; }
 
 void TrackEngine::setFullAuto(bool on)
 {
+    if (!on) savedReset(); // SAVED_LOOKS_MODE
     if (on == m_fullAuto)
         return;
     m_fullAuto = on;
@@ -6697,6 +6700,7 @@ QString TrackEngine::colourOverride() const { return m_override; }
 
 void TrackEngine::setColourOverride(QString colour)
 {
+    savedStop(); // SAVED_LOOKS_HAND: AUTO and a direct colour choice take control too
     // the house rule holds for the palette tiles too
     if (engineBannedColour(colour))
         colour.clear();
@@ -6728,6 +6732,7 @@ QStringList TrackEngine::colourOverrides() const { return m_overrideSet; }
 
 void TrackEngine::toggleColourOverride(const QString &colour)
 {
+    savedStop(); // SAVED_LOOKS_HAND: his newer colour choice wins
     // Runde 304 (Tobias, 2026-09-29: "Når man vælger farve den skal bruge
     // selv, så kan man aktivere mere end én. Så f.eks. trykker man på blå og
     // lilla og så bruger den begge 2 i mix"). The room LEADS in one of them
@@ -6834,6 +6839,7 @@ QString TrackEngine::setPartnerOf(int leadIdx) const
 
 void TrackEngine::setColourMode(int mode)
 {
+    savedStop(); // SAVED_LOOKS_HAND: his newer colour choice wins
     // R370_COLOUR_MODE (Tobias 10-06: "fade og chase ... naar man trykker paa
     // fade/chase, kan man vaelge flere farver (maaske med at den standard
     // vaelger to farver for en, saa man ikke trykker og der ikke sker noget)")
@@ -7636,6 +7642,7 @@ QString TrackEngine::importSettings()
         settings.setValue(key, v);
         n++;
     }
+    savedReset(); m_savedLoaded = false; savedLoad(); emit savedLooksChanged(); // SAVED_LOOKS_IMPORT
     // take them on board: roles, stars and options are read in ensureTable
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = qBound(4, settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt(), 128);   // as setHoldBars (runde 220)
@@ -9501,7 +9508,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     micBeat(state, sectionChanged, bpm);             // R467_MIC_CHECK
     // R470_COLOUR_MEMORY (R472_COLMEM_FROM: by the section's start - R475_MEMBY_REALSTART: its
     // real one: in a DJ loop over the flag tick()'s is 32 beats back, his colours went to AUTO)
-    colourMemoryBeat(m_realSecStart > 0 ? m_realSecStart : (secStart > 0 ? secStart : beat), state, sectionChanged);
+    // SAVED_LOOKS_MEMORY: a one-section recall is not a new permanent colour preference.
+    const int savedBoundary = m_realSecStart > 0 ? m_realSecStart : secStart;
+    if (savedActive() && (m_savedPlayingFrom != savedBoundary || m_savedPlayingState != state)) savedStop();
+    if (!savedActive())
+        colourMemoryBeat(m_realSecStart > 0 ? m_realSecStart : (secStart > 0 ? secStart : beat), state, sectionChanged);
     syncBeat(beat, bpm);                             // R470_SYNC: round 2's blink (R472_SYNC_CLOCK: and the taps' clock)
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
@@ -9738,6 +9749,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool forceNext = m_forceNext;
     m_forceNext = false;
     m_nextFiled = false;                 // R485_A5_NEXT_ONCE_TICK: the next NEXT rejects the look this beat draws
+    savedBeat(state, beat, m_realSecStart > 0 ? m_realSecStart : secStart); // SAVED_LOOKS_BEAT
     // ENERGY at zero is the restaurant: the base stands in its colour and
     // nothing moves or changes - no pulse, no patterns, no colour rotation,
     // no positions. A hold the slider imposes.
@@ -11752,6 +11764,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (his.isEmpty() == false)
                 castSet = his;
         }
+        savedCast(castSet, hold, isCalm); // SAVED_LOOKS_CAST: normal masks/renderer remain authoritative
         hitCast(beat, castSet);          // R445_DROP_HIT: his STROBE - the strobe group on stage for the bar
         // R479_PAD_ONE_LASER (night review 10-17): never both laser types, a pad too - a held
         // laser pad takes the other type out of the cast, after the budget (no group steps in)
@@ -11863,6 +11876,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_dropStrobesOnly = m_dropStrobesOnly && strobesOnly;
     }
     /* ---- accent: a partner colour on one effect group in drops ---- */
+    savedColours(); // SAVED_LOOKS_COLOUR
     QString accentColour;
     // runde 304: two tiles or more - the next one is the accent in every
     // section (not only drops, whatever the "Accent colour in drops" tile
@@ -11964,6 +11978,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
 
     bool hard = sectionChanged && isDrop;
+    if (savedActive()) {
+        m_partnerPick = m_savedPlaying.value(QStringLiteral("partner")).toString();
+        m_partnerSolo = m_savedPlaying.value(QStringLiteral("partnerSolo")).toBool();
+        accentColour = m_savedPlaying.value(QStringLiteral("accent")).toString();
+        m_accentGroup = m_savedPlaying.value(QStringLiteral("accentGroup")).toString();
+    }
     QStringList castSorted = castSet.values();
     castSorted.sort();
     // runde 306: the groups the tiles' colours spread over, in the rig's own
@@ -12121,6 +12141,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // (settleNow sets m_dropCalm above), and there it is the same one step.
     if (dropSettled)
         m_dropStyle = m_dropStyle == 1 ? 4 : ((m_dropStyle == 5 || m_dropStyle == 3) ? 2 : m_dropStyle);
+    savedColours(); // SAVED_LOOKS_STYLE: after the draw, before colour-layer/drop rendering
     // R372_LAYER_DROP: AUTO's fade-or-chase for a drop reads the drop's style,
     // which is drawn just above - after the layer was updated for this beat.
     // On the landing it still read 0 (the drop landed as a chase and turned
@@ -12528,6 +12549,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // any beat that is not a build lets go (a hidden drop, a fader under 30 %)
     m_buildDrawn = isBuild && (m_buildDrawn || redraw);
 
+    savedMoves(energy); // SAVED_LOOKS_MOVES: restore choices, never raw DMX or absolute laser aims
     /* ---- texture: the lit fixtures of a group sit at slightly different
      *      levels and drift a little every bar - a flat group looks like a
      *      photo, this looks like light ---- */
@@ -13628,6 +13650,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_sweepHistory.insert(key, history);
             }
         }
+        savedSweep(key); // SAVED_LOOKS_SWEEP: applySweep still handles dark repositioning
         // the floor round: no figure on the heads - they stand straight down (r214)
         if (applySweep(key, ((m_floorRound || positionHeld(key)) && g.heads) ? TrackSweep() : m_sweep.value(key), bpm, energy)   // R378_POSITIONS: no figure on a held aim
             && g.lasers)
@@ -13754,6 +13777,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      && rng->bounded(1000) < int(500.0 * qBound(0.0, (energy - 0.45) / 0.45, 1.0)))
                 mode = 2;                            // runde 292: 0 -> 1 in 2 over 45-90 % (was 1 in 3)
         }
+        savedZoom(key, want, mode); // SAVED_LOOKS_ZOOM
         m_zoom.insert(key, want);
         m_zoomMode.insert(key, mode);
         int idx = want;
@@ -17846,6 +17870,7 @@ void TrackEngine::calm(int bars)
 
 void TrackEngine::next()
 {
+    savedBeforeNext();                 // SAVED_LOOKS_UNDO: once before the actual NEXT
     // R424_NEXT_RATES (Tobias 10-11: "Naar der bliver trykket next, giver det saa
     // en lille rating paa looket? Det burde det."). 9/10 + 10/11: 0 thumbs; 10/11 alone 158
     // NEXT. One small down vote on the look it skips - the unit a plain thumb
@@ -17860,7 +17885,18 @@ void TrackEngine::next()
     if (m_lastState.isEmpty() == false && salvo == false)
     {
         markVerdictPoint();
+        const int bucket = verdictBucket();
+        const auto before = m_autoRatings;
+        QHash<quint32, int> down;
+        for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it) down[it.key()] = it->down[bucket];
         creditVerdict(-1);
+        if (m_savedUndo.isEmpty() == false && m_savedUndoBucket < 0) {
+            m_savedUndoBucket = bucket;
+            for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+                if (it->down[bucket] > down.value(it.key())) m_savedUndoDown[it.key()] = it->down[bucket] - down.value(it.key());
+            for (auto it = m_autoRatings.constBegin(); it != m_autoRatings.constEnd(); ++it)
+                if (it.value().second > before.value(it.key()).second) m_savedUndoAutoDown[it.key()] = it.value().second - before.value(it.key()).second;
+        }
         m_verdictMs = -1;
     }
     advanceLook();
@@ -18391,6 +18427,7 @@ bool TrackEngine::rateAutoLook(int verdict, const QString &group)
 
 void TrackEngine::markVerdictPoint()
 {
+    m_savedVerdict = savedCapture(); // SAVED_LOOKS_VERDICT
     m_verdictActive = m_active;
     m_verdictAutoKeys = (m_fullAuto && m_blackout == false && m_flash == false
                          && m_mixing == false && m_override.isEmpty())
@@ -18533,6 +18570,7 @@ void TrackEngine::rate(int verdict)
         return;
 
     creditVerdict(verdict);
+    if (verdict >= 0) savedRemember(); // SAVED_LOOKS_SAVE: existing thumb, all input surfaces
     if (verdict < 0)
         advanceLook();             // same reasoning as rateGroup() - its verdict is filed above
     m_verdictMs = -1;              // used, see rateGroup()
@@ -19766,6 +19804,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 
 void TrackEngine::release()
 {
+    savedReset(); // SAVED_LOOKS_RELEASE
     hitUndark();
     m_quietSpatial = false;
     m_hitReturning = false;                         // R445_DROP_HIT: the show does not fade out from his DARK
@@ -20406,6 +20445,7 @@ void TrackEngine::setNextKey(const QString &key)
 
 void TrackEngine::trackLoaded(const QString &title, const QString &key)
 {
+    savedReset(); // SAVED_LOOKS_TRACK: no queued look or UNDO can leak into another track
     if (title != m_trackTitle)
         qualityFinish(QStringLiteral("track-change"));
     // a NEXT pressed on the old track's last beat is about that track: kept,
@@ -24350,6 +24390,13 @@ QVariantList TrackEngine::planLaneOf(const QVariantList &sections, int cur)
         row.insert(QStringLiteral("mode"), mode);
         row.insert(QStringLiteral("next"), i == next);
         row.insert(QStringLiteral("ahead"), ahead);   // R484_PL_LANE_ROW: the card asks planRowsAt
+        const QString savedId = m_savedQueue.value(start);
+        const QVariantMap saved = savedById(savedId);
+        if (!savedId.isEmpty() && !saved.isEmpty()) {
+            keys = saved.value(QStringLiteral("groups")).toStringList();
+            row[QStringLiteral("mode")] = QStringLiteral("saved");
+            row[QStringLiteral("savedName")] = saved.value(QStringLiteral("name"));
+        }
         row.insert(QStringLiteral("chips"), planChips(keys));
         out << row;
     }
@@ -24515,6 +24562,7 @@ QVariantList TrackEngine::planRowsAt(int boundary, const QString &section)
 
 void TrackEngine::togglePlanAt(int boundary, const QString &section, const QString &key)
 {
+    savedCancelAt(boundary); // SAVED_LOOKS_PLAN_HAND: a newer manual plan wins
     if (planIsRig(boundary))
     {
         toggleDropGroup(key);            // it became the next one under his finger: the RIG's plan
@@ -24546,6 +24594,7 @@ void TrackEngine::togglePlanAt(int boundary, const QString &section, const QStri
 
 void TrackEngine::planEngineDecidesAt(int boundary, const QString &section)
 {
+    savedCancelAt(boundary); // SAVED_LOOKS_PLAN_HAND: a newer manual plan wins
     if (planIsRig(boundary))
     {
         planEngineDecides();
@@ -28803,4 +28852,439 @@ qreal TrackEngine::dialogueGain(const QString &group) const
     const bool call = group == m_dialogueCall, answer = group == m_dialogueAnswer;
     if (!call && !answer) return 1.0;
     return trackDialogueGain(m_dialogueBeat - m_dialogueStart, call, group == m_compositionBase);
+}
+#include <QXmlStreamWriter>
+
+/* SAVED_LOOKS: persistent semantic recipes, operator undo, and per-play section scheduling. */
+static QVariantMap savedWriteTrackMove(const TrackMove& a) { QVariantMap m;
+    m.insert(QStringLiteral("pattern"), a.pattern);
+    m.insert(QStringLiteral("stepBeats"), a.stepBeats);
+    m.insert(QStringLiteral("pulse"), a.pulse);
+    m.insert(QStringLiteral("pulseOn"), a.pulseOn);
+    m.insert(QStringLiteral("colourBars"), a.colourBars);
+    m.insert(QStringLiteral("flashBar"), a.flashBar);
+    m.insert(QStringLiteral("ownChaser"), a.ownChaser);
+    m.insert(QStringLiteral("breatheBars"), a.breatheBars);
+    m.insert(QStringLiteral("phase"), a.phase);
+    m.insert(QStringLiteral("subSteps"), a.subSteps);
+    m.insert(QStringLiteral("texture"), a.texture);
+    m.insert(QStringLiteral("bare"), a.bare);
+    m.insert(QStringLiteral("width"), a.width);
+    m.insert(QStringLiteral("drawnE"), a.drawnE);
+    return m;
+}
+static TrackMove savedReadTrackMove(const QVariantMap& m) { TrackMove a;
+    a.pattern = qBound(0, m.value(QStringLiteral("pattern"), a.pattern).toInt(), ENGINE_PAT_COUNT-1);
+    a.stepBeats = qBound(1, m.value(QStringLiteral("stepBeats"), a.stepBeats).toInt(), 256);
+    a.pulse = qBound(-1.0, m.value(QStringLiteral("pulse"), a.pulse).toDouble(), 1.0);
+    a.pulseOn = qBound(0, m.value(QStringLiteral("pulseOn"), a.pulseOn).toInt(), 3);
+    a.colourBars = qBound(-10000, m.value(QStringLiteral("colourBars"), a.colourBars).toInt(), 10000);
+    a.flashBar = m.value(QStringLiteral("flashBar"), a.flashBar).toBool();
+    a.ownChaser = m.value(QStringLiteral("ownChaser"), a.ownChaser).toBool();
+    a.breatheBars = qBound(-10000, m.value(QStringLiteral("breatheBars"), a.breatheBars).toInt(), 10000);
+    a.phase = qBound(-10000, m.value(QStringLiteral("phase"), a.phase).toInt(), 10000);
+    a.subSteps = qBound(1, m.value(QStringLiteral("subSteps"), a.subSteps).toInt(), 4);
+    a.texture = qBound(-1.0, m.value(QStringLiteral("texture"), a.texture).toDouble(), 1.0);
+    a.bare = m.value(QStringLiteral("bare"), a.bare).toBool();
+    a.width = qBound(0, m.value(QStringLiteral("width"), a.width).toInt(), 127);
+    a.drawnE = qBound(-1.0, m.value(QStringLiteral("drawnE"), a.drawnE).toDouble(), 1.0);
+    return a;
+}
+static QVariantMap savedWriteTrackSweep(const TrackSweep& a) { QVariantMap m;
+    m.insert(QStringLiteral("shape"), a.shape);
+    m.insert(QStringLiteral("width"), a.width);
+    m.insert(QStringLiteral("height"), a.height);
+    m.insert(QStringLiteral("rotation"), a.rotation);
+    m.insert(QStringLiteral("beats"), a.beats);
+    m.insert(QStringLiteral("spread"), a.spread);
+    m.insert(QStringLiteral("mirror"), a.mirror);
+    m.insert(QStringLiteral("fan"), a.fan);
+    m.insert(QStringLiteral("fx"), a.fx);
+    m.insert(QStringLiteral("fy"), a.fy);
+    m.insert(QStringLiteral("dx"), a.dx);
+    m.insert(QStringLiteral("dy"), a.dy);
+    m.insert(QStringLiteral("tier"), a.tier);
+    m.insert(QStringLiteral("drive"), a.drive);
+    m.insert(QStringLiteral("drawnE"), a.drawnE);
+    m.insert(QStringLiteral("minBeats"), a.minBeats);
+    m.insert(QStringLiteral("paceRole"), a.paceRole);
+    m.insert(QStringLiteral("drawnF"), a.drawnF);
+    m.insert(QStringLiteral("laserForm"), a.laserForm);
+    m.insert(QStringLiteral("upOnly"), a.upOnly);
+    return m;
+}
+static TrackSweep savedReadTrackSweep(const QVariantMap& m) { TrackSweep a;
+    a.shape = qBound(-1, m.value(QStringLiteral("shape"), a.shape).toInt(), 20);
+    a.width = qBound(0, m.value(QStringLiteral("width"), a.width).toInt(), 127);
+    a.height = qBound(0, m.value(QStringLiteral("height"), a.height).toInt(), 127);
+    a.rotation = qBound(-360, m.value(QStringLiteral("rotation"), a.rotation).toInt(), 360);
+    a.beats = qBound(1, m.value(QStringLiteral("beats"), a.beats).toInt(), 1024);
+    a.spread = qBound(0, m.value(QStringLiteral("spread"), a.spread).toInt(), 2);
+    a.mirror = m.value(QStringLiteral("mirror"), a.mirror).toBool();
+    a.fan = qBound(-360, m.value(QStringLiteral("fan"), a.fan).toInt(), 360);
+    a.fx = qBound(1, m.value(QStringLiteral("fx"), a.fx).toInt(), 16);
+    a.fy = qBound(1, m.value(QStringLiteral("fy"), a.fy).toInt(), 16);
+    a.dx = qBound(-127, m.value(QStringLiteral("dx"), a.dx).toInt(), 127);
+    a.dy = qBound(-127, m.value(QStringLiteral("dy"), a.dy).toInt(), 127);
+    a.tier = qBound(0, m.value(QStringLiteral("tier"), a.tier).toInt(), 2);
+    a.drive = m.value(QStringLiteral("drive"), a.drive).toBool();
+    a.drawnE = qBound(-1.0, m.value(QStringLiteral("drawnE"), a.drawnE).toDouble(), 1.0);
+    a.minBeats = qBound(1, m.value(QStringLiteral("minBeats"), a.minBeats).toInt(), 1024);
+    a.paceRole = qBound(0, m.value(QStringLiteral("paceRole"), a.paceRole).toInt(), 2);
+    a.drawnF = qBound(-1.0, m.value(QStringLiteral("drawnF"), a.drawnF).toDouble(), 1.0);
+    a.laserForm = qBound(0, m.value(QStringLiteral("laserForm"), a.laserForm).toInt(), 3);
+    a.upOnly = m.value(QStringLiteral("upOnly"), a.upOnly).toBool();
+    return a;
+}
+
+void TrackEngine::savedLoad() const
+{
+    if (m_savedLoaded) return;
+    m_savedLoaded = true; m_savedLooks.clear();
+    const auto doc = QJsonDocument::fromJson(QSettings().value(QStringLiteral("trackengine/saved-looks")).toString().toUtf8());
+    if (!doc.isArray()) return;
+    QSet<QString> ids;
+    for (const auto &v : doc.array()) {
+        const auto row = v.toObject().toVariantMap();
+        const QString id = row.value(QStringLiteral("id")).toString();
+        if (row.value(QStringLiteral("version")).toInt() != 1 || id.isEmpty() || ids.contains(id)) continue;
+        ids.insert(id); m_savedLooks << row;
+    }
+}
+void TrackEngine::savedWrite()
+{
+    QSettings().setValue(QStringLiteral("trackengine/saved-looks"), QString::fromUtf8(QJsonDocument::fromVariant(m_savedLooks).toJson(QJsonDocument::Compact)));
+    emit savedLooksChanged(); emit planLaneChanged();
+}
+QString TrackEngine::savedRigKey(const QStringList &groups) const
+{
+    QStringList parts;
+    for (const QString &key : groups) {
+        const TrackGroup g = m_groups.value(key);
+        parts << key;
+        for (quint32 id : g.fixtures) {
+            const Fixture *fx = m_doc ? m_doc->fixture(id) : nullptr;
+            parts << QStringLiteral("%1:%2:%3").arg(id).arg(fx ? fx->address() : 0).arg(fx ? fx->channels() : 0);
+        }
+    }
+    return QString::fromLatin1(QCryptographicHash::hash(parts.join(QLatin1Char('|')).toUtf8(), QCryptographicHash::Sha256).toHex());
+}
+QString TrackEngine::savedProgramKey(quint32 id) const
+{
+    if (m_savedProgramCache.contains(id)) return m_savedProgramCache.value(id);
+    if (!m_doc || !m_funcs.contains(id)) return QString();
+    const Function *f = m_doc->function(id);
+    if (!f) return QString();
+    QString xml; QXmlStreamWriter writer(&xml); f->saveXML(&writer);
+    // The root function ID is temporary; child references and fixture IDs remain part of the content.
+    xml.replace(QRegularExpression(QStringLiteral("(<Function[^>]*\\s)ID=\"[0-9]+\"")), QStringLiteral("\\1ID=\"0\""));
+    const QString key = QString::fromLatin1(QCryptographicHash::hash(xml.toUtf8(), QCryptographicHash::Sha256).toHex());
+    m_savedProgramCache.insert(id, key); m_savedProgramIndex.insert(key, id);
+    return key;
+}
+quint32 TrackEngine::savedProgramFind(const QString &key) const
+{
+    if (m_savedProgramIndex.contains(key)) return m_savedProgramIndex.value(key);
+    for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+        if (!it->generated && savedProgramKey(it.key()) == key) return it.key();
+    m_savedProgramIndex.insert(key, Function::invalidId()); // retry after the next table rebuild
+    return Function::invalidId();
+}
+QVariantMap TrackEngine::savedCapture() const
+{
+    if (m_lastState.isEmpty() || m_cast.isEmpty() || m_startScene || m_testTrack || m_blackout || m_flash || m_lastStage != 0 || !m_fullAuto) return {};
+    QVariantMap look, moves, sweeps, motion, zoom, zoomMode;
+    QStringList cast = m_cast.values(); cast.sort();
+    look[QStringLiteral("version")] = 1; look[QStringLiteral("section")] = m_lookState.isEmpty() ? m_lastState : m_lookState;
+    look[QStringLiteral("groups")] = cast; look[QStringLiteral("rig")] = savedRigKey(cast);
+    look[QStringLiteral("colour")] = m_colour; look[QStringLiteral("partner")] = m_partnerPick;
+    look[QStringLiteral("partnerSolo")] = m_partnerSolo; look[QStringLiteral("accent")] = m_accentPick;
+    look[QStringLiteral("accentGroup")] = m_accentGroup; look[QStringLiteral("lead")] = m_rhythmLead;
+    look[QStringLiteral("overrides")] = m_overrideSet; look[QStringLiteral("override")] = m_override;
+    look[QStringLiteral("overrideIdx")] = m_overrideIdx; look[QStringLiteral("colourMode")] = m_colourMode;
+    look[QStringLiteral("dropStyle")] = m_dropStyle; look[QStringLiteral("dropFlow")] = m_dropFlow;
+    look[QStringLiteral("buildStyle")] = m_buildStyle; look[QStringLiteral("floorRound")] = m_floorRound;
+    look[QStringLiteral("onKick")] = m_strobeOnKick;
+    look[QStringLiteral("barDetail")] = m_barDetailDraw; look[QStringLiteral("barSingle")] = m_barSingleDraw;
+    look[QStringLiteral("title")] = m_trackTitle;
+    for (const QString &key : cast) {
+        if (m_moves.contains(key)) moves[key] = savedWriteTrackMove(m_moves.value(key));
+        if (m_sweep.contains(key)) sweeps[key] = savedWriteTrackSweep(m_sweep.value(key));
+        const quint32 id = m_sectionMotion.value(key, Function::invalidId());
+        if (m_funcs.contains(id) && !m_funcs.value(id).generated) {
+            const QString identity = savedProgramKey(id);
+            if (identity.isEmpty()) return {};
+            motion[key] = identity;
+        }
+        if (m_zoom.contains(key)) zoom[key] = m_zoom.value(key);
+        if (m_zoomMode.contains(key)) zoomMode[key] = m_zoomMode.value(key);
+    }
+    look[QStringLiteral("moves")] = moves; look[QStringLiteral("sweeps")] = sweeps;
+    look[QStringLiteral("motion")] = motion; look[QStringLiteral("zoom")] = zoom; look[QStringLiteral("zoomMode")] = zoomMode;
+    return look;
+}
+QString TrackEngine::savedInvalid(const QVariantMap &look) const
+{
+    const QStringList groups = look.value(QStringLiteral("groups")).toStringList();
+    if (look.value(QStringLiteral("version")).toInt() != 1 || groups.isEmpty()) return tr("INVALID LOOK");
+    if (!m_fullAuto) return tr("FULL AUTO FIRST");
+    for (const QString &g : groups)
+        if (!m_groups.contains(g) || m_groupOff.contains(g)) return tr("GROUP UNAVAILABLE");
+    if (savedRigKey(groups) != look.value(QStringLiteral("rig")).toString()) return tr("RIG CHANGED");
+    const QString colour = look.value(QStringLiteral("colour")).toString();
+    if (!m_palette.contains(colour) || engineBannedColour(colour)) return tr("COLOUR UNAVAILABLE");
+    QStringList colours = look.value(QStringLiteral("overrides")).toStringList();
+    colours << look.value(QStringLiteral("partner")).toString() << look.value(QStringLiteral("accent")).toString();
+    for (const QString &c : colours)
+        if (!c.isEmpty() && (!m_palette.contains(c) || engineBannedColour(c))) return tr("COLOUR UNAVAILABLE");
+    const QVariantMap programs = look.value(QStringLiteral("motion")).toMap();
+    for (auto it = programs.constBegin(); it != programs.constEnd(); ++it)
+        if (savedProgramFind(it.value().toString()) == Function::invalidId()) return tr("PROGRAM CHANGED");
+    return QString();
+}
+QVariantMap TrackEngine::savedById(const QString &id) const
+{
+    savedLoad();
+    for (const QVariant &v : m_savedLooks) if (v.toMap().value(QStringLiteral("id")).toString() == id) return v.toMap();
+    return {};
+}
+int TrackEngine::savedNext(const QString &type) const
+{
+    int next = -1;
+    for (const QVariant &v : m_savedMarkers) {
+        const auto flag = v.toMap(); const int b = flag.value(QStringLiteral("beat")).toInt();
+        if (b > m_savedCur && b > 1 && flag.value(QStringLiteral("type")).toString() == type && (next < 0 || b < next)) next = b;
+    }
+    return next;
+}
+QVariantList TrackEngine::savedLooks() const
+{
+    savedLoad(); QVariantList out;
+    for (const QVariant &v : m_savedLooks) {
+        QVariantMap row = v.toMap();
+        const QString id = row.value(QStringLiteral("id")).toString(), type = row.value(QStringLiteral("section")).toString();
+        int queued = -1;
+        for (auto it = m_savedQueue.constBegin(); it != m_savedQueue.constEnd(); ++it) if (it.value() == id) { queued = it.key(); break; }
+        const QString why = savedInvalid(row); const int next = savedNext(type);
+        row[QStringLiteral("queued")] = queued > 0;
+        row[QStringLiteral("target")] = queued > 0 ? queued : next;
+        row[QStringLiteral("canQueue")] = queued > 0 || (why.isEmpty() && next > 0 && !m_savedContextTitle.isEmpty());
+        row[QStringLiteral("reason")] = why.isEmpty() ? (next < 0 ? tr("NO NEXT %1").arg(type.toUpper()) : QString()) : why;
+        out << row;
+    }
+    return out;
+}
+QVariantList TrackEngine::recentSavedLooks() const
+{
+    QVariantList out;
+    for (const QVariant &v : savedLooks()) if (v.toMap().value(QStringLiteral("used")).toLongLong() > 0) out << v;
+    std::stable_sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("used")).toLongLong() > b.toMap().value(QStringLiteral("used")).toLongLong();
+    });
+    return out;
+}
+void TrackEngine::savedRemember()
+{
+    savedLoad();
+    const bool stamped = m_verdictMs >= 0 && m_clock.elapsed() - m_verdictMs < 20000;
+    QVariantMap look = stamped ? m_savedVerdict : savedCapture();
+    if (look.isEmpty() || look.value(QStringLiteral("title")).toString() != m_trackTitle || m_testTrack) {
+        m_savedFeedback = tr("NO LOOK TO SAVE"); emit savedLooksChanged(); return;
+    }
+    // Identity is the exact recipe, not its source track or runtime function IDs.
+    QVariantMap identity = look; identity.remove(QStringLiteral("title"));
+    const QString id = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument::fromVariant(identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+    look[QStringLiteral("id")] = id;
+    const QString lead = look.value(QStringLiteral("lead")).toString();
+    const auto move = savedReadTrackMove(look.value(QStringLiteral("moves")).toMap().value(lead).toMap());
+    const QStringList patterns = {tr("Still"),tr("Chase"),tr("Bounce"),tr("Odd/even"),tr("Halves"),tr("Sparkle"),tr("Fill")};
+    QString name = look.value(QStringLiteral("colour")).toString().toUpper() + QStringLiteral(" / ") + patterns.value(move.pattern);
+    QSet<QString> names;
+    for (const QVariant &v : m_savedLooks) names.insert(v.toMap().value(QStringLiteral("name")).toString());
+    const QString stem = name;
+    for (int suffix=2; names.contains(name); ++suffix) name = stem + QLatin1Char(' ') + QString::number(suffix);
+    look[QStringLiteral("name")] = name;
+    for (int i = 0; i < m_savedLooks.count(); ++i) if (m_savedLooks.at(i).toMap().value(QStringLiteral("id")).toString() == id) {
+        look[QStringLiteral("used")] = m_savedLooks.at(i).toMap().value(QStringLiteral("used"));
+        look[QStringLiteral("name")] = m_savedLooks.at(i).toMap().value(QStringLiteral("name"));
+        m_savedLooks.removeAt(i); break;
+    }
+    m_savedLooks.prepend(look); m_savedFeedback = QStringLiteral("SAVED"); savedWrite();
+    logSignal(QStringLiteral("sig:saved-look:") + id.left(12));
+}
+void TrackEngine::queueSavedLook(const QString &id)
+{
+    const QVariantMap look = savedById(id); if (look.isEmpty()) return;
+    for (auto it = m_savedQueue.begin(); it != m_savedQueue.end(); ++it) if (it.value() == id) {
+        m_savedQueue.erase(it); m_savedFeedback.clear(); emit savedLooksChanged(); emit planLaneChanged(); return;
+    }
+    const int next = savedNext(look.value(QStringLiteral("section")).toString());
+    const QString why = savedInvalid(look);
+    if (!why.isEmpty() || next < 0 || m_savedContextTitle.isEmpty()) { m_savedFeedback = why.isEmpty() ? tr("NO MATCHING SECTION") : why; emit savedLooksChanged(); return; }
+    m_savedQueue[next] = id; m_savedFeedback = tr("QUEUED");
+    setPlanLane(true); emit savedLooksChanged(); emit planLaneChanged();
+    logSignal(QStringLiteral("sig:saved-queue:") + id.left(12) + QLatin1Char('@') + QString::number(next));
+}
+void TrackEngine::removeSavedLook(const QString &id)
+{
+    savedLoad();
+    for (int i = m_savedLooks.count()-1; i >= 0; --i) if (m_savedLooks.at(i).toMap().value(QStringLiteral("id")).toString() == id) m_savedLooks.removeAt(i);
+    for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();) if (it.value() == id) it = m_savedQueue.erase(it); else ++it;
+    savedWrite();
+}
+void TrackEngine::savedTrackContext(const QString &title, const QVariantList &markers, int beat)
+{
+    bool changed = title != m_savedContextTitle || markers != m_savedMarkers;
+    QMap<QString,int> targets;
+    savedLoad();
+    for (const QVariant &v : m_savedLooks) {
+        const QString type = v.toMap().value(QStringLiteral("section")).toString(); targets[type] = savedNext(type);
+    }
+    if (title != m_savedContextTitle) savedReset();
+    m_savedContextTitle = title; m_savedCur = beat;
+    if (markers != m_savedMarkers) {
+        m_savedMarkers = markers;
+        // Retyped/deleted flags cannot leave a stale attachment to the wrong section.
+        for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();) {
+            bool found = false;
+            const QString kind = savedById(it.value()).value(QStringLiteral("section")).toString();
+            for (const QVariant &v : markers) { const auto f = v.toMap(); if (f.value(QStringLiteral("beat")).toInt() == it.key() && f.value(QStringLiteral("type")).toString() == kind) found = true; }
+            if (!found) it = m_savedQueue.erase(it); else ++it;
+        }
+    }
+    // A target may just have ceased to be future even when its type is unchanged.
+    for (auto it = targets.constBegin(); it != targets.constEnd(); ++it)
+        if (savedNext(it.key()) != it.value()) changed = true;
+    // A steady beat does not rebuild the touch list under a scrolling finger.
+    if (changed) { emit savedLooksChanged(); emit planLaneChanged(); }
+}
+bool TrackEngine::savedActive() const
+{
+    return !m_savedPlaying.isEmpty() && !m_startScene && m_fullAuto && m_lastStage == 0;
+}
+void TrackEngine::savedStop()
+{
+    if (!m_savedUserColours.isEmpty()) {
+        m_override = m_savedUserColours.value(QStringLiteral("override")).toString();
+        m_overrideSet = m_savedUserColours.value(QStringLiteral("overrides")).toStringList();
+        m_overrideIdx = m_savedUserColours.value(QStringLiteral("idx")).toInt();
+        m_colourMode = m_savedUserColours.value(QStringLiteral("mode")).toInt();
+    }
+    m_savedPlaying.clear(); m_savedUserColours.clear(); m_savedPlayingFrom = -1; m_savedPlayingState.clear();
+}
+void TrackEngine::savedReset()
+{
+    savedStop(); m_savedQueue.clear(); m_savedUndo.clear(); m_savedRestore.clear(); m_savedVerdict.clear();
+    m_savedUndoDown.clear(); m_savedUndoAutoDown.clear(); m_savedUndoBucket = -1;
+    emit savedLooksChanged(); emit planLaneChanged();
+}
+void TrackEngine::savedCancelAt(int boundary)
+{
+    m_savedQueue.remove(boundary);
+    if (boundary == m_savedPlayingFrom) savedStop();
+    emit savedLooksChanged(); emit planLaneChanged();
+}
+void TrackEngine::savedBeat(const QString &state, int beat, int boundary)
+{
+    const auto previousQueue = m_savedQueue;
+    const bool hadUndo = !m_savedUndo.isEmpty();
+    m_savedBeatBoundary = boundary;
+    if (m_savedUndoFrom != boundary || (!m_savedUndo.isEmpty() && m_savedUndoState != state)) m_savedUndo.clear();
+    if (!m_savedPlaying.isEmpty() && (m_savedPlayingFrom != boundary || m_savedPlayingState != state)) savedStop();
+    QVariantMap activate;
+    bool used = false;
+    if (!m_savedRestore.isEmpty()) { activate = m_savedRestore; m_savedRestore.clear(); }
+    if (m_savedQueue.contains(boundary) && beat >= boundary && beat < boundary + 4) {
+        const QString id = m_savedQueue.take(boundary); const auto row = savedById(id);
+        if (row.value(QStringLiteral("section")).toString() == state && savedInvalid(row).isEmpty() && !m_hold && calmBarsLeft() == 0) { activate = row; used = true; }
+    }
+    for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();) if (it.key() + 3 < beat) it = m_savedQueue.erase(it); else ++it;
+    if (!activate.isEmpty() && savedInvalid(activate).isEmpty()) {
+        savedStop();
+        m_savedUserColours = {{QStringLiteral("override"),m_override},{QStringLiteral("overrides"),m_overrideSet},{QStringLiteral("idx"),m_overrideIdx},{QStringLiteral("mode"),m_colourMode}};
+        m_savedPlaying = activate; m_savedPlayingFrom = boundary; m_savedPlayingState = state;
+        m_override = activate.value(QStringLiteral("override")).toString(); m_overrideSet = activate.value(QStringLiteral("overrides")).toStringList();
+        m_overrideIdx = activate.value(QStringLiteral("overrideIdx")).toInt(); m_colourMode = qBound(0,activate.value(QStringLiteral("colourMode")).toInt(),2);
+        m_layerTimer.stop(); m_layerOwned.clear(); m_mixGlide = false;
+        if (used) {
+            qint64 sequence = 0; for (const QVariant &v : m_savedLooks) sequence = qMax(sequence, v.toMap().value(QStringLiteral("used")).toLongLong());
+            for (int i=0;i<m_savedLooks.count();++i) { auto row=m_savedLooks.at(i).toMap(); if(row.value(QStringLiteral("id"))==activate.value(QStringLiteral("id"))) { row[QStringLiteral("used")]=QString::number(sequence+1);m_savedLooks[i]=row;break;} }
+            savedWrite(); logSignal(QStringLiteral("sig:saved-play:")+activate.value(QStringLiteral("id")).toString().left(12));
+        }
+    }
+    if (previousQueue != m_savedQueue || hadUndo != !m_savedUndo.isEmpty()) { emit savedLooksChanged(); emit planLaneChanged(); }
+}
+void TrackEngine::savedCast(QSet<QString> &cast, bool held, bool calm)
+{
+    if (!savedActive() || held || calm || m_faderNow < 0.03) return;
+    QSet<QString> chosen;
+    for (const QString &key : m_savedPlaying.value(QStringLiteral("groups")).toStringList())
+        if (m_groups.contains(key) && !m_groupOff.contains(key) && !lastTrackDark(m_groups.value(key))) chosen.insert(key);
+    if (!chosen.isEmpty()) cast = chosen;
+}
+void TrackEngine::savedColours()
+{
+    if (!savedActive()) return;
+    m_colour = m_savedPlaying.value(QStringLiteral("colour")).toString();
+    m_dropStyle = qBound(0,m_savedPlaying.value(QStringLiteral("dropStyle")).toInt(),5);
+    m_dropFlow = qBound(0,m_savedPlaying.value(QStringLiteral("dropFlow")).toInt(),3);
+    m_buildStyle = qBound(0,m_savedPlaying.value(QStringLiteral("buildStyle")).toInt(),3);
+}
+void TrackEngine::savedMoves(qreal energy)
+{
+    Q_UNUSED(energy)
+    if (!savedActive()) return;
+    const QVariantMap moves = m_savedPlaying.value(QStringLiteral("moves")).toMap();
+    for (auto it=moves.constBegin();it!=moves.constEnd();++it) m_moves[it.key()]=savedReadTrackMove(it.value().toMap());
+    const QString lead = m_savedPlaying.value(QStringLiteral("lead")).toString();
+    if (!smallWash(lead)) m_rhythmLead = lead;
+    m_buildStyle=qBound(0,m_savedPlaying.value(QStringLiteral("buildStyle")).toInt(),3);
+    m_floorRound=m_savedPlaying.value(QStringLiteral("floorRound")).toBool();
+    m_strobeOnKick=m_savedPlaying.value(QStringLiteral("onKick")).toBool();
+    m_barDetailDraw=m_savedPlaying.value(QStringLiteral("barDetail")).toBool() && m_faderNow >= .75;
+    m_barSingleDraw=m_savedPlaying.value(QStringLiteral("barSingle")).toBool() && m_faderNow >= 1.0 && m_lastState==QStringLiteral("drop");
+    const auto programs=m_savedPlaying.value(QStringLiteral("motion")).toMap();
+    for(auto it=programs.constBegin();it!=programs.constEnd();++it){const quint32 id=savedProgramFind(it.value().toString());if(id!=Function::invalidId())m_sectionMotion[it.key()]=id;}
+}
+void TrackEngine::savedSweep(const QString &group)
+{
+    if (!savedActive()) return;
+    const auto sweeps=m_savedPlaying.value(QStringLiteral("sweeps")).toMap();
+    if(sweeps.contains(group))m_sweep[group]=savedReadTrackSweep(sweeps.value(group).toMap());
+}
+void TrackEngine::savedZoom(const QString &group,int &want,int &mode)
+{
+    if(!savedActive())return;
+    const auto zoom=m_savedPlaying.value(QStringLiteral("zoom")).toMap(), modes=m_savedPlaying.value(QStringLiteral("zoomMode")).toMap();
+    if(zoom.contains(group))want=qBound(-1,zoom.value(group).toInt(),10);
+    if(modes.contains(group))mode=qBound(0,modes.value(group).toInt(),2);
+}
+bool TrackEngine::canUndoLook() const
+{
+    return !m_savedUndo.isEmpty() && !m_startScene && m_lastStage==0 && m_savedUndo.value(QStringLiteral("title")).toString()==m_trackTitle && m_savedUndoState==m_lastState;
+}
+void TrackEngine::savedBeforeNext()
+{
+    if(m_forceNext)return; // several NEXT presses before one beat reject only one actual look
+    m_savedUndo=savedCapture();m_savedUndoFrom=m_savedBeatBoundary;m_savedUndoState=m_lastState;
+    savedStop();
+    m_savedUndoBucket=-1;m_savedUndoDown.clear();m_savedUndoAutoDown.clear();
+    m_savedUndoRejectCasts=m_nextRejCasts;m_savedUndoRejectColours=m_nextRejColours;
+    m_savedUndoRejectPatterns=m_nextRejPatterns;m_savedUndoRejectFamilies=m_nextRejFamilies;
+    m_savedUndoRejectState=m_nextRejState;m_savedUndoRejectTitle=m_nextRejTitle;m_savedUndoFiled=m_nextFiled;
+    emit savedLooksChanged();
+}
+void TrackEngine::undoLook()
+{
+    if(!canUndoLook() || !savedInvalid(m_savedUndo).isEmpty())return;
+    if(m_savedUndoBucket>=0){
+        for(auto it=m_savedUndoDown.constBegin();it!=m_savedUndoDown.constEnd();++it)if(m_funcs.contains(it.key()))m_funcs[it.key()].down[m_savedUndoBucket]=qMax(0,m_funcs[it.key()].down[m_savedUndoBucket]-it.value());
+        for(auto it=m_savedUndoAutoDown.constBegin();it!=m_savedUndoAutoDown.constEnd();++it)m_autoRatings[it.key()].second=qMax(0,m_autoRatings[it.key()].second-it.value());
+        saveRoles(); emit tableChanged();
+    }
+    m_nextRejCasts=m_savedUndoRejectCasts;m_nextRejColours=m_savedUndoRejectColours;
+    m_nextRejPatterns=m_savedUndoRejectPatterns;m_nextRejFamilies=m_savedUndoRejectFamilies;
+    m_nextRejState=m_savedUndoRejectState;m_nextRejTitle=m_savedUndoRejectTitle;m_nextFiled=m_savedUndoFiled;
+    m_savedRestore=m_savedUndo;m_savedUndo.clear();m_forceNext=true;
+    emit savedLooksChanged(); logSignal(QStringLiteral("sig:undo-look"));
 }

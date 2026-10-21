@@ -652,6 +652,7 @@ QString TrackManager::stateAtBeat(int beat) const
 
 void TrackManager::updateState()
 {
+    if (m_engine) m_engine->savedTrackContext(m_title, m_markers, m_currentBeat); // SAVED_LOOKS_CONTEXT
     int beat = m_currentBeat;
     if (m_quantize > 1 && beat > m_downbeat)      // DOWNBEAT_R104_QUANT: the track's own grid
         beat = ((beat - 1 - m_downbeat) / m_quantize) * m_quantize + 1 + m_downbeat;
