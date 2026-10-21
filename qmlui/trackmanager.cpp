@@ -1817,6 +1817,10 @@ void TrackManager::midiInit()
         return;
     m_midiInit = true;
     midiLoad();
+    connect(m_engine, &TrackEngine::settingsImported, this, [this]() {
+        midiLoad();                      // MIDI_EDIT_IMPORT: definitions and runtime change together
+        midiRefresh();
+    });
     m_midiTimer.setInterval(100);
     connect(&m_midiTimer, &QTimer::timeout, this, &TrackManager::midiTick);
     // R486_MI_QUEUED: the universe's thread and the MIDI plugin's emit this - the work
@@ -1827,7 +1831,15 @@ void TrackManager::midiInit()
 
 void TrackManager::midiLoad()
 {
+    // MIDI_EDIT_RELOAD: imported definitions cannot retain a held pad or old pickup/undo.
+    for (MidiMap &m : m_midiMaps)
+        midiRelease(m);
     m_midiMaps.clear();
+    m_midiUndo.clear();
+    m_midiCanUndo = false;
+    m_midiHazeMoveMs = 0;
+    midiLearnStop();
+    m_midiTimer.stop();
     const QByteArray raw = QSettings().value(QStringLiteral(TRACK_MIDI_KEY)).toString().toUtf8();
     const QJsonArray list = QJsonDocument::fromJson(raw).array();
     for (const QJsonValue &v : list)
@@ -2430,16 +2442,18 @@ void TrackManager::midiLearnHeard(quint32 universe, quint32 channel, int raw)
     QString had;                         // where this control was before
     for (int i = m_midiMaps.count() - 1; i >= 0; i--)
     {
-        const MidiMap &m = m_midiMaps.at(i);
+        MidiMap &m = m_midiMaps[i];
         if (m.universe == universe && m.channel == channel)
         {
             if (m.target != target)
                 was = m.target;
+            midiRelease(m);              // MIDI_EDIT_REASSIGN: release before losing the old route
             m_midiMaps.removeAt(i);
         }
         else if (m.target == target)
         {
             had = midiSource(m.universe, m.channel, false);
+            midiRelease(m);
             m_midiMaps.removeAt(i);
         }
     }
@@ -2481,7 +2495,21 @@ void TrackManager::midiUndo()
 {
     if (m_midiCanUndo == false)
         return;
-    m_midiMaps = m_midiUndo;
+    // MIDI_EDIT_UNDO: restore mappings, never a historical pressed pad or taken fader.
+    for (MidiMap &m : m_midiMaps)
+        midiRelease(m);
+    m_midiMaps.clear();
+    for (const MidiMap &saved : m_midiUndo)
+    {
+        MidiMap m;
+        m.universe = saved.universe;
+        m.channel = saved.channel;
+        m.device = saved.device;
+        m.target = saved.target;
+        m.kind = saved.kind;
+        m_midiMaps.append(m);
+    }
+    midiScanVc();
     m_midiUndo.clear();
     m_midiCanUndo = false;
     midiSave();
@@ -2490,28 +2518,39 @@ void TrackManager::midiUndo()
     emit midiChanged();
 }
 
-void TrackManager::midiClear(const QString &target)
+void TrackManager::midiRelease(MidiMap &m)
 {
-    // R487_B1_BURST_CLEAR: a haze burst ends with its mapping - back to his limit first
-    if (target == QLatin1String("haze") && m_midiHazeMoveMs > 0)
+    // MIDI_EDIT_RELEASE: only effects this pad still holds; a quick STUTTER tap is latched.
+    const bool held = m.armed;
+    m.armed = false;
+    if (held && m_engine != nullptr)
+    {
+        if (m.target == QLatin1String("flash"))
+            m_engine->setFlash(false);
+        else if (m.target == QLatin1String("blackout"))
+            m_engine->setBlackout(false);
+        else if (m.target == QLatin1String("stutter"))
+            m_engine->setStutter(false);
+    }
+    // R487_B1_BURST_CLEAR: a haze burst ends with its mapping - back to his limit first.
+    // The same applies to reassignment, UNDO and import, preserving midiTick's ownership check.
+    if (m.target == QLatin1String("haze") && m_midiHazeMoveMs > 0)
     {
         m_midiHazeMoveMs = 1;
         midiTick();
     }
+}
+
+void TrackManager::midiClear(const QString &target)
+{
     for (int i = m_midiMaps.count() - 1; i >= 0; i--)
         if (m_midiMaps.at(i).target == target)
         {
-            // a held pad lets go with its mapping
-            if (m_midiMaps.at(i).armed && m_engine != nullptr)
-            {
-                if (target == QLatin1String("flash"))
-                    m_engine->setFlash(false);
-                else if (target == QLatin1String("blackout"))
-                    m_engine->setBlackout(false);
-            }
+            midiRelease(m_midiMaps[i]);
             m_midiMaps.removeAt(i);
         }
     m_midiCanUndo = false;
+    m_midiUndo.clear();
     midiSave();
     emit midiChanged();
 }

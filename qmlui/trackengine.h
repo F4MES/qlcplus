@@ -1308,6 +1308,7 @@ public:
     void stopAll();
 
 signals:
+    void settingsImported();             // MIDI_EDIT_IMPORT: consumers reload after successful import
     void tableChanged();
     void lastTrackChanged();             // R458_LAST_TRACK
     void hazeNagChanged();               // R467_HAZE_NAG

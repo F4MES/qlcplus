@@ -7702,6 +7702,7 @@ QString TrackEngine::importSettings()
     announceRoom();
     emit tableChanged();
     emit liveChanged();
+    emit settingsImported();             // MIDI_EDIT_IMPORT
     return tr("loaded %1 settings - restart QLC+ for the Track page's own values").arg(n);
 }
 

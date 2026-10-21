@@ -607,6 +607,7 @@ private:
     QTimer m_midiTimer;
     void midiInit();
     void midiLoad();
+    void midiRelease(MidiMap &m);       // MIDI_EDIT_RELEASE_API
     void midiSave();
     void midiTick();
     void midiTouch();
