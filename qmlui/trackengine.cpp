@@ -28930,6 +28930,7 @@ qreal TrackEngine::dialogueGain(const QString &group) const
     return trackDialogueGain(m_dialogueBeat - m_dialogueStart, call, group == m_compositionBase);
 }
 #include <QXmlStreamWriter>
+#include <functional>
 
 /* SAVED_LOOKS: persistent semantic recipes, operator undo, and per-play section scheduling. */
 static QVariantMap savedWriteTrackMove(const TrackMove& a) { QVariantMap m;
@@ -29047,22 +29048,67 @@ QString TrackEngine::savedRigKey(const QStringList &groups) const
 }
 QString TrackEngine::savedProgramKey(quint32 id) const
 {
-    if (m_savedProgramCache.contains(id)) return m_savedProgramCache.value(id);
+    if (m_savedProgramCache.contains(id)) {
+        const QString key = m_savedProgramCache.value(id);
+        // A dependency cached by recursion has no lookup alias until it is visited as a root.
+        if (m_savedProgramIndex.value(key, Function::invalidId()) == id) return key;
+    }
     if (!m_doc || !m_funcs.contains(id)) return QString();
-    const Function *f = m_doc->function(id);
-    if (!f) return QString();
-    QString xml; QXmlStreamWriter writer(&xml); f->saveXML(&writer);
-    // The root function ID is temporary; child references and fixture IDs remain part of the content.
-    xml.replace(QRegularExpression(QStringLiteral("(<Function[^>]*\\s)ID=\"[0-9]+\"")), QStringLiteral("\\1ID=\"0\""));
-    const QString key = QString::fromLatin1(QCryptographicHash::hash(xml.toUtf8(), QCryptographicHash::Sha256).toHex());
-    m_savedProgramCache.insert(id, key); m_savedProgramIndex.insert(key, id);
+    auto source = [](const Function *f) {
+        QString xml; QXmlStreamWriter writer(&xml); f->saveXML(&writer);
+        // The root ID is temporary; referenced fixture/function IDs remain meaningful.
+        xml.replace(QRegularExpression(QStringLiteral("(<Function[^>]*\\s)ID=\"[0-9]+\"")), QStringLiteral("\\1ID=\"0\""));
+        return xml;
+    };
+    auto digest = [](const QString &xml) {
+        return QString::fromLatin1(QCryptographicHash::hash(xml.toUtf8(), QCryptographicHash::Sha256).toHex());
+    };
+    const Function *root = m_doc->function(id);
+    if (!root) return QString();
+    const QString rootXml = source(root), legacy = digest(rootXml);
+    QSet<quint32> visiting;
+    std::function<QString(quint32)> content = [&](quint32 fid) -> QString {
+        if (visiting.contains(fid)) return QString(); // malformed cyclic/missing programs cannot be recalled
+        if (m_savedProgramCache.contains(fid)) return m_savedProgramCache.value(fid);
+        const Function *f = m_doc->function(fid);
+        if (!f) return QString();
+        visiting.insert(fid);
+        QString xml = fid == id ? rootXml : source(f);
+        QList<quint32> children;
+        if (const auto *chase = qobject_cast<const Chaser *>(f)) {
+            for (const auto &step : chase->steps())
+                if (step.fid != Function::invalidId()) children << step.fid;
+        } else if (const auto *collection = qobject_cast<const Collection *>(f)) {
+            children = collection->functions();
+        }
+        for (quint32 child : children) {
+            const QString key = content(child);
+            if (key.isEmpty()) { visiting.remove(fid); return QString(); }
+            xml += QLatin1Char('\n') + key;
+        }
+        visiting.remove(fid);
+        const QString key = digest(xml);
+        m_savedProgramCache.insert(fid, key);
+        return key;
+    };
+    const QString key = m_savedProgramCache.contains(id) ? m_savedProgramCache.value(id) : content(id);
+    if (!key.isEmpty()) {
+        m_savedProgramIndex.insert(key, id);
+        // Older favorites have only the parent XML hash; keep their existing lookup compatible.
+        // New snapshots include all child content, so later child edits are detected as well.
+        m_savedProgramIndex.insert(legacy, id);
+    }
     return key;
 }
 quint32 TrackEngine::savedProgramFind(const QString &key) const
 {
+    if (key.isEmpty()) return Function::invalidId();
     if (m_savedProgramIndex.contains(key)) return m_savedProgramIndex.value(key);
-    for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
-        if (!it->generated && savedProgramKey(it.key()) == key) return it.key();
+    for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it) {
+        if (it->generated) continue;
+        savedProgramKey(it.key());
+        if (m_savedProgramIndex.contains(key)) return m_savedProgramIndex.value(key);
+    }
     m_savedProgramIndex.insert(key, Function::invalidId()); // retry after the next table rebuild
     return Function::invalidId();
 }
@@ -29269,7 +29315,11 @@ void TrackEngine::savedBeat(const QString &state, int beat, int boundary)
     if (!m_savedPlaying.isEmpty() && (m_savedPlayingFrom != boundary || m_savedPlayingState != state)) savedStop();
     QVariantMap activate;
     bool used = false;
-    if (!m_savedRestore.isEmpty()) { activate = m_savedRestore; m_savedRestore.clear(); }
+    if (!m_savedRestore.isEmpty()) {
+        // A press on the old section's final beat must not restore into the next one.
+        if (m_savedUndoFrom == boundary && m_savedUndoState == state) activate = m_savedRestore;
+        m_savedRestore.clear();
+    }
     if (m_savedQueue.contains(boundary) && beat >= boundary && beat < boundary + 4) {
         const QString id = m_savedQueue.take(boundary); const auto row = savedById(id);
         if (row.value(QStringLiteral("section")).toString() == state && savedInvalid(row).isEmpty() && !m_hold && calmBarsLeft() == 0) { activate = row; used = true; }
@@ -29337,10 +29387,14 @@ void TrackEngine::savedZoom(const QString &group,int &want,int &mode)
 }
 bool TrackEngine::canUndoLook() const
 {
-    return !m_savedUndo.isEmpty() && !m_startScene && m_lastStage==0 && m_savedUndo.value(QStringLiteral("title")).toString()==m_trackTitle && m_savedUndoState==m_lastState;
+    return !m_savedUndo.isEmpty() && !m_startScene && m_lastStage==0 && m_savedUndo.value(QStringLiteral("title")).toString()==m_trackTitle && m_savedUndoState==m_lastState && savedInvalid(m_savedUndo).isEmpty();
 }
 void TrackEngine::savedBeforeNext()
 {
+    if (!m_savedRestore.isEmpty()) {
+        // NEXT after UNDO is a newer decision, even before the restore's beat arrives.
+        m_savedRestore.clear(); m_forceNext = false;
+    }
     if(m_forceNext)return; // several NEXT presses before one beat reject only one actual look
     m_savedUndo=savedCapture();m_savedUndoFrom=m_savedBeatBoundary;m_savedUndoState=m_lastState;
     savedStop();
