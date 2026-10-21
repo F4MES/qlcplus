@@ -1886,10 +1886,9 @@ void TrackEngine::noteShow(bool on)
     // R482_LOG_HAND_IMPL (night review r478): SHOW ON / OFF - the desk's switch or the phone's
     // (a sig:remote:show line beside it says which). 00:30:14 SHOW OFF was only in the atmos file
     logSignal(on ? QStringLiteral("sig:show-on") : QStringLiteral("sig:show-off"));
-    // R485_A7_SHOW_OFF (Tobias 10-20: "Efter SHOW OFF ... skal du selv trykke haze-AUTO igen.
-    // Hazeren starter aldrig af sig selv"): SHOW OFF turns haze AUTO off, not only pauses it
-    if (!on)
-        setHazeAuto(false);
+    // R487_B6_SHOW_OFF (Tobias 10-21: "Bliv armeret"): SHOW OFF takes haze and fan to 0
+    // (TrackManager::setAutoRun) - haze AUTO stays armed and goes on at the next SHOW ON.
+    // LAST TRACK's house light still turns it off (enterHouse)
 }
 
 void TrackEngine::noteEnergyHand(int from, int to)
@@ -4815,13 +4814,17 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     // Preselect from broad categories; the unchanged joins below remain final.
     const bool focusBurst = isDrop && m_faderNow < 1.0 - 1e-9 && beat > m_landBurstUntil
                           && m_strobeHeadsOnly == false && hitBurstNow(beat) == false;
-    if (on && focusBurst && (m_strobeFocus.isEmpty() || m_cast.contains(m_strobeFocus) == false))
+    // R487_B4_FOCUS_PAD: a group under his pad is steady (R469) and never joins below - as the
+    // focus it kept everyone else out too, and the burst strobed nothing
+    if (on && focusBurst && (m_strobeFocus.isEmpty() || m_cast.contains(m_strobeFocus) == false
+                             || m_padFlash.contains(m_strobeFocus)))
     {
         QStringList focus;
         foreach (const QString &key, m_groupOrder)
         {
             const TrackGroup &fg = m_groups.value(key);
-            if (m_cast.contains(key) == false || m_groupOff.contains(key) || fg.patternDevice)
+            if (m_cast.contains(key) == false || m_groupOff.contains(key) || fg.patternDevice
+                || m_padFlash.contains(key))     // R487_B4_FOCUS_PAD
                 continue;
             // Strobe lamps use their musical dimmer chases outside landings.
             if (fg.strobes || (fg.heads == false && (fg.lasers || w2 <= 0.30)))
@@ -7647,6 +7650,13 @@ QString TrackEngine::importSettings()
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = qBound(4, settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt(), 128);   // as setHoldBars (runde 220)
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
+    // R487_B4_IMPORT_ROWS: the haze row and both rows' nights read again from the file, as the
+    // ENERGY row (R484_EH_CURVE_READ) - a tap wrote the old row over the import. All four:
+    // the rows re-learn from the nights, so the nights must be the imported ones
+    m_atmosRowRead = false;
+    m_atmosRowFresh = false;
+    m_atmosRead = false;
+    m_clockHandRead = false;
     loadClockCurve(settings);
     m_closingOn = settings.value(SETTINGS_ENGINE_CLOSING, false).toBool();   // R458_CLOSING_OFF
     m_base = settings.value(SETTINGS_ENGINE_BASE, QString()).toString();
@@ -19819,6 +19829,7 @@ void TrackEngine::release()
     m_calmUntil = 0;             // CALM goes with the show (stopAll() says so too; r199)
     m_forceNext = false;
     nextForget();                // R483_NEXT_RELEASE: the looks NEXT threw away go with the show
+    m_nextSkipped.clear();       // R487_B4_SKIP_RESET: and its look-skip line (else on the next SHOW ON)
     m_andBass = false;           // R463_PLUCK_RESET
     m_pluckSlots = 0;
     // the opening picture goes with everything else - and its tile with it:
@@ -20448,6 +20459,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     savedReset(); // SAVED_LOOKS_TRACK: no queued look or UNDO can leak into another track
     if (title != m_trackTitle)
         qualityFinish(QStringLiteral("track-change"));
+    m_nextSkipped.clear();               // R487_B4_SKIP_RESET: its look-skip line is the old track's
     // a NEXT pressed on the old track's last beat is about that track: kept,
     // the new track's first beat drew a fresh colour over the one the mix
     // handed over (runde 300, bane B's B19)
@@ -25691,16 +25703,32 @@ void TrackEngine::lastWhiteStop()
     reapplyLevels();
 }
 
+void TrackEngine::setDeckMixerTime(qint64 sourceMs)
+{
+    // LAST_TRACK_FRESH_MIXER: losing BLT/DJM, a restart, or an old BLT is unknown.
+    // Source time must also advance through the whole closing interval: repeating a
+    // last packet in fresh position messages must never count as fresh mixer evidence.
+    if (sourceMs < 0 || sourceMs < m_mixerSourceMs)
+    {
+        m_airOffMs = m_airSeenMs = m_airOffSourceMs = -1;
+        m_fadersDownMs = m_fadersSeenMs = m_fadersDownSourceMs = -1;
+    }
+    m_mixerSourceMs = sourceMs;
+}
+
 void TrackEngine::setDeckAir(int air)
 {
     // from every "pos" BLT sends (TrackManager::handlePosition). BLT says it only when it has
     // seen a DJM, and says "off" only when no other deck is heard either - a mix handed over
     // on the faders is the next track. We only READ it: nothing goes back to the mixer.
     const qint64 now = m_clock.elapsed();
-    if (air == 0)
+    if (air == 0 && m_mixerSourceMs >= 0)
     {
         if (m_airOffMs < 0 || m_airSeenMs < 0 || now - m_airSeenMs > 1500)
+        {
+            m_airOffSourceMs = m_mixerSourceMs;
             m_airOffMs = now;            // a new run of "off air" - an old one that went quiet is not it
+        }
         m_airSeenMs = now;
     }
     else
@@ -25716,10 +25744,13 @@ void TrackEngine::setDeckFaders(int onAir)
     // the players the DJM has on air - whether they play or not - and says it only once it has
     // seen a DJM; no "faders" (an older BLT, no mixer) is -1, and -1 is never "down".
     const qint64 now = m_clock.elapsed();
-    if (onAir == 0)
+    if (onAir == 0 && m_mixerSourceMs >= 0)
     {
         if (m_fadersDownMs < 0 || m_fadersSeenMs < 0 || now - m_fadersSeenMs > 1500)
+        {
+            m_fadersDownSourceMs = m_mixerSourceMs;
             m_fadersDownMs = now;        // a new run - an old one that went quiet is not it
+        }
         m_fadersSeenMs = now;
     }
     else
@@ -25752,6 +25783,7 @@ void TrackEngine::lastTrackAuto(bool showOn)
         return;
     const qint64 now = m_clock.elapsed();
     if (m_fadersDownMs < 0 || m_fadersSeenMs < 0 || now - m_fadersSeenMs >= 1500
+        || m_fadersDownSourceMs < 0 || m_mixerSourceMs - m_fadersDownSourceMs <= ENGINE_LAST_AUTO_MS
         || now - m_fadersDownMs <= qint64(ENGINE_LAST_AUTO_MS))
         return;
     logSignal(QStringLiteral("sig:last-track-auto"));
@@ -25878,6 +25910,8 @@ void TrackEngine::lastTrackTick(bool showOn)
     {
         const qint64 nowMs = m_clock.elapsed();
         if (m_airOffMs >= 0 && m_airSeenMs >= 0 && nowMs - m_airSeenMs < 1500
+            && m_airOffSourceMs >= 0
+            && m_mixerSourceMs - m_airOffSourceMs >= (m_lastStage == 2 ? ENGINE_LAST_AIR_MS : ENGINE_LAST_AIR_MID_MS)
             && nowMs - m_airOffMs >= (m_lastStage == 2 ? ENGINE_LAST_AIR_MS : ENGINE_LAST_AIR_MID_MS))
         {
             logSignal(QStringLiteral("sig:last-track-fader"));
@@ -25910,6 +25944,13 @@ void TrackEngine::lastTrackTick(bool showOn)
         Function *hazeFunc = m_doc != nullptr ? m_doc->function(m_hazeScene) : nullptr;
         if (hazeFunc != nullptr && hazeFunc->name() == ENGINE_HAZE_SCENE)
             applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
+        // R487_B6_HOUSE_FAN (Tobias 10-21: "last-track ... saetter haze og fan paa 0"): the fan
+        // ran on through the house light and DARK - it stops with the haze (and a VC fader's too)
+        atmosNext(QStringLiteral("last-track"));
+        setFan(0.0);
+        Function *fanFunc = m_doc != nullptr ? m_doc->function(m_fanScene) : nullptr;
+        if (fanFunc != nullptr && fanFunc->name() == ENGINE_FAN_SCENE)
+            applyAtmos(m_fanScene, m_fanChannels, 0.0);
     }
     qreal level;
     // R479_LAST_WHITE_RISE: from where the track's white stood to full in 2 s - at the music's
@@ -26060,18 +26101,53 @@ void TrackEngine::setHazeLimit(int percent)
 
 bool TrackEngine::hazeAuto() const { return m_hazeAuto; }
 
+// R487_B6_NIGHT (Tobias 10-21): the night haze AUTO was armed in, "" = off
+#define SETTINGS_ENGINE_HAZEAUTO QStringLiteral("trackengine/haze-auto-night")
+
 void TrackEngine::setHazeAuto(bool on)
 {
+    // R487_B6_WHY: the engine's own changes say why (noon, restore) - a tap or a hand says nothing
+    const QString why = m_hazeAutoWhy;
+    m_hazeAutoWhy.clear();
     if (on == m_hazeAuto)
         return;
     m_hazeAuto = on;
     m_hazeAutoStepMs = -1;
-    logSignal(QStringLiteral("sig:haze-auto:") + (on ? QStringLiteral("1") : QStringLiteral("0")));
+    logSignal(QStringLiteral("sig:haze-auto:") + (on ? QStringLiteral("1") : QStringLiteral("0"))
+              + (why.isEmpty() ? QString() : QStringLiteral(":") + why));
+    // R487_B6_NIGHT: kept for tonight (noon to noon) - written on a change only
+    QSettings().setValue(SETTINGS_ENGINE_HAZEAUTO, on ? nightKey() : QString());
     emit liveChanged();
 }
 
 void TrackEngine::hazeAutoTick(bool showOn)
 {
+    // R487_B6_NOON (Tobias 10-21): haze AUTO belongs to one night (noon to noon). The first
+    // tick after start-up arms it again when it was armed tonight (a crash, an update); one
+    // stored on another night stays off. At noon it goes off: a show left on never hazes by
+    // itself the next evening
+    const QString night = nightKey();
+    if (m_hazeAutoNight.isEmpty())
+    {
+        m_hazeAutoNight = night;
+        const QString stored = QSettings().value(SETTINGS_ENGINE_HAZEAUTO).toString();
+        if (m_hazeAuto == false && stored == night)
+        {
+            m_hazeAutoWhy = QStringLiteral("restore");
+            setHazeAuto(true);
+        }
+        else if (m_hazeAuto == false && stored.isEmpty() == false)
+        {
+            logSignal(QStringLiteral("sig:haze-auto:0:new-night"));
+            QSettings().setValue(SETTINGS_ENGINE_HAZEAUTO, QString());
+        }
+    }
+    else if (night != m_hazeAutoNight)
+    {
+        m_hazeAutoNight = night;
+        m_hazeAutoWhy = QStringLiteral("noon");
+        setHazeAuto(false);
+    }
     if (m_hazeAuto == false)
         return;
     if (showOn == false || m_lastStage > 0 || m_closingDim < 1.0 || m_testTrack || hazeAvailable() == false)
