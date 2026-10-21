@@ -1919,7 +1919,7 @@ private:
 public:
     void setNextDropBeat(int beat) { m_nextDropBeat = beat; }
     // R431_DROP_PICK
-    QStringList dropSet() const { return m_dropSet; }
+    QStringList dropSet() const;
     int dropMode() const { return m_dropMode; }
     QString planSection() const { return m_planSection; }   // R432_NEXT_SECTION
     bool planRemembered() const { return m_planRemembered; }   // R439_TRACK_MEMORY
@@ -2553,6 +2553,7 @@ private:
     QString savedInvalid(const QVariantMap &look) const;
     QVariantMap savedById(const QString &id) const;
     int savedNext(const QString &type) const;
+    int savedPlanKey(int boundary, const QString &section) const;
     bool savedActive() const;
     void savedRemember();
     void savedBeforeNext();
