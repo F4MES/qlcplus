@@ -142,6 +142,14 @@ class TrackManager : public QObject
     Q_PROPERTY(int bpmHigh READ bpmHigh WRITE setBpmHigh NOTIFY energyChanged)
     Q_PROPERTY(bool testTrack READ testTrack NOTIFY testTrackChanged)   // R450_TT_PROP
     Q_PROPERTY(qreal testBpm READ testBpm NOTIFY testTrackChanged)
+    // R486_MI_PROP: MIDI LEARN (track_runtime/midimap.inc.cpp)
+    Q_PROPERTY(bool midiLearn READ midiLearn NOTIFY midiChanged)
+    Q_PROPERTY(QString midiLearnTarget READ midiLearnTarget NOTIFY midiChanged)
+    Q_PROPERTY(QVariantMap midiBanner READ midiBanner NOTIFY midiChanged)
+    Q_PROPERTY(QVariantList midiMappings READ midiMappings NOTIFY midiChanged)
+    Q_PROPERTY(QString midiListen READ midiListen NOTIFY midiChanged)
+    Q_PROPERTY(QString midiLast READ midiLast NOTIFY midiChanged)
+    Q_PROPERTY(bool midiCanUndo READ midiCanUndo NOTIFY midiChanged)
 
 public:
     TrackManager(QQuickView *view, Doc *doc, QObject *parent = nullptr);
@@ -259,6 +267,28 @@ public:
      *  page; the answer is the page's state ("TRACKSTATE|{json}") */
     Q_INVOKABLE QString remoteCommand(const QString &line);
     QString remoteState();
+    /* R486_MI_API: MIDI LEARN - any controller, input only (track_runtime/midimap.inc.cpp) */
+    bool midiLearn() const;
+    QString midiLearnTarget() const;
+    QVariantMap midiBanner() const;
+    QVariantList midiMappings() const;
+    QString midiListen() const;
+    QString midiLast() const;
+    bool midiCanUndo() const;
+    /** the controls a controller can drive: { t (the page's objectName), name, kind 0 fader / 1 button / 2 held } */
+    Q_INVOKABLE QVariantList midiTargets() const;
+    Q_INVOKABLE void midiLearnStart();
+    Q_INVOKABLE void midiLearnStop();
+    Q_INVOKABLE void midiSelect(const QString &target);
+    Q_INVOKABLE void midiCancel();
+    Q_INVOKABLE void midiUndo();
+    Q_INVOKABLE void midiClear(const QString &target);
+    Q_INVOKABLE void midiClearAll();
+    Q_INVOKABLE void midiRefresh();
+    /** R486_MI_ALL_AUTO: ALL AUTO, as the page's allAuto() */
+    Q_INVOKABLE void allAuto();
+    /** InputOutputMap::inputValueChanged, queued to the GUI thread */
+    void midiInput(quint32 universe, quint32 channel, uchar value, const QString &key);
 
     /* ---- roles ---- */
     bool roleMode() const;
@@ -293,6 +323,7 @@ public:
 
 signals:
     void testTrackChanged();             // R450_TT_SIG
+    void midiChanged();                  // R486_MI_SIG
     void listenPortChanged();
     void connectedChanged();
     void bltRunningChanged();            // R465_BLT_LIVE_SIG
@@ -543,6 +574,54 @@ private:
     bool m_remoteTimerOn = false;
     QJsonArray m_remoteGroups;           // the groups for the phone, every 2 s
     qint64 m_remoteGroupsMs = 0;
+
+    /* R486_MI_MEM: MIDI LEARN (track_runtime/midimap.inc.cpp) */
+    struct MidiMap
+    {
+        quint32 universe = 0;
+        quint32 channel = 0;             // QLC's: CC n, 128 + note, OMNI's MIDI channel in bits 12-15
+        QString device;                  // the input's name when it was learned
+        QString target;                  // the control's objectName on the page
+        int kind = 0;                    // 0 fader, 1 button, 2 held
+        int lastRaw = -1;                // the last value heard, 0..255
+        int appliedRaw = -1;             // the value that last moved the control
+        int anchorRaw = -1;              // where it rested when it let go
+        bool taken = false;              // a fader that has picked the control up
+        qreal lastSet = -1.0;            // what it set
+        bool armed = false;              // a held pad that holds
+        qint64 pressMs = 0;
+        QString warn;                    // a VC widget on the same channel
+    };
+    QList<MidiMap> m_midiMaps;
+    QList<MidiMap> m_midiUndo;
+    bool m_midiInit = false;
+    bool m_midiLearn = false;
+    bool m_midiCanUndo = false;
+    bool m_midiDirty = false;
+    QString m_midiTarget;
+    QString m_midiListen;
+    QString m_midiLast;
+    QVariantMap m_midiBanner;
+    qint64 m_midiLearnMs = 0;
+    qint64 m_midiHazeMoveMs = 0;         // the haze burst's last move
+    QTimer m_midiTimer;
+    void midiInit();
+    void midiLoad();
+    void midiSave();
+    void midiTick();
+    void midiTouch();
+    int midiFind(quint32 universe, quint32 channel);
+    int midiKind(const QString &target) const;
+    QString midiName(const QString &target) const;
+    QString midiSource(quint32 universe, quint32 channel, bool shortForm) const;
+    qreal midiCurrent(const QString &target) const;
+    void midiFader(int idx, int raw, qint64 now);
+    void midiButton(int idx, int raw, qint64 now);
+    void midiTap(const QString &target);
+    void midiLearnHeard(quint32 universe, quint32 channel, int raw);
+    void midiSetBanner(int kind, const QString &text, const QString &sub, const QString &target);
+    void midiIdleBanner();
+    void midiScanVc();
 };
 
 #endif // TRACKMANAGER_H

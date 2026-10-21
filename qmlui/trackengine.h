@@ -1274,6 +1274,8 @@ public:
     void noteShow(bool on);                              // sig:show-on / sig:show-off
     void noteEnergyHand(int from, int to);               // sig:energy:<from>><to>, once it has settled
     void noteRemote(const QString &cmd, const QString &args);   // sig:remote:<cmd>[:<args>], a drag once
+    // R486_MI_LOG: sig:midi:<what> - a pad, a fader taking over, LEARN (track_runtime/midimap.inc.cpp)
+    void noteMidi(const QString &tag) { logSignal(QStringLiteral("sig:midi:") + tag); }
     // R475_ENGINE_PUBLIC: the section's own start before R236 shifts it (the colour memory), the
     // SECTION press held now (the pick's end - noteSectionOverride() only logs, R335), and who
     // the next setHaze() / setFan() is (the atmos log - "hand" when nobody says)

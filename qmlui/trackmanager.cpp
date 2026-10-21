@@ -32,6 +32,10 @@
 
 #include "trackmanager.h"
 #include "trackengine.h"
+#include "inputoutputmap.h"          // R486_MI_INC: MIDI LEARN hears the inputs
+#include "inputpatch.h"
+#include "qlcinputprofile.h"
+#include "qlcinputchannel.h"
 #include <QQmlContext>
 #include <QDateTime>
 #include "functionparent.h"
@@ -124,6 +128,7 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     // does not link to the Track code)
     if (QCoreApplication::instance() != nullptr)
         QCoreApplication::instance()->setProperty("trackRemote", QVariant::fromValue<QObject *>(this));
+    midiInit();                          // R486_MI_INIT: MIDI LEARN listens (track_runtime/midimap.inc.cpp)
     // R474_UPDATE_START: a newer rig build? Every 30 min, the first look 20 s after the start
     QTimer::singleShot(20000, this, &TrackManager::updateCheck);
     m_updateTimer.setInterval(30 * 60 * 1000);
@@ -1748,6 +1753,939 @@ void TrackManager::syncEarlyBeat()
         syncPlanEarly(m_currentBeat, 0);
 }
 
+// R486_MI_CPP
+/* =====================================================================
+ *  MIDI LEARN (runde 486, R486_MI) - in track_runtime/midimap.inc.cpp,
+ *  part of trackmanager.cpp (both trees; the page's LEARN layer and SETUP's
+ *  MIDI fold-out are on the layout branch only).
+ *
+ *  Tobias, 2026-10-20/21: "Naeste ting vi skal lave er midi mapping til faders
+ *  og knapper" - any controller via MIDI LEARN, input only (nothing is sent
+ *  back). Mockups 1-6 approved 10-21 with: the haze burst (3 s, back to his
+ *  haze limit, below the limit before the next), a VC overlap is a yellow
+ *  warning only, BLACKOUT held while the pad is down, a quick STUTTER latches.
+ *
+ *  - the door: InputOutputMap::inputValueChanged hears every patched input
+ *    universe. It is emitted on the universe's thread (the buffered values,
+ *    Universe::processFaders -> flushInput) and on the MIDI plugin's (every
+ *    change to or from 0) - never the GUI thread: a QUEUED connection, and
+ *    everything below runs on the GUI thread as the desk and the phone do.
+ *  - a mapping: universe + QLC channel (CC n = n, Note n = 128 + n, OMNI puts
+ *    the MIDI channel in bits 12-15) -> a control, named by its objectName on
+ *    the v2 page. One control per channel, one channel per control: learning
+ *    again moves it (UNDO puts the list back). Saved in trackengine/midi-map.
+ *  - the SAME calls as the desk and the phone (remote.inc.cpp): ENERGY ends
+ *    ENERGY AUTO, HAZE / FAN end HAZE AUTO, the trims snap as the desk's, the
+ *    sections toggle as the tiles. The engine's laser and drop rules sit behind
+ *    those calls. Nothing that asks SURE? on the page can be learned.
+ *  - a fader takes over only when it passes the value on the screen (a
+ *    motorless controller) and lets go when anything else moves the value. A
+ *    move of one MIDI step (a pot's jitter) is no hand.
+ *  - HAZE above his haze limit is a burst: it follows the fader while it
+ *    moves, 3 s without a move and it goes back to the limit; the fader then
+ *    has to come down to the limit before it can push above again.
+ *  - a button acts on the press (0 -> more than 0); BLACKOUT, STUTTER and
+ *    FLASH WHITE are held while the pad is down, as a finger on the desk.
+ *  - while LEARN is on nothing acts - but a held pad still lets go.
+ * ===================================================================== */
+
+#define TRACK_MIDI_KEY          "trackengine/midi-map"
+#define TRACK_MIDI_BURST_MS     3000      // R486_MI_BURST: the haze above the limit, still for 3 s
+#define TRACK_MIDI_TAP_MS       250       // STUTTER: a quicker press latches (R427 on the desk)
+#define TRACK_MIDI_LEARN_IDLE_MS 60000    // LEARN on its own for a minute: off
+#define TRACK_MIDI_JITTER       3         // 0..255: one MIDI step is 2 (3 at the top)
+
+namespace
+{
+enum { MidiFader = 0, MidiButton = 1, MidiHold = 2 };
+
+QString midiDot() { return QStringLiteral(" ") + QChar(0x00B7) + QStringLiteral(" "); }
+}
+
+/* ---------------------------------------------------------------- setup */
+
+void TrackManager::midiInit()
+{
+    if (m_midiInit || m_doc == nullptr || m_doc->inputOutputMap() == nullptr)
+        return;
+    m_midiInit = true;
+    midiLoad();
+    m_midiTimer.setInterval(100);
+    connect(&m_midiTimer, &QTimer::timeout, this, &TrackManager::midiTick);
+    // R486_MI_QUEUED: the universe's thread and the MIDI plugin's emit this - the work
+    // is done here, on the GUI thread, after the event loop has it
+    connect(m_doc->inputOutputMap(), &InputOutputMap::inputValueChanged,
+            this, &TrackManager::midiInput, Qt::QueuedConnection);
+}
+
+void TrackManager::midiLoad()
+{
+    m_midiMaps.clear();
+    const QByteArray raw = QSettings().value(QStringLiteral(TRACK_MIDI_KEY)).toString().toUtf8();
+    const QJsonArray list = QJsonDocument::fromJson(raw).array();
+    for (const QJsonValue &v : list)
+    {
+        const QJsonObject o = v.toObject();
+        MidiMap m;
+        m.universe = quint32(o.value(QStringLiteral("u")).toInt(-1));
+        m.channel = quint32(o.value(QStringLiteral("ch")).toInt(-1));
+        m.device = o.value(QStringLiteral("dev")).toString();
+        m.target = o.value(QStringLiteral("t")).toString();
+        m.kind = o.value(QStringLiteral("k")).toInt(-1);
+        if (o.value(QStringLiteral("u")).toInt(-1) < 0 || o.value(QStringLiteral("ch")).toInt(-1) < 0
+            || m.target.isEmpty() || m.kind < MidiFader || m.kind > MidiHold || midiFind(m.universe, m.channel) >= 0)
+            continue;
+        m_midiMaps.append(m);
+    }
+}
+
+void TrackManager::midiSave()
+{
+    QJsonArray list;
+    for (const MidiMap &m : m_midiMaps)
+    {
+        QJsonObject o;
+        o.insert(QStringLiteral("u"), int(m.universe));
+        o.insert(QStringLiteral("ch"), int(m.channel));
+        o.insert(QStringLiteral("dev"), m.device);
+        o.insert(QStringLiteral("t"), m.target);
+        o.insert(QStringLiteral("k"), m.kind);
+        list.append(o);
+    }
+    QSettings().setValue(QStringLiteral(TRACK_MIDI_KEY),
+                         QString::fromUtf8(QJsonDocument(list).toJson(QJsonDocument::Compact)));
+}
+
+/* -------------------------------------------------------- the controls */
+
+QVariantList TrackManager::midiTargets() const
+{
+    // the learnable controls - their names are the page's objectNames. Not here on purpose:
+    // SHOW, LAST TRACK, FULL AUTO, UPDATE and SETUP (they ask SURE? or are no live control)
+    QVariantList list;
+    auto add = [&list](const QString &t, const QString &name, int kind)
+    {
+        QVariantMap m;
+        m.insert(QStringLiteral("t"), t);
+        m.insert(QStringLiteral("name"), name);
+        m.insert(QStringLiteral("kind"), kind);
+        list.append(m);
+    };
+    add(QStringLiteral("master"), QStringLiteral("MASTER DIMMER"), MidiFader);
+    if (m_engine != nullptr)
+    {
+        // a group with a fader (an ON/OFF-only group has no trim)
+        const QVariantList groups = m_engine->groups();
+        for (const QVariant &g : groups)
+        {
+            const QVariantMap gm = g.toMap();
+            if (gm.value(QStringLiteral("switchOnly")).toBool())
+                continue;
+            const QString key = gm.value(QStringLiteral("key")).toString();
+            add(QStringLiteral("groupTrim:") + key, key.toUpper(), MidiFader);
+        }
+    }
+    add(QStringLiteral("energy"), QStringLiteral("ENERGY"), MidiFader);
+    add(QStringLiteral("haze"), QStringLiteral("HAZE"), MidiFader);
+    add(QStringLiteral("fan"), QStringLiteral("FAN SPEED"), MidiFader);
+    add(QStringLiteral("nextLook"), QStringLiteral("NEXT LOOK"), MidiButton);
+    add(QStringLiteral("hold"), QStringLiteral("HOLD"), MidiButton);
+    add(QStringLiteral("calm"), QStringLiteral("CALM"), MidiButton);
+    add(QStringLiteral("stutter"), QStringLiteral("STUTTER"), MidiHold);
+    add(QStringLiteral("blackout"), QStringLiteral("BLACKOUT"), MidiHold);
+    add(QStringLiteral("flash"), QStringLiteral("FLASH WHITE"), MidiHold);
+    add(QStringLiteral("dropHit"), QStringLiteral("DROP HIT"), MidiButton);
+    add(QStringLiteral("hitKind:1"), QStringLiteral("DROP HIT FLSH"), MidiButton);
+    add(QStringLiteral("hitKind:2"), QStringLiteral("DROP HIT STRB"), MidiButton);
+    add(QStringLiteral("hitKind:3"), QStringLiteral("DROP HIT DARK"), MidiButton);
+    add(QStringLiteral("allAuto"), QStringLiteral("ALL AUTO"), MidiButton);
+    add(QStringLiteral("energyAuto"), QStringLiteral("ENERGY AUTO"), MidiButton);
+    add(QStringLiteral("followMusic"), QStringLiteral("SECTION AUTO"), MidiButton);
+    add(QStringLiteral("positionAuto"), QStringLiteral("POSITION AUTO"), MidiButton);
+    add(QStringLiteral("autoColour"), QStringLiteral("COLOUR AUTO"), MidiButton);
+    add(QStringLiteral("hazeAuto"), QStringLiteral("HAZE AUTO"), MidiButton);
+    const QStringList sections = QStringList() << QStringLiteral("normal") << QStringLiteral("break")
+                                               << QStringLiteral("build") << QStringLiteral("drop");
+    for (const QString &st : sections)
+        add(QStringLiteral("section:") + st, st.toUpper(), MidiButton);
+    if (m_engine != nullptr)
+    {
+        const QVariantList palette = m_engine->palette();
+        for (const QVariant &c : palette)
+            add(QStringLiteral("colour:") + c.toString(), c.toString().toUpper(), MidiButton);
+    }
+    return list;
+}
+
+int TrackManager::midiKind(const QString &target) const
+{
+    const QVariantList list = midiTargets();
+    for (const QVariant &v : list)
+    {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("t")).toString() == target)
+            return m.value(QStringLiteral("kind")).toInt();
+    }
+    return -1;
+}
+
+QString TrackManager::midiName(const QString &target) const
+{
+    const QVariantList list = midiTargets();
+    for (const QVariant &v : list)
+    {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("t")).toString() == target)
+            return m.value(QStringLiteral("name")).toString();
+    }
+    return target.section(QLatin1Char(':'), -1).toUpper();
+}
+
+QString TrackManager::midiSource(quint32 universe, quint32 channel, bool shortForm) const
+{
+    const quint32 c = channel & 0x0FFF;
+    QString what;
+    QString tag;
+    if (c <= 127)
+    {
+        what = QStringLiteral("CC %1").arg(c);
+        tag = what;
+    }
+    else if (c <= 255)
+    {
+        what = QStringLiteral("Note %1").arg(c - 128);
+        tag = QStringLiteral("NOTE %1").arg(c - 128);
+    }
+    else if (c <= 383)
+    {
+        what = QStringLiteral("Aftertouch %1").arg(c - 256);
+        tag = QStringLiteral("AT %1").arg(c - 256);
+    }
+    else if (c <= 511)
+    {
+        what = QStringLiteral("Program %1").arg(c - 384);
+        tag = QStringLiteral("PC %1").arg(c - 384);
+    }
+    else if (c == 512)
+    {
+        what = QStringLiteral("Channel pressure");
+        tag = QStringLiteral("PRESS");
+    }
+    else if (c == 513)
+    {
+        what = QStringLiteral("Pitch wheel");
+        tag = QStringLiteral("PITCH");
+    }
+    else
+    {
+        what = QStringLiteral("Input %1").arg(channel);
+        tag = QStringLiteral("IN %1").arg(channel);
+    }
+    if (shortForm)
+        return tag;
+    InputPatch *ip = m_doc != nullptr && m_doc->inputOutputMap() != nullptr
+                   ? m_doc->inputOutputMap()->inputPatch(universe) : nullptr;
+    QString text = what;
+    if (ip == nullptr || ip->pluginName() == QLatin1String("MIDI"))
+    {
+        // OMNI: the MIDI channel rides in bits 12-15; else the device's own channel
+        int midiCh = 1;
+        if (channel >= 4096)
+            midiCh = int(channel >> 12) + 1;
+        else if (ip != nullptr)
+        {
+            const QVariant p = ip->getPluginParameters().value(QStringLiteral("midichannel"));
+            if (p.isValid() && p.toInt() >= 0 && p.toInt() <= 15)
+                midiCh = p.toInt() + 1;
+        }
+        text += midiDot() + QStringLiteral("ch %1").arg(midiCh);
+    }
+    else
+        text = QStringLiteral("Input %1").arg(channel);
+    return text + midiDot() + QStringLiteral("universe %1").arg(universe + 1);
+}
+
+int TrackManager::midiFind(quint32 universe, quint32 channel)
+{
+    for (int i = 0; i < m_midiMaps.count(); i++)
+        if (m_midiMaps.at(i).universe == universe && m_midiMaps.at(i).channel == channel)
+            return i;
+    // the controller was patched on another universe since: the same device, the same channel
+    InputPatch *ip = m_doc != nullptr && m_doc->inputOutputMap() != nullptr
+                   ? m_doc->inputOutputMap()->inputPatch(universe) : nullptr;
+    if (ip == nullptr || ip->inputName().isEmpty())
+        return -1;
+    for (int i = 0; i < m_midiMaps.count(); i++)
+    {
+        MidiMap &m = m_midiMaps[i];
+        if (m.channel != channel || m.device != ip->inputName())
+            continue;
+        InputPatch *was = m_doc->inputOutputMap()->inputPatch(m.universe);
+        if (was != nullptr && was->inputName() == m.device)
+            continue;                    // still there: a second one of the same kind
+        m.universe = universe;
+        midiSave();
+        return i;
+    }
+    return -1;
+}
+
+qreal TrackManager::midiCurrent(const QString &target) const
+{
+    if (m_engine == nullptr)
+        return -1.0;
+    if (target == QLatin1String("energy"))
+        return qBound(0.0, energyTrim() / 100.0, 1.0);
+    if (target == QLatin1String("master"))
+        return m_engine->master();
+    if (target == QLatin1String("haze"))
+        return m_engine->haze();
+    if (target == QLatin1String("fan"))
+        return m_engine->fan();
+    if (target.startsWith(QLatin1String("groupTrim:")))
+    {
+        const QVariantMap trims = m_engine->trims();
+        const QString key = target.mid(10);
+        return trims.contains(key) ? trims.value(key).toDouble() : -1.0;
+    }
+    return -1.0;
+}
+
+/* ------------------------------------------------------------ the input */
+
+void TrackManager::midiInput(quint32 universe, quint32 channel, uchar value, const QString &key)
+{
+    Q_UNUSED(key)
+    if (m_engine == nullptr)
+        return;
+    const quint32 c = channel & 0x0FFF;
+    if (c >= 529 && c <= 531)
+        return;                          // a MIDI clock's beat / start / stop is no control
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const int raw = int(value);
+    const int idx = midiFind(universe, channel);
+    m_midiLast = QStringLiteral("Last heard: ") + midiSource(universe, channel, false)
+               + QStringLiteral(" = %1 %").arg(qRound(raw * 100.0 / 255.0));
+    if (idx >= 0)
+        m_midiLast += QStringLiteral("  ") + QChar(0x2192) + QStringLiteral("  ") + midiName(m_midiMaps.at(idx).target);
+    midiTouch();
+
+    if (m_midiLearn)
+    {
+        // R486_MI_LEARN_QUIET: nothing acts while learning - a held pad still lets go, and
+        // the controls remember where the controller is (a fader takes over after)
+        if (idx >= 0)
+        {
+            MidiMap &m = m_midiMaps[idx];
+            if (m.kind == MidiHold && raw == 0 && m.armed)
+                midiButton(idx, raw, now);
+            m.lastRaw = raw;
+            if (m.kind == MidiFader)
+            {
+                m.taken = false;
+                m.anchorRaw = raw;
+            }
+        }
+        midiLearnHeard(universe, channel, raw);
+        return;
+    }
+    if (idx < 0)
+        return;                          // R486_MI_UNMAPPED: heard, shown, nothing more
+    if (m_midiMaps.at(idx).kind == MidiFader)
+        midiFader(idx, raw, now);
+    else
+        midiButton(idx, raw, now);
+}
+
+void TrackManager::midiFader(int idx, int raw, qint64 now)
+{
+    MidiMap &m = m_midiMaps[idx];
+    const QString target = m.target;
+    const qreal v = raw / 255.0;
+    const qreal cur = midiCurrent(target);
+    if (cur < 0)
+    {
+        m.lastRaw = raw;
+        return;                          // a group no longer in the show
+    }
+    // R486_MI_LETGO: anything else moved it (the desk, the phone, AUTO, LAST TRACK) - it lets go
+    if (m.taken && qAbs(cur - m.lastSet) > 0.011)
+    {
+        m.taken = false;
+        m.anchorRaw = m.lastRaw;
+        m_midiDirty = true;
+    }
+    if (m.taken == false)
+    {
+        // R486_MI_PICKUP: a motorless fader takes over when it passes the screen's value -
+        // moved more than a step from where it rested, and across (or onto) the value
+        const qreal p = m.lastRaw >= 0 ? m.lastRaw / 255.0 : -1.0;
+        const bool moved = m.anchorRaw >= 0 && qAbs(raw - m.anchorRaw) > TRACK_MIDI_JITTER;
+        const bool across = p >= 0 && (p - cur) * (v - cur) <= 0;
+        bool take = moved && (across || qAbs(v - cur) <= 0.02);
+        // R486_MI_BURST_REARM: over the haze limit only from below it - after a burst the
+        // fader comes down to the limit first
+        if (take && target == QLatin1String("haze") && v > m_engine->hazeRest() + 0.001
+            && !(p >= 0 && p <= m_engine->hazeRest() + 0.001))
+            take = false;
+        if (m.anchorRaw < 0)
+            m.anchorRaw = raw;
+        m.lastRaw = raw;
+        if (take == false)
+            return;
+        m.taken = true;
+        m.appliedRaw = -1;
+        m_engine->noteMidi(QStringLiteral("take:") + target);
+        m_midiDirty = true;
+    }
+    else if (m.appliedRaw >= 0 && qAbs(raw - m.appliedRaw) <= TRACK_MIDI_JITTER
+             && raw != 0 && raw != 255)
+    {
+        m.lastRaw = raw;
+        return;                          // R486_MI_JITTER: one MIDI step is no hand (the ends always land)
+    }
+    m.lastRaw = raw;
+    m.appliedRaw = raw;
+
+    // the same calls as the desk's faders (and the phone's)
+    if (target == QLatin1String("energy"))
+    {
+        if (m_engine->roomAuto())
+            m_engine->setRoomAuto(false);    // a hand on ENERGY, as the desk's press
+        setEnergyTrim(qRound(v * 100.0));
+    }
+    else if (target == QLatin1String("master"))
+        m_engine->setMaster(v);
+    else if (target == QLatin1String("fan"))
+        m_engine->setFan(v < 0.03 ? 0.0 : v);
+    else if (target == QLatin1String("haze"))
+    {
+        const qreal level = v < 0.03 ? 0.0 : v;
+        // R486_MI_BURST (Tobias 10-21): over his haze limit it lives while the fader moves
+        if (level > m_engine->hazeRest() + 0.001)
+            m_midiHazeMoveMs = now;
+        else
+            m_midiHazeMoveMs = 0;
+        m_engine->setHaze(level);
+    }
+    else if (target.startsWith(QLatin1String("groupTrim:")))
+    {
+        qreal t = v;
+        if (t > 0.97)
+            t = 1.0;
+        else if (t < 0.03)
+            t = 0.0;
+        t = qRound(t * 100.0) / 100.0;       // whole percent, as the desk (runde 221)
+        m_engine->setGroupTrim(target.mid(10), t);
+    }
+    // the list may have changed under a signal: find it again
+    const int again = midiFind(m.universe, m.channel);
+    if (again >= 0)
+        m_midiMaps[again].lastSet = midiCurrent(target);
+}
+
+void TrackManager::midiButton(int idx, int raw, qint64 now)
+{
+    MidiMap &m = m_midiMaps[idx];
+    const bool was = m.lastRaw > 0;
+    m.lastRaw = raw;
+    const bool press = raw > 0 && was == false;
+    const bool release = raw == 0 && was;
+    const QString target = m.target;
+    if (m.kind == MidiHold)
+    {
+        // R486_MI_HOLD: as a finger on the desk's tile (TouchInput's press / release)
+        if (press)
+        {
+            if (target == QLatin1String("flash"))
+            {
+                m.armed = true;
+                m_engine->setFlash(true);
+            }
+            else if (target == QLatin1String("blackout"))
+            {
+                if (m_engine->blackout())
+                {
+                    m_engine->setBlackout(false);
+                    m.armed = false;
+                }
+                else
+                {
+                    m_engine->setBlackout(true);
+                    m.armed = true;
+                }
+            }
+            else if (target == QLatin1String("stutter"))
+            {
+                if (m_engine->stutter())
+                {
+                    m_engine->setStutter(false);
+                    m.armed = false;
+                }
+                else
+                {
+                    m_engine->setStutter(true);
+                    m.armed = true;
+                    m.pressMs = now;
+                }
+            }
+            m_engine->noteMidi(target + QStringLiteral(":1"));
+        }
+        else if (release && m.armed)
+        {
+            m.armed = false;
+            if (target == QLatin1String("flash"))
+                m_engine->setFlash(false);
+            else if (target == QLatin1String("blackout"))
+                m_engine->setBlackout(false);
+            else if (target == QLatin1String("stutter") && now - m.pressMs >= TRACK_MIDI_TAP_MS)
+                m_engine->setStutter(false);     // a quick press latches it (R427)
+            m_engine->noteMidi(target + QStringLiteral(":0"));
+        }
+        m_midiDirty = true;
+        return;
+    }
+    if (press == false)
+        return;                          // R486_MI_RELEASE: a tap is the press
+    midiTap(target);
+    m_midiDirty = true;
+}
+
+void TrackManager::midiTap(const QString &target)
+{
+    TrackEngine *e = m_engine;
+    // R486_MI_SAME_CALLS: the page's tiles, line for line
+    if (target == QLatin1String("nextLook"))
+        e->next();
+    else if (target == QLatin1String("hold"))
+        e->setHold(!e->hold());
+    else if (target == QLatin1String("calm"))
+        e->calm(e->calmBarsLeft() > 0 ? 0 : 16);
+    else if (target == QLatin1String("dropHit"))
+        e->setHitKind(e->hitKind() > 0 ? 0 : e->hitLast());
+    else if (target.startsWith(QLatin1String("hitKind:")))
+        e->setHitKind(qBound(1, target.mid(8).toInt(), 3));
+    else if (target == QLatin1String("allAuto"))
+        allAuto();
+    else if (target == QLatin1String("energyAuto"))
+        e->setRoomAuto(true);
+    else if (target == QLatin1String("followMusic"))
+        setOverrideState(QString());
+    else if (target == QLatin1String("positionAuto"))
+        e->setPositionMode(QString());
+    else if (target == QLatin1String("autoColour"))
+        e->setColourOverride(QString());
+    else if (target == QLatin1String("hazeAuto"))
+        e->setHazeAuto(true);
+    else if (target.startsWith(QLatin1String("section:")))
+    {
+        const QString st = target.mid(8);
+        setOverrideState(overrideState() == st ? QString() : st);
+    }
+    else if (target.startsWith(QLatin1String("colour:")))
+        e->toggleColourOverride(target.mid(7));
+    else
+        return;
+    e->noteMidi(target);
+}
+
+void TrackManager::allAuto()
+{
+    // R486_MI_ALL_AUTO: the page's allAuto() (runde 396 + HAZE AUTO, Tobias 20-10), for a pad
+    if (m_engine == nullptr)
+        return;
+    m_engine->setRoomAuto(true);
+    if (m_engine->hazeAvailable())
+        m_engine->setHazeAuto(true);
+    setOverrideState(QString());
+    m_engine->setPositionMode(QString());
+    m_engine->setColourOverride(QString());
+}
+
+/* ---------------------------------------------------------------- LEARN */
+
+void TrackManager::midiSetBanner(int kind, const QString &text, const QString &sub, const QString &target)
+{
+    m_midiBanner.clear();
+    m_midiBanner.insert(QStringLiteral("kind"), kind);     // 0 pick a control, 1 waiting, 2 learned, 3 not that
+    m_midiBanner.insert(QStringLiteral("text"), text);
+    m_midiBanner.insert(QStringLiteral("sub"), sub);
+    m_midiBanner.insert(QStringLiteral("t"), target);
+}
+
+void TrackManager::midiIdleBanner()
+{
+    midiSetBanner(0, QStringLiteral("Tap a control, then move a fader or press a button on your controller"),
+                  m_midiListen.isEmpty()
+                  ? QStringLiteral("No MIDI input patched in QLC+ - patch your controller under Inputs/Outputs")
+                  : QStringLiteral("Nothing on the page or in the room reacts while learning"), QString());
+}
+
+void TrackManager::midiLearnStart()
+{
+    midiInit();
+    midiRefresh();
+    m_midiLearn = true;
+    m_midiTarget.clear();
+    m_midiCanUndo = false;
+    m_midiLearnMs = QDateTime::currentMSecsSinceEpoch();
+    midiIdleBanner();
+    if (m_engine != nullptr)
+        m_engine->noteMidi(QStringLiteral("learn:1"));
+    midiTouch();
+    emit midiChanged();
+}
+
+void TrackManager::midiLearnStop()
+{
+    if (m_midiLearn == false)
+        return;
+    m_midiLearn = false;
+    m_midiTarget.clear();
+    m_midiCanUndo = false;
+    m_midiBanner.clear();
+    if (m_engine != nullptr)
+        m_engine->noteMidi(QStringLiteral("learn:0"));
+    emit midiChanged();
+}
+
+void TrackManager::midiSelect(const QString &target)
+{
+    if (m_midiLearn == false)
+        return;
+    const int kind = midiKind(target);
+    if (kind < 0)
+        return;
+    m_midiTarget = target;
+    m_midiLearnMs = QDateTime::currentMSecsSinceEpoch();
+    midiSetBanner(1, midiName(target) + QStringLiteral(" - waiting for MIDI") + QChar(0x2026),
+                  kind == MidiFader ? QStringLiteral("Move a fader or a knob on your controller. A button cannot drive a fader.")
+                                    : QStringLiteral("Press a button or a pad on your controller."), target);
+    emit midiChanged();
+}
+
+void TrackManager::midiCancel()
+{
+    if (m_midiLearn == false)
+        return;
+    m_midiTarget.clear();
+    m_midiLearnMs = QDateTime::currentMSecsSinceEpoch();
+    midiIdleBanner();
+    emit midiChanged();
+}
+
+void TrackManager::midiLearnHeard(quint32 universe, quint32 channel, int raw)
+{
+    if (m_midiTarget.isEmpty())
+        return;                          // no control picked: only "last heard"
+    const QString target = m_midiTarget;
+    const int kind = midiKind(target);
+    const quint32 c = channel & 0x0FFF;
+    InputPatch *ip = m_doc->inputOutputMap()->inputPatch(universe);
+    // an endless encoder sends steps, not a place: not in this round
+    if (ip != nullptr && ip->profile() != nullptr)
+    {
+        QLCInputChannel *ich = ip->profile()->channel(channel);
+        if (ich != nullptr && ich->type() == QLCInputChannel::Encoder)
+        {
+            midiSetBanner(3, QStringLiteral("That was an endless encoder - not supported yet"),
+                          QStringLiteral("Use a fader or a knob with ends, or a button."), target);
+            emit midiChanged();
+            return;
+        }
+    }
+    if (kind == MidiFader)
+    {
+        if ((c >= 128 && c <= 255) || (c >= 384 && c <= 511))
+        {
+            midiSetBanner(3, QStringLiteral("That was a button - ") + midiName(target) + QStringLiteral(" needs a fader or a knob"),
+                          QStringLiteral("Move a fader or a knob on your controller, or CANCEL."), target);
+            emit midiChanged();
+            return;
+        }
+        if (raw <= 4 || raw >= 251)
+        {
+            // a CC button sends only its ends - a fader soon sends something between
+            midiSetBanner(3, QStringLiteral("Heard ") + midiSource(universe, channel, false)
+                          + QStringLiteral(" at %1 %").arg(qRound(raw * 100.0 / 255.0)),
+                          QStringLiteral("If it is a fader, move it towards the middle - a button cannot drive a fader."), target);
+            emit midiChanged();
+            return;
+        }
+    }
+    else if (raw == 0)
+        return;                          // a release is no press
+
+    m_midiUndo = m_midiMaps;
+    QString was;                         // what this channel drove before
+    QString had;                         // where this control was before
+    for (int i = m_midiMaps.count() - 1; i >= 0; i--)
+    {
+        const MidiMap &m = m_midiMaps.at(i);
+        if (m.universe == universe && m.channel == channel)
+        {
+            if (m.target != target)
+                was = m.target;
+            m_midiMaps.removeAt(i);
+        }
+        else if (m.target == target)
+        {
+            had = midiSource(m.universe, m.channel, false);
+            m_midiMaps.removeAt(i);
+        }
+    }
+    MidiMap m;
+    m.universe = universe;
+    m.channel = channel;
+    m.device = ip != nullptr ? ip->inputName() : QString();
+    m.target = target;
+    m.kind = kind;
+    m.lastRaw = raw;
+    m.anchorRaw = raw;
+    m_midiMaps.append(m);
+    midiSave();
+    midiScanVc();
+    m_midiCanUndo = true;
+    m_midiTarget.clear();
+    m_midiLearnMs = QDateTime::currentMSecsSinceEpoch();
+
+    QString sub;
+    if (was.isEmpty() == false)
+        sub = midiSource(universe, channel, true) + QStringLiteral(" was on ") + midiName(was)
+            + QStringLiteral(" - ") + midiName(was) + QStringLiteral(" has no MIDI now. ");
+    else if (had.isEmpty() == false)
+        sub = midiName(target) + QStringLiteral(" was on ") + had + QStringLiteral(" - that one does nothing now. ");
+    const int j = midiFind(universe, channel);
+    if (j >= 0 && m_midiMaps.at(j).warn.isEmpty() == false)
+        sub += QStringLiteral("Also on a Virtual Console widget (\"") + m_midiMaps.at(j).warn
+             + QStringLiteral("\") - both will react. ");
+    sub += QStringLiteral("Tap the next control, or DONE.");
+    const QString kindText = kind == MidiFader ? QStringLiteral("fader") : kind == MidiHold ? QStringLiteral("held") : QStringLiteral("button");
+    midiSetBanner(2, midiName(target) + QStringLiteral("  ") + QChar(0x2190) + QStringLiteral("  ")
+                  + midiSource(universe, channel, false) + QStringLiteral("  (") + kindText + QStringLiteral(")"), sub, target);
+    if (m_engine != nullptr)
+        m_engine->noteMidi(QStringLiteral("learn:") + target + QStringLiteral(":%1:%2").arg(universe).arg(channel));
+    emit midiChanged();
+}
+
+void TrackManager::midiUndo()
+{
+    if (m_midiCanUndo == false)
+        return;
+    m_midiMaps = m_midiUndo;
+    m_midiUndo.clear();
+    m_midiCanUndo = false;
+    midiSave();
+    if (m_midiLearn)
+        midiIdleBanner();
+    emit midiChanged();
+}
+
+void TrackManager::midiClear(const QString &target)
+{
+    for (int i = m_midiMaps.count() - 1; i >= 0; i--)
+        if (m_midiMaps.at(i).target == target)
+        {
+            // a held pad lets go with its mapping
+            if (m_midiMaps.at(i).armed && m_engine != nullptr)
+            {
+                if (target == QLatin1String("flash"))
+                    m_engine->setFlash(false);
+                else if (target == QLatin1String("blackout"))
+                    m_engine->setBlackout(false);
+            }
+            m_midiMaps.removeAt(i);
+        }
+    m_midiCanUndo = false;
+    midiSave();
+    emit midiChanged();
+}
+
+void TrackManager::midiClearAll()
+{
+    // the page asks SURE? first
+    QStringList targets;
+    for (const MidiMap &m : m_midiMaps)
+        targets << m.target;
+    for (const QString &t : targets)
+        midiClear(t);
+    if (m_engine != nullptr)
+        m_engine->noteMidi(QStringLiteral("clear-all"));
+}
+
+void TrackManager::midiRefresh()
+{
+    midiInit();
+    // where QLC+ hears input: every universe with an input patched
+    QStringList where;
+    if (m_doc != nullptr && m_doc->inputOutputMap() != nullptr)
+    {
+        InputOutputMap *io = m_doc->inputOutputMap();
+        for (quint32 u = 0; u < io->universesCount(); u++)
+        {
+            InputPatch *ip = io->inputPatch(u);
+            if (ip == nullptr || ip->plugin() == nullptr)
+                continue;
+            QString line = QStringLiteral("universe %1 - %2 input \"%3\"").arg(u + 1).arg(ip->pluginName(), ip->inputName());
+            if (ip->pluginName() == QLatin1String("MIDI"))
+            {
+                const QVariant p = ip->getPluginParameters().value(QStringLiteral("midichannel"));
+                if (p.isValid() && p.toInt() >= 0 && p.toInt() <= 15)
+                    line += QStringLiteral(" (MIDI channel %1)").arg(p.toInt() + 1);
+                else
+                    line += QStringLiteral(" (all MIDI channels)");
+            }
+            where << line;
+        }
+    }
+    m_midiListen = where.isEmpty() ? QString() : QStringLiteral("Listening on ") + where.join(QStringLiteral(", "));
+    midiScanVc();
+    emit midiChanged();
+}
+
+void TrackManager::midiScanVc()
+{
+    // R486_MI_VC (Tobias 10-21: a warning only): a Virtual Console widget on the same
+    // channel reacts too - QLC+'s VC hears the same signal. Read through Qt's meta
+    // system: the VC is App's, not ours
+    QHash<quint64, QString> used;
+    QObject *vc = m_view != nullptr && m_view->rootContext() != nullptr
+                ? m_view->rootContext()->contextProperty(QStringLiteral("virtualConsole")).value<QObject *>() : nullptr;
+    if (vc != nullptr)
+    {
+        QVariantList widgets;
+        if (QMetaObject::invokeMethod(vc, "widgetsList", Qt::DirectConnection, Q_RETURN_ARG(QVariantList, widgets),
+                                      Q_ARG(QVariantList, QVariantList()), Q_ARG(quint32, quint32(0xFFFFFFFFu))))
+        {
+            for (const QVariant &w : widgets)
+            {
+                const QVariantMap wm = w.toMap();
+                QObject *widget = wm.value(QStringLiteral("classRef")).value<QObject *>();
+                if (widget == nullptr)
+                    continue;
+                const QVariantList sources = widget->property("inputSourcesList").toList();
+                for (const QVariant &s : sources)
+                {
+                    const QVariantMap sm = s.toMap();
+                    if (sm.contains(QStringLiteral("universe")) == false || sm.value(QStringLiteral("invalid")).toBool())
+                        continue;
+                    const quint64 k = (quint64(sm.value(QStringLiteral("universe")).toUInt()) << 32)
+                                    | (sm.value(QStringLiteral("channel")).toUInt() & 0xFFFF);
+                    if (used.contains(k) == false)
+                        used.insert(k, wm.value(QStringLiteral("label")).toString());
+                }
+            }
+        }
+    }
+    for (MidiMap &m : m_midiMaps)
+        m.warn = used.value((quint64(m.universe) << 32) | (m.channel & 0xFFFF));
+}
+
+/* ------------------------------------------------------- for the pages */
+
+bool TrackManager::midiLearn() const { return m_midiLearn; }
+QString TrackManager::midiLearnTarget() const { return m_midiTarget; }
+QVariantMap TrackManager::midiBanner() const { return m_midiBanner; }
+QString TrackManager::midiListen() const { return m_midiListen; }
+QString TrackManager::midiLast() const { return m_midiLast; }
+bool TrackManager::midiCanUndo() const { return m_midiCanUndo; }
+
+QVariantList TrackManager::midiMappings() const
+{
+    QVariantList list;
+    for (const MidiMap &m : m_midiMaps)
+    {
+        QVariantMap row;
+        row.insert(QStringLiteral("t"), m.target);
+        row.insert(QStringLiteral("n"), midiName(m.target));
+        row.insert(QStringLiteral("f"), midiSource(m.universe, m.channel, false));
+        row.insert(QStringLiteral("tag"), midiSource(m.universe, m.channel, true));
+        row.insert(QStringLiteral("k"), m.kind == MidiFader ? QStringLiteral("FADER")
+                                       : m.kind == MidiHold ? QStringLiteral("HOLD") : QStringLiteral("BUTTON"));
+        row.insert(QStringLiteral("fader"), m.kind == MidiFader);
+        row.insert(QStringLiteral("taken"), m.taken);
+        const int at = m.lastRaw >= 0 ? qRound(m.lastRaw * 100.0 / 255.0) : -1;
+        row.insert(QStringLiteral("at"), at);
+        QString state;
+        bool warn = false;
+        if (m.kind == MidiFader)
+        {
+            const int screen = qRound(qMax(0.0, midiCurrent(m.target)) * 100.0);
+            if (m.taken)
+                state = QStringLiteral("Taken over - %1 %").arg(screen);
+            else if (at < 0)
+                state = QStringLiteral("Not heard yet - it takes over when it passes %1 %").arg(screen);
+            else
+            {
+                state = QStringLiteral("Not taken over - controller at %1 %, screen at %2 %: move it %3 past %2 %")
+                        .arg(at).arg(screen).arg(at < screen ? QStringLiteral("up") : QStringLiteral("down"));
+                warn = true;
+            }
+            if (m.target == QLatin1String("haze") && m_engine != nullptr)
+                state += QStringLiteral(". Above %1 % it is a burst: back to %1 after 3 s without a move")
+                         .arg(m_engine->hazeLimit());
+        }
+        else if (m.kind == MidiHold)
+            state = m.target == QLatin1String("blackout") ? QStringLiteral("Dark while the pad is down")
+                  : m.target == QLatin1String("stutter") ? QStringLiteral("Held while the pad is down - a quick press latches it")
+                  : QStringLiteral("Held while the pad is down");
+        else
+            state = QStringLiteral("Press = tap");
+        if (m.warn.isEmpty() == false)
+        {
+            state = QStringLiteral("Also on a Virtual Console widget (\"") + m.warn + QStringLiteral("\") - both will react");
+            warn = true;
+        }
+        row.insert(QStringLiteral("s"), state);
+        row.insert(QStringLiteral("w"), warn);
+        list.append(row);
+    }
+    return list;
+}
+
+void TrackManager::midiTouch()
+{
+    m_midiDirty = true;
+    if (m_midiTimer.isActive() == false)
+        m_midiTimer.start();
+}
+
+void TrackManager::midiTick()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // R486_MI_BURST_END: still for 3 s over the limit - back to his haze limit, and the
+    // fader lets go (it comes down to the limit to push again)
+    if (m_midiHazeMoveMs > 0 && now - m_midiHazeMoveMs >= TRACK_MIDI_BURST_MS)
+    {
+        m_midiHazeMoveMs = 0;
+        for (MidiMap &m : m_midiMaps)
+        {
+            if (m.target != QLatin1String("haze") || m.taken == false)
+                continue;
+            m.taken = false;
+            m.anchorRaw = m.lastRaw;
+            // only if the haze is still ours (the desk, AUTO or SHOW OFF may have it)
+            if (m_engine != nullptr && qAbs(m_engine->haze() - m.lastSet) <= 0.011
+                && m_engine->haze() > m_engine->hazeRest() + 0.001)
+            {
+                m_engine->setHaze(m_engine->hazeRest());
+                m_engine->noteMidi(QStringLiteral("haze-burst-end"));
+            }
+        }
+        m_midiDirty = true;
+    }
+    if (m_midiLearn && now - m_midiLearnMs > TRACK_MIDI_LEARN_IDLE_MS)
+        midiLearnStop();
+    if (m_midiDirty)
+    {
+        m_midiDirty = false;
+        emit midiChanged();
+    }
+    if (m_midiHazeMoveMs == 0 && m_midiLearn == false)
+        m_midiTimer.stop();
+}
+
+// R486_MI_END
 // R459_RM_CPP
 /* =====================================================================
  *  TRACK REMOTE (runde 459) - inserted into trackmanager.cpp by
