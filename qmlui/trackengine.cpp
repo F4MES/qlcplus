@@ -6336,11 +6336,13 @@ bool TrackEngine::smallWash(const QString &key) const
 
 void TrackEngine::toggleDropGroup(QString key)
 {
-    savedCancelAt(m_dropPlanFor); // SAVED_LOOKS_RIG_HAND
     // R431_DROP_PICK: a tap on a group's name in RIG - out of the drop, or in.
     // From the first tap the set is his until the drop is over.
     if (m_dropMode == 0 || m_groups.contains(key) == false || m_groupOff.contains(key))
         return;
+    // SAVED_PLAN_HAND: change the set actually shown, before releasing its recipe.
+    m_dropSet = dropSet();
+    savedCancelAt(m_dropPlanFor);
     const bool in = m_dropSet.contains(key) == false;
     if (m_dropTouched == false)
         m_planOriginal = m_dropSet;      // R433_SECTION_TASTE: the engine's plan, as it stood
@@ -11663,6 +11665,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // that section runs on exactly his set from its first beat to its last.
     {
         const int oldMode = m_dropMode;
+        const int oldBoundary = m_dropPlanFor; // SAVED_PLAN_NOTIFY: dropSet() also reads the target flag
         const QStringList oldSet = m_dropSet;
         const QString oldSection = m_planSection;
         // a jump back - but not a DJ loop (m_loopPasses, set above this beat):
@@ -11873,7 +11876,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         m_dropPlanBeat = beat;
         m_planFaderNow = fader;              // R443_PLAN_LANE: the guesses are sized at the slider now
-        if (m_dropMode != oldMode || m_dropSet != oldSet || m_planSection != oldSection)
+        if (m_dropMode != oldMode || m_dropSet != oldSet || m_planSection != oldSection || m_dropPlanFor != oldBoundary)
             emit dropSetChanged();
     }
 
@@ -24421,7 +24424,7 @@ QVariantList TrackEngine::planRows()
     // and the rule the engine itself would keep (his pick may break it)
     if (m_dropMode == 0)
         return QVariantList();
-    return planRowsOf(m_dropSet);
+    return planRowsOf(dropSet());
 }
 
 QVariantList TrackEngine::planRowsOf(const QStringList &set) const
@@ -24466,8 +24469,10 @@ QVariantList TrackEngine::planRowsOf(const QStringList &set) const
 void TrackEngine::planEngineDecides()
 {
     // ENGINE DECIDES: the next section is the engine's again
-    if (m_dropMode == 0 || (m_dropTouched == false && m_planRemembered == false))
+    if (m_dropMode == 0 || (m_dropTouched == false && m_planRemembered == false
+        && savedPlanKey(m_dropPlanFor, m_planSection) < 0))
         return;
+    savedCancelAt(m_dropPlanFor);
     m_dropTouched = false;
     m_planRemembered = false;
     m_planOriginal.clear();
@@ -24535,6 +24540,9 @@ int TrackEngine::planAheadAt(int boundary, const QString &section, QStringList *
 
 QStringList TrackEngine::planAheadShown(int boundary, const QString &section)
 {
+    // The queued recipe is what the operator sees and starts editing.
+    const int saved = savedPlanKey(boundary, section);
+    if (saved > 0) return savedById(m_savedQueue.value(saved)).value(QStringLiteral("groups")).toStringList();
     // what the lane shows for a later section: his, else last time's, else the guess
     QStringList keys;
     const int was = planAheadAt(boundary, section, &keys);
@@ -24565,7 +24573,7 @@ bool TrackEngine::planAheadOpen(int boundary) const
 
 QVariantList TrackEngine::planRowsAt(int boundary, const QString &section)
 {
-    if (planIsRig(boundary))
+    if (planIsRig(boundary) && section == m_planSection)
         return planRows();
     if (section.isEmpty() || planAheadOpen(boundary) == false)
         return QVariantList();
@@ -24574,16 +24582,16 @@ QVariantList TrackEngine::planRowsAt(int boundary, const QString &section)
 
 void TrackEngine::togglePlanAt(int boundary, const QString &section, const QString &key)
 {
-    savedCancelAt(boundary); // SAVED_LOOKS_PLAN_HAND: a newer manual plan wins
-    if (planIsRig(boundary))
+    if (section.isEmpty() || planAheadOpen(boundary) == false
+        || m_groups.contains(key) == false || m_groupOff.contains(key)) return;
+    if (planIsRig(boundary) && section == m_planSection)
     {
         toggleDropGroup(key);            // it became the next one under his finger: the RIG's plan
         return;
     }
-    if (section.isEmpty() || planAheadOpen(boundary) == false
-        || m_groups.contains(key) == false || m_groupOff.contains(key))
-        return;
+    const bool saved = savedPlanKey(boundary, section) > 0;
     const QStringList set = planAheadShown(boundary, section);
+    savedCancelAt(boundary); // valid newer hand edit, after capturing the set on screen
     const bool in = set.contains(key) == false;
     QStringList out;
     foreach (const QString &k, m_groupOrder)
@@ -24593,7 +24601,7 @@ void TrackEngine::togglePlanAt(int boundary, const QString &section, const QStri
     // R485_A6_SAW: what the lane showed at his first change (the guess or last time's, at the
     // slider then) is the plan R433 learns against when the section comes - as a RIG tap's
     const QString was = old >= 0 ? m_planAhead.value(old) : QString();
-    const QString saw = was.count(QLatin1Char('|')) >= 2 ? was.section(QLatin1Char('|'), 2, 2)
+    const QString saw = !saved && was.count(QLatin1Char('|')) >= 2 ? was.section(QLatin1Char('|'), 2, 2)
                                                         : set.join(QLatin1Char('+'));
     if (old >= 0)
         m_planAhead.remove(old);
@@ -24606,14 +24614,13 @@ void TrackEngine::togglePlanAt(int boundary, const QString &section, const QStri
 
 void TrackEngine::planEngineDecidesAt(int boundary, const QString &section)
 {
-    savedCancelAt(boundary); // SAVED_LOOKS_PLAN_HAND: a newer manual plan wins
-    if (planIsRig(boundary))
+    if (section.isEmpty() || planAheadOpen(boundary) == false) return;
+    if (planIsRig(boundary) && section == m_planSection)
     {
         planEngineDecides();
         return;
     }
-    if (section.isEmpty() || planAheadOpen(boundary) == false)
-        return;
+    savedCancelAt(boundary);
     // the engine's - and last time's pick does not come back for it on this play
     const int old = planAheadKey(boundary, section);
     if (old >= 0)
@@ -29031,7 +29038,7 @@ void TrackEngine::savedLoad() const
 void TrackEngine::savedWrite()
 {
     QSettings().setValue(QStringLiteral("trackengine/saved-looks"), QString::fromUtf8(QJsonDocument::fromVariant(m_savedLooks).toJson(QJsonDocument::Compact)));
-    emit savedLooksChanged(); emit planLaneChanged();
+    emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged();
 }
 QString TrackEngine::savedRigKey(const QStringList &groups) const
 {
@@ -29170,6 +29177,27 @@ QVariantMap TrackEngine::savedById(const QString &id) const
     for (const QVariant &v : m_savedLooks) if (v.toMap().value(QStringLiteral("id")).toString() == id) return v.toMap();
     return {};
 }
+int TrackEngine::savedPlanKey(int boundary, const QString &section) const
+{
+    if (boundary <= 0 || section.isEmpty()) return -1;
+    int best = -1;
+    for (auto it = m_savedQueue.constBegin(); it != m_savedQueue.constEnd(); ++it) {
+        if (savedById(it.value()).value(QStringLiteral("section")).toString() != section) continue;
+        if (it.key() == boundary) return boundary;
+        // RIG may point at the grid step just after the real flag, never one before it.
+        if (section == m_planSection && planIsRig(boundary) && planIsRig(it.key())) best = qMax(best, it.key());
+    }
+    return best;
+}
+QStringList TrackEngine::dropSet() const
+{
+    const int key = m_dropMode == 0 ? -1 : savedPlanKey(m_dropPlanFor, m_planSection);
+    if (key < 0) return m_dropSet;
+    const QStringList groups = savedById(m_savedQueue.value(key)).value(QStringLiteral("groups")).toStringList();
+    QStringList out;
+    for (const QString &group : m_groupOrder) if (groups.contains(group)) out << group;
+    return out;
+}
 int TrackEngine::savedNext(const QString &type) const
 {
     int next = -1;
@@ -29238,13 +29266,13 @@ void TrackEngine::queueSavedLook(const QString &id)
 {
     const QVariantMap look = savedById(id); if (look.isEmpty()) return;
     for (auto it = m_savedQueue.begin(); it != m_savedQueue.end(); ++it) if (it.value() == id) {
-        m_savedQueue.erase(it); m_savedFeedback.clear(); emit savedLooksChanged(); emit planLaneChanged(); return;
+        m_savedQueue.erase(it); m_savedFeedback.clear(); emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged(); return;
     }
     const int next = savedNext(look.value(QStringLiteral("section")).toString());
     const QString why = savedInvalid(look);
     if (!why.isEmpty() || next < 0 || m_savedContextTitle.isEmpty()) { m_savedFeedback = why.isEmpty() ? tr("NO MATCHING SECTION") : why; emit savedLooksChanged(); return; }
     m_savedQueue[next] = id; m_savedFeedback = tr("QUEUED");
-    setPlanLane(true); emit savedLooksChanged(); emit planLaneChanged();
+    setPlanLane(true); emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged();
     logSignal(QStringLiteral("sig:saved-queue:") + id.left(12) + QLatin1Char('@') + QString::number(next));
 }
 void TrackEngine::removeSavedLook(const QString &id)
@@ -29278,7 +29306,7 @@ void TrackEngine::savedTrackContext(const QString &title, const QVariantList &ma
     for (auto it = targets.constBegin(); it != targets.constEnd(); ++it)
         if (savedNext(it.key()) != it.value()) changed = true;
     // A steady beat does not rebuild the touch list under a scrolling finger.
-    if (changed) { emit savedLooksChanged(); emit planLaneChanged(); }
+    if (changed) { emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged(); }
 }
 bool TrackEngine::savedActive() const
 {
@@ -29298,13 +29326,15 @@ void TrackEngine::savedReset()
 {
     savedStop(); m_savedQueue.clear(); m_savedUndo.clear(); m_savedRestore.clear(); m_savedVerdict.clear();
     m_savedUndoDown.clear(); m_savedUndoAutoDown.clear(); m_savedUndoBucket = -1;
-    emit savedLooksChanged(); emit planLaneChanged();
+    emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged();
 }
 void TrackEngine::savedCancelAt(int boundary)
 {
+    const int planned = savedPlanKey(boundary, m_planSection);
+    if (planned > 0 && boundary == m_dropPlanFor) m_savedQueue.remove(planned);
     m_savedQueue.remove(boundary);
     if (boundary == m_savedPlayingFrom) savedStop();
-    emit savedLooksChanged(); emit planLaneChanged();
+    emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged();
 }
 void TrackEngine::savedBeat(const QString &state, int beat, int boundary)
 {
@@ -29338,7 +29368,7 @@ void TrackEngine::savedBeat(const QString &state, int beat, int boundary)
             savedWrite(); logSignal(QStringLiteral("sig:saved-play:")+activate.value(QStringLiteral("id")).toString().left(12));
         }
     }
-    if (previousQueue != m_savedQueue || hadUndo != !m_savedUndo.isEmpty()) { emit savedLooksChanged(); emit planLaneChanged(); }
+    if (previousQueue != m_savedQueue || hadUndo != !m_savedUndo.isEmpty()) { emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged(); }
 }
 void TrackEngine::savedCast(QSet<QString> &cast, bool held, bool calm)
 {
