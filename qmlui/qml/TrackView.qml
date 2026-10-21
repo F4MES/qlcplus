@@ -25,6 +25,18 @@ import "."
 Rectangle
 {
     id: trackViewRoot
+    // SAVED_LOOKS_UI: approved 21/10, including touch scroll and outside-to-close.
+    readonly property bool savedUiAvailable: true
+    readonly property bool savedUndoAvailable: !!trackEngine && trackEngine.canUndoLook
+    property bool savedSaveFeedback: false
+    property bool savedFavoritesOpen: false
+    property bool savedRecentOpen: false
+    readonly property var savedRows: trackEngine ? trackEngine.savedLooks : []
+    readonly property var savedRecentRows: trackEngine ? trackEngine.recentSavedLooks : []
+    readonly property bool savedRecentEmpty: savedRecentRows.length === 0
+    onSavedFavoritesOpenChanged: if (savedFavoritesOpen) savedRecentOpen = false
+    onSetupOpenChanged: { savedRecentOpen = false; if (!setupOpen) savedFavoritesOpen = false }
+    onHelpOpenChanged: if (helpOpen) savedRecentOpen = false
     anchors.fill: parent
     color: "#0A0A0D"                    // R403_TONES: page, card, tile - parted by tone alone
 
@@ -182,7 +194,7 @@ Rectangle
     // the next section is the RIG's plan; R484_PL_EDITABLE (Tobias 10-19: "goer det muligt at man
     // kan aendre planen gennem hele tracket fremad"): a later one ("ahead") is his to pick too -
     // the engine plays it when it comes. A section that has begun is not
-    function planEditable(sec) { return sec !== null && (sec.ahead === true || (sec.next && (sec.mode === "next" || sec.mode === "his" || sec.mode === "mem"))) }
+    function planEditable(sec) { return sec !== null && (sec.ahead === true || (sec.next && (sec.mode === "next" || sec.mode === "his" || sec.mode === "mem" || sec.mode === "saved"))) }
     function planCardSec()
     {
         for (var j = 0; j < planModel.length; j++)
@@ -456,6 +468,10 @@ Rectangle
             if (kind === "calm") {
                 c.beginPath(); c.moveTo(5,19); c.bezierCurveTo(1,9,15,10,19,3); c.bezierCurveTo(22,16,13,21,5,19); c.stroke(); line(4,21,15,11)
             } else if (kind === "hold") { c.fillRect(6,4,4,16); c.fillRect(14,4,4,16) }
+            else if (kind === "savedLooks") {
+                c.beginPath(); c.moveTo(6,3); c.lineTo(18,3); c.lineTo(18,22)
+                c.lineTo(12,17); c.lineTo(6,22); c.closePath(); c.stroke()
+            }
             else if (kind === "nextLook") { c.beginPath(); c.moveTo(4,4); c.lineTo(16,12); c.lineTo(4,20); c.closePath(); c.fill(); line(19,4,19,20) }
             else if (kind === "blackout") { circle(12,12,9); line(6,18,18,6) }
             // "give it back to the music": an arrow curving back to where it
@@ -515,6 +531,7 @@ Rectangle
         property bool ring: false             // a white frame: pinned by hand
         property real fontPx: trackViewRoot.fs(14)
         property alias input: btnInput
+        property bool touchInputEnabled: true
         signal tapped()
         radius: Math.round(10 * trackViewRoot.ks)
         color: btnInput.down ? Qt.lighter(base, 1.35) : base
@@ -571,6 +588,7 @@ Rectangle
         TouchInput
         {
             id: btnInput
+            enabled: btn.touchInputEnabled
             onReleasedAt: (x, y, inside) => { if (inside) btn.tapped() }
         }
     }
@@ -1812,9 +1830,9 @@ Rectangle
                         objectName: "planSec:" + md.beat
                         readonly property real x0: (md.beat - planLaneBox.vf) * planLaneBox.px
                         readonly property real x1: (md.end - planLaneBox.vf) * planLaneBox.px
-                        readonly property bool his: md.mode === "his" || md.mode === "mem" || md.mode === "onhis"
+                        readonly property bool his: md.mode === "saved" || md.mode === "his" || md.mode === "mem" || md.mode === "onhis"
                         readonly property bool filled: his || md.mode === "on"
-                        readonly property string tag: md.mode === "mem" ? qsTr("MEM") : ((md.mode === "his" || md.mode === "onhis") ? qsTr("YOURS") : "")
+                        readonly property string tag: md.mode === "saved" ? qsTr("SAVED") : md.mode === "mem" ? qsTr("MEM") : ((md.mode === "his" || md.mode === "onhis") ? qsTr("YOURS") : "")
                         readonly property bool tappable: trackViewRoot.planEditable(md)
                         readonly property real pad: Math.round(6 * trackViewRoot.ks)
                         readonly property real tagW: tag !== "" ? Math.max(trackViewRoot.fs(10) * 4.2 + 14, Math.round(64 * trackViewRoot.ks)) : 0
@@ -2418,6 +2436,15 @@ Rectangle
                         id: thumbRow
                         spacing: Math.round(8 * trackViewRoot.ks)
                         visible: verdictTools.blaming === 0
+                        Btn
+                        {
+                            id: recentSavedButton
+                            objectName: "recentSavedMenu"
+                            width: Math.round(110 * trackViewRoot.ks); height: rail.bh
+                            text: "SAVED"; icon: "savedLooks"; fontPx: trackViewRoot.fs(12)
+                            active: trackViewRoot.savedRecentOpen; tone: trackViewRoot.cBlue
+                            onTapped: trackViewRoot.savedRecentOpen = !trackViewRoot.savedRecentOpen
+                        }
                         Repeater
                         {
                             model: [ 1, -1 ]
@@ -2430,9 +2457,18 @@ Rectangle
                                 radius: Math.round(10 * trackViewRoot.ks)
                                 property bool lit: false
                                 color: lit ? (modelData > 0 ? "#3E7E4E" : "#8E3A3A") : (modelData > 0 ? "#18241B" : "#271818")
+                                Text
+                                {
+                                    anchors.centerIn: parent
+                                    visible: modelData > 0 && trackViewRoot.savedSaveFeedback
+                                    text: qsTr("SAVED")
+                                    font.pixelSize: trackViewRoot.fs(12); font.bold: true
+                                    color: "#B4E6C0"
+                                }
                                 Canvas
                                 {
                                     anchors.centerIn: parent
+                                    visible: !(modelData > 0 && trackViewRoot.savedSaveFeedback)
                                     width: 26; height: 26
                                     rotation: modelData > 0 ? 0 : 180
                                     onPaint:
@@ -2467,11 +2503,12 @@ Rectangle
                                         if (wasHeld) { wasHeld = false; return }
                                         if (!inside) return
                                         if (trackEngine) trackEngine.rate(modelData)
+                                        if (modelData > 0) trackViewRoot.savedSaveFeedback = trackEngine && trackEngine.savedFeedback === "SAVED"
                                         thumb.lit = true
                                         thumbFlash.restart()
                                     }
                                 }
-                                Timer { id: thumbFlash; interval: 220; onTriggered: thumb.lit = false }
+                                Timer { id: thumbFlash; interval: modelData > 0 ? 1500 : 220; onTriggered: { thumb.lit = false; if (modelData > 0) trackViewRoot.savedSaveFeedback = false } }
                             }
                         }
                     }
@@ -3229,11 +3266,21 @@ Rectangle
 
                 Btn
                 {
+                    objectName: "undoLook"
+                    x: liveCard.inX; y: deck.rowY(0); width: liveCard.halfW; height: trackViewRoot.rowH
+                    icon: "revert"
+                    text: qsTr("UNDO")
+                    enabled: trackViewRoot.savedUndoAvailable
+                    onTapped: if (trackEngine) trackEngine.undoLook()
+                }
+                Btn
+                {
                     objectName: "nextLook"
-                    x: liveCard.inX; y: deck.rowY(0); width: liveCard.inW; height: trackViewRoot.rowH
+                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(0)
+                    width: liveCard.halfW; height: trackViewRoot.rowH
                     icon: "nextLook"
-                    text: qsTr("NEXT LOOK")
-                    onTapped: trackEngine.next()
+                    text: qsTr("NEXT")
+                    onTapped: if (trackEngine) trackEngine.next()
                 }
                 Btn
                 {
@@ -3788,7 +3835,7 @@ Rectangle
                 {
                     var nx = planCard.nx
                     if (!nx) return ""
-                    var who = nx.mode === "his" ? qsTr("YOURS") : (nx.mode === "mem" ? qsTr("REMEMBERED") : (nx.mode === "guess" ? qsTr("ENGINE'S GUESS") : qsTr("ENGINE'S PLAN")))
+                    var who = nx.mode === "saved" ? (qsTr("SAVED LOOK") + " · " + (nx.savedName || "")) : nx.mode === "his" ? qsTr("YOURS") : (nx.mode === "mem" ? qsTr("REMEMBERED") : (nx.mode === "guess" ? qsTr("ENGINE'S GUESS") : qsTr("ENGINE'S PLAN")))
                     // R484_PL_TITLE: a later section names its bar
                     var what = nx.next ? qsTr("NEXT %1").arg(nx.type.toUpperCase()) : qsTr("%1 AT BAR %2").arg(nx.type.toUpperCase()).arg(trackViewRoot.barOf(nx.beat))
                     return what + "  \u00B7  " + who + "  \u00B7  " + qsTr("tap a name = in / out")
@@ -3852,7 +3899,7 @@ Rectangle
                     width: Math.round(230 * trackViewRoot.ks); height: Math.max(44, Math.round(44 * trackViewRoot.ks))
                     fontPx: trackViewRoot.fs(12)
                     text: qsTr("ENGINE DECIDES")
-                    enabled: planCard.nx !== null && (planCard.nx.mode === "his" || planCard.nx.mode === "mem")
+                    enabled: planCard.nx !== null && (planCard.nx.mode === "his" || planCard.nx.mode === "mem" || planCard.nx.mode === "saved")
                     onTapped: trackViewRoot.planDecides()   // R484_PL_ENGINE_BTN: the next section's or the later one's
                 }
                 Btn
@@ -3890,7 +3937,7 @@ Rectangle
         y: Math.round(14 * trackViewRoot.ks) + trackViewRoot.topH + trackViewRoot.gapB
         width: trackViewRoot.width - 2 * trackViewRoot.mx
         height: trackViewRoot.height - y - Math.round(6 * trackViewRoot.ks)
-        visible: trackViewRoot.setupOpen && trackManager && trackManager.roleMode
+        visible: trackViewRoot.setupOpen && trackManager && trackManager.roleMode && !trackViewRoot.savedFavoritesOpen
         active: visible
         source: "qrc:/TrackSetup.qml"
         // R402_OVERLAY_IN: a fade and a small zoom on the way in (out at once - a
@@ -4108,7 +4155,7 @@ Rectangle
                     // R455_HELP (Tobias 10-14: "Opdater nu ogsaa vores Help knap, til alt det nye")
                     { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (a warm white grows over the track, lasers out and strobes steady at the outro, full white at the music's end or when the DJ's fader goes down, 5 min, haze down, then dark). Tap twice again to undo." },   // R479_LAST_WHITE_HELP
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br><b>HIT</b> on a DROP flag - a hit is armed for that drop (<b>DROP HIT</b> in LIVE).<br>Warnings appear in the bar under the track." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; hold one to rate a single group.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section - or any later one - to pick its lamps: the next one is the same plan as RIG, a later one becomes it when its turn comes. A section that has begun can not be changed." },   // R484_PL_HELP
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; thumbs up also saves the whole look. Hold one to rate a single group. <b>SAVED</b> opens recent saved looks: swipe to scroll, tap outside to close. Pick <b>NEXT TYPE</b> to use a look in the next matching section; tap <b>QUEUED</b> to cancel. <b>ALL SAVED LOOKS</b> opens the full list.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section - or any later one - to pick its lamps: the next one is the same plan as RIG, a later one becomes it when its turn comes. A section that has begun can not be changed." },   // R484_PL_HELP
                     { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from its logo on the taskbar.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column
@@ -4184,7 +4231,7 @@ Rectangle
         Repeater
         {
             model: [
-                { y: 0, h: 1, b: "<b>NEXT LOOK</b> - a new look now." },
+                { y: 0, h: 1, b: "<b>NEXT</b> - a new look now. <b>UNDO</b> brings the previous look back in this section." },
                 { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
                 { y: 2, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
                 { y: 3, h: 2, b: "<b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 while held; a quick tap locks it.  <b>BLACKOUT</b> - dark while held. Slide off to lock; tap to release." },
@@ -4580,6 +4627,225 @@ Rectangle
                     }
                 }
             }
+        }
+    }
+
+    // SAVED_LOOKS: approved UI.
+    Rectangle
+    {
+        id: savedPanel
+        objectName: "savedLooksPanel"
+        visible: trackViewRoot.savedFavoritesOpen && trackViewRoot.setupOpen
+        z: 900
+        x: trackViewRoot.mx; y: trackViewRoot.topH + trackViewRoot.g
+        width: parent.width - 2 * x; height: parent.height - y
+        color: trackViewRoot.cCard; radius: Math.round(12 * trackViewRoot.ks)
+        MouseArea { anchors.fill: parent }
+        readonly property real pad: trackViewRoot.cardPad + 6
+        Text
+        {
+            x: savedPanel.pad; y: savedPanel.pad
+            text: "SETUP / SAVED LOOKS"; color: trackViewRoot.cMute
+            font.pixelSize: trackViewRoot.fs(12); font.bold: true; font.letterSpacing: 1
+        }
+        Text
+        {
+            x: savedPanel.pad; y: savedPanel.pad + 36 * trackViewRoot.ks
+            text: "Your saved looks"; color: trackViewRoot.cText
+            font.pixelSize: trackViewRoot.fs(30); font.bold: true
+        }
+        Text
+        {
+            x: savedPanel.pad; y: savedPanel.pad + 86 * trackViewRoot.ks
+            width: savedPanel.width - 2 * savedPanel.pad
+            text: "Tap thumbs up while a look plays to save it here."
+            color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(15)
+        }
+        Btn
+        {
+            x: parent.width - savedPanel.pad - width; y: savedPanel.pad + 32 * trackViewRoot.ks
+            width: 136 * trackViewRoot.kw; height: trackViewRoot.rowH
+            text: "BACK"; icon: "revert"
+            onTapped: trackViewRoot.savedFavoritesOpen = false
+        }
+        Text {
+            x: savedPanel.pad; y: savedPanel.pad + 150 * trackViewRoot.ks
+            visible: trackViewRoot.savedRows.length === 0
+            text: "No saved looks yet. Tap thumbs up while a look plays."
+            color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(15)
+        }
+        Flickable
+        {
+            objectName: "savedLooksScroll"
+            x: savedPanel.pad; y: savedPanel.pad + 145 * trackViewRoot.ks
+            width: savedPanel.width - 2 * savedPanel.pad
+            height: Math.max(60, savedPanel.height - y - savedPanel.pad - 48 * trackViewRoot.ks)
+            contentWidth: width; contentHeight: savedColumn.height; clip: true
+            boundsBehavior: Flickable.StopAtBounds; flickableDirection: Flickable.VerticalFlick
+            Column {
+                id: savedColumn
+                width: parent.width; spacing: trackViewRoot.g
+            Repeater
+            {
+                model: trackViewRoot.savedRows
+                Rectangle
+                {
+                    width: parent.width; height: 126 * trackViewRoot.ks
+                    color: trackViewRoot.cBtn; radius: Math.round(10 * trackViewRoot.ks)
+                    Rectangle { x: 20 * trackViewRoot.ks; y: 24 * trackViewRoot.ks; width: 8 * trackViewRoot.ks; height: parent.height - 48 * trackViewRoot.ks; radius: 3; color: modelData.colour === "red" ? "#E03030" : (modelData.colour === "blue" ? "#3060E0" : trackViewRoot.cBlue) }
+                    Text { x: 48 * trackViewRoot.ks; y: 19 * trackViewRoot.ks; width: parent.width - x - 310 * trackViewRoot.kw; elide: Text.ElideRight; text: modelData.name; color: trackViewRoot.cText; font.bold: true; font.pixelSize: trackViewRoot.fs(19) }
+                    Rectangle
+                    {
+                        objectName: "savedSection:" + modelData.section.toUpperCase()
+                        x: 48 * trackViewRoot.ks; y: 49 * trackViewRoot.ks
+                        width: 104 * trackViewRoot.ks; height: 25 * trackViewRoot.ks
+                        radius: 4; color: modelData.section.toUpperCase() === "DROP" ? "#402126" : (modelData.section.toUpperCase() === "BREAK" ? "#183148" : "#303039")
+                        Text { anchors.centerIn: parent; text: modelData.section.toUpperCase(); color: modelData.section.toUpperCase() === "DROP" ? "#FF9299" : (modelData.section.toUpperCase() === "BREAK" ? "#7EC5FF" : "#C0C0CE"); font.bold: true; font.pixelSize: trackViewRoot.fs(12) }
+                    }
+                    Text { x: 166 * trackViewRoot.ks; y: 53 * trackViewRoot.ks; width: parent.width - x - 310 * trackViewRoot.kw; elide: Text.ElideRight; text: modelData.title; color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(13) }
+                    Text { x: 48 * trackViewRoot.ks; y: 82 * trackViewRoot.ks; width: parent.width - x - 310 * trackViewRoot.kw; elide: Text.ElideRight; text: modelData.groups ? modelData.groups.join(" · ") : ""; color: "#C0C0C8"; font.pixelSize: trackViewRoot.fs(13) }
+                    Btn
+                    {
+                        x: parent.width - width - 22 * trackViewRoot.ks; anchors.verticalCenter: parent.verticalCenter
+                        width: 270 * trackViewRoot.kw; height: trackViewRoot.rowH
+                        active: modelData.queued === true
+                        enabled: modelData.canQueue === true
+                        text: active ? "QUEUED · " + modelData.section.toUpperCase()
+                                     : (enabled ? "USE NEXT " + modelData.section.toUpperCase() : modelData.reason || ("NO NEXT " + modelData.section.toUpperCase()))
+                        icon: active ? "check" : "play"; tone: trackViewRoot.cGreen
+                        touchInputEnabled: false
+                        TapHandler {
+                            gesturePolicy: TapHandler.DragThreshold
+                            onTapped: if (trackEngine) trackEngine.queueSavedLook(modelData.id)
+                        }
+                    }
+                }
+            }
+        }
+        }
+        Text
+        {
+            x: savedPanel.pad; anchors.bottom: parent.bottom; anchors.bottomMargin: savedPanel.pad
+            text: "Starts at the next matching section, then returns to AUTO. ENERGY stays where it is."
+            color: trackViewRoot.cMute; font.pixelSize: trackViewRoot.fs(14)
+        }
+    }
+
+    // SAVED_LOOKS: approved UI.
+    MouseArea
+    {
+        objectName: "recentSavedDismiss"
+        anchors.fill: parent; z: 700
+        visible: trackViewRoot.savedRecentOpen && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
+        onClicked: trackViewRoot.savedRecentOpen = false
+    }
+    Rectangle
+    {
+        id: recentPopup
+        objectName: "recentSavedPopup"
+        z: 701
+        visible: trackViewRoot.savedRecentOpen && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
+        width: Math.min(parent.width - 2 * trackViewRoot.mx, Math.max(340, 540 * trackViewRoot.kw))
+        readonly property real pad: Math.max(12, 16 * trackViewRoot.ks)
+        readonly property real itemH: Math.max(trackViewRoot.touchH, 70 * trackViewRoot.ks)
+        readonly property real titleH: Math.max(32, 36 * trackViewRoot.ks)
+        readonly property real footH: Math.max(44, 48 * trackViewRoot.ks)
+        height: 2 * pad + titleH + (trackViewRoot.savedRecentEmpty ? 70 : Math.min(3, trackViewRoot.savedRecentRows.length) * itemH + Math.max(0,Math.min(3,trackViewRoot.savedRecentRows.length)-1) * trackViewRoot.g) + trackViewRoot.g + footH
+        property point origin: Qt.point(0, 0)
+        function align() { if (visible) origin = recentSavedButton.mapToItem(trackViewRoot, 0, recentSavedButton.height) }
+        onVisibleChanged: if (visible) Qt.callLater(align)
+        Connections {
+            target: trackViewRoot
+            function onWidthChanged() { Qt.callLater(recentPopup.align) }
+            function onHeightChanged() { Qt.callLater(recentPopup.align) }
+        }
+        Connections { target: rail; function onYChanged() { Qt.callLater(recentPopup.align) } }
+        x: Math.max(trackViewRoot.mx, Math.min(parent.width - width - trackViewRoot.mx, origin.x))
+        y: Math.min(parent.height - height - trackViewRoot.mx, origin.y + trackViewRoot.g)
+        color: "#17171D"; radius: Math.round(10 * trackViewRoot.ks)
+        focus: visible
+        Keys.onEscapePressed: trackViewRoot.savedRecentOpen = false
+        MouseArea { anchors.fill: parent }
+        Text
+        {
+            x: recentPopup.pad; y: recentPopup.pad + 5
+            text: "RECENT SAVED LOOKS"; color: trackViewRoot.cText
+            font.pixelSize: trackViewRoot.fs(14); font.bold: true
+        }
+        Btn
+        {
+            objectName: "recentSavedClose"
+            x: parent.width - width - recentPopup.pad; y: recentPopup.pad - 3
+            width: 38; height: 32; text: "×"; fontPx: 20
+            onTapped: trackViewRoot.savedRecentOpen = false
+        }
+        Text
+        {
+            visible: trackViewRoot.savedRecentEmpty
+            x: recentPopup.pad; y: recentPopup.pad + recentPopup.titleH + 12
+            width: parent.width - 2 * recentPopup.pad
+            text: "No saved looks used yet."; color: trackViewRoot.cMute
+            font.pixelSize: trackViewRoot.fs(14)
+        }
+        Flickable
+        {
+            objectName: "recentSavedScroll"
+            visible: !trackViewRoot.savedRecentEmpty
+            x: recentPopup.pad; y: recentPopup.pad + recentPopup.titleH
+            width: parent.width - 2 * recentPopup.pad
+            height: parent.height - y - recentPopup.pad - recentPopup.footH - trackViewRoot.g
+            contentWidth: width; contentHeight: recentColumn.height; clip: true
+            boundsBehavior: Flickable.StopAtBounds; flickableDirection: Flickable.VerticalFlick
+            Column {
+                id: recentColumn
+                width: parent.width; spacing: trackViewRoot.g
+            Repeater
+            {
+                model: trackViewRoot.savedRecentRows
+                Rectangle
+                {
+                    width: parent.width; height: recentPopup.itemH
+                    color: trackViewRoot.cBtn; radius: 6
+                    Text
+                    {
+                        x: 10; y: 8; width: parent.width - 140; elide: Text.ElideRight
+                        text: modelData.name; color: trackViewRoot.cText
+                        font.pixelSize: trackViewRoot.fs(14); font.bold: true
+                    }
+                    Rectangle
+                    {
+                        x: 10; y: parent.height - height - 7
+                        width: 76 * trackViewRoot.ks; height: Math.max(18, 23 * trackViewRoot.ks)
+                        color: modelData.section.toUpperCase() === "DROP" ? "#402126" : (modelData.section.toUpperCase() === "BREAK" ? "#183148" : "#303039")
+                        radius: 3
+                        Text { anchors.centerIn: parent; text: modelData.section.toUpperCase(); color: modelData.section.toUpperCase() === "DROP" ? "#FF9299" : (modelData.section.toUpperCase() === "BREAK" ? "#7EC5FF" : "#C0C0CE"); font.pixelSize: trackViewRoot.fs(11); font.bold: true }
+                    }
+                    Btn
+                    {
+                        objectName: "recentUse:" + index
+                        x: parent.width - width - 6; y: 6
+                        width: 118; height: parent.height - 12
+                        enabled: modelData.canQueue === true
+                        active: modelData.queued === true
+                        text: active ? "QUEUED" : (enabled ? "NEXT " + modelData.section.toUpperCase() : modelData.reason || ("NO NEXT " + modelData.section.toUpperCase()))
+                        fontPx: trackViewRoot.fs(11); tone: trackViewRoot.cGreen
+                        touchInputEnabled: false
+                        TapHandler {
+                            gesturePolicy: TapHandler.DragThreshold
+                            onTapped: if (trackEngine) trackEngine.queueSavedLook(modelData.id)
+                        }
+                    }
+                }
+            }
+        }
+        }
+        Btn
+        {
+            objectName: "recentAllSaved"
+            x: recentPopup.pad; y: parent.height - height - recentPopup.pad
+            width: parent.width - 2 * recentPopup.pad; height: recentPopup.footH
+            text: "ALL SAVED LOOKS"; icon: "savedLooks"; fontPx: trackViewRoot.fs(13)
+            onTapped: { trackViewRoot.savedRecentOpen = false; trackViewRoot.setupOpen = true; trackViewRoot.savedFavoritesOpen = true }
         }
     }
 }

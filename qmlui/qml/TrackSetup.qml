@@ -387,6 +387,15 @@ Rectangle
             }
         }
 
+        // SAVED_LOOKS_SETUP: separate row keeps the 1366 toolbar intact.
+        TrackTile {
+            objectName: "savedLooksSetup"
+            visible: setupRoot.host && setupRoot.host.savedUiAvailable === true
+            Layout.preferredWidth: 180; Layout.preferredHeight: visible ? 40 : 0
+            label: qsTr("SAVED LOOKS")
+            onTapped: if (setupRoot.host) setupRoot.host.savedFavoritesOpen = true
+        }
+
         // ------------------------------------------------- R486_MI_SETUP (fold-out)
         // Tobias 10-21 (mockups 1 + 6 approved): where QLC+ hears MIDI, the last message
         // (input only - the one feedback there is), LEARN, the list with CLEAR, CLEAR ALL (SURE?)

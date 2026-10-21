@@ -1087,6 +1087,19 @@ public:
     Q_INVOKABLE void calm(int bars);
     int calmBarsLeft() const;
     /** New colour, new cast, new moves - now. */
+    // SAVED_LOOKS_API: complete recipes, independent of temporary function IDs.
+    Q_PROPERTY(bool canUndoLook READ canUndoLook NOTIFY savedLooksChanged)
+    Q_PROPERTY(QVariantList savedLooks READ savedLooks NOTIFY savedLooksChanged)
+    Q_PROPERTY(QVariantList recentSavedLooks READ recentSavedLooks NOTIFY savedLooksChanged)
+    Q_PROPERTY(QString savedFeedback READ savedFeedback NOTIFY savedLooksChanged)
+    bool canUndoLook() const;
+    QVariantList savedLooks() const;
+    QVariantList recentSavedLooks() const;
+    QString savedFeedback() const { return m_savedFeedback; }
+    Q_INVOKABLE void undoLook();
+    Q_INVOKABLE void queueSavedLook(const QString &id);
+    Q_INVOKABLE void removeSavedLook(const QString &id);
+    void savedTrackContext(const QString &title, const QVariantList &markers, int beat);
     Q_INVOKABLE void next();
     void advanceLook();                  // R424_NEXT_RATES: NEXT without its verdict (a thumb down's)
     bool creditVerdict(int verdict);     // R424_NEXT_RATES: the counting rate() always did
@@ -1310,7 +1323,8 @@ signals:
     void slabChanged();                  // R436_STROBE_LAB
     void clabChanged();                  // R440_COLOUR_LAB
     void sendChanged();                  // R440_SEND
-    void planLaneChanged();              // R443_PLAN_LANE
+    void planLaneChanged();
+    void savedLooksChanged();              // R443_PLAN_LANE
     void hitChanged();                   // R445_DROP_HIT
     /** a colour tile was pressed but the colour cannot be used (not in the
      *  palette any more, banned): the tile blinks (runde 313, B27/Tobias) */
@@ -2499,6 +2513,51 @@ private:
     bool m_startScene;        // the opening picture is held by hand
     qreal m_startLevel;       // a trim on the opening picture
     bool m_startColour;       // the opening picture chose the colour, not the DJ
+    // SAVED_LOOKS_MEM: only JSON recipes persist; queued/undo state belongs to this play.
+    mutable bool m_savedLoaded = false;
+    mutable QVariantList m_savedLooks;
+    QString m_savedFeedback;
+    QString m_savedContextTitle;
+    QVariantList m_savedMarkers;
+    int m_savedCur = -1;
+    QMap<int, QString> m_savedQueue;
+    QVariantMap m_savedPlaying, m_savedVerdict, m_savedUndo, m_savedRestore;
+    int m_savedPlayingFrom = -1, m_savedUndoFrom = -1;
+    QString m_savedPlayingState, m_savedUndoState;
+    int m_savedBeatBoundary = -1;
+    mutable QHash<quint32, QString> m_savedProgramCache;
+    mutable QHash<QString, quint32> m_savedProgramIndex;
+    QVariantMap m_savedUserColours;
+    QHash<quint32, int> m_savedUndoDown;
+    QMap<QString, int> m_savedUndoAutoDown;
+    int m_savedUndoBucket = -1;
+    QList<QStringList> m_savedUndoRejectCasts;
+    QStringList m_savedUndoRejectColours;
+    QHash<QString, QList<int>> m_savedUndoRejectPatterns;
+    QHash<QString, QStringList> m_savedUndoRejectFamilies;
+    QString m_savedUndoRejectState, m_savedUndoRejectTitle;
+    bool m_savedUndoFiled = false;
+    void savedLoad() const;
+    void savedWrite();
+    QVariantMap savedCapture() const;
+    QString savedRigKey(const QStringList &groups) const;
+    QString savedProgramKey(quint32 id) const;
+    quint32 savedProgramFind(const QString &key) const;
+    QString savedInvalid(const QVariantMap &look) const;
+    QVariantMap savedById(const QString &id) const;
+    int savedNext(const QString &type) const;
+    bool savedActive() const;
+    void savedRemember();
+    void savedBeforeNext();
+    void savedBeat(const QString &state, int beat, int boundary);
+    void savedStop();
+    void savedReset();
+    void savedCancelAt(int boundary);
+    void savedCast(QSet<QString> &cast, bool held, bool calm);
+    void savedColours();
+    void savedMoves(qreal energy);
+    void savedSweep(const QString &group);
+    void savedZoom(const QString &group, int &want, int &mode);
     bool m_forceNext;
     /** runde 338: a fixture's per-eye channels (4 or more) and its master
      *  dimmer, for beamShareOf/fullBankOf - read once per table build: the
