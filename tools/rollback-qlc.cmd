@@ -138,7 +138,10 @@ function Close-Qlc {
     if ((Get-QlcProcesses).Count -gt 0) {
         Say "  QLC+ did not close by itself - stopping it" "Yellow"
         Get-QlcProcesses | Stop-Process -Force
-        Start-Sleep -Seconds 2
+        # R487_B5_KILLWAIT: until it is gone - a dying one still holds the single-instance guard
+        $deadline = (Get-Date).AddSeconds(15)
+        while ((Get-QlcProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+        if ((Get-QlcProcesses).Count -gt 0) { Say "  QLC+ is still closing - if it does not come back, start it by hand" "Red" }
     }
     Say "  QLC+ closed."
     return $true

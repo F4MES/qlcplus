@@ -1265,6 +1265,8 @@ public:
     /** R479_LAST_WHITE_API: the followed deck's on-air from the DJM (BLT's "air" in its
      *  "pos", only when it has seen a mixer): 1 on air, 0 off air, -1 not known */
     void setDeckAir(int air);
+    /** LAST_TRACK_FRESH_MIXER: source time of the actual DJM status, not a repeated pos. */
+    void setDeckMixerTime(qint64 sourceMs);
     /** R484_LF_API: how many players' channels the DJM has on air (BLT's "faders" in its
      *  "pos", only when it has seen a mixer): 0 every fader down, -1 not known */
     void setDeckFaders(int onAir);
@@ -2315,6 +2317,9 @@ private:
     qint64 m_lastBeatAtMs = -1;            // the last beat drawn (m_clock): the white between beats
     qreal m_lastWhiteP = -1.0;             // the white now, 0-1 of the house light (-1: not running)
     qreal m_houseFrom = 0.0;               // where the house light starts from
+    qint64 m_mixerSourceMs = -1;          // LAST_TRACK_FRESH_MIXER: -1 is unknown
+    qint64 m_airOffSourceMs = -1;
+    qint64 m_fadersDownSourceMs = -1;
     qint64 m_airOffMs = -1;                // the deck off air since (m_clock); -1 on air or not known
     qint64 m_airSeenMs = -1;               // the last "pos" that said so
     qint64 m_fadersDownMs = -1;            // R484_LF_MEMBERS: every fader down since (m_clock); -1 up or not known
@@ -2335,6 +2340,8 @@ private:
     int m_hazeLimit = 70;                 // saved per rig, 0..100 in 5% steps
     bool m_hazeAuto = false;               // off at every start-up, as ENERGY's AUTO (R378_ROOM_OFF)
     qint64 m_hazeAutoStepMs = -1;          // its last step (m_clock)
+    QString m_hazeAutoNight;               // R487_B6_NIGHT: the night its state belongs to ("" = start-up)
+    QString m_hazeAutoWhy;                 // R487_B6_WHY: the next change's reason in the log
     mutable QVector<int> m_atmosRowH;      // the row: haze % per point (-1 = none: AUTO holds)
     mutable QVector<int> m_atmosRowF;      // ... and the fan
     mutable quint32 m_atmosOwn = 0;        // bit i: point i is his - learning leaves it

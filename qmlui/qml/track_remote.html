@@ -490,6 +490,7 @@ function wireFader(el) {
   const end = (e, keep) => {
     if (e.pointerId !== ptr) return;
     ptr = null;
+    delete restHeld[el.dataset.f];       // R487_B2_PHONE_LIFT: the lift ends the hold, whatever the limit did meanwhile
     if (busy[el.dataset.f] !== Infinity) return;
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     if (mode === 2) {

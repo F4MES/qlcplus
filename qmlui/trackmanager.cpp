@@ -545,6 +545,12 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     // before the repeats are dropped below - a brake happens between beats
     if (m_engine != nullptr && playing)
         m_engine->setDeckTempo(obj.value(QStringLiteral("bpm")).toDouble());
+    // LAST_TRACK_FRESH_MIXER: must run before air/faders, even on a repeated beat
+    if (m_engine != nullptr) {
+        bool mixerTimeOk = false;
+        const qint64 mixerTime = obj.value(QStringLiteral("mixerTime")).toVariant().toLongLong(&mixerTimeOk);
+        m_engine->setDeckMixerTime(mixerTimeOk ? mixerTime : -1);
+    }
     // R479_LAST_WHITE_AIR: the deck's on-air (only from a BLT that has seen a DJM), before
     // the repeats are dropped below - a fader pulled down repeats the beat it stood on
     if (m_engine != nullptr)
@@ -1136,7 +1142,7 @@ void TrackManager::slotEnergyTick()
         m_lastEngineBeat = -1;           // R187_WATCHDOG_BEAT: a resume on the same beat runs
         emit positionChanged();
         if (m_engine != nullptr && m_autoRun && m_roleMode)
-            m_engine->idle();
+            m_engine->linkIdle(); // LAST_TRACK_LINK_UNKNOWN: never HOUSE from missing data
     }
     // STOP_GRACE_R105_IDLE: a stop that lasted its second goes idle now
     if (m_playing == false && m_stopSinceMs > 0
@@ -2123,11 +2129,13 @@ void TrackManager::midiFader(int idx, int raw, qint64 now)
         const qreal p = m.lastRaw >= 0 ? m.lastRaw / 255.0 : -1.0;
         const bool moved = m.anchorRaw >= 0 && qAbs(raw - m.anchorRaw) > TRACK_MIDI_JITTER;
         const bool across = p >= 0 && (p - cur) * (v - cur) <= 0;
-        bool take = moved && (across || qAbs(v - cur) <= 0.02);
+        // R487_B1_PICKUP_END: at an end (0 or 100 %) there is no passing the value - a fader that
+        // was on it (within 2 %) and then moved takes over too
+        bool take = moved && (across || qAbs(v - cur) <= 0.02 || (p >= 0 && qAbs(p - cur) <= 0.02));
         // R486_MI_BURST_REARM: over the haze limit only from below it - after a burst the
         // fader comes down to the limit first
         if (take && target == QLatin1String("haze") && v > m_engine->hazeRest() + 0.001
-            && !(p >= 0 && p <= m_engine->hazeRest() + 0.001))
+            && !(p >= 0 && (p < 0.03 ? 0.0 : p) <= m_engine->hazeRest() + 0.001))   // R487_B1_REARM_OFF: the bottom 3 % is off
             take = false;
         if (m.anchorRaw < 0)
             m.anchorRaw = raw;
@@ -2484,6 +2492,12 @@ void TrackManager::midiUndo()
 
 void TrackManager::midiClear(const QString &target)
 {
+    // R487_B1_BURST_CLEAR: a haze burst ends with its mapping - back to his limit first
+    if (target == QLatin1String("haze") && m_midiHazeMoveMs > 0)
+    {
+        m_midiHazeMoveMs = 1;
+        midiTick();
+    }
     for (int i = m_midiMaps.count() - 1; i >= 0; i--)
         if (m_midiMaps.at(i).target == target)
         {
@@ -2661,7 +2675,8 @@ void TrackManager::midiTick()
         m_midiHazeMoveMs = 0;
         for (MidiMap &m : m_midiMaps)
         {
-            if (m.target != QLatin1String("haze") || m.taken == false)
+            // R487_B1_BURST_LEARN: also when LEARN let it go - the haze can still be the burst's
+            if (m.target != QLatin1String("haze"))
                 continue;
             m.taken = false;
             m.anchorRaw = m.lastRaw;
