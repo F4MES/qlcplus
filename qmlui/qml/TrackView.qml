@@ -4349,4 +4349,237 @@ Rectangle
             }
         }
     }
+
+    // ================================================= R486_MI_PAGE: MIDI LEARN
+    // Tobias 10-20/21 ("midi mapping til faders og knapper", mockups 2-5 approved 10-21):
+    // LEARN dims the page, outlines every control a controller can drive (their
+    // objectNames are the manager's targets) and covers the top bar with the banner -
+    // a tap picks a control, nothing on the page acts. Outside LEARN a mapped control
+    // carries a small MIDI tag, and a fader the controller has not taken over shows
+    // where the controller is. The manager does the rest (track_runtime/midimap.inc.cpp).
+    readonly property bool midiLearnOn: trackManager ? trackManager.midiLearn === true : false
+    property var midiRects: []
+    function midiScan()
+    {
+        if (!trackManager || !midiLayer.wanted) { midiRects = []; return }
+        var targets = trackManager.midiTargets()
+        var maps = trackManager.midiMappings || []
+        var want = ({})
+        for (var i = 0; i < targets.length; i++) want[targets[i].t] = targets[i]
+        var mapped = ({})
+        for (var j = 0; j < maps.length; j++) mapped[maps[j].t] = maps[j]
+        var out = []
+        var walk = function(it)
+        {
+            if (!it || it === midiLayer || it === setupLoader || !it.visible) return
+            var n = it.objectName
+            if (n !== "" && want[n] !== undefined && it.width > 0 && it.height > 0)
+            {
+                var p = it.mapToItem(midiLayer, 0, 0)
+                var m = mapped[n]
+                out.push({ t: n, x: p.x, y: p.y, w: it.width, h: it.height, fader: want[n].kind === 0,
+                           tag: m ? m.tag : "", mapped: m !== undefined,
+                           at: m && m.fader && !m.taken ? m.at : -1 })
+            }
+            var c = it.children
+            for (var k = 0; k < c.length; k++) walk(c[k])
+        }
+        walk(trackViewRoot)
+        midiRects = out
+    }
+    function midiPick(x, y)
+    {
+        // the smallest outline under the finger (DROP HIT's chips sit inside DROP HIT)
+        var best = null
+        for (var i = 0; i < midiRects.length; i++)
+        {
+            var r = midiRects[i]
+            if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h && (!best || r.w * r.h < best.w * best.h))
+                best = r
+        }
+        if (best) trackManager.midiSelect(best.t)
+        else trackManager.midiCancel()
+    }
+    Timer { id: midiScanLater; interval: 60; onTriggered: trackViewRoot.midiScan() }
+    // the outlines follow the page: its size, the manager's list, SETUP / HELP, and every 3 s while shown
+    Timer { interval: 3000; repeat: true; running: midiLayer.wanted; onTriggered: trackViewRoot.midiScan() }
+    Connections
+    {
+        target: trackManager
+        ignoreUnknownSignals: true
+        function onMidiChanged() { midiScanLater.restart() }
+    }
+    Connections
+    {
+        target: trackViewRoot
+        // R486_MI_LEAVE: SETUP or HELP opening ends LEARN
+        function onSetupOpenChanged() { if (trackViewRoot.setupOpen && trackViewRoot.midiLearnOn) trackManager.midiLearnStop(); midiScanLater.restart() }
+        function onHelpOpenChanged() { if (trackViewRoot.helpOpen && trackViewRoot.midiLearnOn) trackManager.midiLearnStop(); midiScanLater.restart() }
+        function onMidiLearnOnChanged() { midiScanLater.restart() }
+        function onWidthChanged() { midiScanLater.restart() }
+        function onHeightChanged() { midiScanLater.restart() }
+    }
+    Item
+    {
+        id: midiLayer
+        objectName: "midiLayer"
+        anchors.fill: parent
+        z: 950
+        readonly property bool learning: trackViewRoot.midiLearnOn
+        readonly property bool tagsOn: !learning && trackManager && (trackManager.midiMappings || []).length > 0
+                                       && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen && !trackViewRoot.planCardOpen
+        readonly property bool wanted: learning || tagsOn
+        readonly property var banner: trackManager && trackManager.midiBanner ? trackManager.midiBanner : ({})
+        readonly property string sel: trackManager && trackManager.midiLearnTarget ? trackManager.midiLearnTarget : ""
+        readonly property var selRect:
+        {
+            for (var i = 0; i < trackViewRoot.midiRects.length; i++)
+                if (trackViewRoot.midiRects[i].t === sel) return trackViewRoot.midiRects[i]
+            return null
+        }
+        readonly property real dim: !learning ? 0 : (selRect ? 0.6 : 0.35)
+        readonly property real bannerH: Math.round(14 * trackViewRoot.ks) + trackViewRoot.topH
+        visible: wanted
+        onWantedChanged: midiScanLater.restart()
+
+        // LEARN: nothing under it takes a finger or a mouse - a tap picks a control
+        TouchInput
+        {
+            objectName: "midiCatch"
+            enabled: midiLayer.learning
+            onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.midiPick(x, y) }
+        }
+        // the dim, with a hole for the picked control
+        Rectangle { visible: midiLayer.dim > 0 && !midiLayer.selRect; anchors.fill: parent; color: "#000000"; opacity: midiLayer.dim }
+        Repeater
+        {
+            model: midiLayer.dim > 0 && midiLayer.selRect ? 4 : 0
+            Rectangle
+            {
+                readonly property var s: midiLayer.selRect
+                color: "#000000"; opacity: midiLayer.dim
+                x: index === 1 ? s.x + s.w + 3 : 0
+                y: index === 0 ? 0 : index === 3 ? s.y + s.h + 3 : s.y - 3
+                width: index === 0 || index === 3 ? parent.width : index === 1 ? Math.max(0, parent.width - s.x - s.w - 3) : Math.max(0, s.x - 3)
+                height: index === 0 ? Math.max(0, s.y - 3) : index === 3 ? Math.max(0, parent.height - s.y - s.h - 3) : s.h + 6
+            }
+        }
+        // outlines (LEARN) and tags (both)
+        Repeater
+        {
+            model: trackViewRoot.midiRects
+            Item
+            {
+                objectName: "midiMark:" + modelData.t
+                readonly property bool picked: modelData.t === midiLayer.sel
+                readonly property bool learned: midiLayer.banner.kind === 2 && midiLayer.banner.t === modelData.t
+                readonly property color c: picked ? "#E3B44F" : learned ? "#6ECD82" : "#4FA3E3"
+                readonly property string tagText: midiLayer.learning ? modelData.tag : (modelData.mapped ? "MIDI" : "")
+                visible: midiLayer.learning || modelData.mapped
+                x: modelData.x - 3; y: modelData.y - 3; width: modelData.w + 6; height: modelData.h + 6
+                opacity: midiLayer.learning && midiLayer.sel !== "" && !picked ? 0.35 : 1
+                Rectangle
+                {
+                    visible: midiLayer.learning
+                    anchors.fill: parent; radius: Math.round(6 * trackViewRoot.ks); color: "transparent"
+                    border.width: picked || learned ? 3 : 1.5; border.color: parent.c
+                }
+                Rectangle
+                {
+                    objectName: "midiTag:" + modelData.t
+                    readonly property bool quiet: !midiLayer.learning
+                    readonly property bool side: modelData.t === "allAuto"
+                    readonly property bool below: modelData.t.indexOf("hitKind:") === 0
+                    visible: parent.tagText !== ""
+                    x: side ? parent.width + 4 : parent.width - width + 2
+                    y: side ? (parent.height - height) / 2 : below ? parent.height - 2 : -height / 2 - 1
+                    width: tagT.implicitWidth + trackViewRoot.fs(8); height: tagT.implicitHeight + trackViewRoot.fs(2)
+                    radius: 3
+                    color: quiet ? "#14324F" : parent.c
+                    border.width: quiet ? 1 : 0; border.color: "#4FA3E3"
+                    Text
+                    {
+                        id: tagT
+                        anchors.centerIn: parent
+                        text: parent.parent.tagText
+                        color: parent.quiet ? "#8CC4F0" : "#0A1622"
+                        font.bold: true; font.pixelSize: trackViewRoot.fs(9); font.letterSpacing: 0.5
+                    }
+                }
+                // a fader the controller has not taken over: where the controller is
+                Item
+                {
+                    objectName: "midiGhost:" + modelData.t
+                    visible: !midiLayer.learning && modelData.fader && modelData.at >= 0
+                    readonly property real gx: 3 + 3 + (modelData.w - 6) * modelData.at / 100
+                    x: gx; y: 3; width: 1; height: modelData.h
+                    Rectangle { x: -1; width: 3; height: parent.height; color: "#4FA3E3" }
+                    Rectangle
+                    {
+                        readonly property bool after: parent.gx < width + 12
+                        x: after ? 6 : -width - 6; y: (parent.height - height) / 2
+                        width: gT.implicitWidth + trackViewRoot.fs(10); height: gT.implicitHeight + trackViewRoot.fs(4); radius: 3
+                        color: "#4FA3E3"
+                        Text { id: gT; anchors.centerIn: parent; text: "MIDI " + modelData.at + " %"; color: "#0A1622"; font.bold: true; font.pixelSize: trackViewRoot.fs(10) }
+                    }
+                }
+            }
+        }
+        // the banner over the top bar (SHOW / LAST TRACK cannot be hit while learning)
+        Rectangle
+        {
+            objectName: "midiBanner"
+            visible: midiLayer.learning
+            x: 0; y: 0; width: parent.width; height: midiLayer.bannerH
+            readonly property int kind: midiLayer.banner.kind !== undefined ? midiLayer.banner.kind : 0
+            color: kind === 2 ? "#16331F" : (kind === 1 || kind === 3) ? "#33280F" : "#14324F"
+            TouchInput { }                       // the top bar under it takes nothing
+            Rectangle
+            {
+                id: midiChip
+                x: trackViewRoot.fs(14); anchors.verticalCenter: parent.verticalCenter
+                width: midiChipT.implicitWidth + trackViewRoot.fs(22); height: trackViewRoot.fs(32); radius: 4
+                color: parent.kind === 2 ? "#6ECD82" : (parent.kind === 1 || parent.kind === 3) ? "#E3B44F" : "#4FA3E3"
+                Text { id: midiChipT; anchors.centerIn: parent; text: parent.parent.kind === 2 ? qsTr("LEARNED") : qsTr("MIDI LEARN"); color: "#0A1622"; font.bold: true; font.pixelSize: trackViewRoot.fs(14); font.letterSpacing: 1.5 }
+            }
+            Column
+            {
+                anchors.left: midiChip.right; anchors.leftMargin: trackViewRoot.fs(18); anchors.verticalCenter: parent.verticalCenter
+                width: midiBtns.x - x - trackViewRoot.fs(16)
+                spacing: trackViewRoot.fs(3)
+                Text { objectName: "midiBannerText"; width: parent.width; elide: Text.ElideRight; text: midiLayer.banner.text || ""; color: "#FFFFFF"; font.bold: true; font.pixelSize: trackViewRoot.fs(18) }
+                Text { width: parent.width; elide: Text.ElideRight; visible: text !== ""; text: midiLayer.banner.sub || ""; color: "#A9C3DA"; font.pixelSize: trackViewRoot.fs(13) }
+            }
+            Row
+            {
+                id: midiBtns
+                anchors.right: parent.right; anchors.rightMargin: trackViewRoot.fs(14); anchors.verticalCenter: parent.verticalCenter
+                spacing: trackViewRoot.fs(10)
+                Repeater
+                {
+                    model: midiLayer.sel !== "" ? [ { t: qsTr("CANCEL"), n: "midiCancel", primary: false } ]
+                         : (trackManager && trackManager.midiCanUndo ? [ { t: qsTr("UNDO"), n: "midiUndo", primary: false }, { t: qsTr("DONE"), n: "midiDone", primary: true } ]
+                                                                    : [ { t: qsTr("DONE"), n: "midiDone", primary: true } ])
+                    Rectangle
+                    {
+                        objectName: modelData.n
+                        width: Math.max(trackViewRoot.fs(120), bT.implicitWidth + trackViewRoot.fs(36)); height: trackViewRoot.fs(48); radius: 6
+                        color: modelData.primary ? "#FFFFFF" : "transparent"
+                        border.width: modelData.primary ? 0 : 1.5; border.color: "#A9C3DA"
+                        Text { id: bT; anchors.centerIn: parent; text: modelData.t; color: modelData.primary ? "#0A1622" : "#FFFFFF"; font.bold: true; font.pixelSize: trackViewRoot.fs(14); font.letterSpacing: 1.5 }
+                        TouchInput
+                        {
+                            onReleasedAt: (x, y, inside) =>
+                            {
+                                if (!inside || !trackManager) return
+                                if (modelData.n === "midiCancel") trackManager.midiCancel()
+                                else if (modelData.n === "midiUndo") trackManager.midiUndo()
+                                else trackManager.midiLearnStop()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

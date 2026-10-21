@@ -79,6 +79,7 @@ Rectangle
     property bool advancedOpen: false
     property bool cacheOpen: false
     property bool learnedOpen: false     // R436_LEARNED
+    property bool midiOpen: false        // R486_MI_SETUP_OPEN
     property bool labMenuOpen: false     // R436_LAB_MENU
     property string ioMessage: ""
 
@@ -333,6 +334,18 @@ Rectangle
                 }
             }
 
+            // R486_MI_SETUP_TILE: MIDI LEARN's list (64 wide: the row still fits at 1366)
+            TrackTile
+            {
+                objectName: "midiTile"
+                Layout.preferredWidth: 64
+                Layout.preferredHeight: 34
+                label: qsTr("MIDI")
+                active: setupRoot.midiOpen
+                activeColor: "#4FA3E3"
+                onTapped: setupRoot.midiOpen = !setupRoot.midiOpen
+            }
+
             TrackTile
             {
                 Layout.preferredWidth: 120
@@ -371,6 +384,139 @@ Rectangle
                 active: on
                 activeColor: "#4FB3C8"
                 onTapped: if (typeof qlcplus !== "undefined" && qlcplus) qlcplus.toggleFullscreen()
+            }
+        }
+
+        // ------------------------------------------------- R486_MI_SETUP (fold-out)
+        // Tobias 10-21 (mockups 1 + 6 approved): where QLC+ hears MIDI, the last message
+        // (input only - the one feedback there is), LEARN, the list with CLEAR, CLEAR ALL (SURE?)
+        Rectangle
+        {
+            id: midiPanel
+            objectName: "midiPanel"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            readonly property var rows: trackManager && trackManager.midiMappings ? trackManager.midiMappings : []
+            readonly property string listen: trackManager && trackManager.midiListen ? trackManager.midiListen : ""
+            readonly property real listH: Math.min(Math.max(1, rows.length) * 38, Math.max(38 * 3, setupRoot.height - 330))
+            readonly property real wantH: 124 + listH + 10
+            Layout.preferredHeight: visible ? wantH : 0
+            Layout.maximumHeight: visible ? wantH : 0
+            visible: setupRoot.midiOpen
+            onVisibleChanged: if (visible && trackManager) trackManager.midiRefresh()
+            color: "#1E1E21"
+            radius: 6
+            readonly property real cName: 190
+            readonly property real cFrom: 300
+            readonly property real cKind: 96
+
+            Text { x: 20; y: 14; text: qsTr("MIDI CONTROLLER"); color: setupRoot.cText; font.bold: true; font.pixelSize: 16 }
+            Text
+            {
+                x: 190; y: 16; width: parent.width - 190 - 290; elide: Text.ElideRight
+                text: qsTr("Input only - nothing is sent back. A fader takes over when it passes the value on the screen.")
+                color: setupRoot.cDim; font.pixelSize: 13
+            }
+            TrackTile
+            {
+                objectName: "midiLearnTile"
+                x: parent.width - 20 - 120 - 8 - 130; y: 8; width: 130; height: 34
+                label: qsTr("LEARN"); active: true; activeColor: "#4FA3E3"
+                onTapped:
+                {
+                    if (!trackManager) return
+                    trackManager.midiLearnStart()
+                    // the controls are on the page: SETUP closes
+                    if (setupRoot.host) setupRoot.host.setupOpen = false
+                }
+            }
+            TrackTile
+            {
+                id: midiClearAllTile
+                objectName: "midiClearAll"
+                property bool armed: false
+                x: parent.width - 20 - 120; y: 8; width: 120; height: 34
+                label: armed ? qsTr("SURE?") : qsTr("CLEAR ALL")
+                active: armed; activeColor: "#E3B44F"
+                enabled: midiPanel.rows.length > 0
+                opacity: enabled ? 1 : 0.4
+                onTapped:
+                {
+                    if (armed === false) { armed = true; midiClearArm.restart(); return }
+                    armed = false
+                    if (trackManager) trackManager.midiClearAll()
+                }
+                Timer { id: midiClearArm; interval: 4000; onTriggered: midiClearAllTile.armed = false }
+            }
+            // where QLC+ hears MIDI
+            Rectangle { x: 20; y: 56; width: 10; height: 10; radius: 5; color: midiPanel.listen !== "" ? "#6ECD82" : "#F05050" }
+            Text
+            {
+                objectName: "midiListen"
+                x: 38; y: 50; width: parent.width - 58; elide: Text.ElideRight
+                text: midiPanel.listen !== "" ? midiPanel.listen
+                      : qsTr("No MIDI input patched in QLC+ - patch your controller under Inputs/Outputs (start QLC+ once without -k, then save the show)")
+                color: midiPanel.listen !== "" ? setupRoot.cText : "#F05050"; font.pixelSize: 14; font.bold: midiPanel.listen === ""
+            }
+            Text
+            {
+                objectName: "midiLast"
+                x: 38; y: 72; width: parent.width - 58; elide: Text.ElideRight
+                text: trackManager && trackManager.midiLast ? trackManager.midiLast : qsTr("Last heard: nothing yet")
+                color: "#6A6A74"; font.pixelSize: 13
+            }
+            Repeater
+            {
+                model: [ { x: 20, t: qsTr("CONTROL") }, { x: 20 + midiPanel.cName, t: qsTr("FROM YOUR CONTROLLER") },
+                         { x: 20 + midiPanel.cName + midiPanel.cFrom, t: qsTr("KIND") },
+                         { x: 20 + midiPanel.cName + midiPanel.cFrom + midiPanel.cKind, t: qsTr("NOW") } ]
+                Text { x: modelData.x; y: 100; text: modelData.t; color: "#6A6A74"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1 }
+            }
+            Text
+            {
+                visible: midiPanel.rows.length === 0
+                x: 20; y: 124; width: parent.width - 40; height: 38; verticalAlignment: Text.AlignVCenter
+                text: qsTr("Nothing learned yet. Tap LEARN, tap a control on the page, then move a fader or press a button on your controller.")
+                color: setupRoot.cDim; font.pixelSize: 14; elide: Text.ElideRight
+            }
+            ListView
+            {
+                x: 12; y: 120; width: parent.width - 24; height: midiPanel.listH
+                clip: true
+                interactive: contentHeight > height
+                boundsBehavior: Flickable.StopAtBounds
+                model: midiPanel.rows
+                delegate: Rectangle
+                {
+                    id: mrow
+                    objectName: "midiRow:" + modelData.t
+                    width: ListView.view.width; height: 38
+                    color: "transparent"
+                    Rectangle
+                    {
+                        anchors.fill: parent; anchors.bottomMargin: 4; radius: 4
+                        color: index % 2 === 0 ? "#242428" : "#1E1E21"
+                    }
+                    Text { x: 8; width: midiPanel.cName - 12; y: 8; elide: Text.ElideRight
+                           text: modelData.n; color: setupRoot.cText; font.bold: true; font.pixelSize: 14 }
+                    Text { x: 8 + midiPanel.cName; width: midiPanel.cFrom - 12; y: 8; elide: Text.ElideRight
+                           text: modelData.f; color: "#4FA3E3"; font.pixelSize: 14 }
+                    Rectangle
+                    {
+                        x: 8 + midiPanel.cName + midiPanel.cFrom; y: 7
+                        width: 70; height: 20; radius: 3; color: "transparent"; border.width: 1; border.color: "#4A4A52"
+                        Text { anchors.centerIn: parent; text: modelData.k; color: setupRoot.cDim; font.bold: true; font.pixelSize: 11 }
+                    }
+                    Text { x: 8 + midiPanel.cName + midiPanel.cFrom + midiPanel.cKind; width: mrow.width - x - 100; y: 9
+                           elide: Text.ElideRight; text: modelData.s; color: modelData.w ? "#E3B44F" : setupRoot.cDim; font.pixelSize: 13 }
+                    TrackTile
+                    {
+                        objectName: "midiClear:" + modelData.t
+                        anchors.right: parent.right; anchors.rightMargin: 4; y: 4
+                        width: 84; height: 26; label: qsTr("CLEAR")
+                        onTapped: if (trackManager) trackManager.midiClear(modelData.t)
+                    }
+                }
             }
         }
 
