@@ -2060,7 +2060,7 @@ public:
     QString m_formTrack;
     int m_formLandBeat = -1;
     bool m_formWhite = false;            // strob-storm: white this drop
-    bool m_formSingle = false;           // strob-storm: single eyes at the stop this drop
+    bool m_formSingle = false;           // strob-storm: whole bars at the stop this drop (R489_EX_MEMBERS)
     bool m_formStormBars = false;        // strob-storm: the show has the storm programmes
     int m_formSideBeats = 2;             // side-mod-side: beats a side
     bool m_formWild = false;             // omvendt: this beat is in the build's wild bars
@@ -2116,7 +2116,9 @@ public:
     int m_formKickBeat = -1;             // ... the beat it last decided on
     int m_formKickLast = -10;            // ... the last beat with a kick (a launch)
     bool m_formKickLaunch = false;       // ... this beat launched
-    int m_formKickKind = -1;             // ... 0 fill, 1 packet, 2/3 the same back
+    int m_formKickKind = -1;             // ... 0 fill, 1 packet, 2/3 the same back, 4/5 the step
+    bool m_formKickStep = false;         // ... R489_EX_STEP_MEMBERS: one bar a kick (80-90 %)
+    int m_formKickStepNo = 0;            // ... the step's kicks so far this way
     bool dropFormKickReady() const;
     quint32 dropFormKick(const QString &key, const QString &colour, qreal kick, int beat, int dropBar);
     bool dropFormKickWait(const QString &key, quint32 mf, const Function *func) const;

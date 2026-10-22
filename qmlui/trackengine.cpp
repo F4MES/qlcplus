@@ -11256,7 +11256,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (dropArrives)
     {
         m_barSingleDraw = rng->bounded(100) < 35; // C20261020: even a HIT need not be single-eye
-        m_barSingleDraw = m_barSingleDraw || m_formSingle;   // R488_DX_SINGLE: strob-storm drew single eyes (100 %)
+        // R488_DX_SINGLE is gone (R489_EX_NO_SINGLE): strob-storm's stop is whole bars now, it draws no single eyes
         if (hold == false && isCalm == false)
         {
             QList<int> flows = { 0, 1, 2 };
@@ -14908,7 +14908,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                      || (m_fullAuto && tier > 0 && key != m_rhythmLead);
                     motionDivision = slowed ? qMax(densePace, motionDivision) : densePace;
                 }
-                // R488_DX_STORM_PACE: the storm's own step - sixteenths for single eyes at the stop, eighths for pairs
+                // R488_DX_STORM_PACE: the storm's own step - sixteenths at the stop (whole bars, R489_EX_PACE_NOTE), eighths for pairs
                 if (formMf != Function::invalidId() && mf == formMf)
                     motionDivision = dropFormDivision(mi.barCoverage.minEyes < 2);
                 if (kickMf != Function::invalidId() && mf == kickMf)
@@ -25376,7 +25376,10 @@ void TrackEngine::dropRemember(bool isDrop, const QSet<QString> &castSet)
  *  100 % lift then runs). Logged: sig:drop-form:<name> on the landing,
  *  form-<name> in the beat's event column while it runs.
  *
- *    strob-storm    95 %  big + hard drops: his STROB SLOW button as a drop
+ *    strob-storm    95 %  big + hard drops: his STROB SLOW button as a drop;
+ *                         at the stop (R489_EX_DOC, Tobias 10-22) one random
+ *                         WHOLE bar (8 eyes) at a time on the sixteenths,
+ *                         like the strobe lamps; 95-99 % two eyes a bar
  *    omvendt        70 %  a wild build into a flatter drop that lands calm
  *    rejsen-op      75 %  bars dark + aimed down before the landing, lit on
  *                         it, one slow fade up to the home aim (8-16 bars)
@@ -25387,9 +25390,11 @@ void TrackEngine::dropRemember(bool isDrop, const QSet<QString> &castSet)
  *    halvtid        50 %  a heavy drop in half time (own)
  *    kun-laser      60 %  a strobe-free, laser-led melodic drop (own)
  *    kick-chase     60 %  the bars chase ON THE KICK, home aim only (Tobias
- *                         10-22, R488_DX_KICK): from 80 % every kick fills the
+ *                         10-22, R488_DX_KICK): from 90 % every kick fills the
  *                         row bar by bar and it is dark again before the next
- *                         beat; 60-80 % every kick sends a packet of 3 eyes
+ *                         beat; 80-90 % every kick lights the NEXT whole bar,
+ *                         one bar a kick through the room (R489_EX_DOC_KICK);
+ *                         60-80 % every kick sends a packet of 3 eyes
  *                         across the room. One way for 8 bars, back for 8.
  * ===================================================================== */
 
@@ -25408,7 +25413,8 @@ enum TrackDropFormId
 #define ENGINE_FORM_MASK_SIDE 2          // ... the two halves answer each other
 #define ENGINE_FORM_MASK_WAVE 3          // ... a wave across the group
 #define ENGINE_KICK_PREFIX    QStringLiteral("AUTO Bars Drop Kick ")
-#define ENGINE_KICK_FILL      0.80       // kick-chase: the fill from here, the packet under it
+#define ENGINE_KICK_FILL      0.80       // kick-chase: whole bars from here, the packet under it
+#define ENGINE_KICK_ALL       0.90       // R489_EX_KICK_ALL: the whole row a kick from here, one bar a kick under it
 
 static const char *trackDropFormName(int form)
 {
@@ -25891,13 +25897,17 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
             // STORM in white or the room's colour (never white under his tiles - a tile is one colour)
             m_formWhite = form == DF_STORM && m_override.isEmpty() && m_overrideSet.count() < 2
                        && dice.bounded(2) == 0;
-            // single eyes are an option at the stop, never forced (BACKLOG lys 1)
-            // (tick() draws m_barSingleDraw after this, on the same beat: it reads m_formSingle)
-            m_formSingle = form == DF_STORM && fader >= 1.0 - 1e-9 && dice.bounded(100) < 65;
+            // R489_EX_WHOLE_LAND (Tobias 10-22: "paa 100% skal det strobe paa hele baren
+            // (8 oejne) og saa vaere tilfaeldigt paa barene, ligesom paa strobe-lamperne"):
+            // the storm's stop is one random WHOLE bar at a time, every storm drop - the
+            // slider decides per beat (dropFormProgramme), no single eyes any more
+            m_formSingle = form == DF_STORM;
             // side to side per half bar, per beat from 90 % (and on a backbeat)
             m_formSideBeats = (fader >= 0.90 || m_backbeat) ? 1 : 2;
             // kick-chase: which of the two from the landing (then on the slider, per kick)
             m_formKickFill = fader >= ENGINE_KICK_FILL;
+            m_formKickStep = fader < ENGINE_KICK_ALL;    // R489_EX_STEP_LAND: one bar a kick under 90 %
+            m_formKickStepNo = 0;
             m_formKickFid = Function::invalidId();
             m_formKickBeat = -1;
             m_formKickLast = -10;
@@ -26124,23 +26134,25 @@ bool TrackEngine::dropFormNative(const QString &key) const
 quint32 TrackEngine::dropFormProgramme(const QString &key, const QString &colour, bool isDrop) const
 {
     // STROB STORM's bars: the reserved AUTO Bars Drop Storm programmes (gen_programs,
-    // runde 488) - pairs on the eighths at 95-99 %, single eyes at the stop when this
-    // drop drew them. Measured by the same coverage as every bar programme: a
+    // runde 488) - pairs on the eighths at 95-99 %, and at the stop (DROP HIT's lift
+    // too) one random WHOLE bar at a time on the sixteenths (R489_EX_WHOLE_PICK,
+    // Tobias 10-22). Measured by the same coverage as every bar programme: a
     // programme the eye rules refuse now is not handed out. Missing in an old show
-    // file: the bars stay classic.
+    // file: the stop runs the pairs, and with no storm programmes the bars stay classic.
     if (m_formNow != DF_STORM || isDrop == false)
         return Function::invalidId();
     const TrackGroup &g = m_groups.value(key);
     if (g.lasers == false || g.patternDevice)
         return Function::invalidId();
-    const bool single = m_formSingle && m_faderNow >= 1.0 - 1e-9;
-    const QString want = single ? QStringLiteral("AUTO Bars Drop Storm ") : QStringLiteral("AUTO Bars Drop Storm Pairs ");
+    const bool whole = m_formSingle && m_faderNow >= 1.0 - 1e-9;
     const QString hue = colour.isEmpty() ? QString() : colour.toLower();
     quint32 found = Function::invalidId();
+    for (int pass = whole ? 0 : 1; pass < 2 && found == Function::invalidId(); pass++)
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
     {
         const TrackFuncInfo &info = it.value();
-        if (info.name.startsWith(want) == false || (single && info.name.contains(QStringLiteral(" Pairs "))))
+        const QString want = pass == 0 ? QStringLiteral("AUTO Bars Drop Storm Whole ") : QStringLiteral("AUTO Bars Drop Storm Pairs ");
+        if (info.name.startsWith(want) == false)
             continue;
         if (info.banned || info.role != ENGINE_ROLE_MOTION || info.groups.count() != 1 || info.groups.contains(key) == false)
             continue;
@@ -26158,8 +26170,9 @@ quint32 TrackEngine::dropFormProgramme(const QString &key, const QString &colour
 
 int TrackEngine::dropFormDivision(bool single) const
 {
-    // the storm's step: sixteenths for the single eyes at the stop, eighths for the pairs
-    return single ? 250 : 500;
+    // the storm's step: sixteenths at the stop (the whole bars - R489_EX_WHOLE_PACE -
+    // or an old show file's pairs there), eighths for the pairs at 95-99 %
+    return (single || (m_formSingle && m_faderNow >= 1.0 - 1e-9)) ? 250 : 500;
 }
 
 QString TrackEngine::dropFormColour(const QString &key, const QString &colour) const
@@ -26728,7 +26741,11 @@ bool TrackEngine::dropFormRiseHolds(const QString &key) const
  * timing IS the tempo. The engine starts one from
  * its first step on every beat the analysis heard a kick on (tick()'s `kick`,
  * the strobes' own rule: under 0.20 is no kick) and nothing on a beat without:
- *   Fill    (from 80 %)  whole bars, bar by bar: the row is full at half the
+ *   Step    (80-90 %)    one WHOLE bar a kick, the next bar on the next kick,
+ *                        through the room (R489_EX_STEP_DOC, Tobias 10-22: "behold
+ *                        ogsaa ... hvert kick 'fylder' en bar ad gangen gennem
+ *                        rummet"); lit at once, dark from 70 % of the beat
+ *   Fill    (from 90 %)  whole bars, bar by bar: the row is full at half the
  *                        beat, stands a tenth, dark from 70 % of the beat - a
  *                        fill never runs into the next kick, so the row can
  *                        never end up standing lit
@@ -26771,6 +26788,11 @@ quint32 TrackEngine::dropFormKick(const QString &key, const QString &colour, qre
             m_formKickFill = true;
         else if (m_faderNow < ENGINE_KICK_FILL - 0.02)
             m_formKickFill = false;
+        // R489_EX_STEP_PICK: one bar a kick under 90 %, the whole row from it
+        if (m_faderNow >= ENGINE_KICK_ALL + 0.02)
+            m_formKickStep = false;
+        else if (m_faderNow < ENGINE_KICK_ALL - 0.02)
+            m_formKickStep = true;
         const bool back = ((qMax(0, dropBar) / 8) % 2) == 1;
         m_formKickLaunch = kick < 0.0 || kick >= 0.20;
         if (m_formKickLaunch)
@@ -26778,12 +26800,25 @@ quint32 TrackEngine::dropFormKick(const QString &key, const QString &colour, qre
             // the packet before is still crossing: the chained one carries its tail
             const bool chain = m_formKickFill == false && m_formKickLast == beat - 1
                             && m_formKickKind == (back ? 3 : 1);
-            const int kind = m_formKickFill ? (back ? 2 : 0) : (back ? 3 : 1);
-            const QString want = ENGINE_KICK_PREFIX
-                               + (m_formKickFill ? QStringLiteral("Fill ") : (chain ? QStringLiteral("Packet Chain ") : QStringLiteral("Packet ")))
-                               + (back ? QStringLiteral("Back ") : QString());
+            bool step = m_formKickFill && m_formKickStep;
+            const int stepKind = back ? 5 : 4;
+            if (step && m_formKickKind != stepKind)
+                m_formKickStepNo = 0;        // a new run (or the way back) starts at its own end
+            const int bars = qMax(1, int(m_groups.value(key).fixtures.count()));
+            const int stepIdx = m_formKickStepNo % bars;
+            const int stepBar = back ? bars - stepIdx : stepIdx + 1;
             const QString hue = colour.toLower();
             quint32 found = Function::invalidId();
+            int kind = -1;
+            // the step first; an older show file without the step programmes runs the fill
+            for (int pass = step ? 0 : 1; pass < 2 && found == Function::invalidId(); pass++)
+            {
+            step = pass == 0;
+            kind = step ? stepKind : (m_formKickFill ? (back ? 2 : 0) : (back ? 3 : 1));
+            const QString want = ENGINE_KICK_PREFIX
+                               + (step ? QStringLiteral("Step %1 ").arg(stepBar)
+                                  : (m_formKickFill ? QStringLiteral("Fill ") : (chain ? QStringLiteral("Packet Chain ") : QStringLiteral("Packet "))))
+                               + (back && step == false ? QStringLiteral("Back ") : QString());
             for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
             {
                 const TrackFuncInfo &info = it.value();
@@ -26800,12 +26835,15 @@ quint32 TrackEngine::dropFormKick(const QString &key, const QString &colour, qre
                 found = info.id;
                 break;
             }
+            }   // R489_EX_STEP_FOUND: the pass loop
             if (found != Function::invalidId())
             {
                 if (kind != m_formKickKind)
                     logSignal(QStringLiteral("sig:drop-kick:%1:%2@%3")
-                              .arg(m_formKickFill ? QStringLiteral("fill") : QStringLiteral("packet"),
+                              .arg(step ? QStringLiteral("step") : (m_formKickFill ? QStringLiteral("fill") : QStringLiteral("packet")),
                                    back ? QStringLiteral("back") : QStringLiteral("forth")).arg(beat));
+                if (step)
+                    m_formKickStepNo++;
                 m_formKickFid = found;
                 m_formKickKind = kind;
                 m_formKickLast = beat;
@@ -26835,7 +26873,9 @@ int TrackEngine::dropFormKickDivision(quint32 mf) const
     // Time chasers, so they start on the kick itself - a Beats chaser of sub-beat
     // steps waits for the next whole Link beat): the fill's ten steps fill a beat,
     // the packet moves a bar a quarter beat
-    return m_funcs.value(mf).name.contains(QStringLiteral(" Fill ")) ? 100 : 250;
+    // R489_EX_STEP_PACE: the step's ten steps fill a beat like the fill's
+    const QString &name = m_funcs.value(mf).name;
+    return (name.contains(QStringLiteral(" Fill ")) || name.contains(QStringLiteral(" Step "))) ? 100 : 250;
 }
 
 bool TrackEngine::dropFormHomeOnly(const QString &key) const
