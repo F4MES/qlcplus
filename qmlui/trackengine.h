@@ -290,6 +290,7 @@ struct TrackMove
     qreal texture = 0.0;      // per-fixture level spread among the lit ones, 0..0.3 - a flat group looks static
     bool bare = false;        // strobes: blink one at a time with nothing lit behind them
     int width = 1;            // chase / pingpong: how many neighbours are lit together (runde 338)
+    int formMask = 0;         // R488_DX_MASK_FIELD: a drop form's own picture (dropforms.inc.cpp), 0 none
     qreal drawnE = -1.0;      // the energy this move was drawn at (-1 = m_movesEnergy's) - runde 264
 };
 
@@ -2045,6 +2046,82 @@ public:
     QStringList dropPicks(const QStringList &priority, int effects) const;
     void dropVariety(QStringList &priority, int effects, const QString &base, bool strobeFirst);
     void dropRemember(bool isDrop, const QSet<QString> &castSet);
+    // R488_DX_DECL: the drop forms (track_runtime/dropforms.inc.cpp, runde 488)
+    int m_formPlan = 0;                  // the form decided for the coming drop flag
+    int m_formPlanFor = -1;              // ... that flag
+    QString m_formPlanTitle;             // ... in this track
+    qreal m_formPlanScore = 0.0;
+    bool m_formPlanHit = false;          // ... with his DROP HIT armed
+    int m_formNow = 0;                   // the form on stage in this drop (0 = the classic drop)
+    int m_formFrom = -1;                 // its landing
+    int m_formUntil = -1;                // its last beat
+    int m_formLast = 0;                  // the last drop's form: never the same special twice
+    int m_formDrops = 0;                 // drops landed in this track
+    QString m_formTrack;
+    int m_formLandBeat = -1;
+    bool m_formWhite = false;            // strob-storm: white this drop
+    bool m_formSingle = false;           // strob-storm: single eyes at the stop this drop
+    bool m_formStormBars = false;        // strob-storm: the show has the storm programmes
+    int m_formSideBeats = 2;             // side-mod-side: beats a side
+    bool m_formWild = false;             // omvendt: this beat is in the build's wild bars
+    int m_formWildFor = -1;
+    qreal m_formWildProg = 0.0;          // ... the build's prog where they began
+    qreal m_formWildFrac = 0.0;          // ... and how far in
+    int m_riseStage = 0;                 // rejsen-op: 0 off, 1 dark, 2 down, 3 rising, 4/5 home in the dark
+    int m_riseUnits = 0;
+    int m_riseMs = 0;
+    int m_riseBeats = 32;
+    qint64 m_riseStartMs = -1;
+    int m_riseBeat = -1;
+    QString m_riseGroup;
+    bool dropFormBlocked(int at) const;
+    QString dropFormBars() const;
+    QString dropFormStrobes() const;
+    int dropFormDecide(int at, qreal fader, qreal bpm, int beat);
+    void dropFormReset(bool newTrack);
+    void dropFormEnd(const QString &why);
+    void dropFormBeat(int beat, int secStart, int secEnd, const QString &nextState, bool isDrop,
+                      bool isBuild, int dropBar, int beatInBar, qreal fader, bool hold, bool isCalm,
+                      bool still, qreal bpm, qreal prog, bool forceNext);
+    bool dropFormOwns(const QString &key) const;
+    void dropFormMove(const QString &key, TrackMove &mv, int dropBar, qreal fader, const QString &base) const;
+    void dropFormPulse(const QString &key, TrackMove &mv, const QString &base) const;
+    bool dropFormNative(const QString &key) const;
+    quint32 dropFormProgramme(const QString &key, const QString &colour, bool isDrop) const;
+    int dropFormDivision(bool single) const;
+    QString dropFormColour(const QString &key, const QString &colour) const;
+    qreal dropFormLevel(const QString &key, const QString &base, int dropBar, int beatInBar) const;
+    void dropFormBreathDark(QSet<QString> &darkGroups, const QSet<QString> &castSet, const QString &base,
+                            int dropBar, int beatInBar) const;
+    bool dropFormCalm() const;
+    bool dropFormCalmLanding(bool isDrop, int secStart) const;
+    bool dropFormFullBuild(int beat) const;
+    bool dropFormHalfTime() const;
+    bool dropFormHoldsColour(bool isDrop, int secStart) const;
+    void dropFormCast(QStringList &priority) const;
+    void dropFormPlan();
+    QString dropFormEvent() const;
+    int dropFormSide(const QString &group, int part) const;
+    QVector<qreal> dropFormMask(const QString &group, const TrackMove &move, int step) const;
+    quint32 dropFormRiseScene(const QString &key, quint32 home, int units);
+    void dropFormRiseDark(const QString &key, QSet<QString> &darkGroups);
+    qreal dropFormRiseLeft() const;
+    bool dropFormRiseAim(const QString &key, QSet<QString> &darkGroups, bool inCast, bool isDrop,
+                         bool dropWaiting, int beat, int dropBar, int beatInBar, int secStart,
+                         qreal fader, bool isCalm, bool still);
+    void dropFormRiseFader(qreal fader);
+    bool dropFormRiseHolds(const QString &key) const;
+    bool m_formKickFill = false;         // kick-chase: the fill (from 80 %), else the 3-eye packet
+    quint32 m_formKickFid = 0xFFFFFFFFu;  // ... the programme last started on a kick (Function::invalidId())
+    int m_formKickBeat = -1;             // ... the beat it last decided on
+    int m_formKickLast = -10;            // ... the last beat with a kick (a launch)
+    bool m_formKickLaunch = false;       // ... this beat launched
+    int m_formKickKind = -1;             // ... 0 fill, 1 packet, 2/3 the same back
+    bool dropFormKickReady() const;
+    quint32 dropFormKick(const QString &key, const QString &colour, qreal kick, int beat, int dropBar);
+    bool dropFormKickWait(const QString &key, quint32 mf, const Function *func) const;
+    int dropFormKickDivision(quint32 mf) const;
+    bool dropFormHomeOnly(const QString &key) const;
     // R483_NEXT_DECL (Tobias 10-20, "3": 57 of 263 NEXT within 4 s of the one before - the
     // staff flipping through). The looks NEXT threw away in this section, last four: not again
     QString m_nextRejState;                          // the section kind they were thrown away in
