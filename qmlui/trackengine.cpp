@@ -26354,14 +26354,14 @@ int TrackEngine::dropFormSide(const QString &group, int part) const
         return -1;
     if (g.lasers && g.patternDevice == false)
     {
-        int far = 0;
+        int wallBars = 0;
         for (int i = 0; i < n; i++)
         {
             Fixture *fx = m_doc ? m_doc->fixture(g.fixtures.at(i)) : nullptr;
             if (fx != nullptr && (fx->address() + 1 == 357 || fx->address() + 1 == 395))
-                far++;
+                wallBars++;
         }
-        if (far > 0 && far < n)
+        if (wallBars > 0 && wallBars < n)
         {
             Fixture *fx = m_doc ? m_doc->fixture(g.fixtures.at(part)) : nullptr;
             return (fx != nullptr && (fx->address() + 1 == 357 || fx->address() + 1 == 395)) ? 1 : 0;
