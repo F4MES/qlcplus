@@ -7494,6 +7494,10 @@ void TrackEngine::setBlackout(bool on)
         selfTest();
     if (on)
         labShutdown(false);             // R410_LAB
+    // R492_LAB_BLACKOUT_OFF: BLACKOUT let go - a lab's old "BLACKOUT is on" refusal goes with it
+    // (no lab can be open under BLACKOUT, so this only clears the refusals)
+    else if (m_labActive == false && m_slabActive == false && m_clabActive == false)
+        labShutdown(false);
 
     applyGroupOff();          // it owns both masks: the off ones and the black ones
 
@@ -14291,6 +14295,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // nights have been 102-130).
         while (mv.subSteps > 1 && m_beatMs > 0.0 && m_beatMs / mv.subSteps < 110.0)
             mv.subSteps /= 2;
+        // R492_GROOVE_PAIRS (Tobias 10-22: "1/2 er OK nogle gange under grooves, men 1/8 er klart
+        // for meget", chosen "halvt slag OK indimellem"): Codex' chase pairs after ALL the shaping
+        // above. His own floor again - under 75 % a pair needs two beats a step (the impact, the
+        // turnaround and the halvings undid it) - and outside a drop two hits are never closer than
+        // half a beat: on sub-steps the pair goes, the walk stays
+        if (mv.rhythm == 3 && m_faderNow < 0.75)
+            mv.stepBeats = qMax(2, mv.stepBeats);
+        if (mv.rhythm == 3 && isDrop == false && mv.subSteps > 1)
+            mv.rhythm = 0;
 
         // ... and the third place (runde 153): when the strobes have drawn one
         // of the show's chases for this drop, pinning the generated picture to
@@ -19296,6 +19309,21 @@ void TrackEngine::closingTick(bool showOn)
         ensureTable();
         applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
     }
+    // R492_CLOSING_FAN (Tobias 10-22: "ja" to the clock's closing taking the fan to 0 as LAST
+    // TRACK and SHOW OFF do): once, as the closing starts - his own fan in the dark after that
+    // (a test) is left alone. The VC fan scene too (the R487_B6_HOUSE_FAN pattern).
+    if (closingStarts && lastLid == false)
+    {
+        ensureTable();
+        if (m_fan > 0.0)
+        {
+            atmosNext(QStringLiteral("closing"));
+            setFan(0.0);
+        }
+        Function *fanFunc = m_doc != nullptr ? m_doc->function(m_fanScene) : nullptr;
+        if (fanFunc != nullptr && fanFunc->name() == ENGINE_FAN_SCENE)
+            applyAtmos(m_fanScene, m_fanChannels, 0.0);
+    }
     announceRoom();
 }
 
@@ -22329,7 +22357,16 @@ void TrackEngine::labShutdown(bool rebuildNow)
 {
     slabShutdown();                      // R436_STROBE_LAB: every way this lab closes closes that one too
     if (m_labActive == false)
+    {
+        // R492_LAB_REFUSAL (Tobias 10-22): an old OPEN refusal goes with any other lab, SHOW ON,
+        // a show load or BLACKOUT let go - it stood until this lab's next OPEN
+        if (m_labMessage.isEmpty() == false)
+        {
+            m_labMessage.clear();
+            emit labChanged();
+        }
         return;
+    }
     m_labActive = false;
     m_labAutoTimer.stop();
     m_labStepTimer.stop();
@@ -23304,7 +23341,14 @@ void TrackEngine::slabShutdown()
 {
     clabShutdown();                      // R440_COLOUR_LAB: every way a lab closes closes COLOUR LAB too
     if (m_slabActive == false)
+    {
+        if (m_slabMessage.isEmpty() == false)   // R492_SLAB_REFUSAL: as R492_LAB_REFUSAL
+        {
+            m_slabMessage.clear();
+            emit slabChanged();
+        }
         return;
+    }
     m_slabActive = false;
     m_slabAutoTimer.stop();
     if (m_slabGroup.isEmpty() == false)
@@ -23937,7 +23981,14 @@ void TrackEngine::clabClose()
 void TrackEngine::clabShutdown()
 {
     if (m_clabActive == false)
+    {
+        if (m_clabMessage.isEmpty() == false)   // R492_CLAB_REFUSAL: as R492_LAB_REFUSAL
+        {
+            m_clabMessage.clear();
+            emit clabChanged();
+        }
         return;
+    }
     clabStopAll();
     m_clabActive = false;                // the night's faders count again from here
     m_clabMessage.clear();
