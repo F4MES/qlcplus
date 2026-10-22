@@ -3926,6 +3926,7 @@ void TrackEngine::newTrackMemory(const QString &title)
     m_motifAllowed = false; m_motifPick = -1; m_chaseRhythm = 0;
     autoFadeStop(); m_autoFadePrevious = false;
     m_halfTime = false;
+    dropFormReset(title != m_trackTitle);   // R488_DX_RESET: nothing planned for the new track yet
 }
 
 void TrackEngine::clearDjLoop()
@@ -4719,6 +4720,8 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // to the fastest rate at any fader, 60 % as well as the stop: at 80 %
         // it now tops out a rate under, at 60 % at the middle of the band)
         qreal riserFrom = 0.90 - 0.30 * w2;
+        if (m_formWild)
+            riserFrom = qMin(riserFrom, m_formWildProg);   // R488_DX_WILD_RISER: omvendt - the riser from the wild bars
         if (m_hitStrobeNow)
         {
             want = rateCount - 1;        // R445_DROP_HIT: his STROBE - the fastest, the drop's first bar
@@ -4801,6 +4804,8 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
             beats = 1;
             headsOnly = true;
         }
+        if (want >= 0 && m_hitStrobeNow == false && dropFormCalm())
+            want = -1;                   // R488_DX_CALM_BURST: omvendt / kun-laser are strobe-free (the heads' accents too)
         if (want >= 0)
         {
             m_barStrobeDraw = rng->bounded(100) < 15; // chase is the bars' first choice
@@ -7967,6 +7972,12 @@ QList<TrackEngine::CandEntry> TrackEngine::buildCandidates(int role, const QStri
             continue;
         if (info.frozen)
             continue;                    // it can never step: nothing to follow the music with
+        // R488_DX_STORM_RESERVED: the strob-storm programmes are the drop form's alone
+        if (info.name.startsWith(QStringLiteral("AUTO Bars Drop Storm")))
+            continue;
+        // R488_DX_KICK_RESERVED: ... and kick-chase's (its packet is Tobias' own eye-rule exception)
+        if (info.name.startsWith(QStringLiteral("AUTO Bars Drop Kick ")))
+            continue;
         // "DrypDryp" (the animation lasers) only at a full fader. Tobias,
         // 2026-09-25: "skal kun bruges paa 100% energi. Den er alt for vild
         // til alt andet." By name, as the break's "vifte" is (tierOf).
@@ -10048,6 +10059,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool preDrop = isDrop == false && dropWaiting == false && hold == false
                 && nextState == QStringLiteral("drop")
                 && beatsToNext > 0 && beatsToNext <= 4;
+    // R488_DX_BEAT_CALL: the drop's form - decided ahead, landed, ended (dropforms.inc.cpp)
+    dropFormBeat(beat, secStart, secEnd, nextState, isDrop, isBuild, dropBar, beatInBar, fader, hold,
+                 isCalm, still, bpm, prog, forceNext);
 
     // THE DROP SETTLES (analyse 10g). Tobias, 2026-09-27: "et drop starter jo
     // meget ekstremt, men saa laenge det ikke bliver ved med at vaere
@@ -10550,6 +10564,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         changeColour = sectionColour || holdUp || turnUp;
     if (isCalm)
         changeColour = m_colour.isEmpty();
+    if (sectionChanged && m_colour.isEmpty() == false && dropFormHoldsColour(isDrop, secStart))
+        changeColour = false;            // R488_DX_HOLD_COLOUR: omvendt lands in the build's colour
     if (forceNext)
         changeColour = true;
     // R358_REPEAT: the repeat lands in the first one's colour
@@ -11240,6 +11256,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (dropArrives)
     {
         m_barSingleDraw = rng->bounded(100) < 35; // C20261020: even a HIT need not be single-eye
+        m_barSingleDraw = m_barSingleDraw || m_formSingle;   // R488_DX_SINGLE: strob-storm drew single eyes (100 %)
         if (hold == false && isCalm == false)
         {
             QList<int> flows = { 0, 1, 2 };
@@ -11272,6 +11289,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_nextDropSize = dropSizeAt(m_nextDropBeat);
     else if (isDrop == false)
         m_nextDropSize = 1.0;
+    if (isDrop == false && dropFormFullBuild(beat))
+        m_nextDropSize = 1.0;            // R488_DX_WILD_SIZE: omvendt - a big build into a flatter drop
     // R362_MINI_LAND (Tobias 10-05: "en kort pause inde i et drop faar en
     // mini-landing"): the kick gone for a bar or more inside a drop the
     // analysis did not split, and back. The nights of 10-02/03/04: 34 such
@@ -11389,6 +11408,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     const qreal riserBar = isBuild ? riserAt(beat - beatInBar, secStart, riserTo) : -1.0;
     if (riserBar >= 0.0 && dropWaiting == false)
         rampProg = qBound(0.0, 0.25 * rampProg + 0.75 * riserBar, 1.0);
+    if (m_formWild && isBuild && dropWaiting == false)   // R488_DX_WILD_RAMP: omvendt's last 4-8 bars at the top
+        rampProg = qMax(rampProg, 0.70 + 0.30 * m_formWildFrac);
     if (isBuild)
     {
         effects = qMax(effects, m_effectsBefore);
@@ -11410,6 +11431,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // it - the dice may have rounded down, the music may round up. It added
     // a group at any fader: at ENERGY 20 % a grown drop had two.
     const int energyTop = int(effectsWant(isDrop) + 0.999);
+    if (m_formWild && isBuild && effects < energyTop)
+        effects = energyTop;             // R488_DX_WILD_CAST: omvendt's build has all the slider gives
     if (m_dropGrow && isDrop && effects < energyTop)
         effects++;                       // R360_DROP_GROW: the music grew - one group more
     if (m_lookActive.isEmpty() == false && (isDrop || isBuild) && effects < energyTop)
@@ -11549,6 +11572,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         && nextVariety(priority, effects, base, strobeLead)
         && forceNext && m_nextSkipped.contains(QStringLiteral("cast")) == false)
         m_nextSkipped << QStringLiteral("cast");
+    // R488_DX_CAST: a drop form's own groups first, inside the same budget (the one-laser rule follows)
+    if (isDrop && hold == false && isCalm == false && m_forceOn == false)
+        dropFormCast(priority);
     // Runde 235: one laser type at a time below the top of the fader - the
     // bars or the animation laser, whichever the order put first; the next
     // group in line takes the other's place. On 25-26 Sep Tobias switched a
@@ -11910,6 +11936,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         m_dropPlanBeat = beat;
         m_planFaderNow = fader;              // R443_PLAN_LANE: the guesses are sized at the slider now
+        dropFormPlan();                  // R488_DX_PLAN: RIG shows the drop as its form lands it
         if (m_dropMode != oldMode || m_dropSet != oldSet || m_planSection != oldSection || m_dropPlanFor != oldBoundary)
             emit dropSetChanged();
     }
@@ -12369,6 +12396,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // C20261020_DIALOGUE: one four-bar phrase, one section in four at most
     // by draw, never consecutive sections, and only with bars + heads already lit.
     const bool dialogueAllowed = m_fullAuto && !hold && !isCalm && !still && !m_mixing
+                              && m_formNow == 0   // R488_DX_NO_DIALOGUE: a drop form is the picture
                               && !m_forceOn && !m_dropTouched && !forceNext
                               && !isBuild && !isBreak && fader >= 0.50 && m_hitAmokFrom < 0;
     if (sectionChanged)
@@ -12678,6 +12706,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
 
         bool inCast = castSet.contains(key);
+        // R488_DX_RISE_AIM: rejsen-op owns the bars' aim while it runs (its own dark steps)
+        if (dropFormRiseAim(key, darkGroups, inCast, isDrop, dropWaiting, beat, dropBar, beatInBar,
+                            secStart, fader, isCalm, still))
+            continue;
         // lasers move only in a dark beat at a break; heads move at break or
         // drop starts, and half the time at other section changes - every
         // section would be restless
@@ -12724,7 +12756,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // 40 %, not 60: from 40 % the bars may take a figure that lifts
             // them, from 60 % one that dips them (positionFunction / laserAimSafe)
             bool mayRoam = inCast && m_faderReal >= 0.40 && isBreak == false && isBuild == false
-                        && isCalm == false && still == false;
+                        && isCalm == false && still == false
+                        && dropFormHomeOnly(key) == false;   // R488_DX_KICK_HOME: kick-chase at the home aim only
             // LASER SAFETY (runde 171). The held aim was measured against the
             // fader only on the beat it was chosen: picked at 80 % - a figure
             // dipping 12 units under the home aim - it stayed there when the
@@ -13094,6 +13127,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     else
         m_halfTime = false;
+    if (dropFormHalfTime())
+        m_halfTime = true;               // R488_DX_HALFTIME: halvtid - the drop in half time
     // R358_VOCAL (Tobias 10-05): the mid band carrying the music - mids from
     // 55 % of the track's own top, no kick, the bass under 35 % and the highs
     // under half. Measured in the library: 6 % of the kickless beats, a
@@ -13525,6 +13560,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                    && (isCalm == false || g.lasers == false) && still == false && m_blackout == false
                    && (g.lasers == false || (m_fullAuto && (isBreak == false || liftBreak) && isBuild == false && isCalm == false))
                    && liftLeft == false
+                   && dropFormRiseHolds(key) == false   // R488_DX_RISE_SWEEP: no figure while the bars rise
                    // "Indtil 40 % energi skal de slet ikke bevaege sig"
                    // (Tobias, 2026-09-18). drawSweep() only asks on the beat
                    // a figure is DRAWN, so a figure drawn at 45 % kept running
@@ -13965,6 +14001,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // fading back into the show - on a 40-beat groove it began at offset 32
     // and the drop at 40 cut it (runde 262). beatsToNext <= 0: no flag known.
     if (m_fullAuto && m_sequenceGroups.isEmpty() && !hold && !isCalm && !isBreak
+        && m_formNow == 0                // R488_DX_NO_SEQUENCE: not over a drop form
         && !isBuild && !m_blackout && !m_mixing && !sectionChanged && !exposureRest
         && !preDrop
         // (review 294: a voice is 1-2 beats since runde 292 - the whole
@@ -13997,6 +14034,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     // Runde 260: who lights the room beside the base this beat - see
     // baseCovered(). Decided after every dark group of the beat is known.
+    // R488_DX_BREATH_DARK: aandedraet - the effects out on the phrase's last beat (before the base cover)
+    dropFormBreathDark(darkGroups, castSet, base, isDrop ? dropBar : -1, beatInBar);
     m_baseCover.clear();
     foreach (const QString &key, castSet)
     {
@@ -14211,6 +14250,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      && g.lasers == false) mv.subSteps = qMin(4, mv.subSteps * 2);
         }
 
+        // R488_DX_MOVE: the drop's form shapes the groups it owns - after the classic
+        // shaping (SPEED is put on again in dropFormMove), before every ceiling and guard below
+        if (isDrop && dropBar >= 0 && dropFormOwns(key))
+            dropFormMove(key, mv, dropBar, fader, base);
+        else if (isDrop && dropBar >= 0)
+            dropFormPulse(key, mv, base);
+
         // The strobe lamps do not run between the beats outside a drop
         // (Tobias, 2026-09-15: "deres chases er alt for hurtige generelt paa
         // full auto"). Six lamps handing a pattern round on sixteenths reads
@@ -14384,6 +14430,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // gets the bare level - or the two would multiply. (The level WITH them,
         // `gl`, went with runde 174: its last reader was the chase, which gets
         // the bare level too now, and an unused local stops the -Werror build.)
+        groupLevel *= dropFormLevel(key, base, isDrop ? dropBar : -1, beatInBar);   // R488_DX_BREATH_LEVEL: the base breathes out
         qreal glBase = darkGroups.contains(key) ? 0.0 : groupLevel;
         // the colour this group can actually show (a wheel has seven, the
         // palette has more) - and the motion pick below matches on it too,
@@ -14405,6 +14452,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && colourForGroup(key, m_partnerPick) == m_partnerPick)
             colour = m_partnerPick;
         colour = colourForGroup(key, colour);
+        colour = dropFormColour(key, colour);   // R488_DX_WHITE: strob-storm in white
 
         // motion: real movement (chases, EFX) in drops, the climbing half of
         // a build, and on the base from the groove onward. Static pattern
@@ -14669,6 +14717,24 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
 
+        // R488_DX_STORM_PICK: a drop form draws its own groups itself (no programme under
+        // its masks), and strob-storm's bars run the reserved storm programme
+        if (isDrop && dropBar >= 0 && dropFormNative(key) && mf != Function::invalidId())
+        {
+            mf = Function::invalidId();
+            m_sectionMotion.remove(key);
+        }
+        const quint32 formMf = (isDrop && dropBar >= 0) ? dropFormProgramme(key, colour, isDrop) : Function::invalidId();
+        if (formMf != Function::invalidId())
+        {
+            mf = formMf;
+            m_sectionMotion.insert(key, mf);
+        }
+        // R488_DX_KICK_PICK: kick-chase's bars - restarted on every kick, never held in
+        // m_sectionMotion (the classic drop keeps its own pick there for after the form)
+        const quint32 kickMf = (isDrop && dropBar >= 0) ? dropFormKick(key, colour, kick, beat, dropBar) : Function::invalidId();
+        if (kickMf != Function::invalidId())
+            mf = kickMf;
         // The foundation uses generated intensity masks, whose minimum is
         // known. An opaque dimmer chase cannot promise a continuous floor.
         // Position-only programmes and all effect-group programmes stay intact.
@@ -14804,6 +14870,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             bool wait = mi.oneShot && mfunc != nullptr && mfunc->isRunning() == false
                      && isDrop == false && (beatInBar % 2) != 0
                      && m_active.value("mot:" + key, Function::invalidId()) == mf;
+            if (dropFormKickWait(key, mf, mfunc))
+                wait = true;             // R488_DX_KICK_WAIT: kick-chase - no kick, no launch
             if (wait == false)
             {
                 if (g.strobes)
@@ -14840,6 +14908,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                                      || (m_fullAuto && tier > 0 && key != m_rhythmLead);
                     motionDivision = slowed ? qMax(densePace, motionDivision) : densePace;
                 }
+                // R488_DX_STORM_PACE: the storm's own step - sixteenths for single eyes at the stop, eighths for pairs
+                if (formMf != Function::invalidId() && mf == formMf)
+                    motionDivision = dropFormDivision(mi.barCoverage.minEyes < 2);
+                if (kickMf != Function::invalidId() && mf == kickMf)
+                    motionDivision = dropFormKickDivision(mf);   // R488_DX_KICK_PACE: kick-chase's step at this tempo
                 // C20261020_HIT_RETURN: held chases follow the same musical
                 // pace as generated masks, without changing their programme.
                 if (m_hitReturning && g.lasers == false && g.patternDevice == false && hold == false
@@ -15176,6 +15249,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     bool hit = isCalm == false && still == false && dropWaiting == false
             && m_blackout == false
             && (preDrop && beatsToNext == 1) == false
+            && dropFormCalmLanding(isDrop, secStart) == false   // R488_DX_CALM_HIT: omvendt / kun-laser land calm
             && ((isBuild && (hitProg >= 0.0 ? hitProg : prog) > 0.82 && crowded == false
                  && (haveCurves == false || turn || (kick > 0.45 && riser > 0.08)))
                 || (isDrop && dropBar == 0 && ((beatInBar < 2 && m_landOwed == false) || lateLand)   // runde 360: or late
@@ -15611,7 +15685,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         planStutter();                   // R420_STUTTER: on this beat's grid
         slotChopTimer();                 // and the dark for this beat, now
     }
-    motifRecord(beat, motifSection);
+    if (m_formNow == 0)                  // R488_DX_MOTIF: a drop form is a one-off - never the hook's look
+        motifRecord(beat, motifSection);
     // R358_REPEAT: what the first drop / build looked like, over its first
     // two bars (a group joining on beat three is part of the picture)
     if (m_lookPending.isEmpty() == false && m_lookPendingIdx >= 0
@@ -15679,6 +15754,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (mixQuietIn && djLoopOn()) ev << "mix-loop";
         if (fakeDrop) ev << QString("drop-late@%1").arg(m_dropLand);
         if (isDrop && m_dropStyle > 0) ev << ("drop-" + dropStyleName(m_dropStyle));
+        if (dropFormEvent().isEmpty() == false) ev << dropFormEvent();   // R488_DX_LOG
         if (isDrop && dropBar >= 0 && dropBar < impactBarsLog) ev << "impact";
         if (mixTurnDue && m_nextColour.isEmpty() == false) ev << "mix-turn";
         if (m_fullAuto && m_rhythmLead.isEmpty() == false)
@@ -16591,7 +16667,10 @@ void TrackEngine::applyMove(const QString &group, qreal level, int beat, int sec
     // the step on the beat; the sub-beat steps come from the pulse timer
     TrackMove eff = move;
     if (patterned == false)
+    {
         eff.pattern = ENGINE_PAT_STATIC;
+        eff.formMask = 0;                // R488_DX_MASK_PROG: a programme's picture is its own
+    }
     QVector<qreal> mask = livePatternMask(group, eff, beat - secStart, prog);
     for (int i = 0; i < n; i++)
         setPart(group, i, level * mask.at(i));
@@ -16613,6 +16692,8 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
     QVector<qreal> mask(n, 1.0);
     if (n == 0)
         return mask;
+    if (move.formMask > 0)
+        return dropFormMask(group, move, step);   // R488_DX_FORM_MASK: a drop form's own picture
     switch (pattern)
     {
         case ENGINE_PAT_CHASE:
@@ -18901,6 +18982,7 @@ void TrackEngine::laserFaderCheck(qreal slider)
         return;
     const qreal fader = qMin(closingCap(), qBound(0.0, slider, 1.0));
     const int downNow = laserDownAllowed(qMin(fader, m_faderReal));
+    dropFormRiseFader(fader);            // R488_DX_RISE_FADER: rising bars the slider no longer allows go dark
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
@@ -25265,6 +25347,1504 @@ void TrackEngine::dropRemember(bool isDrop, const QSet<QString> &castSet)
         m_thisDropSet.clear();
         m_thisDropLead.clear();
     }
+}
+/* =====================================================================
+ *  DROP FORMS (runde 488) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/dropforms.inc.cpp.
+ *  R488_DX_FORMS
+ *
+ *  Tobias, 2026-10-21: "Lav nogle flere drop programmer ... STROB slow ...
+ *  ret fed alene over 95% energi som et drop program ... et omvendt drop,
+ *  hvor man laver et stort buildup hvor det bliver vildt, og saa dropper det
+ *  lidt mere roligt med f.eks. laserbars der chaser hurtigt gennem rummet.
+ *  Eller bevaeger sig halv nedefra og saa op langsomt." He picked all four
+ *  proposals, asked for more of our own ("saa kan vi altid lave tommel ned"),
+ *  and the choice "efter musikken".
+ *
+ *  A form is a LAYER on a drop, never a new engine. The classic drop (its
+ *  styles, flows, impact, landing, variety) is untouched and stays the most
+ *  common case. Per drop the engine decides, 32 beats ahead, from what it
+ *  already knows of the music, whether a form fits better than the classic
+ *  drop; the landing checks it again. A form then
+ *    - orders the cast inside the slider's budget (dropFormCast),
+ *    - re-shapes the generated moves of the groups it OWNS, before SPEED and
+ *      every ceiling and laser guard that runs after it (dropFormMove),
+ *    - and may mute the landing's salvo and the bursts (dropFormCalm).
+ *  His own picks win: RIG/PLAN, his section set, a queued saved look, DROP
+ *  pressed, HOLD/CALM, a mix, LAST TRACK. An armed DROP HIT leaves only
+ *  STROB STORM (its hit, landing and burst stay his - STORM is what its
+ *  100 % lift then runs). Logged: sig:drop-form:<name> on the landing,
+ *  form-<name> in the beat's event column while it runs.
+ *
+ *    strob-storm    95 %  big + hard drops: his STROB SLOW button as a drop
+ *    omvendt        70 %  a wild build into a flatter drop that lands calm
+ *    rejsen-op      75 %  bars dark + aimed down before the landing, lit on
+ *                         it, one slow fade up to the home aim (8-16 bars)
+ *    omvendt-rejse  75 %  the two together
+ *    side-mod-side  80 %  the two halves of the room answer each other
+ *    bolgen         60 %  a wave across the room every 2 bars (own)
+ *    aandedraet     70 %  the room breathes out on every 8th bar (own)
+ *    halvtid        50 %  a heavy drop in half time (own)
+ *    kun-laser      60 %  a strobe-free, laser-led melodic drop (own)
+ *    kick-chase     60 %  the bars chase ON THE KICK, home aim only (Tobias
+ *                         10-22, R488_DX_KICK): from 80 % every kick fills the
+ *                         row bar by bar and it is dark again before the next
+ *                         beat; 60-80 % every kick sends a packet of 3 eyes
+ *                         across the room. One way for 8 bars, back for 8.
+ * ===================================================================== */
+
+#include <cmath>
+
+enum TrackDropFormId
+{
+    DF_CLASSIC = 0, DF_STORM, DF_INVERTED, DF_RISE, DF_SIDE, DF_WAVE, DF_BREATH,
+    DF_HALFTIME, DF_LASER, DF_INVRISE, DF_KICK, DF_COUNT
+};
+
+#define ENGINE_FORM_AHEAD     32         // decided this many beats before the drop flag
+#define ENGINE_FORM_BEATS     64         // a form runs at most 16 bars, then the classic drop
+#define ENGINE_RISE_PREFIX    QStringLiteral("TRACK Rise: ")
+#define ENGINE_FORM_MASK_ONE  1          // TrackMove::formMask: one random lamp a step
+#define ENGINE_FORM_MASK_SIDE 2          // ... the two halves answer each other
+#define ENGINE_FORM_MASK_WAVE 3          // ... a wave across the group
+#define ENGINE_KICK_PREFIX    QStringLiteral("AUTO Bars Drop Kick ")
+#define ENGINE_KICK_FILL      0.80       // kick-chase: the fill from here, the packet under it
+
+static const char *trackDropFormName(int form)
+{
+    static const char *const names[DF_COUNT] = {
+        "classic", "strob-storm", "omvendt", "rejsen-op", "side-mod-side", "bolgen",
+        "aandedraet", "halvtid", "kun-laser", "omvendt-rejse", "kick-chase" };
+    return (form >= 0 && form < DF_COUNT) ? names[form] : "classic";
+}
+
+static int trackDropFormMin(int form)
+{
+    // the slider (with a DROP HIT's lift) a form needs, in per cent
+    switch (form)
+    {
+        case DF_STORM:    return 95;
+        case DF_INVERTED: return 70;
+        case DF_RISE:     return 75;
+        case DF_INVRISE:  return 75;
+        case DF_SIDE:     return 80;
+        case DF_WAVE:     return 60;
+        case DF_BREATH:   return 70;
+        case DF_HALFTIME: return 50;
+        case DF_LASER:    return 60;
+        case DF_KICK:     return 60;
+        default:          return 0;
+    }
+}
+
+/* ---- the choice: pure, no Qt - what the music says, as numbers ---- */
+struct TrackDropFeatures
+{
+    double energy = 0.0;      // the slider (a DROP HIT's lift included) where it is decided
+    double size = 1.0;        // dropSizeAt(): the jump into the drop, 0..1
+    double kick = -1.0;       // the drop's kick over its first 16 beats (-1 unknown)
+    double steady = -1.0;     // share of its first 32 beats with a kick
+    double mid = -1.0;        // its mids over 32 beats (-1 without the mid curve)
+    double tone = -1.0;       // highs + waveform over its first 8 beats
+    double buildPeak = -1.0;  // the riser's peak in the 32 beats before it
+    double buildRise = -1.0;  // ... and how far it climbed
+    double half = 0.0;        // share of its 8-beat windows that read half time (R358's rule)
+    double bpm = 0.0;
+    bool firstDrop = true;    // the track's first drop: only STORM and SIDE are special
+    bool hitArmed = false;    // his DROP HIT: only STORM
+    bool bars = false;        // the laser bars can be lit
+    bool strobes = false;     // ... and the strobes
+    bool riseRoom = true;     // two beats left to put the bars down in the dark
+    bool buildRoom = true;    // eight beats left for the wild build
+    int last = DF_CLASSIC;    // the last drop's form: never the same special twice running
+};
+
+static double trackClamp01(double v)
+{
+    return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+}
+
+// How well a form fits this drop, 0 = not at all (not eligible). A form that
+// fits nearly every four-on-the-floor drop (side, wave, breath, rise) tops out
+// near 0.80; one the music asks for by name (the hard drop, the flat drop
+// after a riser, half time, the melody) reaches 1.0.
+static double trackDropFormFit(int form, const TrackDropFeatures &f)
+{
+    if (form <= DF_CLASSIC || form >= DF_COUNT || form == DF_INVRISE)
+        return 0.0;
+    if (f.energy + 1e-9 < trackDropFormMin(form) / 100.0)
+        return 0.0;
+    if (form == f.last)
+        return 0.0;
+    if (f.hitArmed && form != DF_STORM)
+        return 0.0;
+    if (f.firstDrop && form != DF_STORM && form != DF_SIDE)
+        return 0.0;
+    const bool kickKnown = f.kick >= 0.0 && f.steady >= 0.0;
+    switch (form)
+    {
+        case DF_STORM:
+        {
+            // the hardest drops: big AND hard
+            if (f.strobes == false)
+                return 0.0;
+            const double hard = kickKnown ? std::min(f.size, f.kick) : f.size - 0.15;
+            if (hard < 0.55)
+                return 0.0;
+            return 0.60 + 0.40 * trackClamp01((hard - 0.55) / 0.35);
+        }
+        case DF_INVERTED:
+        {
+            // a build with a real riser, into a drop flatter than the build
+            if (f.bars == false || f.buildRoom == false || f.buildRise < 0.12 || f.tone < 0.0)
+                return 0.0;
+            const double under = f.buildPeak - f.tone;          // > 0: the drop sits below the build
+            if (under < -0.02 && f.size >= 0.40)
+                return 0.0;
+            return 0.62 + 0.38 * trackClamp01((under + 0.05) / 0.25);
+        }
+        case DF_RISE:
+        {
+            // a long, steady drop - the rise needs room to be slow
+            if (f.bars == false || f.riseRoom == false || kickKnown == false || f.steady < 0.75 || f.size < 0.25)
+                return 0.0;
+            const double melodic = f.mid >= 0.0 ? trackClamp01((f.mid - 0.35) / 0.40) : 0.3;
+            return 0.58 + 0.10 * trackClamp01((f.steady - 0.75) / 0.25) + 0.12 * melodic;
+        }
+        case DF_SIDE:
+        {
+            // four on the floor that does not let go
+            if ((f.strobes == false && f.bars == false) || kickKnown == false || f.steady < 0.85)
+                return 0.0;
+            return 0.56 + 0.12 * trackClamp01((f.steady - 0.85) / 0.15) + 0.12 * trackClamp01((f.kick - 0.60) / 0.30);
+        }
+        case DF_WAVE:
+        {
+            // a rolling, mid-size drop
+            if (kickKnown == false || f.steady < 0.70 || f.size < 0.20 || f.size > 0.85)
+                return 0.0;
+            return 0.56 + 0.20 * trackClamp01(1.0 - std::fabs(f.size - 0.50) / 0.35);
+        }
+        case DF_BREATH:
+        {
+            // long and steady: the phrase line is there to breathe on
+            if (kickKnown == false || f.steady < 0.85)
+                return 0.0;
+            return 0.56 + 0.18 * trackClamp01((f.steady - 0.85) / 0.15);
+        }
+        case DF_HALFTIME:
+        {
+            if (f.half >= 0.40)
+                return 0.70 + 0.30 * trackClamp01((f.half - 0.40) / 0.40);
+            if (f.bpm > 0.0 && f.bpm <= 122.5 && kickKnown && f.kick >= 0.70 && f.size >= 0.60)
+                return 0.66;              // a slow, heavy drop
+            return 0.0;
+        }
+        case DF_KICK:
+        {
+            // R488_DX_KICK: a steady four-on-the-floor with a real kick - the
+            // chase IS the kick, so a drop that drops kicks has nothing to chase on
+            if (f.bars == false || kickKnown == false || f.steady < 0.90 || f.kick < 0.55)
+                return 0.0;
+            return 0.60 + 0.10 * trackClamp01((f.steady - 0.90) / 0.10) + 0.14 * trackClamp01((f.kick - 0.55) / 0.35);
+        }
+        case DF_LASER:
+        {
+            // melodic: the mids over a soft kick
+            if (f.bars == false || f.mid < 0.45 || kickKnown == false)
+                return 0.0;
+            const double over = f.mid - f.kick;
+            if (over < -0.05)
+                return 0.0;
+            return 0.62 + 0.36 * trackClamp01((over + 0.05) / 0.30);
+        }
+        default:
+            return 0.0;
+    }
+}
+
+static double trackDropFormDice(unsigned &state)
+{
+    // xorshift, seeded per track and drop: the same drop decides the same way
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return (state & 0xffffu) / 65535.0;
+}
+
+// The form for this drop. The better the best fit, the likelier a special form
+// at all (never certain: 85 % at a perfect fit, 55 % right after a special one
+// or on the track's first drop -
+// the classic drop stays the common case); then among the forms within 0.15 of
+// the best, drawn by fit. *score is the best fit.
+static int trackDropFormChoose(const TrackDropFeatures &f, unsigned seed, double *score)
+{
+    // a full mix of the seed first (murmur3's finaliser): track and drop beat
+    // differ in a few bits only, and xorshift alone kept them correlated
+    unsigned st = seed;
+    st ^= st >> 16; st *= 0x85ebca6bu; st ^= st >> 13; st *= 0xc2b2ae35u; st ^= st >> 16;
+    if (st == 0)
+        st = 0x2545f491u;
+    double fits[DF_COUNT] = { 0.0 };
+    double best = 0.0;
+    for (int form = DF_STORM; form < DF_COUNT; form++)
+    {
+        fits[form] = trackDropFormFit(form, f);
+        best = std::max(best, fits[form]);
+    }
+    if (score)
+        *score = best;
+    const double gate = trackClamp01((best - 0.55) / 0.35) * ((f.last != DF_CLASSIC || f.firstDrop) ? 0.55 : 0.85);
+    if (best <= 0.0 || trackDropFormDice(st) >= gate)
+        return DF_CLASSIC;
+    double total = 0.0;
+    for (int form = DF_STORM; form < DF_COUNT; form++)
+        if (fits[form] > 0.0 && fits[form] >= best - 0.15)
+            total += fits[form];
+    double roll = trackDropFormDice(st) * total;
+    int pick = DF_CLASSIC;
+    for (int form = DF_STORM; form < DF_COUNT; form++)
+    {
+        if (fits[form] <= 0.0 || fits[form] < best - 0.15)
+            continue;
+        pick = form;
+        roll -= fits[form];
+        if (roll <= 0.0)
+            break;
+    }
+    // the inverted drop rises instead of chasing, now and then, where the rise fits too
+    if (pick == DF_INVERTED && f.last != DF_INVRISE && trackDropFormFit(DF_RISE, f) > 0.0
+        && trackDropFormDice(st) < 0.5)
+        pick = DF_INVRISE;
+    return pick;
+}
+
+/* ---- the engine side ---- */
+
+bool TrackEngine::dropFormBlocked(int at) const
+{
+    // R488_DX_HIS: his picks win - a form never runs over them
+    if (m_fullAuto == false || m_hold || m_forceOn || m_dropForced || m_mixing || m_lastStage != 0)
+        return true;
+    if (m_dropTouched && m_dropPlanFor > 0 && qAbs(m_dropPlanFor - at) <= 8)
+        return true;
+    if (savedActive())
+        return true;
+    for (auto it = m_savedQueue.constBegin(); it != m_savedQueue.constEnd(); ++it)
+        if (qAbs(it.key() - at) <= 8)
+            return true;
+    return false;
+}
+
+QString TrackEngine::dropFormBars() const
+{
+    // the laser bars the forms use: a bar group on tonight, never the animation laser
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.lasers && g.patternDevice == false && g.parts.count() >= 2 && m_groupOff.contains(key) == false)
+            return key;
+    }
+    return QString();
+}
+
+QString TrackEngine::dropFormStrobes() const
+{
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.strobes && g.parts.count() >= 2 && m_groupOff.contains(key) == false)
+            return key;
+    }
+    return QString();
+}
+
+int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
+{
+    TrackDropFeatures f;
+    f.energy = fader;
+    f.hitArmed = m_hitKind > 0 || m_hitAmokOwed;
+    if (f.hitArmed)
+        f.energy = 1.0;                  // his DROP HIT lands it at 100 % (hitAmok)
+    f.size = dropSizeAt(at);
+    f.bpm = bpm;
+    f.firstDrop = !(m_formTrack == m_trackTitle && m_formDrops > 0);
+    f.bars = dropFormBars().isEmpty() == false;
+    f.strobes = dropFormStrobes().isEmpty() == false && fader >= ENGINE_STROBE_ON;
+    f.riseRoom = at - beat >= 3;
+    f.buildRoom = at - beat >= 8;
+    f.last = m_formLast;
+    const int n = m_audLevel.count();
+    auto mean = [](const QVector<quint8> &v, int a, int b) {
+        qreal sum = 0.0;
+        for (int i = a; i <= b; i++)
+            sum += v.at(i - 1) / 255.0;
+        return sum / qreal(qMax(1, b - a + 1));
+    };
+    if (n > 0 && at >= 1 && at + 31 <= n && m_audKick.count() == n)
+    {
+        f.kick = mean(m_audKick, at, at + 15);
+        int kicks = 0;
+        for (int i = at; i <= at + 31; i++)
+            if (m_audKick.at(i - 1) >= 115)
+                kicks++;
+        f.steady = kicks / 32.0;
+        int halfWins = 0;
+        for (int w = 0; w < 4; w++)
+        {
+            int k = 0;
+            bool neighbours = false, last = false;
+            for (int i = 0; i < 8; i++)
+            {
+                const bool hit = m_audKick.at(at + 8 * w + i - 1) >= 115;
+                k += hit ? 1 : 0;
+                neighbours = neighbours || (hit && last);
+                last = hit;
+            }
+            if (k >= 2 && k <= 4 && neighbours == false)
+                halfWins++;
+        }
+        f.half = halfWins / 4.0;
+        if (m_audMid.count() == n)
+            f.mid = mean(m_audMid, at, at + 31);
+    }
+    if (n > 0 && m_audHigh.count() == n && at >= 12 && at + 7 <= n)
+    {
+        auto tone = [&](int a, int b) { return 0.5 * mean(m_audHigh, a, b) + 0.5 * mean(m_audLevel, a, b); };
+        f.tone = tone(at, at + 7);
+        // the riser: its top in the 32 beats before the drop, and how far it
+        // climbed to get there from its quietest point on the way
+        const int from = qMax(4, at - 32);
+        qreal peak = -1.0, low = 2.0, lowToPeak = 2.0;
+        for (int b = from; b <= at - 1; b++)
+        {
+            const qreal v = tone(qMax(1, b - 3), b);
+            low = qMin(low, v);
+            if (v > peak)
+            {
+                peak = v;
+                lowToPeak = low;
+            }
+        }
+        f.buildPeak = peak;
+        f.buildRise = peak - lowToPeak;
+    }
+    const unsigned seed = unsigned(qHash(m_trackTitle)) ^ (unsigned(at) * 2654435761u);
+    double score = 0.0;
+    int form = trackDropFormChoose(f, seed, &score);
+    const bool blocked = dropFormBlocked(at);
+    if (blocked)
+        form = DF_CLASSIC;
+    m_formPlanScore = score;
+    // why, for the log (the night's tracklog is how a form is judged afterwards)
+    logSignal(QStringLiteral("sig:drop-form-plan:%1@%2:fit%3:size%4:kick%5:steady%6:mid%7:under%8:riser%9")
+              .arg(QLatin1String(trackDropFormName(form))).arg(at).arg(int(qRound(100.0 * score)))
+              .arg(int(qRound(100.0 * f.size))).arg(int(qRound(100.0 * f.kick))).arg(int(qRound(100.0 * f.steady)))
+              .arg(int(qRound(100.0 * f.mid))).arg(int(qRound(100.0 * (f.buildPeak - f.tone))))
+              .arg(int(qRound(100.0 * f.buildRise)))
+              + (blocked ? QStringLiteral(":his") : QString())
+              + (f.half > 0.0 ? QStringLiteral(":half%1").arg(int(qRound(100.0 * f.half))) : QString()));
+    return form;
+}
+
+void TrackEngine::dropFormReset(bool newTrack)
+{
+    // a new track (or the same one sent again): nothing planned for it yet.
+    // The rise is NOT reset here - bars below their home aim must come home
+    // in the dark through its own steps (dropFormRiseAim), whatever plays now.
+    m_formPlan = DF_CLASSIC;
+    m_formPlanFor = -1;
+    m_formPlanTitle.clear();
+    m_formWild = false;
+    if (newTrack)
+    {
+        m_formDrops = 0;
+        m_formTrack.clear();
+    }
+}
+
+void TrackEngine::dropFormEnd(const QString &why)
+{
+    if (m_formNow == DF_CLASSIC)
+        return;
+    logSignal(QStringLiteral("sig:drop-form-end:%1:%2").arg(QLatin1String(trackDropFormName(m_formNow)), why));
+    // the storm programme is the form's alone: the classic drop draws its own
+    for (QHash<QString, quint32>::iterator it = m_sectionMotion.begin(); it != m_sectionMotion.end(); )
+    {
+        if (m_funcs.value(it.value()).name.startsWith(QStringLiteral("AUTO Bars Drop Storm")))
+            it = m_sectionMotion.erase(it);
+        else
+            ++it;
+    }
+    m_formNow = DF_CLASSIC;
+    m_formFrom = -1;
+    m_formUntil = -1;
+}
+
+void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString &nextState, bool isDrop,
+                               bool isBuild, int dropBar, int beatInBar, qreal fader, bool hold, bool isCalm,
+                               bool still, qreal bpm, qreal prog, bool forceNext)
+{
+    // R488_DX_BEAT: from tick(), every beat, once the fader (with a hit's lift),
+    // HOLD and the drop's landing bar are known
+    m_formWild = false;
+    // ---- 1. ahead of the drop: decide once per drop flag
+    const int ahead = m_nextDropBeat;
+    const bool hitNow = m_hitKind > 0 || m_hitAmokOwed;
+    if (isDrop == false && ahead > beat && ahead - beat <= ENGINE_FORM_AHEAD
+        && (m_formPlanFor != ahead || m_formPlanTitle != m_trackTitle
+            || (hitNow != m_formPlanHit && m_riseStage == 0))   // his DROP HIT armed (or not) since: again
+        && hold == false && isCalm == false && still == false && fader >= ENGINE_DROP_SHOW)
+    {
+        m_formPlanFor = ahead;
+        m_formPlanTitle = m_trackTitle;
+        m_formPlanHit = hitNow;
+        m_formPlan = dropFormDecide(ahead, fader, bpm, beat);
+        m_formWhite = false;
+        m_formSingle = false;
+    }
+    // ---- 2. the inverted build: its last 4-8 bars reach the top early
+    const bool inverted = (m_formPlan == DF_INVERTED || m_formPlan == DF_INVRISE)
+                       && m_formPlanTitle == m_trackTitle && m_formPlanFor > beat;
+    if (inverted && isBuild && isDrop == false && hold == false && isCalm == false && still == false)
+    {
+        const int window = fader >= 0.85 ? 32 : 16;
+        if (m_formPlanFor - beat <= window)
+        {
+            if (m_formWild == false && m_formWildFor != m_formPlanFor)
+            {
+                m_formWildFor = m_formPlanFor;
+                m_formWildProg = qBound(0.0, prog, 0.95);
+            }
+            m_formWild = true;
+            m_formWildFrac = qBound(0.0, 1.0 - qreal(m_formPlanFor - beat) / qreal(window), 1.0);
+        }
+    }
+    // ---- 3. the landing: the plan is checked again on the beat
+    const bool lands = isDrop && dropBar == 0 && beatInBar == 0
+                    && (m_lookState != QStringLiteral("drop") || m_dropLanded == false);
+    if (lands && beat != m_formLandBeat)
+    {
+        m_formLandBeat = beat;
+        if (m_formTrack != m_trackTitle)
+        {
+            m_formTrack = m_trackTitle;
+            m_formDrops = 0;
+        }
+        int form = DF_CLASSIC;
+        const bool planHere = m_formPlanTitle == m_trackTitle && m_formPlanFor > 0
+                           && qAbs(m_formPlanFor - secStart) <= 8;
+        if (planHere && m_formPlan != DF_CLASSIC && hold == false && isCalm == false && still == false
+            && dropFormBlocked(secStart) == false
+            && fader + 0.03 >= trackDropFormMin(m_formPlan) / 100.0
+            && (m_hitAmokFrom != beat || m_formPlan == DF_STORM))
+            form = m_formPlan;
+        if (form == DF_STORM && dropFormStrobes().isEmpty())
+            form = DF_CLASSIC;
+        if ((form == DF_INVERTED || form == DF_INVRISE || form == DF_RISE || form == DF_LASER || form == DF_KICK)
+            && dropFormBars().isEmpty())
+            form = DF_CLASSIC;
+        if (form == DF_KICK && dropFormKickReady() == false)
+            form = DF_CLASSIC;           // an old show file without the kick programmes
+        // the rise lands only from its dark aim (dropFormRiseAim put it there)
+        if ((form == DF_RISE || form == DF_INVRISE) && m_riseStage != 2)
+            form = form == DF_INVRISE ? DF_INVERTED : DF_CLASSIC;
+        dropFormEnd(QStringLiteral("new-drop"));
+        m_formNow = form;
+        m_formDrops++;
+        m_formLast = form;
+        m_formWhite = false;
+        m_formSingle = false;
+        if (form != DF_CLASSIC)
+        {
+            m_formFrom = beat;
+            int len = ENGINE_FORM_BEATS;
+            const qreal w = qBound(0.0, (fader - 0.70) / 0.30, 1.0);
+            if (form == DF_STORM)
+                len = dropPhaseBeats();
+            else if (form == DF_INVERTED || form == DF_INVRISE)
+                len = 4 * int(qRound(8.0 + 8.0 * w));
+            if (form == DF_RISE || form == DF_INVRISE)
+            {
+                // 8-16 bars, never more than 0.375 unit a beat, and inside the drop when it says
+                // where it ends (a drop flagged on goes on)
+                int beats = qBound(32, int(std::ceil(m_riseUnits / 0.375 / 4.0)) * 4, 64);
+                const int room = nextState == QStringLiteral("drop") ? 64 : secEnd - beat - 4;
+                if (room >= 32)
+                    beats = qMin(beats, room / 4 * 4);
+                m_riseBeats = beats;
+                len = qMax(len, beats + 4);
+            }
+            m_formUntil = beat + len - 1;
+            m_formStormBars = false;
+            if (form == DF_STORM)
+            {
+                const QString bars = dropFormBars();
+                for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd() && bars.isEmpty() == false; ++it)
+                    if (it.value().name.startsWith(QStringLiteral("AUTO Bars Drop Storm")) && it.value().groups.contains(bars))
+                    {
+                        m_formStormBars = true;
+                        break;
+                    }
+            }
+            QRandomGenerator dice(quint32(qHash(m_trackTitle)) ^ quint32(beat) * 2246822519u);
+            // STORM in white or the room's colour (never white under his tiles - a tile is one colour)
+            m_formWhite = form == DF_STORM && m_override.isEmpty() && m_overrideSet.count() < 2
+                       && dice.bounded(2) == 0;
+            // single eyes are an option at the stop, never forced (BACKLOG lys 1)
+            // (tick() draws m_barSingleDraw after this, on the same beat: it reads m_formSingle)
+            m_formSingle = form == DF_STORM && fader >= 1.0 - 1e-9 && dice.bounded(100) < 65;
+            // side to side per half bar, per beat from 90 % (and on a backbeat)
+            m_formSideBeats = (fader >= 0.90 || m_backbeat) ? 1 : 2;
+            // kick-chase: which of the two from the landing (then on the slider, per kick)
+            m_formKickFill = fader >= ENGINE_KICK_FILL;
+            m_formKickFid = Function::invalidId();
+            m_formKickBeat = -1;
+            m_formKickLast = -10;
+            m_formKickLaunch = false;
+            m_formKickKind = -1;
+        }
+        logSignal(QStringLiteral("sig:drop-form:%1").arg(QLatin1String(trackDropFormName(form))));
+        m_formPlan = DF_CLASSIC;          // used up
+        m_formPlanFor = -1;
+    }
+    // ---- 4. a running form ends: the drop is over, its bars are played, the
+    //         slider went under it, CALM / STILL, or his pick took the section
+    if (m_formNow != DF_CLASSIC && lands == false)
+    {
+        QString why;
+        if (isDrop == false)
+            why = QStringLiteral("drop-over");
+        else if (beat < m_formFrom)
+            why = QStringLiteral("jump-back");
+        else if (beat >= m_formUntil && beatInBar == 0
+                 && (nextState == QStringLiteral("drop") || secEnd - beat > 16))   // not for the drop's last bars
+            why = QStringLiteral("played");
+        else if (isCalm || still)
+            why = QStringLiteral("calm");
+        else if (forceNext)
+            why = QStringLiteral("next");         // his NEXT: the classic drop's next look
+        else if (m_forceOn || m_lastStage != 0 || m_mixing)
+            why = QStringLiteral("his");
+        else if (fader + 0.05 < trackDropFormMin(m_formNow) / 100.0 && beatInBar == 0)
+            why = QStringLiteral("energy");
+        else if (m_dropCalm && m_formNow != DF_RISE && m_formNow != DF_INVRISE)
+            why = QStringLiteral("settled");
+        if (why.isEmpty() == false)
+            dropFormEnd(why);
+    }
+}
+
+bool TrackEngine::dropFormOwns(const QString &key) const
+{
+    // the groups whose generated moves the form shapes
+    if (m_formNow == DF_CLASSIC || m_groups.contains(key) == false || m_groupOff.contains(key))
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    if (g.patternDevice)
+        return false;
+    const bool bars = g.lasers;
+    switch (m_formNow)
+    {
+        case DF_STORM:    return g.strobes || (bars && m_formStormBars);
+        case DF_INVERTED: return bars || g.heads || smallWash(key);
+        case DF_INVRISE:  return bars || g.heads || smallWash(key);
+        case DF_RISE:     return bars;
+        case DF_SIDE:     return true;
+        case DF_WAVE:     return true;
+        case DF_HALFTIME: return g.strobes;
+        case DF_KICK:     return bars && key == dropFormBars();
+        default:          return false;
+    }
+}
+
+void TrackEngine::dropFormMove(const QString &key, TrackMove &mv, int dropBar, qreal fader, const QString &base) const
+{
+    // R488_DX_MOVE: the owned group's move for this beat. SPEED, the strobes'
+    // eighths ceiling, the 110 ms floor and every laser guard run after this.
+    const TrackGroup &g = m_groups.value(key);
+    const qreal w = qBound(0.0, (fader - 0.60) / 0.40, 1.0);
+    const bool isBase = key == base;
+    mv.ownChaser = false;
+    mv.phase = 0;
+    mv.texture = 0.0;
+    mv.breatheBars = 0;
+    mv.flashBar = false;
+    mv.formMask = 0;
+    mv.rhythm = 0;                       // Codex' chase rhythm (C20261022) is the classic drop's: the form steps straight
+    switch (m_formNow)
+    {
+        case DF_STORM:
+            if (g.strobes)
+            {
+                // STROB SLOW's lamps: one at a time, at random, on the eighths
+                mv.formMask = ENGINE_FORM_MASK_ONE;
+                mv.bare = true;
+                mv.stepBeats = 1;
+                mv.subSteps = 2;
+                mv.pulse = 1.0;
+                mv.pulseOn = 0;
+            }
+            else if (g.lasers)
+            {
+                // the storm programme carries the eyes - no pulse on top of it
+                // (kick-chase's programmes too: the case below)
+                mv.pulse = 0.0;
+                mv.pattern = ENGINE_PAT_STATIC;
+                mv.bare = false;
+            }
+            break;
+        case DF_INVERTED:
+        case DF_INVRISE:
+            if (g.lasers && m_formNow == DF_INVERTED)
+            {
+                // the bars chase through the room, side to side, whole bars
+                mv.pattern = ENGINE_PAT_PINGPONG;
+                mv.width = fader >= 0.80 ? 2 : 1;
+                mv.stepBeats = fader >= 0.85 ? 1 : 2;
+                mv.subSteps = 1;
+                mv.pulse = 0.25;
+                mv.pulseOn = 0;
+                mv.bare = false;
+            }
+            else if (g.lasers)
+            {
+                mv.pattern = ENGINE_PAT_STATIC;      // rising, all eyes lit
+                mv.stepBeats = 4;
+                mv.subSteps = 1;
+                mv.pulse = 0.15 + 0.15 * w;
+                mv.pulseOn = 1;
+                mv.bare = false;
+            }
+            else
+            {
+                // the wash holds its colour, steady - a soft breath on 1 and 3
+                mv.pattern = ENGINE_PAT_STATIC;
+                mv.stepBeats = 4;
+                mv.subSteps = 1;
+                mv.pulse = isBase ? 0.10 + 0.10 * w : 0.20;
+                mv.pulseOn = 1;
+                mv.bare = false;
+            }
+            break;
+        case DF_RISE:
+            mv.pattern = ENGINE_PAT_STATIC;
+            mv.stepBeats = 4;
+            mv.subSteps = 1;
+            mv.pulse = 0.15 + 0.15 * w;
+            mv.pulseOn = 1;
+            mv.bare = false;
+            break;
+        case DF_SIDE:
+            mv.formMask = ENGINE_FORM_MASK_SIDE;
+            mv.pattern = ENGINE_PAT_STATIC;
+            mv.stepBeats = m_formSideBeats;
+            mv.subSteps = 1;
+            mv.width = 1;
+            mv.pulseOn = 0;
+            mv.bare = g.strobes;
+            mv.pulse = g.strobes ? 1.0 : (g.lasers ? 0.30 : (isBase ? 0.25 + 0.15 * w : 0.40));
+            break;
+        case DF_WAVE:
+            mv.formMask = ENGINE_FORM_MASK_WAVE;
+            mv.pattern = ENGINE_PAT_STATIC;
+            mv.stepBeats = 1;
+            mv.subSteps = (g.lasers == false && fader >= 0.85) ? 2 : 1;
+            mv.width = fader >= 0.75 ? 2 : 1;
+            mv.pulseOn = 0;
+            mv.bare = g.strobes;
+            mv.pulse = g.strobes ? 1.0 : (g.lasers ? 0.30 : 0.20);
+            break;
+        case DF_KICK:
+            // the kick programme is the picture and the beat: nothing on top of it
+            mv.pulse = 0.0;
+            mv.pattern = ENGINE_PAT_STATIC;
+            mv.bare = false;
+            break;
+        case DF_HALFTIME:
+            if (g.strobes)
+            {
+                // a random half on 1 and 3
+                mv.pattern = ENGINE_PAT_SPARKLE;
+                mv.bare = true;
+                mv.stepBeats = 2;
+                mv.subSteps = 1;
+                mv.pulse = 1.0;
+                mv.pulseOn = 1;
+            }
+            break;
+        default:
+            break;
+    }
+    // his SPEED tiles still halve or double what the form steps (the classic
+    // chain did that before this ran)
+    if (mv.formMask != 0 || g.lasers == false || (m_formNow != DF_STORM && m_formNow != DF_KICK))
+    {
+        if (m_speed < 0)
+        {
+            if (mv.subSteps > 1)
+                mv.subSteps /= 2;
+            else
+                mv.stepBeats *= 2;
+        }
+        else if (m_speed > 0)
+        {
+            if (mv.stepBeats > 1)
+                mv.stepBeats = qMax(1, mv.stepBeats / 2);
+            else if (g.lasers == false && mv.pattern != ENGINE_PAT_STATIC)
+                mv.subSteps = qMin(4, mv.subSteps * 2);
+        }
+    }
+    Q_UNUSED(dropBar)
+}
+
+void TrackEngine::dropFormPulse(const QString &key, TrackMove &mv, const QString &base) const
+{
+    // R488_DX_PULSE: the forms that only colour the classic drop's pulse
+    if (m_formNow == DF_HALFTIME && m_groups.value(key).strobes == false
+        && m_groups.value(key).lasers == false && m_groups.value(key).patternDevice == false)
+    {
+        // heavy: the room pumps on 1 and 3 only, and deeper
+        mv.pulseOn = 1;
+        mv.pulse = qMax(mv.pulse, key == base ? 0.55 : 0.65);
+    }
+}
+
+bool TrackEngine::dropFormNative(const QString &key) const
+{
+    // owned and drawn by the engine's own masks - no programme under it
+    if (dropFormOwns(key) == false)
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    if ((m_formNow == DF_STORM || m_formNow == DF_KICK) && g.lasers)
+        return false;                  // the storm / kick programme
+    return true;
+}
+
+quint32 TrackEngine::dropFormProgramme(const QString &key, const QString &colour, bool isDrop) const
+{
+    // STROB STORM's bars: the reserved AUTO Bars Drop Storm programmes (gen_programs,
+    // runde 488) - pairs on the eighths at 95-99 %, single eyes at the stop when this
+    // drop drew them. Measured by the same coverage as every bar programme: a
+    // programme the eye rules refuse now is not handed out. Missing in an old show
+    // file: the bars stay classic.
+    if (m_formNow != DF_STORM || isDrop == false)
+        return Function::invalidId();
+    const TrackGroup &g = m_groups.value(key);
+    if (g.lasers == false || g.patternDevice)
+        return Function::invalidId();
+    const bool single = m_formSingle && m_faderNow >= 1.0 - 1e-9;
+    const QString want = single ? QStringLiteral("AUTO Bars Drop Storm ") : QStringLiteral("AUTO Bars Drop Storm Pairs ");
+    const QString hue = colour.isEmpty() ? QString() : colour.toLower();
+    quint32 found = Function::invalidId();
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &info = it.value();
+        if (info.name.startsWith(want) == false || (single && info.name.contains(QStringLiteral(" Pairs "))))
+            continue;
+        if (info.banned || info.role != ENGINE_ROLE_MOTION || info.groups.count() != 1 || info.groups.contains(key) == false)
+            continue;
+        if (hue.isEmpty() == false && info.colour != hue)
+            continue;
+        if (info.barCoverage.allows(m_faderNow, true) == false)
+            continue;
+        if (m_doc == nullptr || m_doc->function(info.id) == nullptr)
+            continue;
+        found = info.id;
+        break;
+    }
+    return found;
+}
+
+int TrackEngine::dropFormDivision(bool single) const
+{
+    // the storm's step: sixteenths for the single eyes at the stop, eighths for the pairs
+    return single ? 250 : 500;
+}
+
+QString TrackEngine::dropFormColour(const QString &key, const QString &colour) const
+{
+    // R488_DX_WHITE: STROB STORM in white (his STROB SLOW button) - on the strobes
+    // and the bars, where the group can show white; the rest of the room keeps its colour
+    if (m_formNow != DF_STORM || m_formWhite == false)
+        return colour;
+    const TrackGroup &g = m_groups.value(key);
+    if ((g.strobes || (g.lasers && g.patternDevice == false)) && groupHasColour(key, QStringLiteral("white")))
+        return QStringLiteral("white");
+    return colour;
+}
+
+static bool trackBreathBeat(int form, int dropBar, int beatInBar)
+{
+    // aandedraet: the last beat of every 8-bar phrase of the drop (never the impact bars)
+    return form == DF_BREATH && dropBar >= 4 && beatInBar == 3 && (dropBar % 8) == 7;
+}
+
+qreal TrackEngine::dropFormLevel(const QString &key, const QString &base, int dropBar, int beatInBar) const
+{
+    // R488_DX_BREATH_LEVEL: the base breathes out on it - 45 % at 70, 25 % at the stop;
+    // the phrase's first beat brings it back
+    if (key != base || trackBreathBeat(m_formNow, dropBar, beatInBar) == false)
+        return 1.0;
+    return 0.45 - 0.20 * qBound(0.0, (m_faderNow - 0.70) / 0.30, 1.0);
+}
+
+void TrackEngine::dropFormBreathDark(QSet<QString> &darkGroups, const QSet<QString> &castSet, const QString &base,
+                                     int dropBar, int beatInBar) const
+{
+    // R488_DX_BREATH_DARK: ... and every effect group on stage is out for that beat
+    if (trackBreathBeat(m_formNow, dropBar, beatInBar) == false)
+        return;
+    foreach (const QString &key, castSet)
+        if (key != base)
+            darkGroups.insert(key);
+}
+
+bool TrackEngine::dropFormCalm() const
+{
+    // the drops that land calm and stay strobe-free: no landing salvo, no bursts
+    return m_formNow == DF_INVERTED || m_formNow == DF_INVRISE || m_formNow == DF_LASER;
+}
+
+bool TrackEngine::dropFormCalmLanding(bool isDrop, int secStart) const
+{
+    // ... and the beat it lands on, before the form is on stage (the hit is
+    // decided after the cast, the colour before it)
+    if (isDrop == false)
+        return false;
+    if (dropFormCalm())
+        return true;
+    const bool planned = (m_formPlan == DF_INVERTED || m_formPlan == DF_INVRISE || m_formPlan == DF_LASER)
+                      && m_formPlanTitle == m_trackTitle && m_formPlanFor > 0 && qAbs(m_formPlanFor - secStart) <= 8;
+    return planned;
+}
+
+bool TrackEngine::dropFormFullBuild(int beat) const
+{
+    // omvendt: the build into it is as big as ENERGY allows - not shrunk for the
+    // flatter drop ahead (R362_BUILD_SIZE), that IS the form
+    return (m_formPlan == DF_INVERTED || m_formPlan == DF_INVRISE) && m_formPlanTitle == m_trackTitle
+        && m_formPlanFor == m_nextDropBeat && m_formPlanFor > beat;
+}
+
+bool TrackEngine::dropFormHalfTime() const
+{
+    return m_formNow == DF_HALFTIME;
+}
+
+bool TrackEngine::dropFormHoldsColour(bool isDrop, int secStart) const
+{
+    // omvendt: the wash keeps the build's colour into the drop
+    if (isDrop == false)
+        return false;
+    if (m_formNow == DF_INVERTED || m_formNow == DF_INVRISE)
+        return true;
+    return (m_formPlan == DF_INVERTED || m_formPlan == DF_INVRISE) && m_formPlanTitle == m_trackTitle
+        && m_formPlanFor > 0 && qAbs(m_formPlanFor - secStart) <= 8;
+}
+
+void TrackEngine::dropFormCast(QStringList &priority) const
+{
+    // R488_DX_CAST: the groups a form is about go first, inside the same budget -
+    // the one-laser rule after this then takes the animation laser out for the bars
+    if (m_formNow == DF_CLASSIC)
+        return;
+    const QString bars = dropFormBars();
+    const QString strobes = dropFormStrobes();
+    QStringList first;
+    bool noStrobes = false;
+    switch (m_formNow)
+    {
+        case DF_STORM:    first << strobes << bars; break;
+        case DF_INVERTED:
+        case DF_INVRISE:
+        case DF_LASER:    first << bars; noStrobes = true; break;
+        case DF_RISE:
+        case DF_KICK:     first << bars; break;
+        case DF_SIDE:
+        case DF_WAVE:     first << strobes << bars; break;
+        default:          return;
+    }
+    if (noStrobes)
+    {
+        for (int i = priority.count() - 1; i >= 0; i--)
+            if (m_groups.value(priority.at(i)).strobes)
+                priority.removeAt(i);
+    }
+    for (int i = first.count() - 1; i >= 0; i--)
+    {
+        const int at = first.at(i).isEmpty() ? -1 : int(priority.indexOf(first.at(i)));
+        if (at > 0)
+            priority.move(at, 0);
+    }
+}
+
+void TrackEngine::dropFormPlan()
+{
+    // R488_DX_PLAN: RIG shows the next drop as the form will land it (the
+    // engine's own plan only - a plan he touched is his, and the form yields)
+    if (m_formPlan == DF_CLASSIC || m_dropTouched || m_dropMode == 0
+        || m_planSection != QStringLiteral("drop") || m_formPlanTitle != m_trackTitle
+        || m_dropPlanFor <= 0 || qAbs(m_dropPlanFor - m_formPlanFor) > 8)
+        return;
+    const QString bars = dropFormBars();
+    const QString strobes = dropFormStrobes();
+    QStringList need;
+    bool noStrobes = false;
+    switch (m_formPlan)
+    {
+        case DF_STORM:    need << strobes; break;
+        case DF_INVERTED:
+        case DF_INVRISE:
+        case DF_LASER:    need << bars; noStrobes = true; break;
+        case DF_RISE:
+        case DF_KICK:     need << bars; break;
+        default:          return;
+    }
+    QStringList set = m_dropSet;
+    if (noStrobes)
+        for (int i = set.count() - 1; i >= 0; i--)
+            if (m_groups.value(set.at(i)).strobes)
+                set.removeAt(i);
+    const QString base = baseGroup();
+    foreach (const QString &key, need)
+    {
+        if (key.isEmpty() || set.contains(key))
+            continue;
+        // a real group gives its place (never the base, never a Mini - they use none)
+        for (int i = set.count() - 1; i >= 0 && noStrobes == false; i--)
+        {
+            const QString &k = set.at(i);
+            if (k != base && smallWash(k) == false && need.contains(k) == false)
+            {
+                set.removeAt(i);
+                break;
+            }
+        }
+        set << key;
+    }
+    // one laser type
+    if (bars.isEmpty() == false && set.contains(bars))
+        for (int i = set.count() - 1; i >= 0; i--)
+            if (m_groups.value(set.at(i)).patternDevice)
+                set.removeAt(i);
+    QStringList ordered;
+    foreach (const QString &key, m_groupOrder)
+        if (set.contains(key))
+            ordered << key;
+    m_dropSet = ordered;
+}
+
+QString TrackEngine::dropFormEvent() const
+{
+    if (m_formWild)
+        return QStringLiteral("form-omvendt-build");
+    return m_formNow == DF_CLASSIC ? QString() : QStringLiteral("form-") + QLatin1String(trackDropFormName(m_formNow));
+}
+
+int TrackEngine::dropFormSide(const QString &group, int part) const
+{
+    // which half of the room a part hangs in: 0, 1, or -1 for the middle one.
+    // The bars: the two walls - bar 4 (DMX 357) and bar 6 (395) hang on the far
+    // one, turned (REGLER 1, gen_programs BAR_MIRROR_CH). Everything else: the
+    // halves of its hanging (= address) order.
+    const TrackGroup &g = m_groups.value(group);
+    const int n = int(g.fixtures.count());
+    if (part < 0 || part >= n)
+        return -1;
+    if (g.lasers && g.patternDevice == false)
+    {
+        int far = 0;
+        for (int i = 0; i < n; i++)
+        {
+            Fixture *fx = m_doc ? m_doc->fixture(g.fixtures.at(i)) : nullptr;
+            if (fx != nullptr && (fx->address() + 1 == 357 || fx->address() + 1 == 395))
+                far++;
+        }
+        if (far > 0 && far < n)
+        {
+            Fixture *fx = m_doc ? m_doc->fixture(g.fixtures.at(part)) : nullptr;
+            return (fx != nullptr && (fx->address() + 1 == 357 || fx->address() + 1 == 395)) ? 1 : 0;
+        }
+    }
+    if (n % 2 == 1 && part == n / 2)
+        return -1;
+    return part < n / 2 ? 0 : 1;
+}
+
+QVector<qreal> TrackEngine::dropFormMask(const QString &group, const TrackMove &move, int step) const
+{
+    // R488_DX_FORM_MASK: the forms' own pictures, on the same step clock as every pattern
+    const TrackGroup &g = m_groups.value(group);
+    const int n = int(g.parts.count());
+    QVector<qreal> mask(n, 0.0);
+    if (n == 0)
+        return mask;
+    step = qMax(0, step);
+    // what an unlit lamp shows: the base keeps a floor (the room never goes dark
+    // in a drop's form), effects are out
+    const bool isBase = group == m_compositionBase && g.strobes == false && g.lasers == false;
+    const qreal off = isBase ? 0.20 : 0.0;
+    switch (move.formMask)
+    {
+        case ENGINE_FORM_MASK_ONE:
+        {
+            // one lamp, a different one every step, at random - his STROB SLOW
+            auto pick = [&](int s) {
+                QRandomGenerator local(quint32(s) * 2654435761u ^ quint32(qHash(group)) ^ 0x488u);
+                return int(local.bounded(n));
+            };
+            int lit = pick(step);
+            if (n > 1 && step > 0 && lit == pick(step - 1))
+                lit = (lit + 1 + (step % (n - 1))) % n;
+            for (int i = 0; i < n; i++)
+                mask[i] = i == lit ? 1.0 : off;
+        }
+        break;
+        case ENGINE_FORM_MASK_SIDE:
+        {
+            const int lit = step % 2;
+            for (int i = 0; i < n; i++)
+            {
+                const int side = dropFormSide(group, i);
+                mask[i] = side == lit ? 1.0 : (side < 0 ? qMax(off, 0.45) : off);
+            }
+        }
+        break;
+        case ENGINE_FORM_MASK_WAVE:
+        {
+            // one pass across the group, then rest to the line: every 2 bars
+            // stepping on beats, every bar on eighths - the next one the other way
+            const int perBar = qMax(1, 4 * qMax(1, move.subSteps) / qMax(1, move.stepBeats));
+            const int period = qMax(n + 1, perBar * (move.subSteps > 1 ? 1 : 2));
+            const int cycle = step / period;
+            const int pos = step % period;
+            const int w = qBound(1, move.width, qMax(1, n - 1));
+            for (int i = 0; i < n; i++)
+            {
+                const int at = (cycle % 2) == 0 ? i : n - 1 - i;
+                mask[i] = (pos >= at && pos < at + w) ? 1.0 : off;
+            }
+        }
+        break;
+        default:
+            for (int i = 0; i < n; i++)
+                mask[i] = 1.0;
+        break;
+    }
+    return mask;
+}
+
+/* ---- rejsen-op: the bars' aim ---- */
+
+quint32 TrackEngine::dropFormRiseScene(const QString &key, quint32 home, int units)
+{
+    // the home aim, `units` lower (a bigger tilt is down on these bars - REGLER
+    // 1). A hidden scene of our own, written again on every use (QLC+ saves a
+    // hidden scene's values as nought)
+    Scene *homeScene = m_doc ? qobject_cast<Scene *>(m_doc->function(home)) : nullptr;
+    if (homeScene == nullptr || units <= 0)
+        return Function::invalidId();
+    QList<SceneValue> values;
+    int tilts = 0;
+    foreach (const SceneValue &sv, homeScene->values())
+    {
+        Fixture *fxi = m_doc->fixture(sv.fxi);
+        const QLCChannel *qch = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
+        SceneValue v = sv;
+        if (qch != nullptr && qch->group() == QLCChannel::Tilt && qch->controlByte() == QLCChannel::MSB)
+        {
+            v.value = uchar(qBound(0, int(sv.value) + units, 255));
+            tilts++;
+        }
+        values.append(v);
+    }
+    if (tilts == 0)
+        return Function::invalidId();
+    const QString name = ENGINE_RISE_PREFIX + key;
+    Scene *scene = nullptr;
+    foreach (Function *func, m_doc->functions())
+        if (func != nullptr && func->name() == name)
+            scene = qobject_cast<Scene *>(func);
+    if (scene != nullptr)
+    {
+        foreach (SceneValue old, scene->values())
+            scene->unsetValue(old.fxi, old.channel);
+    }
+    else
+    {
+        scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setVisible(false);
+        if (m_doc->addFunction(scene) == false)
+        {
+            delete scene;
+            return Function::invalidId();
+        }
+    }
+    foreach (const SceneValue &sv, values)
+        scene->setValue(sv);
+    return scene->id();
+}
+
+void TrackEngine::dropFormRiseDark(const QString &key, QSet<QString> &darkGroups)
+{
+    // the light goes first: hard, as every laser re-aim does (runde 401)
+    darkGroups.insert(key);
+    if (m_flashHeld.contains(key))
+        return;
+    const TrackGroup &g = m_groups.value(key);
+    stopSlot(QStringLiteral("col:") + key, true);
+    stopSlot(QStringLiteral("mot:") + key, true);
+    for (int i = 0; i < g.parts.count(); i++)
+        stopSlot(partSlot(key, i), true);
+}
+
+qreal TrackEngine::dropFormRiseLeft() const
+{
+    // how far under the home aim the bars still are, by the fade's own clock
+    if (m_riseStage != 3 || m_riseMs <= 0)
+        return qreal(m_riseUnits);
+    const qreal done = qBound(0.0, qreal(m_clock.elapsed() - m_riseStartMs) / qreal(m_riseMs), 1.0);
+    return qreal(m_riseUnits) * (1.0 - done);
+}
+
+bool TrackEngine::dropFormRiseAim(const QString &key, QSet<QString> &darkGroups, bool inCast, bool isDrop,
+                                  bool dropWaiting, int beat, int dropBar, int beatInBar, int secStart,
+                                  qreal fader, bool isCalm, bool still)
+{
+    // R488_DX_RISE (rejsen-op): from tick()'s aim loop, for the bars. TRUE: this
+    // owns the bars' aim this beat and the engine's own aim code is skipped.
+    //   1  two beats before the landing: the light goes (the aim stays home)
+    //   2  the beat after: the mirror goes DOWN by the slider's own allowance
+    //      (laserDownAllowed - never more than any drop figure may dip), dark,
+    //      and waits there - through a kick wait too
+    //   3  the landing: lit, and the home aim starts ONE QLC fade up to itself
+    //      over 8-16 bars - never more than 0.75 unit a beat; nothing else
+    //      moves the bars meanwhile (no figure, no aim)
+    //   4  anything wrong (the slider, the cast, CALM, a jump, the drop over):
+    //      dark NOW, the mirror home on the NEXT beat, then the engine again
+    const TrackGroup &g = m_groups.value(key);
+    if (g.lasers == false || g.patternDevice || g.parts.count() < 2)
+        return false;
+    if (m_riseStage != 0 && m_riseGroup != key)
+        return false;
+    const QString slot = QStringLiteral("pos:") + key;
+    const quint32 home = homePosition(key);
+    const bool risePlan = (m_formPlan == DF_RISE || m_formPlan == DF_INVRISE) && m_formPlanTitle == m_trackTitle
+                       && m_formPlanFor > 0;
+    const int allowed = laserDownAllowed(qMin(fader, m_faderReal));
+    const bool stopNow = isCalm || still || m_blackout || m_faderReal < 0.40 || home == Function::invalidId()
+                      || m_groupOff.contains(key);
+    switch (m_riseStage)
+    {
+        case 0:
+        {
+            if (risePlan == false || isDrop || beat != m_formPlanFor - 2 || stopNow || m_hold
+                || allowed < 4 || dropFormBlocked(m_formPlanFor))
+                return false;
+            m_riseStage = 1;
+            m_riseBeat = beat;
+            m_riseGroup = key;
+            m_riseUnits = 0;
+            dropFormRiseDark(key, darkGroups);
+            run(slot, home, 1.0, 0, true);
+            m_position.insert(key, home);
+            logSignal(QStringLiteral("sig:drop-rise:dark"));
+            return true;
+        }
+        case 1:
+        {
+            if (beat == m_riseBeat)
+            {
+                dropFormRiseDark(key, darkGroups);
+                return true;
+            }
+            const int units = qMin(allowed, 24);
+            if (beat != m_riseBeat + 1 || risePlan == false || stopNow || units < 4 || (isDrop && dropWaiting == false))
+            {
+                // never moved: the engine has the bars again (they relight where it says)
+                m_riseStage = 0;
+                m_riseGroup.clear();
+                return false;
+            }
+            const quint32 down = dropFormRiseScene(key, home, units);
+            if (down == Function::invalidId())
+            {
+                m_riseStage = 0;
+                m_riseGroup.clear();
+                return false;
+            }
+            dropFormRiseDark(key, darkGroups);
+            run(slot, down, 1.0, 0, true);
+            m_position.insert(key, down);      // laserFaderCheck measures it: a hand on the slider sends it home dark
+            m_riseStage = 2;
+            m_riseBeat = beat;
+            m_riseUnits = units;
+            logSignal(QStringLiteral("sig:drop-rise:down:%1").arg(units));
+            return true;
+        }
+        case 2:
+        {
+            const quint32 down = m_position.value(key, Function::invalidId());
+            const bool landing = isDrop && dropWaiting == false && dropBar == 0 && beatInBar == 0
+                              && (m_formNow == DF_RISE || m_formNow == DF_INVRISE) && m_formFrom == beat;
+            if (landing && inCast && stopNow == false && m_riseUnits <= allowed
+                && m_active.value(slot, Function::invalidId()) == down && down != home)
+            {
+                // lit on the downbeat, and the one slow fade up to home starts
+                Function *func = m_doc->function(home);
+                if (func != nullptr)
+                {
+                    const qreal beatMs = m_beatMs > 0.0 ? m_beatMs : 469.0;
+                    const int beats = qBound(32, m_riseBeats, 64);   // set where the drop landed
+                    m_riseMs = int(beats * beatMs);
+                    stopSlot(slot, true);
+                    if (func->isRunning() && func->stopped())
+                        func->stop(FunctionParent::master(), true);
+                    func->start(m_doc->masterTimer(), FunctionParent::track(), 0, uint(m_riseMs),
+                                Function::defaultSpeed(), Function::defaultSpeed(), Function::Time);
+                    m_active.insert(slot, home);
+                    m_activeLevel.insert(slot, 1.0);
+                    m_activeOut.insert(slot, 1.0);
+                    m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, 1.0));
+                    m_position.insert(key, home);
+                    m_riseStartMs = m_clock.elapsed();
+                    m_riseStage = 3;
+                    m_riseBeat = beat;
+                    logSignal(QStringLiteral("sig:drop-rise:up:%1:%2").arg(m_riseUnits).arg(beats));
+                    return true;
+                }
+            }
+            // still waiting for the landing (a kick wait: 8 bars at most), dark
+            const bool waiting = (dropWaiting || (isDrop == false && beat < m_formPlanFor + 1)) && beat - m_riseBeat <= 33
+                              && stopNow == false && m_riseUnits <= allowed && m_active.value(slot, Function::invalidId()) == down;
+            if (waiting && landing == false)
+            {
+                dropFormRiseDark(key, darkGroups);
+                return true;
+            }
+            // it is not coming: dark (it is), home now - it moved in the dark a beat ago
+            dropFormRiseDark(key, darkGroups);
+            run(slot, home, 1.0, 0, true);
+            m_position.insert(key, home);
+            m_riseStage = 5;
+            m_riseBeat = beat;
+            logSignal(QStringLiteral("sig:drop-rise:home"));
+            return true;
+        }
+        case 3:
+        {
+            const qreal left = dropFormRiseLeft();
+            const bool done = m_clock.elapsed() - m_riseStartMs >= qint64(m_riseMs) + 60;
+            if (done)
+            {
+                m_riseStage = 0;
+                m_riseGroup.clear();
+                logSignal(QStringLiteral("sig:drop-rise:home"));
+                return false;              // home: the engine has them again, nothing moves
+            }
+            const bool wrong = isDrop == false || inCast == false || stopNow
+                            || left > qreal(allowed) + 0.5 || beat < m_formFrom
+                            || (m_formNow != DF_RISE && m_formNow != DF_INVRISE)
+                            || m_active.value(slot, Function::invalidId()) != home;
+            if (wrong)
+            {
+                dropFormRiseDark(key, darkGroups);
+                m_riseStage = 4;
+                m_riseBeat = beat;
+                logSignal(QStringLiteral("sig:drop-rise:abort"));
+                return true;
+            }
+            Q_UNUSED(secStart)
+            return true;
+        }
+        case 4:
+        {
+            // dark since the abort: the mirror home now (a hard cut, in the dark)
+            dropFormRiseDark(key, darkGroups);
+            if (beat == m_riseBeat)
+                return true;
+            stopSlot(slot, true);
+            run(slot, home, 1.0, 0, true);
+            m_position.insert(key, home);
+            m_riseStage = 5;
+            m_riseBeat = beat;
+            return true;
+        }
+        case 5:
+        {
+            // the beat it moved home on stays dark; then the engine relights it
+            if (beat == m_riseBeat)
+            {
+                dropFormRiseDark(key, darkGroups);
+                return true;
+            }
+            m_riseStage = 0;
+            m_riseGroup.clear();
+            return false;
+        }
+        default:
+            m_riseStage = 0;
+            return false;
+    }
+}
+
+void TrackEngine::dropFormRiseFader(qreal fader)
+{
+    // R488_DX_RISE_FADER: a hand on the slider between beats (laserFaderCheck) -
+    // the bars still under their home aim by more than the slider allows NOW go
+    // dark at once; the next beat takes the mirror home (stage 4)
+    if (m_riseStage != 3 || m_riseGroup.isEmpty())
+        return;
+    const int allowed = laserDownAllowed(qMin(fader, m_faderReal));
+    if (dropFormRiseLeft() <= qreal(allowed) + 0.5 && fader >= 0.40)
+        return;
+    QSet<QString> dark;
+    dropFormRiseDark(m_riseGroup, dark);
+    m_cast.remove(m_riseGroup);
+    m_riseStage = 4;
+    m_riseBeat = m_lastBeat;
+    logSignal(QStringLiteral("sig:drop-rise:abort"));
+}
+
+bool TrackEngine::dropFormRiseHolds(const QString &key) const
+{
+    // the bars' figure (EFX) stays off while the rise owns them - and while
+    // kick-chase does (home aim only)
+    return (m_riseStage != 0 && m_riseGroup == key) || dropFormHomeOnly(key);
+}
+
+/* ---- kick-chase (R488_DX_KICK) ----
+ * Tobias, 10-22: "en anden fed effekt/program til laser-bars kunne vaere at de
+ * chaser paa beatet og fylder hele baren 'pr. hit' ... et program til hver vej
+ * ... Den ville dog kun skulle koere paa hjem positionen." - and to the plan:
+ * "Bar for bar, men kun over 80% ish, over 60 kan det vaere 3 oejne, der bliver
+ * sendt afsted paa en en slukket bar, og som sender 3 nye oejne 'afsted' for
+ * hvert kick."
+ *
+ * The programmes are gen_programs' reserved SingleShot chasers "AUTO Bars Drop
+ * Kick ...", stepped by the engine in beats (dropFormKickDivision), so their
+ * timing IS the tempo. The engine starts one from
+ * its first step on every beat the analysis heard a kick on (tick()'s `kick`,
+ * the strobes' own rule: under 0.20 is no kick) and nothing on a beat without:
+ *   Fill    (from 80 %)  whole bars, bar by bar: the row is full at half the
+ *                        beat, stands a tenth, dark from 70 % of the beat - a
+ *                        fill never runs into the next kick, so the row can
+ *                        never end up standing lit
+ *   Packet  (60-80 %)    3 neighbouring eyes on one bar at a time, a bar every
+ *                        quarter beat, the rest dark - one and a half beats to
+ *                        cross the room. "Chain" is the same packet with the
+ *                        last one's tail on the far two bars for its first half
+ *                        beat: on a four-on-the-floor two packets are in flight
+ *                        through every first half of the beat, one through the
+ *                        second - the chase never stops crossing the room
+ * "Back" is the other way; the first 8 bars of the drop run one way, the next 8
+ * back. The bars stay at the home aim (no aim, no figure) while it runs.
+ * The PACKET is Tobias' own exception to the eye-count rule (BACKLOG lys 1:
+ * 13 eyes under 75 %, 10 from 75 %) - 3 or 6 eyes lit - for this programme
+ * and nowhere else: it is not in any pool (STORM_RESERVED) and only this
+ * form hands it out. The fill is whole bars, inside every rule.
+ */
+bool TrackEngine::dropFormKickReady() const
+{
+    const QString bars = dropFormBars();
+    if (bars.isEmpty())
+        return false;
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+        if (it.value().name.startsWith(ENGINE_KICK_PREFIX) && it.value().groups.contains(bars))
+            return true;
+    return false;
+}
+
+quint32 TrackEngine::dropFormKick(const QString &key, const QString &colour, qreal kick, int beat, int dropBar)
+{
+    // R488_DX_KICK_PICK: tick()'s programme pick, for the bars while kick-chase
+    // owns them. Once per beat (a section change runs tick() twice on one beat).
+    if (m_formNow != DF_KICK || dropFormOwns(key) == false)
+        return Function::invalidId();
+    if (beat != m_formKickBeat)
+    {
+        m_formKickBeat = beat;
+        // the slider decides per kick, with a little room either side of 80 %
+        if (m_faderNow >= ENGINE_KICK_FILL + 0.02)
+            m_formKickFill = true;
+        else if (m_faderNow < ENGINE_KICK_FILL - 0.02)
+            m_formKickFill = false;
+        const bool back = ((qMax(0, dropBar) / 8) % 2) == 1;
+        m_formKickLaunch = kick < 0.0 || kick >= 0.20;
+        if (m_formKickLaunch)
+        {
+            // the packet before is still crossing: the chained one carries its tail
+            const bool chain = m_formKickFill == false && m_formKickLast == beat - 1
+                            && m_formKickKind == (back ? 3 : 1);
+            const int kind = m_formKickFill ? (back ? 2 : 0) : (back ? 3 : 1);
+            const QString want = ENGINE_KICK_PREFIX
+                               + (m_formKickFill ? QStringLiteral("Fill ") : (chain ? QStringLiteral("Packet Chain ") : QStringLiteral("Packet ")))
+                               + (back ? QStringLiteral("Back ") : QString());
+            const QString hue = colour.toLower();
+            quint32 found = Function::invalidId();
+            for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+            {
+                const TrackFuncInfo &info = it.value();
+                if (info.name.startsWith(want) == false || info.banned || info.groups.contains(key) == false)
+                    continue;
+                if (back == false && info.name.contains(QStringLiteral(" Back ")))
+                    continue;
+                if (chain == false && info.name.contains(QStringLiteral(" Chain ")))
+                    continue;
+                if (hue.isEmpty() == false && info.colour != hue)
+                    continue;
+                if (m_doc == nullptr || m_doc->function(info.id) == nullptr)
+                    continue;
+                found = info.id;
+                break;
+            }
+            if (found != Function::invalidId())
+            {
+                if (kind != m_formKickKind)
+                    logSignal(QStringLiteral("sig:drop-kick:%1:%2@%3")
+                              .arg(m_formKickFill ? QStringLiteral("fill") : QStringLiteral("packet"),
+                                   back ? QStringLiteral("back") : QStringLiteral("forth")).arg(beat));
+                m_formKickFid = found;
+                m_formKickKind = kind;
+                m_formKickLast = beat;
+                // from its first step, now: whatever is still running goes
+                stopSlot(QStringLiteral("mot:") + key, true);
+            }
+            else
+                m_formKickLaunch = false;    // no programme in this colour: the beat stays dark
+        }
+    }
+    return m_formKickFid;
+}
+
+bool TrackEngine::dropFormKickWait(const QString &key, quint32 mf, const Function *func) const
+{
+    // R488_DX_KICK_WAIT: no kick, no launch - a programme that has run out
+    // waits dark for the next kick (tick() restarts a finished one-shot in a
+    // drop on every beat otherwise); one still crossing the room runs on
+    return m_formNow == DF_KICK && mf != Function::invalidId() && mf == m_formKickFid
+        && m_formKickLaunch == false && dropFormOwns(key)
+        && (func == nullptr || func->isRunning() == false);
+}
+
+int TrackEngine::dropFormKickDivision(quint32 mf) const
+{
+    // R488_DX_KICK_PACE: the step in beats at the tempo playing (the programmes are
+    // Time chasers, so they start on the kick itself - a Beats chaser of sub-beat
+    // steps waits for the next whole Link beat): the fill's ten steps fill a beat,
+    // the packet moves a bar a quarter beat
+    return m_funcs.value(mf).name.contains(QStringLiteral(" Fill ")) ? 100 : 250;
+}
+
+bool TrackEngine::dropFormHomeOnly(const QString &key) const
+{
+    // R488_DX_KICK_HOME: kick-chase runs at the home aim only - no aim, no figure
+    if (m_formNow != DF_KICK || m_groups.contains(key) == false)
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    return g.lasers && g.patternDevice == false;
 }
 /* =====================================================================
  *  LAST TRACK (runde 458) - appended to trackengine.cpp by
