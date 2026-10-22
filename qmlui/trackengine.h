@@ -2110,6 +2110,9 @@ public:
                          bool dropWaiting, int beat, int dropBar, int beatInBar, int secStart,
                          qreal fader, bool isCalm, bool still);
     void dropFormRiseFader(qreal fader);
+    static int dropFormRiseAllowed(qreal energy);                                    // R490_FX_RISE_DECL
+    bool dropFormRiseSafe(const QString &key, quint32 held, qreal fader) const;
+    quint32 dropFormSideColour(const QString &key, const QString &colour, int bar);
     bool dropFormRiseHolds(const QString &key) const;
     bool m_formKickFill = false;         // kick-chase: the fill (from 80 %), else the 3-eye packet
     quint32 m_formKickFid = 0xFFFFFFFFu;  // ... the programme last started on a kick (Function::invalidId())
