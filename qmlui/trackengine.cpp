@@ -14346,6 +14346,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 splitScene = splitColourFunction(key, swap ? accentHere : roomHere, swap ? roomHere : accentHere);
             }
         }
+        // R490_FX_SIDE_USE: side-mod-side - each half of the room in its own colour
+        if (splitScene == Function::invalidId() && spread == false)
+            splitScene = dropFormSideColour(key, colour, bar);
 
         // the base is the light the room stands on: brighter than the
         // effects in a break, where it is often the only thing lit
@@ -19086,6 +19089,8 @@ void TrackEngine::laserFaderCheck(qreal slider)
         const quint32 home = homePosition(key);
         if (held == Function::invalidId() || held == home)
             continue;
+        if (dropFormRiseSafe(key, held, fader))
+            continue;                    // R490_FX_RISE_CHECK: rejsen-op waiting dark at its own depth
         const TrackFuncInfo &hi = m_funcs.value(held);
         // as tick() under HOLD: a still, safe aim stands under 40 % while HOLD
         // is on; one that moves or dips does not (runde 193)
@@ -25382,9 +25387,15 @@ void TrackEngine::dropRemember(bool isDrop, const QSet<QString> &castSet)
  *                         like the strobe lamps; 95-99 % two eyes a bar
  *    omvendt        70 %  a wild build into a flatter drop that lands calm
  *    rejsen-op      75 %  bars dark + aimed down before the landing, lit on
- *                         it, one slow fade up to the home aim (8-16 bars)
+ *                         it, one slow fade up to the home aim (8-16 bars);
+ *                         R490_FX_RISE_DOC: up to 57 units down at 100 %
+ *                         (21 at 75 %) - its own depth, nothing else's -
+ *                         and up at least 1.6 units a beat (2-32 beats)
  *    omvendt-rejse  75 %  the two together
- *    side-mod-side  80 %  the two halves of the room answer each other
+ *    side-mod-side  80 %  the two halves of the room answer each other, each
+ *                         in its own colour (R490_FX_SIDE_DOC): the room's
+ *                         colour on one side, its partner on the other,
+ *                         changing sides every 8 bars
  *    bolgen         60 %  a wave across the room every 2 bars (own)
  *    aandedraet     70 %  the room breathes out on every 8th bar (own)
  *    halvtid        50 %  a heavy drop in half time (own)
@@ -25415,6 +25426,15 @@ enum TrackDropFormId
 #define ENGINE_KICK_PREFIX    QStringLiteral("AUTO Bars Drop Kick ")
 #define ENGINE_KICK_FILL      0.80       // kick-chase: whole bars from here, the packet under it
 #define ENGINE_KICK_ALL       0.90       // R489_EX_KICK_ALL: the whole row a kick from here, one bar a kick under it
+// R490_FX_RISE_REACH (Tobias 10-22: "halv nedefra ... helt ned", chosen "halvvejs ~57
+// enheder" and "kun rejsen-op"): rejsen-op's own depth - halfway between the home aim
+// and his LaserDOWN (115 under). ONLY rejsen-op: every other programme, figure and
+// aim keeps laserDownAllowed (ENGINE_AIM_REACH, 24)
+#define ENGINE_RISE_REACH     57
+#define ENGINE_RISE_PACE      1.60       // R490_FX_RISE_PACE: AT LEAST this many units a beat on the way up
+// (Tobias 10-22: "naar barene bevaeger sig nede blandt publikum skal de minimum bevaege sig
+// med dobbelt hastighed" - double the bars' figures swinging from home, ~0.8 a beat measured;
+// everything under home counts as among the audience, so the whole way home)
 
 static const char *trackDropFormName(int form)
 {
@@ -25872,12 +25892,16 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
                 len = 4 * int(qRound(8.0 + 8.0 * w));
             if (form == DF_RISE || form == DF_INVRISE)
             {
-                // 8-16 bars, never more than 0.375 unit a beat, and inside the drop when it says
-                // where it ends (a drop flagged on goes on)
-                int beats = qBound(32, int(std::ceil(m_riseUnits / 0.375 / 4.0)) * 4, 64);
+                // R490_FX_RISE_BEATS: never slower than ENGINE_RISE_PACE a beat, all the way
+                // home (57 units: 32 beats, 1.78 a beat; 21 at 75 %: 12 beats) - on whole
+                // bars from 8 beats, which only makes it quicker; a drop shorter than that
+                // makes it quicker still, never cut (a drop flagged on goes on)
+                int beats = qMax(2, int(std::floor(m_riseUnits / ENGINE_RISE_PACE)));
+                if (beats >= 8)
+                    beats = beats / 4 * 4;
                 const int room = nextState == QStringLiteral("drop") ? 64 : secEnd - beat - 4;
-                if (room >= 32)
-                    beats = qMin(beats, room / 4 * 4);
+                if (room >= 2 && room < beats)
+                    beats = room;
                 m_riseBeats = beats;
                 len = qMax(len, beats + 4);
             }
@@ -26385,6 +26409,83 @@ int TrackEngine::dropFormSide(const QString &group, int part) const
     return part < n / 2 ? 0 : 1;
 }
 
+quint32 TrackEngine::dropFormSideColour(const QString &key, const QString &colour, int bar)
+{
+    // R490_FX_SIDE_FUNC (Tobias 10-22: "Hver side sin egen farve", chosen "rummets
+    // accentfarve"): while side-mod-side owns a group, one hidden colour scene with
+    // the room's colour on one half and the look's partner (the accent where there
+    // is one - the pairs the rules allow) on the other, by the form's own halves
+    // (dropFormSide; the middle lamp keeps the room's). The sides trade colours every
+    // 8 bars. Never under his colour tile or tiles (one colour / his spread), never
+    // without a partner, never a third colour. Each lamp gets exactly what the
+    // group's own colour scene for its side's colour writes for it.
+    if (m_formNow != DF_SIDE || dropFormOwns(key) == false || m_doc == nullptr)
+        return Function::invalidId();
+    if (m_override.isEmpty() == false || m_overrideSet.count() >= 2 || m_partnerPick.isEmpty())
+        return Function::invalidId();
+    const TrackGroup &g = m_groups.value(key);
+    // the accent group wears the partner all over: its sides are the room's and the partner too
+    const QString room = colourForGroup(key, colour == m_partnerPick ? m_colour : colour);
+    const QString partner = colourForGroup(key, m_partnerPick);
+    if (room.isEmpty() || partner.isEmpty() || room == partner || g.fixtures.count() < 2)
+        return Function::invalidId();
+    const bool swap = ((qMax(0, bar) / 8) % 2) == 1;
+    const QString a = swap ? partner : room;    // side 0 (and the middle)
+    const QString b = swap ? room : partner;    // side 1
+    const QString cacheKey = QStringLiteral("side|") + key + QLatin1Char('|') + a + QLatin1Char('|') + b;
+    if (m_splitScenes.contains(cacheKey) && m_doc->function(m_splitScenes.value(cacheKey)) != nullptr)
+        return m_splitScenes.value(cacheKey);
+    Scene *sa = qobject_cast<Scene *>(m_doc->function(colourFunction(key, a)));
+    Scene *sb = qobject_cast<Scene *>(m_doc->function(colourFunction(key, b)));
+    if (sa == nullptr || sb == nullptr || sa == sb)
+        return Function::invalidId();
+    QSet<quint32> sideA, sideB;
+    for (int i = 0; i < g.fixtures.count(); i++)
+        (dropFormSide(key, i) == 1 ? sideB : sideA).insert(g.fixtures.at(i));
+    QList<SceneValue> values;
+    QSet<quint32> litA, litB;
+    foreach (const SceneValue &sv, sa->values())
+        if (sideA.contains(sv.fxi))
+        {
+            values.append(sv);
+            litA.insert(sv.fxi);
+        }
+    foreach (const SceneValue &sv, sb->values())
+        if (sideB.contains(sv.fxi))
+        {
+            values.append(sv);
+            litB.insert(sv.fxi);
+        }
+    // both sides must really show their colour, or it is one colour with a stray lamp
+    if (litA.isEmpty() || litB.isEmpty())
+        return Function::invalidId();
+    const QString name = ENGINE_COLOUR_PREFIX + QStringLiteral("%1 %2|%3 sides").arg(key, a, b);
+    Scene *scene = nullptr;
+    foreach (Function *func, m_doc->functions())
+        if (func != nullptr && func->name() == name)
+            scene = qobject_cast<Scene *>(func);
+    if (scene != nullptr)
+    {
+        foreach (SceneValue old, scene->values())
+            scene->unsetValue(old.fxi, old.channel);
+    }
+    else
+    {
+        scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setVisible(false);
+        if (m_doc->addFunction(scene) == false)
+        {
+            delete scene;
+            return Function::invalidId();
+        }
+    }
+    foreach (const SceneValue &sv, values)
+        scene->setValue(sv);
+    m_splitScenes.insert(cacheKey, scene->id());
+    return scene->id();
+}
+
 QVector<qreal> TrackEngine::dropFormMask(const QString &group, const TrackMove &move, int step) const
 {
     // R488_DX_FORM_MASK: the forms' own pictures, on the same step clock as every pattern
@@ -26533,7 +26634,8 @@ bool TrackEngine::dropFormRiseAim(const QString &key, QSet<QString> &darkGroups,
     //      (laserDownAllowed - never more than any drop figure may dip), dark,
     //      and waits there - through a kick wait too
     //   3  the landing: lit, and the home aim starts ONE QLC fade up to itself
-    //      over 8-16 bars - never more than 0.75 unit a beat; nothing else
+    //      at AT LEAST 1.6 units a beat (R490_FX_RISE_DOC2: twice the figures
+    //      from home, Tobias 10-22) - never slower; nothing else
     //      moves the bars meanwhile (no figure, no aim)
     //   4  anything wrong (the slider, the cast, CALM, a jump, the drop over):
     //      dark NOW, the mirror home on the NEXT beat, then the engine again
@@ -26546,7 +26648,7 @@ bool TrackEngine::dropFormRiseAim(const QString &key, QSet<QString> &darkGroups,
     const quint32 home = homePosition(key);
     const bool risePlan = (m_formPlan == DF_RISE || m_formPlan == DF_INVRISE) && m_formPlanTitle == m_trackTitle
                        && m_formPlanFor > 0;
-    const int allowed = laserDownAllowed(qMin(fader, m_faderReal));
+    const int allowed = dropFormRiseAllowed(qMin(fader, m_faderReal));   // R490_FX_RISE_ALLOWED
     const bool stopNow = isCalm || still || m_blackout || m_faderReal < 0.40 || home == Function::invalidId()
                       || m_groupOff.contains(key);
     switch (m_riseStage)
@@ -26573,7 +26675,7 @@ bool TrackEngine::dropFormRiseAim(const QString &key, QSet<QString> &darkGroups,
                 dropFormRiseDark(key, darkGroups);
                 return true;
             }
-            const int units = qMin(allowed, 24);
+            const int units = qMin(allowed, ENGINE_RISE_REACH);   // R490_FX_RISE_UNITS
             if (beat != m_riseBeat + 1 || risePlan == false || stopNow || units < 4 || (isDrop && dropWaiting == false))
             {
                 // never moved: the engine has the bars again (they relight where it says)
@@ -26610,7 +26712,7 @@ bool TrackEngine::dropFormRiseAim(const QString &key, QSet<QString> &darkGroups,
                 if (func != nullptr)
                 {
                     const qreal beatMs = m_beatMs > 0.0 ? m_beatMs : 469.0;
-                    const int beats = qBound(32, m_riseBeats, 64);   // set where the drop landed
+                    const int beats = qBound(2, m_riseBeats, 64);   // set where the drop landed (R490_FX_RISE_FAST)
                     m_riseMs = int(beats * beatMs);
                     stopSlot(slot, true);
                     if (func->isRunning() && func->stopped())
@@ -26703,6 +26805,29 @@ bool TrackEngine::dropFormRiseAim(const QString &key, QSet<QString> &darkGroups,
     }
 }
 
+int TrackEngine::dropFormRiseAllowed(qreal energy)
+{
+    // R490_FX_RISE_FUNCS: rejsen-op's depth on the slider - the same shape as
+    // laserDownAllowed ("jo hoejere derefter, jo mere nedad": nothing under 60 %,
+    // a straight line up from there), to ENGINE_RISE_REACH at 100 %:
+    // 75 % 21, 80 % 29, 90 % 43, 100 % 57 units under the home aim
+    const qreal e = qBound(0.0, energy, 1.0);
+    if (e < 0.60)
+        return 0;
+    return int(qRound(ENGINE_RISE_REACH * (e - 0.60) / 0.40));
+}
+
+bool TrackEngine::dropFormRiseSafe(const QString &key, quint32 held, qreal fader) const
+{
+    // laserFaderCheck between beats: the bars waiting dark at rejsen-op's depth are
+    // measured against rejsen-op's allowance, not the 24-unit one (which would send
+    // them home on any touch of the slider). Anything else is measured as before.
+    return m_riseStage == 2 && key == m_riseGroup && held != Function::invalidId()
+        && m_doc != nullptr && m_doc->function(held) != nullptr
+        && m_doc->function(held)->name() == ENGINE_RISE_PREFIX + key
+        && fader >= 0.40 && m_riseUnits <= dropFormRiseAllowed(qMin(fader, m_faderReal));
+}
+
 void TrackEngine::dropFormRiseFader(qreal fader)
 {
     // R488_DX_RISE_FADER: a hand on the slider between beats (laserFaderCheck) -
@@ -26710,7 +26835,7 @@ void TrackEngine::dropFormRiseFader(qreal fader)
     // dark at once; the next beat takes the mirror home (stage 4)
     if (m_riseStage != 3 || m_riseGroup.isEmpty())
         return;
-    const int allowed = laserDownAllowed(qMin(fader, m_faderReal));
+    const int allowed = dropFormRiseAllowed(qMin(fader, m_faderReal));   // R490_FX_RISE_FADER
     if (dropFormRiseLeft() <= qreal(allowed) + 0.5 && fader >= 0.40)
         return;
     QSet<QString> dark;
