@@ -277,6 +277,7 @@ struct TrackFuncInfo
 struct TrackMove
 {
     int pattern = ENGINE_PAT_STATIC;
+    int rhythm = 0;           // C20261022: 0 straight, 1 tresillo, 2 offbeat, 3 paired steps
     int stepBeats = 4;        // beats per pattern step: 1 = every beat, 4 = every bar
     qreal pulse = 0.0;        // how deep the dimmers breathe on the beat, 0..1
     int pulseOn = 0;          // 0 every beat, 1 beats 1+3, 2 beats 2+4, 3 downbeat only
@@ -1650,6 +1651,31 @@ private:
     QString m_positionMode;
     QHash<QString, quint32> m_holdScenes;  // "group|mode" -> the hold scene
     /* R383_BARS_ALONE: this beat's break has the laser bars alone */
+    // C20261022_IDENTITY: a musical motif, not a forced old programme/energy.
+    struct TrackMotif {
+        int from = -1, rhythm = 0, visits = 0;
+        QVector<qreal> sig;
+        QHash<QString, int> shapes;
+        QHash<QString, QString> families;
+    };
+    QHash<QString, QVector<TrackMotif>> m_motifs;
+    QHash<QString, int> m_motifShapes;
+    QHash<QString, QString> m_motifFamilies;
+    QString m_motifContext;
+    int m_motifPick = -1, m_motifVariation = 0, m_chaseRhythm = 0;
+    bool m_motifAllowed = false;
+    void motifStart(int from, const QString &section, bool allowed, bool force);
+    TrackMove motifMove(const QString &group, TrackMove move) const;
+    void motifRecord(int beat, const QString &section);
+    bool m_autoFade = false, m_autoFadePrevious = false;
+    QString m_autoFadeFrom, m_autoFadeTo;
+    QSet<QString> m_autoFadeOwned;
+    int m_autoFadeBeat = -1;
+    qreal m_autoFadeP = 0.0, m_autoFadeRate = 0.0;
+    bool autoFadeGroup(const QString &key) const;
+    void autoFadeStop();
+    void autoFadeTick(int beat, const QString &previous, bool soft, bool frozen, bool hard);
+    void applyAutoFade(const QString &key, bool frame);
     int m_dropFlow = 0; // C20261020: attack/breadth, chase, later climax
     int m_previousFlow = -1;
     int m_previousStyle = -1;
