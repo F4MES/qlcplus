@@ -754,11 +754,18 @@ void TrackEngine::slotPulseTimer()
         TrackMove mv = m_liveMove.value(key);
         const bool barOverlap = m_fullAuto && m_groups.value(key).lasers
                              && !m_groups.value(key).patternDevice && mv.pattern == ENGINE_PAT_CHASE;
-        if ((mv.subSteps > 1 || barOverlap) && m_patterned.value(key, false) && m_beatMs > 0.0)
+        const bool rhythmChase = m_fullAuto && !m_groups.value(key).patternDevice
+                              && mv.pattern == ENGINE_PAT_CHASE && mv.rhythm > 0;
+        if ((mv.subSteps > 1 || barOverlap || rhythmChase) && m_patterned.value(key, false) && m_beatMs > 0.0)
         {
             any = true;
             qreal within = qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999);
             int sub = int(within * mv.subSteps);
+            if (rhythmChase) {
+                const auto nowFrame = trackChaseFrame(m_beatIndex + within, mv.stepBeats, mv.subSteps, mv.phase, mv.rhythm);
+                const auto beatFrame = trackChaseFrame(m_beatIndex, mv.stepBeats, mv.subSteps, mv.phase, mv.rhythm);
+                sub = nowFrame.step - beatFrame.step; // a pulse only at a real new chase event
+            }
             // every sub-step is a hit of its own: without this the pulse
             // decayed from the beat, and on a bare chase the eighths and
             // sixteenths landed at 37, 14 and 5 per cent - a trail, not steps
@@ -3902,6 +3909,7 @@ void TrackEngine::newTrackMemory(const QString &title)
     if (title != m_trackTitle)          // the same track sent again keeps what its drops looked like
     {
         m_lookMemory.clear();
+        m_motifs.clear(); // C20261022: never borrow another song
         m_lookRepeat = 0;
         m_previousFlowTrack.clear(); // C20261020: contrast is per track
         m_dropLastFamilies.clear();
@@ -3914,6 +3922,9 @@ void TrackEngine::newTrackMemory(const QString &title)
     m_reuseColour.clear();
     m_reuseStyle = -1;
     m_reuseMotion.clear();
+    m_motifContext.clear(); m_motifShapes.clear(); m_motifFamilies.clear();
+    m_motifAllowed = false; m_motifPick = -1; m_chaseRhythm = 0;
+    autoFadeStop(); m_autoFadePrevious = false;
     m_halfTime = false;
 }
 
@@ -3944,6 +3955,11 @@ QVector<qreal> TrackEngine::soundSig(int from, int beats) const
         return n > 0 ? sum / n : -1.0;
     };
     out << mean(m_audLevel) << mean(m_audKick) << mean(m_audHigh) << mean(m_audMid);
+    // C20261022_CONTOUR: equal average loudness is not the same hook. Keep the
+    // beat-by-beat envelopes, including known-vs-missing bands, for conservative matches.
+    for (const auto *v : { &m_audLevel, &m_audKick, &m_audHigh, &m_audMid })
+        for (int b = from; b < from + beats; ++b)
+            out << (b >= 1 && b <= v->count() ? v->at(b - 1) / 255.0 : -1.0);
     return out;
 }
 
@@ -6961,7 +6977,7 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
     }
     if (style == 0)
     {
-        if (m_mixGlide == false)         // runde 374: the mix's glide runs on it too
+        if (m_mixGlide == false && !m_autoFade) // C20261022: both AUTO fades share this timer
             m_layerTimer.stop();
         m_layerBeat = beat;
         m_layerRate = 0.0;
@@ -7064,7 +7080,7 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
         if (m_layerTimer.isActive() == false)
             m_layerTimer.start();
     }
-    else if (m_mixGlide == false)        // runde 374
+    else if (m_mixGlide == false && !m_autoFade) // C20261022
         m_layerTimer.stop();
     emit colourFadeChanged();
 }
@@ -7360,7 +7376,7 @@ void TrackEngine::slotLayerTimer()
     // starts it again with the next beat
     const bool stale = m_beatMs <= 0.0
                     || qreal(m_clock.elapsed() - m_beatStartMs) > qMax(2000.0, 4.0 * m_beatMs);
-    if ((m_layerStyle != 1 && m_mixGlide == false) || m_docTimer.isActive() || m_building || stale || m_startScene)
+    if ((m_layerStyle != 1 && m_mixGlide == false && !m_autoFade) || m_docTimer.isActive() || m_building || stale || m_startScene)
     {
         m_layerTimer.stop();
         return;
@@ -7377,6 +7393,10 @@ void TrackEngine::slotLayerTimer()
         }
         emit colourFadeChanged();        // runde 374: the FADE tile's bar
     }
+    if (m_autoFade)
+        for (const QString &key : m_autoFadeOwned)
+            if (m_active.contains(QStringLiteral("col:") + key) && m_cast.contains(key))
+                applyAutoFade(key, true);
     // R374_MIX_GLIDE: the base between two beats
     if (m_mixGlide && m_mixGlideKey.isEmpty() == false
         && m_active.contains(QStringLiteral("col:") + m_mixGlideKey)
@@ -7386,6 +7406,7 @@ void TrackEngine::slotLayerTimer()
 
 void TrackEngine::applyOverride(const QString &colour)
 {
+    autoFadeStop(); // C20261022: a hand takes colour ownership immediately
     if (colour == m_override)
         return;
     m_override = colour;
@@ -8243,7 +8264,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // calmest patterns - it was exempt, and the top-star doubling below then
     // drew its wildest patterns at 35 % twice as often as at 100 %
     const bool patternGroup = m_groups.value(group).patternDevice;
-    const bool layerG = layerGroup(group) || (m_mixGlide && group == m_mixGlideKey);   // R370 (R374: the mix's glide)
+    const bool layerG = layerGroup(group) || autoFadeGroup(group) || (m_mixGlide && group == m_mixGlideKey);   // R370 (R374: the mix's glide)
     const bool aimHeld = positionHeld(group);     // R378_POSITIONS
     int calmest = 3;
     if (patternGroup)
@@ -8760,6 +8781,11 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             pool.append(info);
     }
 
+    // C20261022_MOTIF_FAMILY: prefer a returning figure only inside the fully legal pool.
+    if (m_motifAllowed && !m_hold && !savedActive())
+        for (TrackFuncInfo *info : ok)
+            if (!info->family.isEmpty() && info->family == m_motifFamilies.value(group))
+                pool << info << info;
     return pickMotionWeighted(pool, cursor);
 }
 
@@ -10423,6 +10449,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
+    const QString motifSection = isDrop ? QStringLiteral("drop") : isBuild ? QStringLiteral("build")
+                               : isBreak ? QStringLiteral("break") : QStringLiteral("normal");
+    motifStart(secStart, motifSection, m_fullAuto && !hold && !isCalm && !still && !m_mixing
+               && !savedActive() && m_savedRestore.isEmpty(), forceNext);
+    const QString autoPreviousColour = m_colour;
     /* ---- palette: one colour, changed rarely. A fresh track keeps the colour
      *      it arrived with until its first break or drop. ---- */
     // the hold is counted from the last change and varies around the SETUP
@@ -11191,6 +11222,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the lead for this beat (the groups are painted in the cast loop below)
     updateColourLayer(beat, base, isBreak, isBuild, isDrop, prog, fader,
                       hold || still || isCalm, forceNext || m_dropArrivedNow || m_lateLandNow, kick);
+    autoFadeTick(beat, autoPreviousColour, !isDrop && !isBuild && !turn && !preDrop,
+                 hold || still || isCalm, forceNext || isDrop || isBuild || m_flash || m_blackout);
     // R360_DROP_SIZE (Tobias 10-05: "landingens stoerrelse foelger droppets
     // stoerrelse - men energi-faderen skal stadig bestemme hvor vildt det er"):
     // measured where the drop arrives. ENERGY is the ceiling as before; the
@@ -11991,6 +12024,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_partnerPick.clear();
     }
 
+    // C20261022_BRIDGE: the outgoing hue is the only partner during the fade.
+    if (m_autoFade) {
+        m_partnerPick = m_autoFadeFrom; m_partnerSolo = false;
+        if (!accentColour.isEmpty()) accentColour = m_autoFadeFrom;
+    }
     bool hard = sectionChanged && isDrop;
     if (savedActive()) {
         m_partnerPick = m_savedPlaying.value(QStringLiteral("partner")).toString();
@@ -14016,7 +14054,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
         if (m_fullAuto)
-            mv = composeMove(key, mv, tier);
+            mv = motifMove(key, composeMove(key, mv, tier));
         // C20261020_DROP_CONTOUR: live phrasing without restarting the
         // programme or changing an aim. His HOLD/CALM keeps its old meaning.
         if (isDrop && hold == false && g.patternDevice == false)
@@ -14647,7 +14685,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
         // R370_COLOUR_LAYER: the tiles' fade or chase owns this group's colour
         const bool layerOwns = layerGroup(key);
-        if ((layerOwns || (m_mixGlide && key == base))   // R375_GLIDE_COLOURPROG
+        if ((layerOwns || autoFadeGroup(key) || (m_mixGlide && key == base))   // R375_GLIDE_COLOURPROG
             && mf != Function::invalidId() && m_funcs.value(mf).setsColour)
         {
             mf = Function::invalidId();  // held from before the layer: drawn again without it
@@ -14742,6 +14780,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_mixGlideKey = key;
             m_layerLevel.insert(key, glBase);
             applyMixGlide(false);
+        }
+        else if (autoFadeGroup(key) && colour == colourForGroup(key, m_colour) && cf != Function::invalidId())
+        {
+            m_layerLevel.insert(key, glBase);
+            applyAutoFade(key, false);
         }
         else if (cf != Function::invalidId())
         {
@@ -15568,6 +15611,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         planStutter();                   // R420_STUTTER: on this beat's grid
         slotChopTimer();                 // and the dark for this beat, now
     }
+    motifRecord(beat, motifSection);
     // R358_REPEAT: what the first drop / build looked like, over its first
     // two bars (a group joining on beat three is part of the picture)
     if (m_lookPending.isEmpty() == false && m_lookPendingIdx >= 0
@@ -19818,6 +19862,7 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
 
 void TrackEngine::release()
 {
+    autoFadeStop(); // C20261022
     savedReset(); // SAVED_LOOKS_RELEASE
     hitUndark();
     m_quietSpatial = false;
@@ -21085,6 +21130,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
 
 void TrackEngine::stopAll()
 {
+    autoFadeStop(); // C20261022
     m_beatWatch.stop();
     hitReset();                          // R445_DROP_HIT
     m_softRedrawBeat = -1;
@@ -28793,7 +28839,7 @@ QVector<qreal> TrackEngine::livePatternMask(const QString &group, const TrackMov
                                   : int(beat) / qMax(1, move.stepBeats)) + move.phase;
     const TrackGroup &g = m_groups.value(group);
     const bool phrased = m_fullAuto && !g.patternDevice && move.pattern == ENGINE_PAT_CHASE;
-    const TrackChaseFrame frame = trackChaseFrame(beat, move.stepBeats, move.subSteps, move.phase);
+    const TrackChaseFrame frame = trackChaseFrame(beat, move.stepBeats, move.subSteps, move.phase, move.rhythm);
     if (phrased) step = frame.step;
     QVector<qreal> mask = patternMask(group, move, step, prog);
     if (phrased && g.lasers && frame.trail > 0.0)
@@ -28943,6 +28989,7 @@ qreal TrackEngine::dialogueGain(const QString &group) const
 /* SAVED_LOOKS: persistent semantic recipes, operator undo, and per-play section scheduling. */
 static QVariantMap savedWriteTrackMove(const TrackMove& a) { QVariantMap m;
     m.insert(QStringLiteral("pattern"), a.pattern);
+    m.insert(QStringLiteral("rhythm"), a.rhythm); // C20261022: exact saved timing
     m.insert(QStringLiteral("stepBeats"), a.stepBeats);
     m.insert(QStringLiteral("pulse"), a.pulse);
     m.insert(QStringLiteral("pulseOn"), a.pulseOn);
@@ -28960,6 +29007,7 @@ static QVariantMap savedWriteTrackMove(const TrackMove& a) { QVariantMap m;
 }
 static TrackMove savedReadTrackMove(const QVariantMap& m) { TrackMove a;
     a.pattern = qBound(0, m.value(QStringLiteral("pattern"), a.pattern).toInt(), ENGINE_PAT_COUNT-1);
+    a.rhythm = qBound(0, m.value(QStringLiteral("rhythm"), 0).toInt(), 3); // old recipes stay straight
     a.stepBeats = qBound(1, m.value(QStringLiteral("stepBeats"), a.stepBeats).toInt(), 256);
     a.pulse = qBound(-1.0, m.value(QStringLiteral("pulse"), a.pulse).toDouble(), 1.0);
     a.pulseOn = qBound(0, m.value(QStringLiteral("pulseOn"), a.pulseOn).toInt(), 3);
@@ -29138,7 +29186,15 @@ QVariantMap TrackEngine::savedCapture() const
     look[QStringLiteral("barDetail")] = m_barDetailDraw; look[QStringLiteral("barSingle")] = m_barSingleDraw;
     look[QStringLiteral("title")] = m_trackTitle;
     for (const QString &key : cast) {
-        if (m_moves.contains(key)) moves[key] = savedWriteTrackMove(m_moves.value(key));
+        if (m_moves.contains(key)) {
+            TrackMove kept = m_moves.value(key);
+            if (m_motifAllowed && key == m_rhythmLead && m_liveMove.contains(key)) {
+                const TrackMove shown = m_liveMove.value(key);
+                kept.pattern = shown.pattern; kept.phase = shown.phase; kept.rhythm = shown.rhythm;
+                kept.stepBeats = shown.stepBeats; kept.subSteps = shown.subSteps;
+            }
+            moves[key] = savedWriteTrackMove(kept);
+        }
         if (m_sweep.contains(key)) sweeps[key] = savedWriteTrackSweep(m_sweep.value(key));
         const quint32 id = m_sectionMotion.value(key, Function::invalidId());
         if (m_funcs.contains(id) && !m_funcs.value(id).generated) {
@@ -29448,4 +29504,186 @@ void TrackEngine::undoLook()
     m_nextRejState=m_savedUndoRejectState;m_nextRejTitle=m_savedUndoRejectTitle;m_nextFiled=m_savedUndoFiled;
     m_savedRestore=m_savedUndo;m_savedUndo.clear();m_forceNext=true;
     emit savedLooksChanged(); logSignal(QStringLiteral("sig:undo-look"));
+}
+/* 2026-10-22: recurring musical motifs and occasional soft AUTO colour bridges.
+ * Only generated timing / legal candidate preferences. No position or laser-code interpolation.
+ */
+void TrackEngine::motifStart(int from, const QString &section, bool allowed, bool force)
+{
+    const QString context = section + QLatin1Char(':') + QString::number(from);
+    if (context == m_motifContext && !force)
+    {
+        m_motifAllowed = allowed;
+        return;
+    }
+    m_motifContext = context;
+    m_motifAllowed = allowed && !force;
+    m_motifPick = -1;
+    m_motifShapes.clear();
+    m_motifFamilies.clear();
+    m_chaseRhythm = 0;
+    if (!m_motifAllowed || from < 1 || m_trackTitle.isEmpty())
+        return;
+    const QVector<qreal> sig = soundSig(from, 16);
+    if (sig.isEmpty() || sig.first() < 0.0 || from + 15 > m_audLevel.count())
+        return;                         // never infer a hook from absent/truncated analysis
+    auto &records = m_motifs[section];
+    int best = -1;
+    for (int i = 0; i < records.count(); ++i)
+    {
+        const TrackMotif &m = records.at(i);
+        if (m.sig.count() != sig.count() || (m.from != from && qAbs(from - m.from) < 32)) continue;
+        int known = 0;
+        bool alike = true;
+        for (int j = 0; j < sig.count(); ++j)
+        {
+            if ((sig[j] < 0.0) != (m.sig[j] < 0.0)) { alike = false; break; }
+            if (sig[j] < 0.0) continue;
+            ++known;
+            if (qAbs(sig[j] - m.sig[j]) > 0.12) { alike = false; break; }
+        }
+        if (alike && known >= 12) { best = i; break; }
+    }
+    if (best >= 0)
+    {
+        TrackMotif &m = records[best];
+        m_motifShapes = m.shapes;
+        m_motifFamilies = m.families;
+        m_chaseRhythm = m.rhythm;
+        if (from != m.from) ++m.visits;
+        m_motifVariation = m.visits % 2;  // the motif returns, with a small spatial offset
+        qualitySignal(QStringLiteral("sig:motif:") + section);
+    }
+    else if (records.count() < 8)
+    {
+        TrackMotif m;
+        m.from = from; m.sig = sig;
+        // Some sections retain the straight chase. The others choose a rhythm once.
+        m.rhythm = QRandomGenerator::global()->bounded(100) < 40
+                 ? 1 + int(QRandomGenerator::global()->bounded(3)) : 0;
+        records.append(m);
+        m_motifPick = records.count() - 1;
+        m_chaseRhythm = m.rhythm;
+        m_motifVariation = 0;
+    }
+}
+
+TrackMove TrackEngine::motifMove(const QString &group, TrackMove move) const
+{
+    const TrackGroup &g = m_groups.value(group);
+    if (m_hold && m_liveMove.contains(group)) {
+        const TrackMove old = m_liveMove.value(group);
+        move.pattern = old.pattern; move.phase = old.phase; move.rhythm = old.rhythm;
+        return move;
+    }
+    if (!m_motifAllowed || savedActive() || g.patternDevice || m_faderNow < 0.45
+        || group != m_rhythmLead)
+        return move;
+    // Keep the current width, pace and density. Only the legal broad shape returns.
+    const int shape = m_motifShapes.value(group, move.pattern);
+    if (move.pattern != ENGINE_PAT_STATIC && (shape == ENGINE_PAT_CHASE || shape == ENGINE_PAT_PINGPONG
+        || shape == ENGINE_PAT_ODDEVEN || shape == ENGINE_PAT_HALVES || shape == ENGINE_PAT_FILL))
+        move.pattern = shape;
+    move.phase = m_motifVariation;
+    if (move.pattern == ENGINE_PAT_CHASE) {
+        move.rhythm = m_chaseRhythm;
+        if (move.rhythm == 3) {
+            move.subSteps = qMin(move.subSteps, 2); // never add thirty-second-note steps
+            if (m_faderNow < 0.75) move.stepBeats = qMax(2, move.stepBeats);
+        }
+    }
+    return move;
+}
+
+void TrackEngine::motifRecord(int beat, const QString &section)
+{
+    if (!m_motifAllowed || m_motifPick < 0 || !m_motifs.contains(section)) return;
+    auto &records = m_motifs[section];
+    if (m_motifPick >= records.count()) return;
+    TrackMotif &m = records[m_motifPick];
+    if (beat < m.from || beat >= m.from + 8) return;
+    for (const QString &key : m_cast)
+    {
+        if (m_groups.value(key).patternDevice) continue;
+        m.shapes[key] = m_liveMove.value(key).pattern;
+        const QString family = m_funcs.value(m_sectionMotion.value(key, Function::invalidId())).family;
+        if (!family.isEmpty()) m.families[key] = family;
+    }
+}
+
+bool TrackEngine::autoFadeGroup(const QString &key) const
+{
+    const TrackGroup &g = m_groups.value(key);
+    return m_autoFade && m_fullAuto && !m_startScene && !savedActive() && m_override.isEmpty()
+        && !m_flash && !m_blackout && !engineBannedColour(m_autoFadeFrom) && !engineBannedColour(m_autoFadeTo)
+        && g.rgb && !g.lasers && !g.patternDevice && !heldFull(key)
+        && !layerGroup(key) && !(m_mixGlide && key == m_mixGlideKey)
+        && colourFunction(key, m_autoFadeFrom) != Function::invalidId()
+        && colourFunction(key, m_autoFadeTo) != Function::invalidId();
+}
+
+void TrackEngine::autoFadeStop()
+{
+    // Remove only our second layer; do not remove a hand-selected FADE or mix glide.
+    for (const QString &key : m_autoFadeOwned)
+        if (m_active.value(QStringLiteral("colx:") + key, Function::invalidId()) == colourFunction(key, m_autoFadeTo))
+            stopSlot(QStringLiteral("colx:") + key, true);
+    m_autoFadeOwned.clear();
+    m_autoFade = false;
+}
+
+void TrackEngine::autoFadeTick(int beat, const QString &previous, bool soft, bool frozen, bool hard)
+{
+    const bool changed = previous != m_colour;
+    if (hard || !m_fullAuto || m_startScene || savedActive() || !m_override.isEmpty() || m_mixing || m_mixGlide)
+    {
+        autoFadeStop();
+        return;
+    }
+    if (m_autoFade && (m_autoFadeTo != m_colour || m_autoFadeP >= 1.0)) autoFadeStop();
+    if (changed)
+    {
+        autoFadeStop();
+        const bool paired = engineMixesWith().value(previous).contains(m_colour);
+        const bool chosen = soft && !frozen && paired && !previous.isEmpty()
+                         && previous != QStringLiteral("white") && m_colour != QStringLiteral("white")
+                         && !engineBannedColour(previous) && !engineBannedColour(m_colour)
+                         && QRandomGenerator::global()->bounded(100) < 40;
+        if (chosen && !m_autoFadePrevious)
+        {
+            m_autoFade = true;
+            m_autoFadeFrom = previous; m_autoFadeTo = m_colour;
+            m_autoFadeP = 0.0; m_autoFadeBeat = beat;
+            qualitySignal(QStringLiteral("sig:auto-colour-fade"));
+        }
+        m_autoFadePrevious = m_autoFade;
+    }
+    if (!m_autoFade) return;
+    if (!frozen && beat != m_autoFadeBeat)
+    {
+        // Played beats, not a large seek through the song, move the transition.
+        m_autoFadeP = qMin(1.0, m_autoFadeP + m_autoFadeRate);
+        m_autoFadeBeat = beat;
+    }
+    m_autoFadeBeat = beat;
+    m_autoFadeRate = frozen ? 0.0 : 1.0 / 8.0;
+    if (m_autoFadeP >= 1.0) autoFadeStop();
+    else if (!m_layerTimer.isActive()) m_layerTimer.start();
+}
+
+void TrackEngine::applyAutoFade(const QString &key, bool frame)
+{
+    if (!autoFadeGroup(key)) return;
+    qreal p = m_autoFadeP;
+    if (frame && !m_hold && m_beatMs > 0.0)
+        p += qBound(0.0, qreal(m_clock.elapsed() - m_beatStartMs) / m_beatMs, 1.0) * m_autoFadeRate;
+    p = qBound(0.0, p, 1.0);
+    const quint32 fa = colourFunction(key, m_autoFadeFrom), fb = colourFunction(key, m_autoFadeTo);
+    const qreal level = m_layerLevel.value(key, 1.0);
+    const qreal a = fa == fb ? 1.0 : std::cos(p * M_PI / 2.0), b = std::sin(p * M_PI / 2.0);
+    run(QStringLiteral("col:") + key, fa, a * (m_funcs.value(fa).dimmer ? level : 1.0), 0, true);
+    if (fa != fb)
+        run(QStringLiteral("colx:") + key, fb, b * (m_funcs.value(fb).dimmer ? level : 1.0), 0, true);
+    else stopSlot(QStringLiteral("colx:") + key, true);
+    m_autoFadeOwned.insert(key);
 }
