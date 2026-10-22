@@ -2149,6 +2149,10 @@ void TrackManager::midiFader(int idx, int raw, qint64 now)
         if (take && target == QLatin1String("haze") && v > m_engine->hazeRest() + 0.001
             && !(p >= 0 && (p < 0.03 ? 0.0 : p) <= m_engine->hazeRest() + 0.001))   // R487_B1_REARM_OFF: the bottom 3 % is off
             take = false;
+        // R491_M_TRIM_SWITCH: an ON/OFF-only group has no trim (midiTargets) - a map from another
+        // show or an import does not drive one the page cannot show (checked once, at the take)
+        if (take && target.startsWith(QLatin1String("groupTrim:")) && midiKind(target) != MidiFader)
+            take = false;
         if (m.anchorRaw < 0)
             m.anchorRaw = raw;
         m.lastRaw = raw;
@@ -2647,11 +2651,17 @@ bool TrackManager::midiCanUndo() const { return m_midiCanUndo; }
 QVariantList TrackManager::midiMappings() const
 {
     QVariantList list;
+    // R491_M_NAMES: every row's name from ONE list - midiName() per row walked the whole show
+    // (midiTargets -> groups(), ~3 ms) once per row, and the page reads this on every MIDI message
+    QHash<QString, QString> names;
+    const QVariantList targets = midiTargets();
+    for (const QVariant &v : targets)
+        names.insert(v.toMap().value(QStringLiteral("t")).toString(), v.toMap().value(QStringLiteral("name")).toString());
     for (const MidiMap &m : m_midiMaps)
     {
         QVariantMap row;
         row.insert(QStringLiteral("t"), m.target);
-        row.insert(QStringLiteral("n"), midiName(m.target));
+        row.insert(QStringLiteral("n"), names.value(m.target, m.target.section(QLatin1Char(':'), -1).toUpper()));
         row.insert(QStringLiteral("f"), midiSource(m.universe, m.channel, false));
         row.insert(QStringLiteral("tag"), midiSource(m.universe, m.channel, true));
         row.insert(QStringLiteral("k"), m.kind == MidiFader ? QStringLiteral("FADER")
@@ -2723,6 +2733,9 @@ void TrackManager::midiTick()
             if (m_engine != nullptr && qAbs(m_engine->haze() - m.lastSet) <= 0.011
                 && m_engine->haze() > m_engine->hazeRest() + 0.001)
             {
+                // R491_M_BURST_NOT_HAND: the timer puts it back, not his hand - a HAZE AUTO (or ALL AUTO)
+                // he tapped during the 3 s stays on (the burst's own moves already ended the old one)
+                m_engine->atmosNext(QStringLiteral("limit"));
                 m_engine->setHaze(m_engine->hazeRest());
                 m_engine->noteMidi(QStringLiteral("haze-burst-end"));
             }
