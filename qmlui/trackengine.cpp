@@ -1904,7 +1904,10 @@ void TrackEngine::noteEnergyHand(int from, int to)
     // frame - one line once it has stood still for 1.5 s (energyHandTick(), as the atmos log
     // does with a haze drag), from where the hand took it to where it left it
     if (m_energyHandMs < 0)
+    {
         m_energyHandFrom = from;
+        m_qualityGestureAt.insert(QStringLiteral("energy-hand"), m_clock.elapsed());   // R491_E_ENERGY_ONCE_START: where the drag began
+    }
     m_energyHandTo = to;
     m_energyHandMs = m_clock.elapsed();
 }
@@ -12421,7 +12424,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
     }
-    if (!dialogueAllowed || (m_dialogueStart >= 0 && (beat < secStart || beat >= m_dialogueStart + 16))
+    // R491_E_DIALOGUE_LOOP: a beat the DJ plays again inside the phrase ends it - a loop over
+    // the call/answer line swapped the leader every beat or two for as long as he held it
+    if (!dialogueAllowed || (m_dialogueStart >= 0 && (beat < secStart || beat >= m_dialogueStart + 16
+                                                      || (m_loopPasses > 0 && beat <= m_loopFrom && beat >= m_dialogueStart)))
         || (!m_dialogueCall.isEmpty() && (!castSet.contains(m_dialogueCall) || !castSet.contains(m_dialogueAnswer))))
     {
         m_dialogueStart = -1;
@@ -14256,6 +14262,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             dropFormMove(key, mv, dropBar, fader, base);
         else if (isDrop && dropBar >= 0)
             dropFormPulse(key, mv, base);
+        // R491_L_BAR_RHYTHM: Codex' chase rhythm (C20261022) keeps the bars on the beat. At one
+        // beat a step its offbeat, 3-3-2 and pairs stepped (and re-hit the pulse) between the
+        // beats - pairs on eighths, under 75 % too once the impact or turnaround had halved the
+        // step after motifMove(). The bars never step between the beats: there they walk straight.
+        if (g.lasers && g.patternDevice == false && mv.rhythm > 0 && mv.stepBeats < 2)
+            mv.rhythm = 0;
 
         // The strobe lamps do not run between the beats outside a drop
         // (Tobias, 2026-09-15: "deres chases er alt for hurtige generelt paa
@@ -14906,7 +14918,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 {
                     // R485_A2_DENSE_PACE: a ceiling where a rule or his hand slows the
                     // bars (support >= 2 beats a step, half time, SETUP/SPEED), not an override
-                    const int densePace = m_faderNow >= 0.90 && isDrop ? 500 : 1000;
+                    // R491_L_SPARSE_PACE: R359's sparse percussion is a rule that slows the bars as
+                    // well - one step slower, as divisionFor() does (not under SETUP, SPEED or half time)
+                    const bool sparse = division <= 0 && m_speed == 0 && m_halfTime == false
+                                     && m_density < 0 && m_dropShown;
+                    const int densePace = (m_faderNow >= 0.90 && isDrop ? 500 : 1000) * (sparse ? 2 : 1);
                     const bool slowed = division > 0 || m_speed < 0 || m_halfTime
                                      || (m_fullAuto && tier > 0 && key != m_rhythmLead);
                     motionDivision = slowed ? qMax(densePace, motionDivision) : densePace;
@@ -30681,6 +30697,22 @@ void TrackEngine::qualitySignal(const QString &tag)
             const bool continuing = m_qualityGestureAt.contains(gesture) && now - m_qualityGestureAt.value(gesture) < 1500;
             m_qualityGestureAt.insert(gesture,now);
             if (continuing) return;
+        }
+        // R491_E_ENERGY_ONCE_COUNT: a hand on ENERGY under AUTO writes energy-auto:off as it lands
+        // and sig:energy once it settles - one gesture, one intervention (an ENERGY move)
+        if (tag == QStringLiteral("sig:energy-auto:off"))
+            m_qualityGestureAt.insert(QStringLiteral("energy-auto-off"), m_clock.elapsed());
+        else if (kind == QStringLiteral("energy"))
+        {
+            const qint64 off = m_qualityGestureAt.value(QStringLiteral("energy-auto-off"), -1);
+            const qint64 began = m_qualityGestureAt.value(QStringLiteral("energy-hand"), -1);
+            m_qualityGestureAt.remove(QStringLiteral("energy-auto-off"));
+            if (off >= 0 && began >= 0 && qAbs(began - off) < 1500)
+            {
+                m_qualityCounts[QStringLiteral("manual_energy-auto")] -= 1;
+                m_qualityCounts[QStringLiteral("manual_energy")] += 1;
+                return;
+            }
         }
         m_qualityCounts[QStringLiteral("manual_") + kind] += 1;
         counted = true;

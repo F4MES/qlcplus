@@ -494,11 +494,14 @@ Rectangle
                 clip: true
                 interactive: contentHeight > height
                 boundsBehavior: Flickable.StopAtBounds
-                model: midiPanel.rows
+                // R491_M_CLEAR_TAP: the rows by index - a new list (a mapped fader moving, 10 a second) rebuilt
+                // every row, and a CLEAR under the finger died between press and release
+                model: midiPanel.rows.length
                 delegate: Rectangle
                 {
                     id: mrow
-                    objectName: "midiRow:" + modelData.t
+                    readonly property var r: midiPanel.rows[index] || ({})
+                    objectName: "midiRow:" + mrow.r.t
                     width: ListView.view.width; height: 38
                     color: "transparent"
                     Rectangle
@@ -507,23 +510,23 @@ Rectangle
                         color: index % 2 === 0 ? "#242428" : "#1E1E21"
                     }
                     Text { x: 8; width: midiPanel.cName - 12; y: 8; elide: Text.ElideRight
-                           text: modelData.n; color: setupRoot.cText; font.bold: true; font.pixelSize: 14 }
+                           text: mrow.r.n; color: setupRoot.cText; font.bold: true; font.pixelSize: 14 }
                     Text { x: 8 + midiPanel.cName; width: midiPanel.cFrom - 12; y: 8; elide: Text.ElideRight
-                           text: modelData.f; color: "#4FA3E3"; font.pixelSize: 14 }
+                           text: mrow.r.f; color: "#4FA3E3"; font.pixelSize: 14 }
                     Rectangle
                     {
                         x: 8 + midiPanel.cName + midiPanel.cFrom; y: 7
                         width: 70; height: 20; radius: 3; color: "transparent"; border.width: 1; border.color: "#4A4A52"
-                        Text { anchors.centerIn: parent; text: modelData.k; color: setupRoot.cDim; font.bold: true; font.pixelSize: 11 }
+                        Text { anchors.centerIn: parent; text: mrow.r.k; color: setupRoot.cDim; font.bold: true; font.pixelSize: 11 }
                     }
                     Text { x: 8 + midiPanel.cName + midiPanel.cFrom + midiPanel.cKind; width: mrow.width - x - 100; y: 9
-                           elide: Text.ElideRight; text: modelData.s; color: modelData.w ? "#E3B44F" : setupRoot.cDim; font.pixelSize: 13 }
+                           elide: Text.ElideRight; text: mrow.r.s; color: mrow.r.w ? "#E3B44F" : setupRoot.cDim; font.pixelSize: 13 }
                     TrackTile
                     {
-                        objectName: "midiClear:" + modelData.t
+                        objectName: "midiClear:" + mrow.r.t
                         anchors.right: parent.right; anchors.rightMargin: 4; y: 4
                         width: 84; height: 26; label: qsTr("CLEAR")
-                        onTapped: if (trackManager) trackManager.midiClear(modelData.t)
+                        onTapped: if (trackManager) trackManager.midiClear(mrow.r.t)
                     }
                 }
             }
