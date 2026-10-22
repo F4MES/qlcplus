@@ -29,6 +29,8 @@ def wait_for(path, process=None):
 class GuardTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # R492_GUARD_QUIET: the guards' notices (a window) never show in the tests or in CI
+        os.environ['QLC_GUARD_QUIET'] = '1'
         cls.work = tempfile.TemporaryDirectory(prefix='rig guard tests ')
         cls.root = Path(cls.work.name)
         cls.java_home = os.environ.get('JAVA_HOME')

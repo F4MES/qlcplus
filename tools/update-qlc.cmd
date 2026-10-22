@@ -117,6 +117,76 @@ function Find-Shortcut {
     return $null
 }
 
+# R492_AUTOSTART (Tobias 10-22: "jeg har sat qlc som startapp ... synes ikke den gjorde det
+# sidste gang jeg startede PC'en"): what Windows has to start QLC+ by itself, whether it is
+# switched on, whether its target exists - and what QLC+'s own startup log says since then.
+# Only reads; never a reason for the update to stop.
+function Show-Autostart {
+    try {
+        Say "Autostart:" "Cyan"
+        $found = 0
+        $approvedKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved"
+        function Approved($sub, $name) {
+            foreach ($root in @($approvedKey, ($approvedKey -replace '^HKCU:', 'HKLM:'))) {
+                $v = (Get-ItemProperty -Path "$root\$sub" -Name $name -ErrorAction SilentlyContinue).$name
+                if ($v -is [byte[]] -and $v.Length -gt 0) { return (($v[0] -band 1) -eq 0) }
+            }
+            return $true
+        }
+        try {
+        $shell = New-Object -ComObject WScript.Shell
+        foreach ($place in @([Environment]::GetFolderPath("Startup"), [Environment]::GetFolderPath("CommonStartup"))) {
+            if (-not $place -or -not (Test-Path $place)) { continue }
+            foreach ($lnk in Get-ChildItem -Path $place -Filter *.lnk -ErrorAction SilentlyContinue) {
+                $t = $shell.CreateShortcut($lnk.FullName)
+                if ($t.TargetPath -notmatch "qlcplus") { continue }
+                $found++
+                $on = Approved "StartupFolder" $lnk.Name
+                $ok = Test-Path $t.TargetPath
+                Say ("  {0} (Startup folder) -> {1} {2}" -f $lnk.Name, $t.TargetPath, $t.Arguments)
+                if (-not $on) { Say "    SWITCHED OFF in Task Manager > Startup apps - switch it on there" "Red" }
+                if (-not $ok) { Say "    the program it points at does not exist - make the shortcut again" "Red" }
+            }
+        }
+        } catch { Say "  (Startup folder not readable: $($_.Exception.Message))" "Yellow" }
+        foreach ($run in @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Run", "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run")) {
+            $props = Get-ItemProperty -Path $run -ErrorAction SilentlyContinue
+            if (-not $props) { continue }
+            foreach ($p in $props.PSObject.Properties) {
+                if ($p.Name -like "PS*" -or "$($p.Value)" -notmatch "qlcplus") { continue }
+                $found++
+                $on = Approved "Run" $p.Name
+                Say ("  {0} (registry Run) -> {1}" -f $p.Name, $p.Value)
+                if (-not $on) { Say "    SWITCHED OFF in Task Manager > Startup apps - switch it on there" "Red" }
+            }
+        }
+        try {
+            foreach ($task in @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { "$($_.Actions.Execute)" -match "qlcplus" })) {
+                $found++
+                Say ("  {0} (Task Scheduler, {1})" -f $task.TaskName, $task.State)
+            }
+        } catch { }
+        if ($found -eq 0) { Say "  nothing starts QLC+ with Windows (no shortcut in the Startup folder, no Run entry, no task)" "Yellow" }
+        $log = Join-Path (Split-Path $state) "startup.log"
+        $boot = $null
+        try { $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).LastBootUpTime } catch { }
+        if ($boot) { Say ("  Windows started {0:yyyy-MM-dd HH:mm}" -f $boot) }
+        if (Test-Path $log) {
+            Say "  QLC+/BLT starts (startup.log, newest last):"
+            Get-Content $log -Tail 6 -ErrorAction SilentlyContinue | ForEach-Object { Say "    $_" }
+            if ($boot) {
+                $since = @(Get-Content $log -ErrorAction SilentlyContinue | Where-Object {
+                    $_ -match '^(\S+ \S+)\s+QLC\+\s+started' -and [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $null) -ge $boot })
+                if ($since.Count -eq 0) { Say "    QLC+ has not started since Windows started" "Yellow" }
+            }
+        } else {
+            Say "  no startup.log yet - the next QLC+ start writes one"
+        }
+    } catch {
+        Say "  (autostart check failed: $($_.Exception.Message))" "Yellow"
+    }
+}
+
 function Close-Qlc {
     $procs = Get-QlcProcesses
     if ($procs.Count -eq 0) { return $false }
@@ -172,6 +242,7 @@ $s = Read-State
 $wasRunning = (Get-QlcProcesses).Count -gt 0
 $sc = Find-Shortcut
 if ($sc) { Say ("  shortcut {0} opens {1}" -f (Split-Path $sc.Link -Leaf), $sc.Show) }
+Show-Autostart                                   # R492_AUTOSTART_CALL
 
 # ---- 1. what is new (downloaded while QLC+ still runs) ----
 $exeFile = $null; $rev = ""
