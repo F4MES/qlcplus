@@ -2046,6 +2046,204 @@ public:
     QStringList dropPicks(const QStringList &priority, int effects) const;
     void dropVariety(QStringList &priority, int effects, const QString &base, bool strobeFirst);
     void dropRemember(bool isDrop, const QSet<QString> &castSet);
+    // R493_INF_DECL (runde 493): the room features - one declaration block per file, each
+    // owner writes only below its own marker line (track_runtime/r493_<name>.inc.cpp)
+    QString m_trackGenreTag;             // R493 shared: the DJ's rekordbox genre tag ("" none) - set by the groove file
+    qreal m_trackSwing = -1.0;           // R493 shared: the track's swing, 0 straight .. 1 full shuffle, -1 unknown
+    // R493_DECL_ROOMMAP: A4 room map table (rig_room.json)
+    // R493_A4_DECL_ROOMMAP (track_runtime/r493_roommap.inc.cpp): where each lamp hangs, from
+    // rig_room.json (the generator writes the table). x 0 left .. 1 right from the DJ, y 0 at
+    // the DJ .. 1 the back; a placeholder in address order until the real map comes
+    bool roomOf(quint32 fixtureId, qreal *x, qreal *y) const;   // false: the map does not know it
+    QString roomGroupOf(quint32 fixtureId) const;
+    QList<quint32> roomDiscoHeads() const;                      // the disco ball's heads (fixture ids)
+    QList<quint32> roomOrder(const QString &group) const;       // a group from the DJ to the back
+    bool roomPlaceholder() const;
+    void roomHangOrder(QList<quint32> &fixtures) const;         // R493_MAP_DECL: room order when the map knows them all
+    bool roomBall(qreal *x, qreal *y) const;                    // the ball's position, when known
+    int r493RoomRowOf(quint32 fixtureId) const;
+    void roomAnnounce();                                        // sig:room:<status>:<known>:<heads>, once
+    bool m_r493RoomLogged = false;
+    // R493_DECL_GROOVE: A1 swing, stabs, genre tag, finer onsets
+    // R493_A1_DECL (runde 493, A1): swing chases and chord stabs - track_runtime/r493_groove.inc.cpp.
+    // Sets the shared m_trackGenreTag / m_trackSwing above; everything else is its own.
+    void setTrackGroove(const QString &genre, qreal swing, qreal swing16, qreal swing8,
+                        const QVariantList &stabMid);   // TrackManager: the track event's r493 fields
+    int stabMid(int beat, int quarter) const;          // 0-15, or -1 without data
+    void r493GrooveBeat(int beat, int secStart, qreal fader, bool isDrop, bool isBuild, bool isBreak,
+                        bool isCalm, bool hold, bool still, bool preDrop, bool landing);
+    qreal r493SwingDelay(int subSteps, qreal depth) const;
+    qreal r493SwingWithin(const QString &key, const TrackMove &mv, qreal within) const;
+    bool r493StabWanted() const;
+    bool r493StabFrame(qint64 now);
+    void r493StabEnd();
+    qreal m_r493Swing16 = -1.0;          // the off sixteenths' swing, 0..1, -1 unknown
+    qreal m_r493Swing8 = -1.0;           // the off eighths'
+    QVector<quint16> m_r493StabMid;      // the mids' stabs per quarter beat (four nibbles)
+    QString m_r493SwingTitle;            // the track sig:swing was logged for
+    qreal m_r493SwingDepth16 = 0.0;      // this beat's swing on a sixteenth walk (0 = straight)
+    qreal m_r493SwingDepth8 = 0.0;       // ... on an eighth walk
+    int m_r493SwingSec = -1;
+    qint64 m_r493BeatStartMs = -1;       // the beat the decisions were made on
+    int m_r493StabQ = 0;                 // this beat's stab quarters (bits 1-3)
+    int m_r493StabFired = 0;
+    int m_r493StabBeat = 0;
+    int m_r493StabSec = -1;
+    int m_r493StabSecNow = -1;
+    qreal m_r493StabPeak = 0.0;
+    QString m_r493StabKey;
+    QString m_r493BlinkKey;              // the blink running: group, its two colour scenes, levels, clock
+    quint32 m_r493BlinkCol = 0;
+    quint32 m_r493BlinkPartner = 0;
+    qreal m_r493BlinkColLevel = 1.0;
+    qreal m_r493BlinkPartnerLevel = 1.0;
+    qreal m_r493BlinkPeak = 0.0;
+    qreal m_r493BlinkLen = 100.0;
+    qint64 m_r493BlinkFrom = -1;
+    // R493_DECL_GENRE: A2 genre profile
+    // R493_A2_GENRE_DECL: the track's genre profile (track_runtime/r493_genre.inc.cpp)
+    void r493GenreBeat(qreal bpm);
+    qreal r493GenreWeight() const;
+    int r493GenreTickets(const QString &colour, int n) const;
+    qreal r493GenreStrobe(qreal top) const;
+    qreal r493GenrePace() const;
+    int r493GenreHold(int holdBars) const;
+    qreal r493GenreLaser(qreal pLead) const;
+    bool r493GenrePercDraw(QRandomGenerator *rng) const;
+    int r493GenreEffects(int effects, bool isDrop) const;
+    int r493GenreFadePct(int pct) const;
+    qreal r493GenreSwingScale() const;   // for the swing chases: 1 as measured, under 1 straighter
+    bool m_r493GenreDraw = false;        // the room's own colour draw is under way (drawColour)
+    QString m_r493GenreSeen;             // title|tag|swing the profile was read for
+    int m_r493Genre = 0;                 // 0 house (neutral), 1 techno, 2 melodic, 3 afro, 4 minimal
+    int m_r493GenreConf = 0;             // 0-100: under 50 the profile is neutral
+    QString m_r493GenreSrc;              // analysis, tag or both
+    // R493_DECL_MELODY: A2 melody wave
+    // R493_A2_MELODY_DECL: the wash on the melody's arc in a kickless break (r493_melody.inc.cpp)
+    QVector<qreal> r493MelodyArc(int from, int to) const;
+    void r493MelodyBeat(int beat, int secStart, int secEnd, bool isBreak, bool quiet);
+    qreal r493MelodyBreath(const QString &group, qreal sine) const;
+    QVector<qreal> m_r493MelArc;         // the break's level per beat, 0.60-1.00 (empty: the sine)
+    int m_r493MelFrom = -1;              // ... from this beat (the section's start)
+    int m_r493MelBeat = -1;
+    QString m_r493MelTitle;
+    bool m_r493MelLogged = false;
+    qreal m_r493MelW = 0.0;              // its weight over the sine at this beat's start
+    qreal m_r493MelWTo = 0.0;            // ... and at its end (a quarter a beat)
+    // R493_DECL_CAMELOT: A2 Camelot transitions
+    // R493_A2_CAMELOT_DECL: glide or hold-and-cut by the two keys (r493_camelot.inc.cpp)
+    void r493CamelotNextKey(const QString &key);
+    void r493CamelotStash();
+    void r493CamelotLanded(const QString &key, bool adopted);
+    void r493CamelotBeat(int beat, int beatInBar, bool hold, bool isCalm, bool changeColour);
+    bool r493CamelotCutNow(int beat) const;
+    QString m_r493KeyNow, m_r493KeyNext; // the keys as rekordbox wrote them
+    int m_r493CamState = 0;              // 0 -, 1 match, 2 clash holding, 3 cut owed, 4 cut in the mix
+    bool m_r493CamDecided = false;       // this mix has been read
+    bool m_r493CamDropOwed = false;      // the incoming drop arrived: cut on the bar line
+    int m_r493CamMixEnd = -1;
+    int m_r493CamCutBeat = -1;           // the beat the cut went in (a hard one)
+    QString m_r493CamCut, m_r493CamIncoming;
+    QString m_r493CamNext;               // the next colour a clash keeps out of the mix, for the cut
+    // R493_DECL_ZOOMSQUEEZE: A3 zoom squeeze in builds
+    // R493_A3_ZS_DECL (runde 493, A3): the build's zoom steps on two-bar lines (track_runtime/r493_zoomsqueeze.inc.cpp)
+    bool m_r493ZsOn = true;               // the layer on (no UI in this round)
+    int m_r493ZsLogged = -1;              // the build (its first beat) sig:zoom-squeeze was written for
+    QString m_r493ZsGroup;                // the head group the squeeze drew the zoom for ...
+    int m_r493ZsBeat = -1;                // ... on this beat
+    int m_r493ZsStep = -1;                // the step it asked for (0 sharpest .. 8 widest)
+    bool r493ZoomSqueeze(const QString &key, int beat, int secStart, int beatsToNext,
+                         const QString &nextState, qreal energy, int &want);
+    bool r493ZoomSqueezing(const QString &key) const;   // A4: the squeeze drew this group's zoom this beat
+    // R493_DECL_EASING: A3 soft movement
+    // R493_A3_EASE_DECL (runde 493, A3): soft movement on the wash heads (track_runtime/r493_easing.inc.cpp)
+    struct R493EaseHead {
+        quint32 scene = 0xFFFFFFFFu;      // its hidden Replace scene, TRACK Ease: <group> <fixture id>
+        quint32 pan = 0xFFFFFFFFu, tilt = 0xFFFFFFFFu, dimmer = 0xFFFFFFFFu;
+        quint32 chaser = 0xFFFFFFFFu;     // the figure whose steps it shapes
+        int step = -1;                    // ... and the step
+        qreal a[2] = { 0.0, 0.0 }, b[2] = { 0.0, 0.0 };     // pan, tilt: from, to
+        qreal m0[2] = { 0.0, 0.0 }, m1[2] = { 0.0, 0.0 };   // the end slopes (0 = from or to rest)
+        int out[2] = { -1, -1 };          // last written
+        bool on = false;                  // the layer holds the head
+        bool easing = false;              // a step is being shaped
+    };
+    struct R493EfxRamp { int w0 = 0, h0 = 0, w1 = 0, h1 = 0; qint64 t0 = 0; int ms = 0; };
+    struct R493EaseClock { quint32 chaser = 0xFFFFFFFFu; int index = -1; qint64 t0 = 0; qint64 lastPoll = -1; bool known = false; bool layered = false; };
+    QMap<QString, R493EaseClock> m_r493EaseClock;     // head group -> its figure step's own clock
+    QMap<quint32, R493EaseHead> m_r493Ease;            // wash head (fixture id) -> its layer
+    QMap<QString, QList<quint32> > m_r493EaseGroups;   // head group -> its wash heads
+    QMap<QString, R493EfxRamp> m_r493EfxRamp;          // head group -> its EFX size easing in
+    QSet<quint32> m_r493Yield;            // heads another layer holds (A4's disco ball): no squeeze, no easing
+    QTimer m_r493EaseTimer;
+    bool m_r493EaseOn = true;             // the layer on (no UI in this round)
+    bool m_r493EaseWired = false;
+    bool m_r493EaseLogged = false;        // sig:easing:on written for this SHOW ON
+    int m_r493EaseSteps = 0;              // figure steps shaped (harness)
+    int m_r493EfxGrows = 0;               // EFX figures grown in (harness)
+    void r493EnsureEase();
+    void r493EaseTick();
+    void r493EaseRelease(quint32 fid);
+    Scene *r493EaseScene(const R493EaseHead &h) const;
+    void r493EaseEfxStart(const QString &group, Function *func, int width, int height, uint ms);
+    bool r493EaseEfxSize(const QString &group, Function *func, int width, int height);
+    void r493YieldHeads(const QSet<quint32> &fixtureIds);   // A4: heads it holds now (empty: none)
+    bool r493EaseHolds(quint32 fixtureId) const;            // A4: the ease layer holds this head's pan/tilt
+    // R493_DECL_DISCOBALL: A4 disco ball moment
+    // R493_A4_DECL_DISCOBALL (track_runtime/r493_discoball.inc.cpp)
+    int m_r493DiscoSec = -1;             // the break (its first beat) the moment was drawn for
+    QString m_r493DiscoTitle;            // ... in this track
+    int m_r493DiscoWait = 0;             // varietyDraw's wait
+    int m_r493DiscoPhase = 0;            // 0 off, 1 travelling dark, 2 lit, 3 home under the dark mask
+    int m_r493DiscoFrom = -1;            // the beat the phase began
+    int m_r493DiscoKick = 0;             // kick beats in a row
+    int m_r493DiscoKickBeat = -1;
+    QString m_r493DiscoGroup;            // the heads' group
+    QList<quint32> m_r493DiscoFx;        // the heads
+    quint32 m_r493DiscoLook = 0xFFFFFFFFu;   // hidden scene: aim, sharp beam, colour (flashed)
+    quint32 m_r493DiscoDark = 0xFFFFFFFFu;   // hidden scene: their intensity at nought (flashed)
+    int m_r493DiscoAttr = -1;            // the look's intensity override
+    qreal m_r493DiscoTarget = 0.0;       // the beam's level (ENERGY)
+    qreal m_r493DiscoRamp = 0.0;         // its swell, 0..1
+    int m_r493DiscoGen = 0;              // cancels a swell or a dark timer
+    bool r493Kickless(int from, int beats, int allowed) const;
+    bool r493HisPicks() const;
+    int r493DiscoTravel() const;
+    bool r493DiscoHolds(quint32 fixtureId) const;               // for A3: the ball has this head
+    qreal r493DiscoGain(const QString &group) const;
+    Scene *r493DiscoSceneNamed(const QString &name);
+    bool r493DiscoBuild(const QString &group, const QList<quint32> &heads);
+    void r493DiscoLevel();
+    void r493DiscoSwell(int gen);
+    void r493DiscoHome(int beat, const QString &why);
+    void r493DiscoReset(bool soft);
+    void r493DiscoBeat(const QSet<QString> &castSet, const QString &state, int beat, int secStart, int secEnd,
+                       int beatsToNext, qreal fader, qreal kick, bool hold, bool isCalm, bool still, bool silent);
+    // R493_DECL_LASERROOF: A4 laser roof
+    // R493_A4_DECL_LASERROOF (track_runtime/r493_laserroof.inc.cpp)
+    bool m_r493RoofOn = false;           // the laser roof stands
+    int m_r493RoofSec = -1;              // the break (its first beat) it was drawn for
+    QString m_r493RoofTitle;
+    int m_r493RoofWait = 0;              // varietyDraw's wait
+    int m_r493RoofFrom = -1;             // its first beat
+    int m_r493RoofKick = 0;              // kick beats in a row
+    int m_r493RoofKickBeat = -1;
+    QString m_r493RoofBars;              // the bars
+    QString m_r493RoofA, m_r493RoofB;    // the wave's colours (B empty: one colour, no wave)
+    int m_r493RoofPeriod = 16;           // beats from wave to wave
+    int m_r493RoofStep = 2;              // beats a bar inside a wave
+    quint32 m_r493RoofMask = 0;          // the bars in B now (bit = g.fixtures index)
+    QList<quint32> m_r493RoofOrder;      // the bars from the DJ to the back (roomOrder)
+    QHash<QString, quint32> m_r493RoofScenes;   // the wave's colour scenes
+    bool r493HazeOn() const;
+    bool r493RoofStill() const;
+    void r493RoofEnd(const QString &why);
+    void r493RoofReset();
+    qreal r493RoomLevel(const QString &key, qreal groupLevel, bool still) const;
+    quint32 r493RoofColour(const QString &key, int beat);
+    void r493RoofBeat(QSet<QString> &castSet, const QStringList &eligible, const QString &state, int beat,
+                      int secStart, int secEnd, qreal fader, qreal kick, bool hold, bool isCalm, bool still,
+                      bool silent);
     // R488_DX_DECL: the drop forms (track_runtime/dropforms.inc.cpp, runde 488)
     int m_formPlan = 0;                  // the form decided for the coming drop flag
     int m_formPlanFor = -1;              // ... that flag

@@ -442,6 +442,12 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     if (m_engine != nullptr)            // R461_ONSETS: the bass's and the mids' quarter-beat onsets
         m_engine->setTrackOnsets(obj.value(QStringLiteral("onsetLow")).toArray().toVariantList(),
                                  obj.value(QStringLiteral("onsetMid")).toArray().toVariantList());
+    if (m_engine != nullptr)            // R493_A1_PARSE: genre tag, swing, the mids' stabs (r493 BLT)
+        m_engine->setTrackGroove(obj.value(QStringLiteral("genre")).toString(),
+                                 obj.value(QStringLiteral("swing")).toDouble(-1.0),
+                                 obj.value(QStringLiteral("swing16")).toDouble(-1.0),
+                                 obj.value(QStringLiteral("swing8")).toDouble(-1.0),
+                                 obj.value(QStringLiteral("stabMid")).toArray().toVariantList());
     if (m_engine != nullptr)            // R317_PUNCH: how hard, not how full
         m_engine->setTrackPunch(m_title,                // R318_PUNCH_TITLE: one entry per track
                                 obj.value(QStringLiteral("kickRef")).toDouble(-1.0),
