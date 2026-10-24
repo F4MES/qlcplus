@@ -2245,6 +2245,127 @@ public:
     void r493RoofBeat(QSet<QString> &castSet, const QStringList &eligible, const QString &state, int beat,
                       int secStart, int secEnd, qreal fader, qreal kick, bool hold, bool isCalm, bool still,
                       bool silent);
+    // R497_INF_DECL (runde 497): one declaration block per file, each owner writes only
+    // below its own marker line (track_runtime/r497_<name>.inc.cpp)
+    // R497_DECL_BLOOM: A1 centre-out bloom
+    // R497_A1_BLOOM_DECL (runde 497, A1): the wash opens from the centre on a bloom drop's first
+    // beat, and collapses into it the beat before - track_runtime/r497_bloom.inc.cpp
+    QString r497BloomWash() const;
+    bool r497BloomRingsOf(const QString &key, QVector<int> *ring, int *rings) const;
+    bool r497BloomReady() const;                // dropFormDecide: the map knows the wash whole
+    bool r497BloomFree(const QString &key) const;
+    bool r497BloomArm(int mode, int beat);
+    bool r497BloomLand(int beat);               // the drop forms' landing: the bloom's beat
+    void r497BloomBeat(int beat, bool isDrop, const QString &nextState, int beatsToNext, qreal fader,
+                       bool hold, bool isCalm, bool still);   // tick(): the collapse's beat
+    bool r497BloomScenes();                     // the rings' masks for this beat's colour
+    Scene *r497BloomScene(quint32 id, const QString &name);
+    void r497BloomStart();                      // tick(), the beat drawn: the first frame
+    bool r497BloomFrame(qint64 now);            // the pulse timer and reapplyLevels: the rings now
+    void r497BloomStop();
+    int m_r497BloomMode = 0;                    // 0 none, 1 the collapse, 2 the bloom
+    int m_r497BloomBeat = -1;                   // the beat it runs in
+    qint64 m_r497BloomMs = -1;                  // ... that beat's start, once tick() has drawn it
+    QString m_r497BloomKey;                     // the wash
+    QVector<int> m_r497BloomRing;               // lamp -> ring, 0 the centre
+    int m_r497BloomRings = 0;
+    int m_r497CollapseFor = -1;                 // the drop the collapse ran for (once)
+    bool m_r497BloomLogged = false;             // its sig: line written
+    int m_r497BloomPrepFor = -1;                // the drop its masks were made ahead for
+    QVector<quint32> m_r497BloomDark;           // per ring: the dark mask ...
+    QVector<quint32> m_r497BloomLit;            // ... and the lit one (hidden scenes, flashed)
+    QVector<int> m_r497BloomShown;              // per ring: 0 neither flashed, 1 dark, 2 lit
+    QString m_r497BloomCache;                   // the wash and colour scene the masks were made for
+    // R497_DECL_ROLL: A1 builds follow the drum roll
+    // R497_A1_ROLL_DECL (runde 497, A1): the build's rate never past its measured roll -
+    // track_runtime/r497_roll.inc.cpp
+    int r497RollMeasure(int barStart) const;    // 4, 8, 16, or -1 no clear roll
+    void r497RollBeat(int beat, int beatInBar, bool isBuild, bool isDrop, const QString &nextState,
+                      int beatsToNext, bool hold, bool isCalm, bool still);
+    int r497RollChop(int chop) const;           // the stabs
+    void r497RollMove(TrackMove &mv, const TrackGroup &g) const;   // the walks
+    int r497RollStrobe(int want, int rates) const;                 // the strobe riser
+    int m_r497RollTier = -1;                    // this bar's roll, -1 none: today's ramp
+    int m_r497RollBar = -1;                     // the bar it was read for
+    int m_r497RollLogged = -1;                  // the roll last logged in this build
+    QString m_r497RollTitle;
+    // R497_DECL_CURTAIN: A2 the mix as a curtain
+    // R497_A2_CURTAIN_DECL: the mix as a curtain across the room (track_runtime/r497_curtain.inc.cpp)
+    bool m_r497CurtainOn = false;        // the glide shows as a curtain now
+    int m_r497CurtainK = 0;              // heads in the new track's colour, counted from the right
+    int m_r497CurtainMoved = -1;         // the beat the border last moved on
+    QString m_r497CurtainKey;            // the group it runs on (the glide's base)
+    QList<quint32> m_r497CurtainOrder;   // its heads from left to right (roomHangOrder)
+    QHash<QString, quint32> m_r497CurtainScenes;   // "group|a|b|mask" -> hidden colour scene
+    QString r497CurtainMayRun(const QString &key, QList<quint32> *order) const;
+    void r497CurtainOff(const QString &why);
+    void r497CurtainBeat(int beat, int beatInBar, bool frozen);
+    quint32 r497CurtainScene(const QString &key, quint32 fa, quint32 fb, const QSet<quint32> &inB);
+    bool r497CurtainGlide(const QString &key, quint32 fa, quint32 fb, qreal lvl);
+    quint32 r497CurtainColour(const QString &key, const QString &colour);
+    // R497_DECL_TAPS: A3 BLACKOUT taps
+    // R497_A3_TAPS_DECL: his BLACKOUT taps learned, ghost holes from 80 % (track_runtime/r497_taps.inc.cpp)
+    void r497TapLoad();
+    void r497TapSave(bool force);
+    void r497TapEdge(bool on);           // setBlackout: his tap, learned - the ghost stops at once
+    void r497TapBeat(int beat, int bucket, int beatInBar, int dropBar, int beatsToNext, bool dropNext, bool open);
+    void r497TapChop(qint64 now, bool &inStab, qint64 &next) const;   // slotChopTimer: the holes
+    bool r497TapHush() const;            // his picks and the safeties: no hole
+    qreal r497TapRate(int bucket, int ebin) const;   // his taps per 8 bars there
+    bool m_r497TapLoaded = false;
+    bool m_r497TapDirty = false;
+    QVector<qreal> m_r497TapSlot;        // the sixteenth of the bar his taps start on (16)
+    QVector<qreal> m_r497TapLen;         // how long, in sixteenths of a beat (16)
+    QVector<qreal> m_r497TapTaps;        // taps per section x slider band (4 x 3)
+    QVector<qreal> m_r497TapBeats;       // ... and the beats he was at the pad there
+    QVector<qreal> m_r497TapBurst;       // his bursts of 1, 2, 3, 4 taps
+    QList<QPair<qint64, qint64>> m_r497TapPlan;   // this beat's ghost holes (clock ms)
+    qint64 m_r497TapPlanBeat = -1;       // ... planned on this beat start
+    qint64 m_r497TapOnMs = -1;           // his tap down, being learned
+    int m_r497TapOnSlot = 0;
+    int m_r497TapOnBucket = -1;
+    int m_r497TapOnEbin = -1;
+    qint64 m_r497TapLastMs = -1;         // his last BLACKOUT edge (or STUTTER beat)
+    qint64 m_r497TapHisMs = -1;          // his own burst, counted
+    int m_r497TapHisN = 0;
+    bool m_r497TapHisHigh = false;
+    int m_r497TapBucket = -1;            // this beat: 0 drop, 1 break, 2 groove, 3 build, 4 intro/outro
+    int m_r497TapBarBeat = 0;
+    int m_r497TapBeatNo = -1;
+    int m_r497TapCounted = -1;
+    int m_r497TapChopBeat = -1;          // the last beat the room was closed to a hole
+    int m_r497TapLearned = 0;            // taps learned tonight
+    qint64 m_r497TapLogMs = -1;
+    qint64 m_r497TapSaveMs = -1;
+    qreal m_r497TapCredit = 0.0;         // towards the next burst
+    qreal m_r497TapGap = -1.0;
+    int m_r497TapLeft = 0;               // holes the burst still owes
+    int m_r497TapWin = 0;                // beats left in its two bars
+    bool m_r497TapFirst = false;
+    qint64 m_r497TapFreeMs = -1;         // no dark before this (half a beat after the last light back)
+    int m_r497TapGhosts = 0;
+    // R497_DECL_MELODYHEADS: A4 heads follow the melody
+    // R497_A4_DECL (runde 497, A4): the Shark heads' figure follows the melody in kickless breaks
+    struct R497MhState
+    {
+        bool on = false;                 // the arc leads this group on this beat
+        int sign = 0;                    // the tilt way that lifts off straight down (+1/-1), 0 unread
+        qreal k = 1.0, kTo = 1.0;        // the figure's size factor at this beat's start / end
+        qreal off = 0.0, offTo = 0.0;    // the centre's tilt offset (EFX y units), the same
+        qreal appliedK = 1.0;            // what applySweep() was handed last
+        qreal appliedOff = 0.0;
+        qreal writtenOff = 0.0;          // what the EFX's centre carries of ours
+    };
+    QMap<QString, R497MhState> m_r497Mh;   // per wash-head group (r493EnsureEase's)
+    int m_r497MhBeat = -1;
+    int m_r497MhSec = -1;
+    QString m_r497MhTitle;
+    bool m_r497MhLogged = false;         // sig:melody-heads:on said in this section
+    bool m_r497MhShown = false;          // ... and its off still owed
+    int r497MelodyHeadsSign(const QString &group) const;
+    void r497MelodyHeadsBeat(int beat, int secStart, bool isBreak, bool hold, bool quiet);
+    qreal r497MelodyHeadsShape(const QString &group, Function *func, const TrackSweep &sw, int &width, int &height);
+    void r497MelodyHeadsY(const QString &group, Function *func, const TrackSweep &sw);
     // R488_DX_DECL: the drop forms (track_runtime/dropforms.inc.cpp, runde 488)
     int m_formPlan = 0;                  // the form decided for the coming drop flag
     int m_formPlanFor = -1;              // ... that flag
