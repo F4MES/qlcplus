@@ -187,73 +187,8 @@ function Show-Autostart {
     }
 }
 
-# R495_AUTOSTART_REPAIR (Tobias 10-24: "Qlc starter stadig ikke naar jeg taender pcen"): when
-# nothing that WORKS starts QLC+ with Windows - no entry, one switched off in Task Manager, or
-# one whose program is gone - the user's Startup folder gets a copy of the shortcut this update
-# starts QLC+ with (same program, show file and folder), switched on. A working entry is never
-# touched and never doubled (a second start would only meet the "already running" guard).
-function Repair-Autostart($sc) {
-    try {
-        if (-not $sc) { Say "  autostart: no QLC+ shortcut found to copy - not changed" "Yellow"; return }
-        $shell = New-Object -ComObject WScript.Shell
-        $src = $shell.CreateShortcut($sc.Link)
-        if (-not $src.TargetPath -or -not (Test-Path $src.TargetPath)) { return }
-        $approvedKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved"
-        function IsOn($sub, $name) {
-            foreach ($root in @($approvedKey, ($approvedKey -replace '^HKCU:', 'HKLM:'))) {
-                $v = (Get-ItemProperty -Path "$root\$sub" -Name $name -ErrorAction SilentlyContinue).$name
-                if ($v -is [byte[]] -and $v.Length -gt 0) { return (($v[0] -band 1) -eq 0) }
-            }
-            return $true
-        }
-        $working = $false
-        $mine = $null
-        foreach ($place in @([Environment]::GetFolderPath("Startup"), [Environment]::GetFolderPath("CommonStartup"))) {
-            if (-not $place -or -not (Test-Path $place)) { continue }
-            foreach ($lnk in Get-ChildItem -Path $place -Filter *.lnk -ErrorAction SilentlyContinue) {
-                $t = $shell.CreateShortcut($lnk.FullName)
-                if ($t.TargetPath -notmatch "qlcplus") { continue }
-                if ((IsOn "StartupFolder" $lnk.Name) -and (Test-Path $t.TargetPath)) { $working = $true }
-                elseif ($place -eq [Environment]::GetFolderPath("Startup") -and -not $mine) { $mine = $lnk }
-            }
-        }
-        foreach ($run in @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Run", "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run")) {
-            $props = Get-ItemProperty -Path $run -ErrorAction SilentlyContinue
-            if (-not $props) { continue }
-            foreach ($p in $props.PSObject.Properties) {
-                if ($p.Name -like "PS*" -or "$($p.Value)" -notmatch "qlcplus") { continue }
-                $m = [regex]::Match("$($p.Value)", '^\s*"([^"]+)"|^\s*(\S+)')
-                $path = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
-                if ((IsOn "Run" $p.Name) -and (-not $path -or (Test-Path $path))) { $working = $true }
-            }
-        }
-        try {
-            foreach ($task in @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { "$($_.Actions.Execute)" -match "qlcplus" })) {
-                if ("$($task.State)" -ne "Disabled") { $working = $true }
-            }
-        } catch { }
-        if ($working) { Say "  autostart: a working entry starts QLC+ with Windows - not changed" "Green"; return }
-        $startup = [Environment]::GetFolderPath("Startup")
-        $file = if ($mine) { $mine.FullName } else { Join-Path $startup "QLC+ (rig).lnk" }
-        $new = $shell.CreateShortcut($file)
-        $new.TargetPath = $src.TargetPath
-        $new.Arguments = $src.Arguments
-        $new.WorkingDirectory = $src.WorkingDirectory
-        if ($src.IconLocation) { $new.IconLocation = $src.IconLocation }
-        $new.Save()
-        # switched on in Task Manager > Startup apps (the first byte's low bit set = off)
-        $key = "$approvedKey\StartupFolder"
-        $name = Split-Path $file -Leaf
-        $v = (Get-ItemProperty -Path $key -Name $name -ErrorAction SilentlyContinue).$name
-        if ($v -is [byte[]] -and $v.Length -gt 0 -and ($v[0] -band 1) -eq 1) {
-            Set-ItemProperty -Path $key -Name $name -Value ([byte[]](2,0,0,0,0,0,0,0,0,0,0,0))
-        }
-        Say ("  autostart REPAIRED: {0} -> {1} {2}" -f $name, $new.TargetPath, $new.Arguments) "Green"
-        Say "  NB: Windows starts it after you log in - if the PC waits at a login screen, QLC+ waits too" "Yellow"
-    } catch {
-        Say "  (autostart repair failed: $($_.Exception.Message))" "Yellow"
-    }
-}
+# R496_AUTOSTART_REPAIR_OUT (Tobias 10-24): r495's autostart repair is taken out again - Windows
+# Defender blocked the update script for it. The updater only reads the autostart (Show-Autostart).
 
 function Close-Qlc {
     $procs = Get-QlcProcesses
@@ -311,7 +246,7 @@ $wasRunning = (Get-QlcProcesses).Count -gt 0
 $sc = Find-Shortcut
 if ($sc) { Say ("  shortcut {0} opens {1}" -f (Split-Path $sc.Link -Leaf), $sc.Show) }
 Show-Autostart                                   # R492_AUTOSTART_CALL
-Repair-Autostart $sc                             # R495_CALL_AUTOSTART_REPAIR
+# R496_NO_REPAIR_CALL: no autostart repair (see R496_AUTOSTART_REPAIR_OUT)
 
 # ---- 1. what is new (downloaded while QLC+ still runs) ----
 $exeFile = $null; $rev = ""
