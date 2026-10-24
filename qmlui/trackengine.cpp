@@ -31362,8 +31362,10 @@ QVariantList TrackEngine::savedLooks() const
 }
 QVariantList TrackEngine::recentSavedLooks() const
 {
-    QVariantList out;
-    for (const QVariant &v : savedLooks()) if (v.toMap().value(QStringLiteral("used")).toLongLong() > 0) out << v;
+    // R499_SAVED_RECENT_ALL (Tobias 10-25: the SAVED button "viser ikke noget selvom der er saved looks"):
+    // the list took only looks already USED from it, so a look just saved never showed. Every saved
+    // look now: the ones used latest first, then the rest newest saved first (the store's own order)
+    QVariantList out = savedLooks();
     std::stable_sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
         return a.toMap().value(QStringLiteral("used")).toLongLong() > b.toMap().value(QStringLiteral("used")).toLongLong();
     });
