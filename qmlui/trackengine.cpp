@@ -24317,6 +24317,14 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
         foreach (const QFileInfo &fi, docs.entryInfoList(QStringList() << "crumbs-current.txt" << "crumbs-prev.txt"
                                                           << "crash-crumbs-*.txt", QDir::Files, QDir::Time))
             out << fi.absoluteFilePath();
+        // R495_SEND_STARTUP (Tobias 10-24: "Qlc starter stadig ikke naar jeg taender pcen"): every
+        // QLC+/BLT start the startup guards logged (R492_GUARD_LOG), and the updater's state
+        const QString rig = QString::fromLocal8Bit(qgetenv("LOCALAPPDATA")) + "/qlc-rig-update";
+        foreach (const QString &name, QStringList() << "startup.log" << "state.json")
+        {
+            if (QFileInfo::exists(rig + "/" + name))
+                out << rig + "/" + name;
+        }
     }
     else if (id == QStringLiteral("wer"))
     {
@@ -32756,11 +32764,13 @@ static int r493CamelotOf(const QString &keyIn)
 // same key, a step either way on the wheel (same letter), or the relative major/minor
 static bool r493CamelotFits(int a, int b)
 {
-    const int na = a / 2, nb = b / 2, la = a % 2, lb = b % 2;
+    const int na = a / 2, nb = b / 2;
     if (na == nb)
         return true;
     const int d = qAbs(na - nb);
-    return la == lb && (d == 1 || d == 11);
+    // R495_CAMELOT_DIAGONAL (Tobias 10-24: "Glid"): a step either way to the other letter
+    // (8A -> 9B, 9B -> 8A) is an ordinary DJ move - it glides like a match
+    return d == 1 || d == 11;
 }
 
 void TrackEngine::r493CamelotNextKey(const QString &key)
@@ -34095,9 +34105,11 @@ void TrackEngine::r493RoofBeat(QSet<QString> &castSet, const QStringList &eligib
     m_r493RoofA = a;
     m_r493RoofB = b;
     m_r493RoofMask = 0;
-    // a wave every 2-4 bars - faster up the slider; a bar a beat, two low down
-    m_r493RoofPeriod = fader >= 0.85 ? 8 : (fader >= 0.70 ? 12 : 16);
-    m_r493RoofStep = m_r493RoofPeriod >= 16 ? 2 : 1;
+    // R495_ROOF_SLOWER (Tobias 10-24: "Langsommere" - at 85 % a wave came every 2 bars, nearly
+    // all the time): a wave every 4 bars from 85 %, 6 from 70 %, 8 below - a bar a beat, so the
+    // roof stands still in one colour for most of each period
+    m_r493RoofPeriod = fader >= 0.85 ? 16 : (fader >= 0.70 ? 24 : 32);
+    m_r493RoofStep = 1;
     m_r493RoofOrder = roomOrder(bars);
     castSet.insert(bars);
     foreach (const QString &key, castSet.values())
