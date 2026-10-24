@@ -4784,7 +4784,7 @@ Rectangle
             visible: trackViewRoot.savedRecentEmpty
             x: recentPopup.pad; y: recentPopup.pad + recentPopup.titleH + 12
             width: parent.width - 2 * recentPopup.pad
-            text: "No saved looks used yet."; color: trackViewRoot.cMute
+            text: "No saved looks yet. Tap thumbs up while a look plays."; color: trackViewRoot.cMute   // R499_SAVED_EMPTY_TEXT
             font.pixelSize: trackViewRoot.fs(14)
         }
         Flickable
