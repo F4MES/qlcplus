@@ -2208,6 +2208,7 @@ public:
     int m_r493DiscoGen = 0;              // cancels a swell or a dark timer
     bool r493Kickless(int from, int beats, int allowed) const;
     bool r493HisPicks() const;
+    bool r493HisTakes() const;           // R494_DECL_HIS_TAKES: his picks that END a ball/roof (not a BLACKOUT/FLASH tap)
     int r493DiscoTravel() const;
     bool r493DiscoHolds(quint32 fixtureId) const;               // for A3: the ball has this head
     qreal r493DiscoGain(const QString &group) const;

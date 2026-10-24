@@ -21047,6 +21047,83 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     if (func == nullptr)
         return;
 
+    // R494_S1_EYE_CLEAR (runde 494, S1): a laser-bar programme that holds every eye
+    // channel it writes at 0 (the whole-bar climbs, surges and dimmer figures) starts
+    // with those eyes AT 0. The eyes are LTP, and QLC+ fades a new step from the
+    // universe's value (GenericFader: setCurrent(preGMValue)): eyes left lit by an
+    // earlier eye programme - a drop's "Drop Eyes ..." stopped hard with the bars'
+    // colour scene - faded from their colour code down to 0 over the programme's
+    // first step, and the colour scene's own eyes-0 (no fade, started the same beat)
+    // lost the LTP to the programme started after it. Two to four beats of stray eyes
+    // sweeping through the colour codes on a bar meant to be whole (harness r493
+    // zs85 beats 193-196 "Bars Ladder Climb Long", roof85b "Burst Climb", gen
+    // "Funnel Climb": eyes_lit 2 at 80-85 %). The programme's first step writes the
+    // same 0; this only skips the fade from the leftover. Only channels that are not
+    // 0 now; nothing but eye channels, never one of an eye programme; a function that
+    // holds a channel writes it again on the next frame. Same claim/reset QLC+'s own
+    // fixture manager and simple desk use.
+    if (slot.startsWith(QStringLiteral("mot:")) && (func->isRunning() == false || func->stopped()))
+    {
+        static const QRegularExpression eyeName(QStringLiteral("(colou?r|eye)\\s*\\d+"),
+                                                QRegularExpression::CaseInsensitiveOption);
+        QList<quint32> steps;
+        Chaser *chaser = qobject_cast<Chaser *>(func);
+        if (chaser != nullptr)
+        {
+            foreach (const ChaserStep &step, chaser->steps())
+                steps.append(step.fid);
+        }
+        else
+            steps.append(func->id());
+        QHash<quint32, QSet<quint32> > eyesHeld;   // bar -> its eye channels this programme writes
+        QSet<quint32> eyesLit;                     // bars where one step lights an eye: an eye programme
+        bool opaque = false;
+        foreach (quint32 sid, steps)
+        {
+            Scene *scene = qobject_cast<Scene *>(m_doc->function(sid));
+            if (scene == nullptr)
+            {
+                opaque = true;                     // an EFX or a nested chase: leave it alone
+                break;
+            }
+            foreach (const SceneValue &sv, valuesOf(scene))
+            {
+                Fixture *fxi = m_doc->fixture(sv.fxi);
+                const QLCChannel *qc = fxi != nullptr ? fxi->channel(sv.channel) : nullptr;
+                if (qc == nullptr || qc->name().contains(eyeName) == false)
+                    continue;
+                eyesHeld[sv.fxi].insert(sv.channel);
+                if (sv.value > 0)
+                    eyesLit.insert(sv.fxi);
+            }
+        }
+        if (opaque == false && eyesHeld.isEmpty() == false && eyesLit.isEmpty())
+        {
+            int cleared = 0;
+            QList<Universe *> ua = m_doc->inputOutputMap()->claimUniverses();
+            for (auto it = eyesHeld.constBegin(); it != eyesHeld.constEnd(); ++it)
+            {
+                Fixture *fxi = m_doc->fixture(it.key());
+                if (fxi == nullptr || it.value().count() != 8 || fxi->universe() >= quint32(ua.count()))
+                    continue;                      // the 8-eye bars only
+                Universe *universe = ua.at(int(fxi->universe()));
+                foreach (quint32 ch, it.value())
+                {
+                    const int address = int(fxi->address() + ch);
+                    if (universe->preGMValue(address) != 0)
+                    {
+                        universe->reset(address, 1);
+                        cleared++;
+                    }
+                }
+            }
+            m_doc->inputOutputMap()->releaseUniverses();
+            if (cleared > 0)
+                crumb(QStringLiteral("eyes clear ") + slot + QLatin1Char(' ') + QString::number(cleared)
+                      + QLatin1Char(' ') + func->name());
+        }
+    }
+
     // coming straight back to something still fading out: take it over
     if (m_fadeAttr.contains(fid))
     {
@@ -32153,30 +32230,7 @@ struct R493GenreFeat
     qreal swing = -1.0;       // m_trackSwing
 };
 
-qreal r493gClamp01(qreal v)
-{
-    return qBound(0.0, v, 1.0);
-}
-
-// a trapezoid: 0 outside lo..hi, 1 on top..top2
-qreal r493gTrap(qreal v, qreal lo, qreal top, qreal top2, qreal hi)
-{
-    if (v < 0.0)
-        return 0.5;
-    if (v <= lo || v >= hi)
-        return 0.0;
-    if (v < top)
-        return (v - lo) / (top - lo);
-    if (v > top2)
-        return (hi - v) / (hi - top2);
-    return 1.0;
-}
-
-// a term that needs a feature BLT may not have sent: neutral (0.5) without it
-qreal r493gTerm(qreal feat, qreal v)
-{
-    return feat < 0.0 ? 0.5 : r493gClamp01(v);
-}
+// R494_GENRE_HELPERS: the r493 scoring helpers went with the r493 scales (see R494_GENRE_CAL)
 
 // the DJ's tag, read loosely; -1 when it names none of the rig's genres
 int r493GenreOfTag(const QString &tagIn)
@@ -32205,70 +32259,60 @@ int r493GenreOfTag(const QString &tagIn)
 // on its own (tests/A2.md has the table it gives for typical tracks)
 int r493GenreClassify(const R493GenreFeat &f, const QString &tag, int *confOut, QString *srcOut)
 {
+    // R494_GENRE_CAL (Tobias 10-24, after the night of 10-23: 63 of 76 club tracks came out
+    // "melodic house", most at 90 - the first scales were tuned on synthetic tracks, and real
+    // ones carry far more mids). Calibrated on that night's 76 real tracks: each profile needs
+    // ALL of its evidence (the weakest term decides), and anything not clearly one of them is
+    // house - the neutral profile, today's engine. A missing measurement counts as no evidence.
+    auto up = [](qreal v, qreal a, qreal b) { return v < 0.0 ? 0.0 : qBound(0.0, (v - a) / (b - a), 1.0); };
+    auto down = [](qreal v, qreal a, qreal b) { return v < 0.0 ? 0.0 : qBound(0.0, (a - v) / (a - b), 1.0); };
     qreal s[R493_GENRES];
-    const qreal minor = f.key == 0 ? 1.0 : (f.key == 1 ? 0.0 : 0.5);
-    const qreal major = f.key == 1 ? 1.0 : (f.key == 0 ? 0.0 : 0.5);
-    s[R493_TECHNO] = 0.30 * r493gTrap(f.bpm, 123.0, 127.5, 145.0, 152.0)
-                   + 0.25 * r493gTerm(f.kickSteady, f.kickSteady)
-                   + 0.15 * minor
-                   + 0.15 * r493gTerm(f.mids, 1.0 - f.mids / 0.55)
-                   + 0.15 * r493gTerm(f.swing, 1.0 - 2.5 * f.swing);
-    s[R493_MELODIC] = 0.25 * r493gTrap(f.bpm, 110.0, 117.0, 125.0, 128.5)
-                    + 0.20 * r493gTerm(f.kickShare, (0.90 - f.kickShare) / 0.25)
-                    + 0.25 * r493gTerm(f.mids, (f.mids - 0.15) / 0.35)
-                    + 0.15 * r493gTerm(f.midMove, f.midMove / 0.10)
-                    + 0.15 * (f.key == 0 ? 1.0 : (f.key == 1 ? 0.4 : 0.5));
-    s[R493_AFRO] = 0.20 * r493gTrap(f.bpm, 114.0, 118.0, 124.0, 127.0)
-                 + 0.25 * r493gTerm(f.midPerc, (f.midPerc - 0.20) / 0.35)
-                 + 0.20 * r493gTerm(f.swing, f.swing / 0.45)
-                 + 0.15 * r493gTerm(f.offPerc, (f.offPerc - 0.30) / 0.35)
-                 + 0.20 * r493gTerm(f.kickShare, (f.kickShare - 0.60) / 0.25);   // a groove that rolls on
-    s[R493_MINIMAL] = 0.25 * r493gTrap(f.bpm, 119.0, 122.5, 128.0, 131.0)
-                    + 0.25 * r493gTerm(f.mids, 1.0 - f.mids / 0.40)
-                    + 0.20 * r493gTerm(f.kickSteady, f.kickSteady)
-                    + 0.15 * r493gTerm(f.offPerc, (f.offPerc - 0.20) / 0.40)
-                    + 0.15 * r493gTerm(f.midMove, 1.0 - f.midMove / 0.08);
-    s[R493_HOUSE] = 0.30 * r493gTrap(f.bpm, 117.0, 120.5, 127.0, 130.0)
-                  + 0.25 * major
-                  + 0.25 * r493gTerm(f.midPerc, (f.midPerc - 0.10) / 0.30)
-                  + 0.20 * r493gTerm(f.swing, 1.0 - qAbs(f.swing - 0.35) / 0.35);
-    // how much of the analysis was there to read (bpm, kick, mids, onsets, key, swing)
-    int have = 0;
-    have += f.bpm > 0.0 ? 2 : 0;
-    have += f.kickShare >= 0.0 ? 2 : 0;
-    have += f.mids >= 0.0 ? 2 : 0;
-    have += f.offPerc >= 0.0 ? 2 : 0;
-    have += f.key >= 0 ? 1 : 0;
-    have += f.swing >= 0.0 ? 1 : 0;
-    const qreal quality = qreal(have) / 10.0;
-    // the tag: a weak hint, a little on its genre's score
+    s[R493_HOUSE] = 0.0;
+    // afro: percussion in the mids on the off quarters (congas, shakers) - or a measured shuffle
+    s[R493_AFRO] = qMin(up(f.midPerc, 0.55, 0.72), up(f.offPerc, 0.65, 0.82));
+    if (f.swing >= 0.0)
+        s[R493_AFRO] = qMax(s[R493_AFRO], qMin(up(f.swing, 0.25, 0.45), up(f.midPerc, 0.40, 0.55)));
+    // techno: fast, a kick that never stops, few mids and little percussion between the kicks
+    s[R493_TECHNO] = qMin(qMin(up(f.bpm, 128.0, 132.0), up(f.kickSteady, 0.80, 0.95)),
+                          qMin(qMin(up(f.kickShare, 0.65, 0.80), down(f.mids, 0.60, 0.52)),
+                               down(f.midPerc, 0.45, 0.35)));
+    if (f.swing > 0.30)
+        s[R493_TECHNO] *= 0.5;
+    // melodic: long kickless stretches, mids that travel, not fast, not percussive
+    s[R493_MELODIC] = qMin(qMin(down(f.kickShare, 0.60, 0.50), up(f.midMove, 0.10, 0.14)),
+                           qMin(down(f.bpm, 126.0, 123.0), down(f.midPerc, 0.55, 0.45)));
+    // minimal: thin mids that hardly move over a steady kick
+    s[R493_MINIMAL] = qMin(qMin(down(f.mids, 0.50, 0.42), up(f.kickSteady, 0.85, 0.95)),
+                           qMin(down(f.midMove, 0.08, 0.05), up(f.kickShare, 0.70, 0.80)));
+    // the tag: a weak hint - a little on its own genre, never a profile on its own
     const int tagged = r493GenreOfTag(tag);
     int plain = 0;
     for (int g = 1; g < R493_GENRES; g++)
         if (s[g] > s[plain])
             plain = g;
-    if (tagged >= 0)
-        s[tagged] += 0.06;
-    int best = 0, second = -1;
+    if (tagged > 0)
+        s[tagged] = qMin(1.0, s[tagged] + 0.15);
+    int best = 0;
     for (int g = 1; g < R493_GENRES; g++)
         if (s[g] > s[best])
             best = g;
-    for (int g = 0; g < R493_GENRES; g++)
-        if (g != best && (second < 0 || s[g] > s[second]))
-            second = g;
-    const qreal margin = s[best] - s[second];
-    // a clear margin is a clear track: 0.08 ahead -> 50, 0.20 -> 80
-    qreal conf = qMin(90.0, (25.0 + 280.0 * margin) * quality);   // the analysis alone: 90 at most
+    // under half the evidence: house, the neutral profile (confidence = how close it came)
+    qreal conf = 100.0 * s[best];
+    if (s[best] < 0.5)
+        best = R493_HOUSE;
+    conf = qMin(90.0, conf);                              // the analysis alone: 90 at most
     QString src = QStringLiteral("analysis");
     if (tagged >= 0 && tagged == best && plain == best)
     {
-        conf += 15.0;                    // the tag and the analysis agree
+        conf += 10.0;                                     // the tag and the analysis agree
         src = QStringLiteral("both");
     }
     else if (tagged >= 0 && tagged == best)
-        src = QStringLiteral("tag");     // the analysis was too close to call: the tag tipped it
-    else if (tagged >= 0)
-        conf -= 10.0;                    // they disagree: the analysis wins, less sure
+        src = QStringLiteral("tag");                      // the analysis was close: the tag tipped it
+    else if (tagged >= 0 && best != R493_HOUSE)
+        conf -= 10.0;                                     // they disagree: the analysis wins, less sure
+    if (best == R493_HOUSE)
+        conf = qMin(conf, 49.0);                          // house is never a profile of its own
     if (confOut != nullptr)
         *confOut = int(qRound(qBound(0.0, conf, 100.0)));
     if (srcOut != nullptr)
@@ -33459,6 +33503,18 @@ bool TrackEngine::r493Kickless(int from, int beats, int allowed) const
     return hits <= allowed;
 }
 
+bool TrackEngine::r493HisTakes() const
+{
+    // R494_HIS_TAKES (Tobias 10-24, "ja lav det hele"): the night of 10-23 tapped BLACKOUT 4,503
+    // times as a rhythm effect, and every tap ended a running ball or roof for the rest of the
+    // break (6 of 11 balls, all 3 roofs, after 0-14 s). A BLACKOUT or strobe-FLASH tap only
+    // darkens/flashes for as long as he holds it - the moment carries on after it. They still
+    // keep a NEW one from starting (r493HisPicks).
+    return m_forceOn || savedActive() || m_lastStage != 0 || m_labActive || m_slabActive || m_clabActive
+        || m_mixing || m_fullAuto == false || m_startScene
+        || m_flashHeld.isEmpty() == false || m_hitAmokFrom >= 0 || m_testTimer.isActive();
+}
+
 bool TrackEngine::r493HisPicks() const
 {
     // what keeps the room features off: his own picks and the engine's own safeties
@@ -33742,7 +33798,8 @@ void TrackEngine::r493DiscoBeat(const QSet<QString> &castSet, const QString &sta
     const int travel = r493DiscoTravel();
     // his picks end a moment (a position goes at once - setPositionMode()); HOLD keeps one
     // that stands, as it keeps the bars' alone (R384_ALONE_HOLD), but never starts one
-    const bool his = r493HisPicks() || isCalm || still || silent || m_positionMode.isEmpty() == false;
+    // R494_BALL_TAKES: a BLACKOUT/FLASH tap no longer ends it (r493HisTakes)
+    const bool his = r493HisTakes() || isCalm || still || silent || m_positionMode.isEmpty() == false;
     if (m_r493DiscoPhase == 1 || m_r493DiscoPhase == 2)
     {
         const int left = secEnd > beat ? secEnd - beat : (beatsToNext > 0 ? beatsToNext : 1000);
@@ -33952,7 +34009,7 @@ void TrackEngine::r493RoofBeat(QSet<QString> &castSet, const QStringList &eligib
             why = QStringLiteral("kick");
         else if (isCalm || still || silent || fader < 0.45)
             why = QStringLiteral("calm");
-        else if (r493HisPicks() && m_blackout == false)
+        else if (r493HisTakes())   // R494_ROOF_TAKES: a BLACKOUT/FLASH tap no longer ends it
             why = QStringLiteral("his");
         else if (eligible.contains(m_r493RoofBars) == false)
             why = QStringLiteral("bars");
