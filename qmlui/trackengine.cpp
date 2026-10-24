@@ -854,6 +854,8 @@ void TrackEngine::slotPulseTimer()
         any = true;
     if (r497BloomFrame(now))             // R497_A1_TIMER_FRAME: the bloom's / collapse's rings on the wash
         any = true;
+    if (r498RushFrame(now))              // R498_R_TIMER_FRAME: the room rush's front on the wash and the strobes
+        any = true;
     if (any == false)
         m_pulseTimer.stop();
 }
@@ -4958,6 +4960,11 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
     }
     if (lit && m_strobeHeadsOnly == false)
         m_strobeSpent++;
+    // R498_R_STROBE_BUDGET (runde 498, R): a room rush takes the strobe bank as ONE burst of this
+    // window's budget - not when it is spent, the beat is quiet, or a burst above holds the bank
+    // (a build's riser does not: the build rush takes the bank over it for its 1-2 beats)
+    r498RushStrobe(beat, quiet, affordable(1),
+                   beat <= m_strobeUntil && m_strobeHeadsOnly == false && (isBuild == false || m_hitStrobeNow));
 }
 
 bool TrackEngine::setsColourOf(Function *func) const
@@ -10092,6 +10099,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the build's roll for this bar (r497_roll.inc.cpp)
     r497BloomBeat(beat, isDrop, nextState, beatsToNext, fader, hold, isCalm, still);
     r497RollBeat(beat, beatInBar, isBuild, isDrop, nextState, beatsToNext, hold, isCalm, still);
+    // R498_R_BEAT_CALL (runde 498, R): the room rush - a running one carries on, or one starts
+    // here (the rush drop, the build's last bar, a drop's phrase turn) (r498_rush.inc.cpp)
+    r498RushBeat(beat, isDrop, isBuild, nextState, beatsToNext, dropBar, beatInBar, fader, hold, isCalm, still);
 
     // THE DROP SETTLES (analyse 10g). Tobias, 2026-09-27: "et drop starter jo
     // meget ekstremt, men saa laenge det ikke bliver ved med at vaere
@@ -15281,6 +15291,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (r493StabWanted() && m_pulseTimer.isActive() == false)   // R493_A1_TIMER_START: the stabs need its frames
         m_pulseTimer.start();
     r497BloomStart();                    // R497_A1_BLOOM_START: the rings' first frame, the beat drawn
+    r498RushStart();                     // R498_R_START: the room rush's first frame, the beat drawn
 
     // the cast is settled here, before the hits: genFlash() reads m_cast to
     // find the groups it has to hand back, and a beat-old cast left a group
@@ -17078,6 +17089,7 @@ void TrackEngine::reapplyLevels()
     }
     r493DiscoLevel();                    // R493_A4_DISCO_REAPPLY: the ball's beam (BLACKOUT, MASTER, a trim)
     r497BloomFrame(m_clock.elapsed());   // R497_A1_REAPPLY: a lit ring follows a stab's dark, MASTER, a trim at once
+    r498RushFrame(m_clock.elapsed());    // R498_R_REAPPLY: a lit lamp of the rush follows a stab's dark, MASTER, a trim
 }
 
 qreal TrackEngine::pulseFactor(const QString &group) const
@@ -20159,6 +20171,7 @@ void TrackEngine::release()
     m_darkUntil.clear();              // AUTO is off: nothing is waiting to come back
     r493DiscoReset(true);             // R493_A4_RESET_RELEASE: the ball's heads home dark, the roof down
     r493RoofReset();
+    r498RushStop();                   // R498_R_STOP_RELEASE: the room rush's masks let go
     foreach (const QString &slot, m_active.keys())
     {
         // Both masks go: with AUTO off the group's channels belong to the
@@ -20473,6 +20486,7 @@ void TrackEngine::idle()
     m_hitReturning = false;                    // runde 356: a stopped deck is not a silent beat
     r493DiscoReset(true);                      // R493_A4_RESET_IDLE: a stopped deck - the ball and the roof go
     r493RoofReset();
+    r498RushStop();                            // R498_R_STOP_IDLE: the room rush's masks let go
     // R458_LAST_TRACK: the house light holds, and the last track stopping
     // (the DJ stops the deck, or BLT goes quiet) is the end of the night
     if (m_lastStage >= 3)
@@ -21513,6 +21527,7 @@ void TrackEngine::stopAll()
     m_strobeUntil = -1;          // or the next tick walks straight back into a burst
     r493DiscoReset(true);                // R493_A4_RESET_STOPALL: the ball's heads home dark, the roof down
     r493RoofReset();
+    r498RushStop();                      // R498_R_STOP_ALL: the room rush's masks let go
     m_strobeRate = 0;
     m_pulseDepth.clear();
     m_breathe.clear();
@@ -25678,6 +25693,7 @@ enum TrackDropFormId
 {
     DF_CLASSIC = 0, DF_STORM, DF_INVERTED, DF_RISE, DF_SIDE, DF_WAVE, DF_BREATH,
     DF_HALFTIME, DF_LASER, DF_INVRISE, DF_KICK,
+    DF_RUSH,                             // R498_R_DF_ENUM: a fast wave through the room (r498_rush.inc.cpp)
     DF_BLOOM,                            // R497_A1_DF_ENUM: the wash opens from the centre (r497_bloom.inc.cpp)
     DF_COUNT
 };
@@ -25706,6 +25722,7 @@ static const char *trackDropFormName(int form)
     static const char *const names[DF_COUNT] = {
         "classic", "strob-storm", "omvendt", "rejsen-op", "side-mod-side", "bolgen",
         "aandedraet", "halvtid", "kun-laser", "omvendt-rejse", "kick-chase",
+        "rush",                          // R498_R_DF_NAME (before the bloom, as in the enum)
         "bloom" };                       // R497_A1_DF_NAME
     return (form >= 0 && form < DF_COUNT) ? names[form] : "classic";
 }
@@ -25726,6 +25743,7 @@ static int trackDropFormMin(int form)
         case DF_LASER:    return 60;
         case DF_KICK:     return 60;
         case DF_BLOOM:    return 60;     // R497_A1_DF_MIN: with the build's stabs
+        case DF_RUSH:     return 60;     // R498_R_DF_MIN: the room rush (2 beats a sweep under 70 %)
         default:          return 0;
     }
 }
@@ -25751,6 +25769,7 @@ struct TrackDropFeatures
     bool buildRoom = true;    // eight beats left for the wild build
     int last = DF_CLASSIC;    // the last drop's form: never the same special twice running
     bool bloomRoom = false;   // R497_A1_DF_FEAT: the room map knows the wash whole (r497BloomReady)
+    bool rushRoom = false;    // R498_R_DF_FEAT: the room map knows the wash whole (r498RushReady)
 };
 
 static double trackClamp01(double v)
@@ -25843,6 +25862,15 @@ static double trackDropFormFit(int form, const TrackDropFeatures &f)
                 return 0.0;
             const double rise = f.buildRise >= 0.0 ? trackClamp01(f.buildRise / 0.30) : 0.3;
             return 0.58 + 0.14 * trackClamp01((f.size - 0.30) / 0.60) + 0.10 * rise;
+        }
+        case DF_RUSH:
+        {
+            // R498_R_DF_FIT (runde 498): the wave through the room - a big jump onto a real kick
+            // reads it best; like the bloom it fits most drops a little (0.58-0.80), none without the map
+            if (f.rushRoom == false)
+                return 0.0;
+            const double hit = f.kick >= 0.0 ? trackClamp01((f.kick - 0.50) / 0.40) : 0.3;
+            return 0.58 + 0.12 * trackClamp01((f.size - 0.30) / 0.60) + 0.10 * hit;
         }
         case DF_KICK:
         {
@@ -25976,6 +26004,7 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
     f.bars = dropFormBars().isEmpty() == false;
     f.strobes = dropFormStrobes().isEmpty() == false && fader >= ENGINE_STROBE_ON;
     f.bloomRoom = r497BloomReady();      // R497_A1_DF_DECIDE: no map, no bloom - the draw as before
+    f.rushRoom = r498RushReady();        // R498_R_DF_DECIDE: no map, no rush - the draw as before
     f.riseRoom = at - beat >= 3;
     f.buildRoom = at - beat >= 8;
     f.last = m_formLast;
@@ -26157,13 +26186,18 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
         // R497_A1_BLOOM_LAND (runde 497): the bloom lands only where its rings can run now
         if (form == DF_BLOOM && r497BloomLand(beat) == false)
             form = DF_CLASSIC;
+        // R498_R_DF_LAND (runde 498): the rush lands only where it can run now
+        if (form == DF_RUSH && r498RushLand(beat) == false)
+            form = DF_CLASSIC;
         dropFormEnd(QStringLiteral("new-drop"));
         m_formNow = form;
         m_formDrops++;
         m_formLast = form;
         m_formWhite = false;
         m_formSingle = false;
-        if (form == DF_BLOOM)
+        if (form == DF_RUSH)
+            m_formNow = DF_CLASSIC;          // R498_R_DF_CLASSIC: drawn as a form, the rush drop itself is the classic one
+        else if (form == DF_BLOOM)
             m_formNow = DF_CLASSIC;          // R497_A1_BLOOM_CLASSIC: drawn as a form, the drop itself is the classic one
         else if (form != DF_CLASSIC)
         {
@@ -31762,36 +31796,36 @@ struct R493RoomRow
 
 // R493_ROOM_TABLE_BEGIN (written by feature_trackview_engine.py from rig_room.json: 24 fixtures, map)
 static const R493RoomRow r493RoomRows[] = {
-    { 1, "Shark Zoom Wash", 0.9152, 0.8536 },
-    { 23, "Shark Zoom Wash", 0.5728, 0.3571 },
-    { 41, "Shark Zoom Wash", 0.5576, 0.8268 },
-    { 59, "Shark Zoom Wash", 0.8152, 0.3214 },
-    { 74, "Strobes All", -1.0000, -1.0000 },
-    { 82, "Strobes All", -1.0000, -1.0000 },
-    { 96, "Shark Zoom Wash", 0.2261, 0.5643 },
-    { 111, "Strobes All", -1.0000, -1.0000 },
-    { 132, "Shark Zoom Wash", 0.0315, 0.3339 },
-    { 147, "Strobes All", -1.0000, -1.0000 },
-    { 163, "Strobes All", -1.0000, -1.0000 },
-    { 179, "Shark Zoom Wash", 0.8804, 0.4982 },
-    { 194, "Strobes All", -1.0000, -1.0000 },
+    { 1, "Shark Zoom Wash", 0.7330, 0.6860 },
+    { 23, "Shark Zoom Wash", 0.4490, 0.2450 },
+    { 41, "Shark Zoom Wash", 0.4470, 0.5680 },
+    { 59, "Shark Zoom Wash", 0.7290, 0.1490 },
+    { 74, "Strobes All", 0.9130, 0.7480 },
+    { 82, "Strobes All", 0.6460, 0.7270 },
+    { 96, "Shark Zoom Wash", 0.1260, 0.3370 },
+    { 111, "Strobes All", 0.5720, 0.5240 },
+    { 132, "Shark Zoom Wash", 0.0390, 0.1470 },
+    { 147, "Strobes All", 0.5260, 0.1590 },
+    { 163, "Strobes All", 0.2850, 0.0650 },
+    { 179, "Shark Zoom Wash", 0.7310, 0.4010 },
+    { 194, "Strobes All", 0.1320, 0.1510 },
     { 203, "Animation Laser", -1.0000, -1.0000 },
     { 219, "Animation Laser", -1.0000, -1.0000 },
-    { 255, "Haze", 0.9674, 0.1464 },
+    { 255, "Haze", 0.9700, 0.1000 },
     { 300, "LaserBars", -1.0000, -1.0000 },
     { 319, "LaserBars", -1.0000, -1.0000 },
     { 338, "LaserBars", -1.0000, -1.0000 },
     { 357, "LaserBars", -1.0000, -1.0000 },
     { 376, "LaserBars", -1.0000, -1.0000 },
     { 395, "LaserBars", -1.0000, -1.0000 },
-    { 492, "Mini 4 Eyes", 0.4478, 0.0982 },
-    { 499, "Mini 4 Eyes", 0.7696, 0.1393 },
+    { 492, "Mini 4 Eyes", 0.3430, 0.0390 },
+    { 499, "Mini 4 Eyes", 0.6650, 0.0410 },
 };
 static const int r493RoomRowCount = 24;
 static const int r493RoomDisco[] = { 132, 96 };
 static const int r493RoomDiscoCount = 2;
-static const qreal r493RoomBallX = 0.6087;
-static const qreal r493RoomBallY = 0.1161;
+static const qreal r493RoomBallX = 0.5040;
+static const qreal r493RoomBallY = 0.0600;
 static const char r493RoomStatus[] = "map";
 // R493_ROOM_TABLE_END
 
@@ -35774,4 +35808,785 @@ void TrackEngine::r497MelodyHeadsY(const QString &group, Function *func, const T
     if (qAbs(efx->getAttributeValue(EFX::YOffset) - y) > 1e-4)
         efx->adjustAttribute(y, EFX::YOffset);
     it->writtenOff = it->appliedOff;
+}
+/* =====================================================================
+ *  THE ROOM RUSH (runde 498, agent R) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/r498_rush.inc.cpp
+ *  (R498_INF_RUSH, R498_R_RUSH_FILE).
+ *
+ *  Tobias, 2026-10-24: "et program hvor lyset gaar hurtigt igennem hele
+ *  rummet paa wash og strobe-lamperne". Directions: "Lav dem alle sammen
+ *  vel.. det er vel bare programmer der kan blive trukket i puljen?"; speed:
+ *  ENERGY; when: "Hist og her, du bestemmer"; never the animation lasers.
+ *
+ *  WHAT. A fast wave runs through the room over the wash (the Sharks) and
+ *  the strobe bank: each lamp flashes as the front passes it. A lamp's phase
+ *  is where it hangs (the room map, rig_room.json) projected on the rush's
+ *  direction, 0..1 over the lamps that take part. Four directions, drawn
+ *  from a pool, never the same one twice running:
+ *    loop     along his BLAA/ROED CHASE Loop: from the Loop's first strobe
+ *             (back right) to its last (front left by the DJ) - the axis
+ *             between the two strobes' places on the map
+ *    to-dj    from the back wall to the DJ
+ *    from-dj  from the DJ to the back wall
+ *    across   left to right or right to left, the other side each time
+ *  SPEED on ENERGY, on the beat grid: one sweep is 2 beats under 70 % and
+ *  1 beat from 70 % (fast through the room: no 4-beat step).
+ *  WASH: each lamp goes to full for a short slice (a fifth of the sweep) in
+ *  the look's colour - every other rush its partner colour, when the look
+ *  has one that may be shown (white only in drops; his tiles: his colour) -
+ *  then back to what the engine draws. The flash REPLACES the lamp's colour
+ *  (a hidden scene per lamp, flashed with ReplaceBlend and forced LTP, its
+ *  colour channels all written - the ones the colour does not use at
+ *  nought), never adds to it; its dimmer is a mask of its own that carries
+ *  the level, so the colour stays whole (as the engine levels a lamp). Aim,
+ *  zoom and speed are never touched.
+ *  STROBES: the rush takes the bank for its length - the lamp the front
+ *  passes flashes once (an eighth of the sweep) in the strobes' colour, the
+ *  others are held dark (their intensity channels at nought), so the wave
+ *  reads; the shutter channels are written closed (no hardware strobe) and
+ *  the macros at nought. One rush is ONE burst against the strobe budget
+ *  (driveStrobe: affordable(1), m_strobeSpent + 1). The strobes stand aside -
+ *  the rush runs on the wash alone - when the budget is spent, under
+ *  ENGINE_STROBE_ON, the group switched off, his strobe fader at 0, a pad or
+ *  a held flash on them, a quiet beat (break, rest, CALM ...) or when a burst
+ *  of the engine's own (the landing's salvo, DROP HIT, a riser) holds the
+ *  bank; a burst that starts mid-rush takes the bank back at once.
+ *  LEVEL: MASTER x the group's trim on both; the strobes at the drop's
+ *  "step" level (0.70 at 60 % -> 1.0 at 100 %, runde 352) - never over
+ *  MASTER, never the whole bank at once. lightsOut() (BLACKOUT, a stab, the
+ *  build's black beat, r497's ghost holes) takes every lit lamp to nought at
+ *  once: dark wins.
+ *
+ *  WHEN ("hist og her"):
+ *  (a) a drop form, DF_RUSH (dropforms.inc.cpp), drawn by the forms' own
+ *      draw from 60 %: a rush on the drop's first beat and on the first beat
+ *      of its second bar (R498_RUSH_FORM_BARS), then the classic drop. Like
+ *      the bloom it lands as the classic drop (m_formNow stays classic);
+ *      never twice running and never the same drop as a bloom (one form a
+ *      drop, m_formLast).
+ *  (b) the build's last bar, from 70 %: one rush to-dj or loop whose last
+ *      lamp's flash ends on the drop line. With R374's black beat (62 %+, a
+ *      drop of 0.40+) it ends on the black beat's line instead. Not when a
+ *      bloom is planned for that drop (the collapse owns that beat).
+ *  (c) in a classic drop from 75 %, on an 8-bar phrase turn: about 15 %
+ *      (a dice of the track and the beat - no global random drawn), at most
+ *      once in 32 bars.
+ *  Never in grooves, breaks, intros or outros; never under his picks
+ *  (r497BloomFree: RIG/PLAN, saved looks, DROP/DROP HIT, HOLD/CALM/STILL,
+ *  positions, FLASH/pads/BLACKOUT, LAST TRACK, the labs, a mix, SHOW OFF),
+ *  his drop set (m_dropTouched), the disco ball, the laser roof, the
+ *  curtain, a bloom, a hit scene of his show on the wash.
+ *
+ *  Only the map: the wash and the strobes come from the engine's groups, and
+ *  a group takes part only when the map knows every lamp of it (status
+ *  "map"); the Mini 4 Eyes, the laser bars and the animation lasers never.
+ *  Placeholder map: r498RushReady() is false, DF_RUSH's fit is 0 (the draw
+ *  makes the same choices with the same dice as before) and nothing here
+ *  runs - the engine is exactly as today.
+ *  Log: sig:rush:<loop|to-dj|from-dj|across>:<beats>@<drop-form|build|phrase>;
+ *  crumbs carry the lamps in the order the front meets them.
+ * ===================================================================== */
+
+#define R498_RUSH_FORM_BARS     2        // the rush drop: a rush on the first beat of each of its first 2 bars
+#define R498_RUSH_WASH_SLICE    0.20     // a wash lamp's flash, as a share of the sweep
+#define R498_RUSH_STROBE_SLICE  0.12     // a strobe's one flash, as a share of the sweep
+#define R498_RUSH_PHRASE_P      0.15     // (c): the chance on an 8-bar phrase turn
+#define R498_RUSH_PHRASE_GAP    128      // (c): at most one in 32 bars
+#define R498_RUSH_LOOP_FIRST    74       // his BLAA/ROED CHASE Loop's first strobe (DMX start) - its PLACE is the map's
+#define R498_RUSH_LOOP_LAST     194      // ... and its last
+
+static const char *r498RushDirName(int dir)
+{
+    static const char *const names[4] = { "loop", "to-dj", "from-dj", "across" };
+    return (dir >= 0 && dir < 4) ? names[dir] : "loop";
+}
+
+static const char *r498RushWhyName(int why)
+{
+    static const char *const names[3] = { "drop-form", "build", "phrase" };
+    return (why >= 0 && why < 3) ? names[why] : "drop-form";
+}
+
+static quint32 r498RushDice(const QString &title, int beat, quint32 salt)
+{
+    // a dice of the track and the beat (murmur3's finaliser), as the drop forms': the global
+    // random generator is never drawn, so every other draw of the engine stays as it was
+    quint32 st = quint32(qHash(title)) ^ (quint32(beat) * 2654435761u) ^ salt;
+    st ^= st >> 16; st *= 0x85ebca6bu; st ^= st >> 13; st *= 0xc2b2ae35u; st ^= st >> 16;
+    return st;
+}
+
+static int r498RushSweep(qreal fader)
+{
+    // ENERGY on the beat grid (lead decision 10-24, "hurtigt"): 2 beats under 70 %, 1 beat from 70 %
+    return fader >= 0.70 ? 1 : 2;
+}
+
+bool TrackEngine::r498RushMapped(const QString &key) const
+{
+    // a group the map knows whole
+    if (key.isEmpty() || m_groups.contains(key) == false || m_groupOff.contains(key))
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    if (g.fixtures.isEmpty() || g.lasers || g.patternDevice || g.generatable() == false)
+        return false;
+    foreach (quint32 fid, g.fixtures)
+    {
+        if (roomOf(fid, nullptr, nullptr) == false)
+            return false;
+    }
+    return true;
+}
+
+QString TrackEngine::r498RushWash() const
+{
+    // R498_R_RUSH_FILE: the wash it runs on - the moving-head wash (never the Minis, the bars or
+    // the animation lasers), three lamps or more, the map knowing each; the base first
+    if (m_doc == nullptr || roomPlaceholder())
+        return QString();
+    QStringList order;
+    order << r497BloomWash() << m_groupOrder;
+    foreach (const QString &key, order)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.heads && g.strobes == false && g.fixtures.count() >= 3 && r498RushMapped(key))
+            return key;
+    }
+    return QString();
+}
+
+QString TrackEngine::r498RushStrobes() const
+{
+    // the strobe bank: the strobe group the map knows whole with the most lamps ("" none: wash only)
+    if (m_doc == nullptr || roomPlaceholder())
+        return QString();
+    QString best;
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.strobes && g.fixtures.count() >= 2 && r498RushMapped(key)
+            && (best.isEmpty() || g.fixtures.count() > m_groups.value(best).fixtures.count()))
+            best = key;
+    }
+    return best;
+}
+
+bool TrackEngine::r498RushReady() const
+{
+    // dropFormDecide and every beat: no map, no rush - the engine as today
+    return r498RushWash().isEmpty() == false;
+}
+
+bool TrackEngine::r498RushFree() const
+{
+    // his hand and the room's other owners of the wash (the bloom's list: his picks, the labs,
+    // a mix, DROP HIT, HOLD, positions, the disco ball, the laser roof, a pad or held flash on
+    // the wash) - and his drop set, the curtain, a bloom running, BLACKOUT
+    const QString wash = r498RushWash();
+    return wash.isEmpty() == false && r497BloomFree(wash) && m_blackout == false && m_dropTouched == false
+        && m_r497CurtainOn == false && m_r497BloomMode == 0;
+}
+
+bool TrackEngine::r498RushStrobesFree(qreal fader) const
+{
+    // the strobes may join: on the slider's strobe line, the group on, his fader up, no pad or
+    // held flash of his on them
+    const QString key = m_r498RushStrobeKey;
+    return key.isEmpty() == false && fader >= ENGINE_STROBE_ON && m_groupOff.contains(key) == false
+        && m_groupTrim.value(key, 1.0) > 0.01 && m_padFlash.contains(key) == false
+        && m_flashHeld.contains(key) == false && m_groups.value(key).generatable();
+}
+
+bool TrackEngine::r498RushLand(int beat)
+{
+    // R498_R_DF_LAND (dropforms' landing): the rush drop lands - its rushes from this beat
+    if (r498RushReady() == false || r498RushFree() == false)
+        return false;
+    m_r498RushFormAt = beat;
+    return true;
+}
+
+void TrackEngine::r498RushBeat(int beat, bool isDrop, bool isBuild, const QString &nextState, int beatsToNext,
+                               int dropBar, int beatInBar, qreal fader, bool hold, bool isCalm, bool still)
+{
+    // R498_R_BEAT_CALL (tick(), every beat after the drop forms and the bloom): a running rush
+    // carries on into its next beat; else one may start here
+    if (m_r498RushState != 0)
+    {
+        if (beat == m_r498RushBeatNow + 1 && beat < m_r498RushFrom + m_r498RushBeats && (isDrop || isBuild)
+            && hold == false && isCalm == false && still == false && r498RushFree())
+        {
+            m_r498RushBeatNow = beat;
+            m_r498RushMs = -1;           // the masks hold until the beat is drawn (r498RushStart)
+            return;
+        }
+        r498RushStop();
+    }
+    if (r498RushReady() == false)
+        return;                          // the placeholder map: nothing below runs
+    if (m_r498RushTitle != m_trackTitle)
+    {
+        m_r498RushTitle = m_trackTitle;
+        m_r498RushBuildFor = -1;
+        m_r498RushPhraseAt = -100000;
+        m_r498RushFormAt = -1;
+    }
+    if (isDrop == false)
+        m_r498RushFormAt = -1;           // the rush drop is over (or never came)
+    // the masks made ahead, once (a first making searches the show's functions - not on a beat
+    // a rush may start on: well inside a build or a drop)
+    if (m_r498RushCache.isEmpty() && fader >= 0.60 && hold == false
+        && ((isBuild && isDrop == false && beatsToNext > 4) || (isDrop && dropBar >= 2 && dropBar % 8 != 0)))
+    {
+        r498RushLamps();
+        if (m_r498RushFx.isEmpty() == false)
+            r498RushMasks(isDrop);
+    }
+    if (hold || isCalm || still || fader < 0.60 || (isDrop == false && isBuild == false) || r498RushFree() == false)
+        return;
+    // (a) the rush drop: its first beat, then the first beat of the next bar(s)
+    if (isDrop && m_r498RushFormAt >= 0)
+    {
+        const int k = beat - m_r498RushFormAt;
+        if (k < 0 || k >= 4 * R498_RUSH_FORM_BARS)
+            m_r498RushFormAt = -1;
+        else if (k % 4 == 0 && beatInBar == 0)
+        {
+            r498RushGo(beat, r498RushSweep(fader), 0, false, fader, true);
+            return;
+        }
+    }
+    // (b) the build's last bar: to the DJ (or along the Loop, which ends by him), its last
+    // flash ending on the drop line - or on R374's black beat's, which stays black
+    if (isBuild && isDrop == false && nextState == QStringLiteral("drop") && fader >= 0.70
+        && beatsToNext >= 1 && beatsToNext <= 3)
+    {
+        const int at = beat + beatsToNext;
+        const int sweep = r498RushSweep(fader);
+        const bool black = fader >= 0.62 && m_nextDropSize >= 0.40 && m_flash == false && djLoopOn() == false;
+        const bool bloom = m_formPlan == DF_BLOOM && m_formPlanFor == at && m_formPlanTitle == m_trackTitle;
+        if (beatsToNext == sweep + (black ? 1 : 0) && bloom == false && m_r497CollapseFor != at
+            && m_r498RushBuildFor != at && dropFormBlocked(at) == false)
+        {
+            m_r498RushBuildFor = at;
+            r498RushGo(beat, sweep, 1, true, fader, false);
+        }
+        return;
+    }
+    // (c) a classic drop's 8-bar phrase turn, from 75 %: now and then, at most once in 32 bars
+    if (isDrop && fader >= 0.75 && dropBar >= 8 && dropBar % 8 == 0 && beatInBar == 0 && m_formNow == DF_CLASSIC
+        && beat - m_r498RushPhraseAt >= R498_RUSH_PHRASE_GAP && dropFormBlocked(beat) == false
+        && (r498RushDice(m_trackTitle, beat, 0x52555348u) & 0xffffu) / 65535.0 < R498_RUSH_PHRASE_P)
+    {
+        if (r498RushGo(beat, r498RushSweep(fader), 2, false, fader, true))
+            m_r498RushPhraseAt = beat;
+    }
+}
+
+void TrackEngine::r498RushLamps()
+{
+    // the lamps: the wash, then the strobe bank
+    m_r498RushWashKey = r498RushWash();
+    m_r498RushStrobeKey = r498RushStrobes();
+    QVector<quint32> fx;
+    QVector<bool> strobe;
+    foreach (quint32 fid, m_groups.value(m_r498RushWashKey).fixtures)
+    {
+        fx << fid;
+        strobe << false;
+    }
+    if (m_r498RushStrobeKey.isEmpty() == false)
+    {
+        foreach (quint32 fid, m_groups.value(m_r498RushStrobeKey).fixtures)
+        {
+            if (fx.contains(fid) == false)
+            {
+                fx << fid;
+                strobe << true;
+            }
+        }
+    }
+    if (fx != m_r498RushFx)
+    {
+        r498RushStop();
+        m_r498RushFx = fx;
+        m_r498RushIsStrobe = strobe;
+        m_r498RushShown = QVector<int>(fx.count(), 0);
+        m_r498RushCache.clear();
+    }
+}
+
+bool TrackEngine::r498RushGo(int beat, int beats, int why, bool toDj, qreal fader, bool isDrop)
+{
+    // a rush from this beat: the lamps and the direction drawn; its masks are filled when the
+    // beat is drawn (r498RushStart), in the colours the beat shows
+    r498RushLamps();
+    if (m_r498RushFx.isEmpty())
+        return false;
+    m_r498RushFader = fader;
+    m_r498RushIsDrop = isDrop;
+    // the direction: from the pool, never the last one again (the build: the two that end by the DJ)
+    QList<int> pool;
+    if (toDj)
+        pool << 0 << 1;
+    else
+        pool << 0 << 1 << 2 << 3;
+    if (pool.count() > 1)
+        pool.removeAll(m_r498RushLastDir);
+    const int dir = pool.at(int(r498RushDice(m_trackTitle, beat, 0x44495221u) % quint32(pool.count())));
+    if (dir == 3)
+        m_r498RushRight = !m_r498RushRight;   // across: the other side each time
+    m_r498RushLastDir = dir;
+    m_r498RushDir = dir;
+    m_r498RushWhy = why;
+    m_r498RushState = 2;
+    m_r498RushFrom = beat;
+    m_r498RushBeats = qMax(1, beats);
+    m_r498RushBeatNow = beat;
+    m_r498RushMs = -1;
+    m_r498RushWithStrobes = false;
+    m_r498RushStrobeAsked = false;
+    m_r498RushCount++;
+    r498RushPhases();
+    return true;
+}
+
+void TrackEngine::r498RushPhases()
+{
+    // each lamp's phase: its place on the map projected on the direction, 0..1 over the lamps
+    // taking part (the strobes only when they joined); -1 for a lamp that does not
+    const int n = int(m_r498RushFx.count());
+    QVector<qreal> along(n, 0.0);
+    QVector<bool> in(n, false);
+    // the Loop's axis: from his chase's first strobe to its last, where the map has them;
+    // without them, from the back right corner to the front left
+    qreal ax = 1.0, ay = 1.0, bx = 0.0, by = 0.0;
+    bool first = false, last = false;
+    if (m_doc != nullptr && m_r498RushStrobeKey.isEmpty() == false)
+    {
+        foreach (quint32 fid, m_groups.value(m_r498RushStrobeKey).fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr)
+                continue;
+            const int dmx = int(fxi->address()) + 1;
+            if (dmx == R498_RUSH_LOOP_FIRST && fxi->universe() == 0)
+                first = roomOf(fid, &ax, &ay);
+            else if (dmx == R498_RUSH_LOOP_LAST && fxi->universe() == 0)
+                last = roomOf(fid, &bx, &by);
+        }
+    }
+    if (first == false || last == false)
+    {
+        ax = 1.0; ay = 1.0; bx = 0.0; by = 0.0;
+    }
+    qreal lo = 0.0, hi = 0.0;
+    bool any = false;
+    for (int i = 0; i < n; i++)
+    {
+        qreal x = 0.0, y = 0.0;
+        if (roomOf(m_r498RushFx.at(i), &x, &y) == false)
+            continue;
+        if (m_r498RushIsStrobe.at(i) && m_r498RushWithStrobes == false)
+            continue;
+        qreal s = 0.0;
+        switch (m_r498RushDir)
+        {
+            case 1:  s = -y; break;                                  // to the DJ: the back first
+            case 2:  s = y; break;                                   // from the DJ
+            case 3:  s = m_r498RushRight ? -x : x; break;            // across
+            default: s = (x - ax) * (bx - ax) + (y - ay) * (by - ay); break;   // along his Loop
+        }
+        along[i] = s;
+        in[i] = true;
+        lo = any ? qMin(lo, s) : s;
+        hi = any ? qMax(hi, s) : s;
+        any = true;
+    }
+    m_r498RushPhase = QVector<qreal>(n, -1.0);
+    for (int i = 0; i < n; i++)
+    {
+        if (in.at(i))
+            m_r498RushPhase[i] = hi - lo > 1e-6 ? (along.at(i) - lo) / (hi - lo) : 0.0;
+    }
+}
+
+bool TrackEngine::r498RushMasks(bool isDrop)
+{
+    // per lamp a lit mask (the colour scene's own values for the lamp - never aim, zoom or speed -
+    // every other colour channel at nought, the dimmer full, the shutter open / no strobe, the
+    // macros at nought) and, for a strobe, a dark one (its intensity channels at nought).
+    // Made once (named hidden scenes), refilled when the colours change - never mid-rush.
+    if (m_doc == nullptr)
+        return false;
+    const QString wash = m_r498RushWashKey, strobes = m_r498RushStrobeKey;
+    QString washColour = colourShown(wash);
+    // every other rush the look's partner colour on the wash, where it may be shown: not under
+    // ONE tile of his (his colour), white only in a drop
+    const QString partner = m_partnerPick;
+    if (m_r498RushCount % 2 == 1 && partner.isEmpty() == false && partner != washColour
+        && (m_override.isEmpty() || m_overrideSet.count() >= 2) && engineBannedColour(partner) == false
+        && (partner != QStringLiteral("white") || isDrop) && colourForGroup(wash, partner) == partner
+        && colourFunction(wash, partner) != Function::invalidId())
+        washColour = partner;
+    Scene *washScene = qobject_cast<Scene *>(m_doc->function(colourFunction(wash, washColour)));
+    if (washScene == nullptr)
+        return false;
+    Scene *strobeScene = strobes.isEmpty() ? nullptr
+                       : qobject_cast<Scene *>(m_doc->function(colourFunction(strobes, colourShown(strobes))));
+    const QString cacheKey = QStringLiteral("%1|%2|%3|%4").arg(wash, strobes).arg(washScene->id())
+                             .arg(strobeScene != nullptr ? strobeScene->id() : Function::invalidId());
+    const int n = int(m_r498RushFx.count());
+    auto alive = [this](const QVector<quint32> &ids, int count) {
+        if (ids.count() != count)
+            return false;
+        for (quint32 id : ids)
+            if (id != Function::invalidId() && m_doc->function(id) == nullptr)
+                return false;
+        return true;
+    };
+    if (cacheKey == m_r498RushCache && alive(m_r498RushLit, n) && alive(m_r498RushDim, n) && alive(m_r498RushDark, n))
+        return true;
+    // (r497BloomScene lets a flashed mask go before it is refilled; a refill only comes before a
+    // rush's first frame, so nothing of ours is lit here)
+    QVector<quint32> litIds(n, Function::invalidId()), dimIds(n, Function::invalidId()), darkIds(n, Function::invalidId());
+    for (int i = 0; i < n; i++)
+    {
+        const quint32 fxid = m_r498RushFx.at(i);
+        const bool isStrobe = m_r498RushIsStrobe.at(i);
+        Fixture *fxi = m_doc->fixture(fxid);
+        Scene *colourScene = isStrobe ? strobeScene : washScene;
+        if (fxi == nullptr || (isStrobe == false && colourScene == nullptr))
+            return false;
+        QList<SceneValue> lit, dark;
+        QSet<quint32> skip, set;
+        for (quint32 ch = 0; ch < fxi->channels(); ch++)
+        {
+            const QLCChannel *qch = fxi->channel(ch);
+            if (qch == nullptr)
+                continue;
+            if (qch->group() == QLCChannel::Pan || qch->group() == QLCChannel::Tilt
+                || qch->preset() == QLCChannel::SpeedPanTiltFastSlow || qch->preset() == QLCChannel::SpeedPanTiltSlowFast
+                || qch->preset() == QLCChannel::BeamZoomSmallBig || qch->preset() == QLCChannel::BeamZoomBigSmall)
+                skip.insert(ch);
+            if (qch->group() == QLCChannel::Intensity)
+                dark.append(SceneValue(fxid, ch, 0));
+        }
+        if (colourScene != nullptr)
+        {
+            foreach (const SceneValue &sv, colourScene->values())
+            {
+                if (sv.fxi != fxid || skip.contains(sv.channel) || set.contains(sv.channel))
+                    continue;
+                lit.append(sv);
+                set.insert(sv.channel);
+            }
+        }
+        const quint32 dimCh = dimmerChannel(fxi);
+        if (colourScene != nullptr && set.isEmpty() == false)
+        {
+            if (dimCh != QLCChannel::invalid())
+            {
+                // the dimmer in a mask of its own, full, carrying the level: the colour stays
+                // whole and only the dimmer is scaled, as the engine levels a lamp
+                for (int k = lit.count() - 1; k >= 0; k--)
+                    if (lit.at(k).channel == dimCh)
+                        lit.removeAt(k);
+                set.insert(dimCh);
+            }
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch == nullptr || set.contains(ch) || skip.contains(ch))
+                    continue;
+                if (qch->group() == QLCChannel::Intensity)
+                {
+                    // REPLACED, not added: a colour channel the colour does not use is nought
+                    lit.append(SceneValue(fxid, ch, 0));
+                    set.insert(ch);
+                }
+                else if (qch->group() == QLCChannel::Effect
+                         || qch->preset() == QLCChannel::ShutterStrobeSlowFast
+                         || qch->preset() == QLCChannel::ShutterStrobeFastSlow)
+                {
+                    // the macros at nought, no hardware strobe (0 on the strobes' strobe channels)
+                    lit.append(SceneValue(fxid, ch, 0));
+                    set.insert(ch);
+                }
+                else if (qch->group() == QLCChannel::Shutter)
+                {
+                    foreach (QLCCapability *cap, qch->capabilities())
+                    {
+                        if (cap != nullptr && cap->preset() == QLCCapability::ShutterOpen)
+                        {
+                            lit.append(SceneValue(fxid, ch, cap->min()));
+                            set.insert(ch);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        const quint32 dmx = fxi->address() + 1;
+        if (lit.isEmpty() == false)
+        {
+            Scene *ls = r497BloomScene(i < m_r498RushLit.count() ? m_r498RushLit.at(i) : Function::invalidId(),
+                                       QStringLiteral("TRACK R498: rush lit %1").arg(dmx));
+            if (ls == nullptr)
+                return false;
+            foreach (const SceneValue &sv, lit)
+                ls->setValue(sv);
+            ls->setBlendMode(Universe::ReplaceBlend);
+            litIds[i] = ls->id();
+            if (dimCh != QLCChannel::invalid())
+            {
+                Scene *ms = r497BloomScene(i < m_r498RushDim.count() ? m_r498RushDim.at(i) : Function::invalidId(),
+                                           QStringLiteral("TRACK R498: rush dim %1").arg(dmx));
+                if (ms == nullptr)
+                    return false;
+                ms->setValue(SceneValue(fxid, dimCh, 255));
+                ms->setBlendMode(Universe::ReplaceBlend);
+                dimIds[i] = ms->id();
+            }
+        }
+        else if (isStrobe == false)
+            return false;                // a wash lamp with no colour: no rush
+        if (isStrobe && dark.isEmpty() == false)
+        {
+            Scene *ds = r497BloomScene(i < m_r498RushDark.count() ? m_r498RushDark.at(i) : Function::invalidId(),
+                                       QStringLiteral("TRACK R498: rush dark %1").arg(dmx));
+            if (ds == nullptr)
+                return false;
+            foreach (const SceneValue &sv, dark)
+                ds->setValue(sv);
+            ds->setBlendMode(Universe::ReplaceBlend);
+            darkIds[i] = ds->id();
+        }
+    }
+    m_r498RushLit = litIds;
+    m_r498RushDim = dimIds;
+    m_r498RushDark = darkIds;
+    m_r498RushCache = cacheKey;
+    m_r498RushShown = QVector<int>(n, 0);
+    return true;
+}
+
+void TrackEngine::r498RushStart()
+{
+    // R498_R_START (tick(), the beat drawn): this beat's clock, the first frame, the pulse timer
+    if (m_r498RushState == 0 || m_doc == nullptr)
+        return;
+    if (m_r498RushBeatNow != m_lastBeat || m_beatMs <= 0.0)
+    {
+        r498RushStop();
+        return;
+    }
+    // a hit scene of his show on the wash this beat (the "flash" slot) keeps its beat
+    const quint32 hitScene = m_active.value(QStringLiteral("flash"), Function::invalidId());
+    if (hitScene != Function::invalidId() && m_funcs.value(hitScene).groups.contains(m_r498RushWashKey))
+    {
+        r498RushStop();
+        return;
+    }
+    m_r498RushMs = m_beatStartMs;
+    if (m_r498RushBeatNow == m_r498RushFrom)
+    {
+        // its masks in the colours this beat shows (a landing's new look included)
+        if (r498RushMasks(m_r498RushIsDrop) == false)
+        {
+            r498RushStop();
+            return;
+        }
+        if (m_testTrack == false)
+            logSignal(QStringLiteral("sig:rush:%1:%2@%3").arg(QLatin1String(r498RushDirName(m_r498RushDir)))
+                      .arg(m_r498RushBeats).arg(QLatin1String(r498RushWhyName(m_r498RushWhy))));
+        // the crumb: the lamps in the order the front meets them
+        QList<QPair<qreal, int> > order;
+        for (int i = 0; i < m_r498RushPhase.count(); i++)
+            if (m_r498RushPhase.at(i) >= 0.0)
+                order << qMakePair(m_r498RushPhase.at(i), i);
+        std::stable_sort(order.begin(), order.end());
+        QStringList lamps;
+        for (const QPair<qreal, int> &o : std::as_const(order))
+        {
+            Fixture *fxi = m_doc->fixture(m_r498RushFx.at(o.second));
+            if (fxi != nullptr)
+                lamps << QString::number(fxi->address() + 1);
+        }
+        crumb(QStringLiteral("r498 rush %1 %2/%3 %4: %5").arg(QLatin1String(r498RushDirName(m_r498RushDir)))
+              .arg(m_r498RushBeats).arg(QLatin1String(r498RushWhyName(m_r498RushWhy))).arg(m_r498RushFrom)
+              .arg(lamps.join(QLatin1Char('>'))));
+    }
+    r498RushFrame(m_clock.elapsed());
+    if (m_r498RushState != 0 && m_pulseTimer.isActive() == false)
+        m_pulseTimer.start();
+}
+
+void TrackEngine::r498RushStrobe(int beat, bool quiet, bool affordable, bool burst)
+{
+    // R498_R_STROBE_BUDGET (the end of driveStrobe, once the beat's bursts are decided): the
+    // strobes join a rush on its first beat - ONE burst against the window's budget - unless the
+    // beat is quiet or a burst of the engine's own holds the bank (the landing's salvo, DROP HIT,
+    // the "and again" bursts, the heads' accents do not count); such a burst mid-rush takes the
+    // bank back. A build's riser is not such a burst: the build rush takes the bank over it for
+    // its 1-2 beats (driveStrobe passes burst false in a build, his DROP HIT's STROBE aside)
+    if (m_r498RushState == 0)
+        return;
+    if (m_r498RushWithStrobes && burst)
+    {
+        m_r498RushWithStrobes = false;
+        crumb(QStringLiteral("r498 rush %1: the strobes to the burst").arg(beat));
+    }
+    if (m_r498RushStrobeAsked == false && m_r498RushFrom == beat)
+    {
+        m_r498RushStrobeAsked = true;
+        bool masks = false;
+        for (int i = 0; i < m_r498RushFx.count(); i++)
+            masks = masks || (m_r498RushIsStrobe.at(i) && i < m_r498RushLit.count()
+                              && m_r498RushLit.at(i) != Function::invalidId());
+        const bool free = r498RushStrobesFree(m_r498RushFader);
+        if (masks && free && quiet == false && affordable && burst == false)
+        {
+            m_r498RushWithStrobes = true;
+            m_strobeSpent++;             // one rush, one burst
+            r498RushPhases();
+            QList<QPair<qreal, int> > order;
+            for (int i = 0; i < m_r498RushPhase.count(); i++)
+                if (m_r498RushPhase.at(i) >= 0.0)
+                    order << qMakePair(m_r498RushPhase.at(i), i);
+            std::stable_sort(order.begin(), order.end());
+            QStringList lamps;
+            for (const QPair<qreal, int> &o : std::as_const(order))
+            {
+                Fixture *fxi = m_doc != nullptr ? m_doc->fixture(m_r498RushFx.at(o.second)) : nullptr;
+                if (fxi != nullptr)
+                    lamps << QStringLiteral("%1%2").arg(m_r498RushIsStrobe.at(o.second) ? QStringLiteral("s") : QString())
+                                                   .arg(fxi->address() + 1);
+            }
+            crumb(QStringLiteral("r498 rush %1 with the strobes: %2").arg(beat).arg(lamps.join(QLatin1Char('>'))));
+        }
+        crumb(QStringLiteral("r498 rush %1: strobes %2").arg(beat)
+              .arg(m_r498RushWithStrobes ? QStringLiteral("in")
+                   : burst ? QStringLiteral("out (a burst)") : quiet ? QStringLiteral("out (quiet)")
+                   : affordable == false ? QStringLiteral("out (budget %1 spent)").arg(m_strobeSpent)
+                   : free == false ? QStringLiteral("out (his/off)") : QStringLiteral("out (no masks)")));
+    }
+    r498RushFrame(m_clock.elapsed());
+}
+
+bool TrackEngine::r498RushFrame(qint64 now)
+{
+    // R498_R_TIMER_FRAME (the pulse timer, reapplyLevels, driveStrobe): the front now
+    if (m_r498RushState == 0 || m_doc == nullptr)
+        return false;
+    if (m_beatMs <= 0.0 || (m_r498RushMs >= 0 && now - m_r498RushMs > qint64(2.0 * m_beatMs)))
+    {
+        r498RushStop();                  // no next beat came (the deck stopped): let go
+        return false;
+    }
+    if (r498RushFree() == false || m_r498RushWashKey != r498RushWash())
+    {
+        r498RushStop();                  // his hand mid-beat: the room as the engine draws it, at once
+        return false;
+    }
+    if (m_r498RushMs < 0)
+        return true;                     // the next beat is being drawn: the masks hold as they are
+    const qreal sweep = qreal(m_r498RushBeats);
+    const qreal pos = qreal(m_r498RushBeatNow - m_r498RushFrom)
+                    + qBound(0.0, qreal(now - m_r498RushMs) / m_beatMs, 0.999);
+    const qreal washSlice = R498_RUSH_WASH_SLICE * sweep;
+    const qreal strobeSlice = R498_RUSH_STROBE_SLICE * sweep;
+    const qreal run = sweep - washSlice;           // the front meets the last lamp here: its flash ends on the line
+    const qreal washLevel = lightsOut() ? 0.0
+                          : qBound(0.0, masterOut() * trimOf(m_r498RushWashKey), 1.0);
+    const qreal step = qBound(0.70, 0.70 + 0.75 * (m_r498RushFader - 0.60), 1.0);   // runde 352's step level
+    const qreal strobeLevel = (lightsOut() || m_r498RushStrobeKey.isEmpty()) ? 0.0
+                            : qBound(0.0, step * masterOut() * trimOf(m_r498RushStrobeKey), 1.0);
+    const int n = int(m_r498RushFx.count());
+    if (m_r498RushShown.count() != n)
+        m_r498RushShown = QVector<int>(n, 0);
+    for (int i = 0; i < n; i++)
+    {
+        const bool isStrobe = m_r498RushIsStrobe.at(i);
+        const qreal phase = i < m_r498RushPhase.count() ? m_r498RushPhase.at(i) : -1.0;
+        int want = 0;
+        if (phase >= 0.0 && (isStrobe == false || m_r498RushWithStrobes))
+        {
+            const qreal at = phase * run;
+            const bool on = pos >= at && pos < at + (isStrobe ? strobeSlice : washSlice);
+            want = on ? 2 : (isStrobe ? 1 : 0);
+        }
+        Function *litF = i < m_r498RushLit.count() ? m_doc->function(m_r498RushLit.at(i)) : nullptr;
+        Function *dimF = i < m_r498RushDim.count() ? m_doc->function(m_r498RushDim.at(i)) : nullptr;
+        Function *darkF = i < m_r498RushDark.count() ? m_doc->function(m_r498RushDark.at(i)) : nullptr;
+        if ((want == 2 && litF == nullptr) || (want == 1 && darkF == nullptr))
+            want = 0;
+        if (want == 2)
+        {
+            // the level on the dimmer alone (the colour whole); a lamp with no dimmer: on its colour
+            const qreal level = isStrobe ? strobeLevel : washLevel;
+            if (dimF != nullptr)
+                dimF->requestAttributeOverride(ENGINE_INTENSITY_ATTR, level);
+            else
+                litF->requestAttributeOverride(ENGINE_INTENSITY_ATTR, level);
+        }
+        if (m_r498RushShown.at(i) == want)
+            continue;
+        // the new one first, then the old one let go: never a frame with neither
+        if (want == 2)
+        {
+            litF->flash(m_doc->masterTimer(), true, true);
+            if (dimF != nullptr)
+                dimF->flash(m_doc->masterTimer(), true, true);
+            if (darkF != nullptr)
+                darkF->unFlash(m_doc->masterTimer());
+        }
+        else if (want == 1)
+        {
+            darkF->flash(m_doc->masterTimer(), true, true);
+            if (litF != nullptr)
+                litF->unFlash(m_doc->masterTimer());
+            if (dimF != nullptr)
+                dimF->unFlash(m_doc->masterTimer());
+        }
+        else
+        {
+            if (litF != nullptr)
+                litF->unFlash(m_doc->masterTimer());
+            if (dimF != nullptr)
+                dimF->unFlash(m_doc->masterTimer());
+            if (darkF != nullptr)
+                darkF->unFlash(m_doc->masterTimer());
+        }
+        m_r498RushShown[i] = want;
+    }
+    return true;
+}
+
+void TrackEngine::r498RushStop()
+{
+    // R498_R_STOP: every mask let go - the room is what the engine draws
+    if (m_doc != nullptr)
+    {
+        for (int i = 0; i < m_r498RushShown.count(); i++)
+        {
+            if (m_r498RushShown.at(i) == 0)
+                continue;
+            Function *litF = i < m_r498RushLit.count() ? m_doc->function(m_r498RushLit.at(i)) : nullptr;
+            Function *dimF = i < m_r498RushDim.count() ? m_doc->function(m_r498RushDim.at(i)) : nullptr;
+            Function *darkF = i < m_r498RushDark.count() ? m_doc->function(m_r498RushDark.at(i)) : nullptr;
+            if (litF != nullptr)
+                litF->unFlash(m_doc->masterTimer());
+            if (dimF != nullptr)
+                dimF->unFlash(m_doc->masterTimer());
+            if (darkF != nullptr)
+                darkF->unFlash(m_doc->masterTimer());
+        }
+    }
+    m_r498RushShown.fill(0);
+    m_r498RushState = 0;
+    m_r498RushMs = -1;
+    m_r498RushBeatNow = -1;
+    m_r498RushWithStrobes = false;
 }

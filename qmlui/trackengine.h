@@ -2345,6 +2345,54 @@ public:
     qint64 m_r497TapFreeMs = -1;         // no dark before this (half a beat after the last light back)
     int m_r497TapGhosts = 0;
     // R497_DECL_MELODYHEADS: A4 heads follow the melody
+    // R498_DECL_RUSH: the room rush (track_runtime/r498_rush.inc.cpp, R498_INF_DECL)
+    // R498_R_DECL (runde 498, agent R): the room rush - a fast wave through the room over the wash
+    // and the strobes, four directions, its speed on ENERGY (track_runtime/r498_rush.inc.cpp)
+    bool r498RushMapped(const QString &key) const;      // a group the map knows whole
+    QString r498RushWash() const;                       // the wash it runs on ("" none: no rush)
+    QString r498RushStrobes() const;                    // the strobe bank ("" none: the wash alone)
+    bool r498RushReady() const;                         // dropFormDecide: the map knows the wash whole
+    bool r498RushFree() const;                          // his picks and the room's other owners: no rush
+    bool r498RushStrobesFree(qreal fader) const;        // the strobes may join
+    bool r498RushLand(int beat);                        // the drop forms' landing: the rush drop's first beat
+    void r498RushBeat(int beat, bool isDrop, bool isBuild, const QString &nextState, int beatsToNext,
+                      int dropBar, int beatInBar, qreal fader, bool hold, bool isCalm, bool still);
+    void r498RushLamps();                               // the lamps: the wash, then the strobe bank
+    bool r498RushGo(int beat, int beats, int why, bool toDj, qreal fader, bool isDrop);
+    void r498RushPhases();                              // each lamp's place on the direction, 0..1
+    bool r498RushMasks(bool isDrop);                    // the lamps' lit / dark masks for this beat's colours
+    void r498RushStart();                               // tick(), the beat drawn: the first frame
+    void r498RushStrobe(int beat, bool quiet, bool affordable, bool burst);   // driveStrobe: the strobes join, one burst
+    bool r498RushFrame(qint64 now);                     // the pulse timer and reapplyLevels: the front now
+    void r498RushStop();
+    int m_r498RushState = 0;                    // 0 none, 2 a rush running
+    int m_r498RushFrom = -1;                    // the beat it started on
+    int m_r498RushBeats = 0;                    // its sweep, in beats (4, 2, 1)
+    int m_r498RushBeatNow = -1;                 // the beat it is in
+    qint64 m_r498RushMs = -1;                   // ... that beat's start, once tick() has drawn it
+    int m_r498RushDir = -1;                     // 0 loop, 1 to-dj, 2 from-dj, 3 across
+    int m_r498RushLastDir = -1;                 // never the same direction twice running
+    bool m_r498RushRight = false;               // across: from the right this time
+    int m_r498RushWhy = 0;                      // 0 the drop form, 1 the build, 2 a phrase turn
+    qreal m_r498RushFader = 0.0;                // the slider it started at
+    bool m_r498RushIsDrop = false;              // it started in a drop (white may be the partner)
+    bool m_r498RushWithStrobes = false;         // the strobes joined (one burst spent)
+    bool m_r498RushStrobeAsked = false;
+    int m_r498RushCount = 0;                    // rushes so far: every other one in the partner colour
+    QVector<quint32> m_r498RushFx;              // the lamps: the wash, then the strobes
+    QVector<bool> m_r498RushIsStrobe;
+    QVector<qreal> m_r498RushPhase;             // -1: not in this rush
+    QVector<quint32> m_r498RushLit;             // per lamp: its lit mask - the colour (hidden scene, flashed) ...
+    QVector<quint32> m_r498RushDim;             // ... its dimmer, full, carrying the level ...
+    QVector<quint32> m_r498RushDark;            // ... and a strobe's dark one
+    QVector<int> m_r498RushShown;               // per lamp: 0 neither flashed, 1 dark, 2 lit
+    QString m_r498RushCache;                    // the groups and colour scenes the masks were made for
+    QString m_r498RushWashKey;
+    QString m_r498RushStrobeKey;
+    int m_r498RushFormAt = -1;                  // the rush drop's landing beat
+    QString m_r498RushTitle;
+    int m_r498RushBuildFor = -1;                // the drop a build rush ran for (once)
+    int m_r498RushPhraseAt = -100000;           // the last phrase rush (at most one in 32 bars)
     // R497_A4_DECL (runde 497, A4): the Shark heads' figure follows the melody in kickless breaks
     struct R497MhState
     {
