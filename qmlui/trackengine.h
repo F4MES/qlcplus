@@ -1615,6 +1615,22 @@ private:
     // (m_clock ms). Never cleared: a deck handover resets the beat numbers.
     QHash<QString, qint64> m_aimMs;
     QHash<QString, int> m_darkUntil;     // group -> last beat of a planned dark stretch
+    // R503_SAFE_AIM_MS (runde 503, SAFE): when a laser bar group's mirror last moved (m_clock ms) and the
+    // aim it moved to (its pos: fid; none for a figure's stop or lift). tick() keeps the group dark 150 ms
+    // after it, and until the MasterTimer has written that aim twice (at most 1 s). Never cleared: a stamp
+    // older than a second does nothing.
+    QHash<QString, qint64> m_r503AimMs;
+    QHash<QString, quint32> m_r503AimFid;
+    void r503SafeAim(const QString &group, quint32 aim)
+    {
+        if (group.isEmpty() || m_groups.contains(group) == false)
+            return;
+        const TrackGroup &g = m_groups[group];
+        if (g.lasers == false || g.patternDevice)
+            return;                          // the bars only: the animation laser has no aim to move
+        m_r503AimMs.insert(group, m_clock.elapsed());
+        m_r503AimFid.insert(group, aim);
+    }
     qreal m_master;
     bool m_blackout;
     bool m_mixing;
