@@ -151,6 +151,53 @@ Rectangle
     property int zoomCenter: 1
     property int zoomSpan: 64
 
+    // R502_M_STATE (Tobias 10-25, mockup approved: "Hvis man bare trykker skal den bare saette hvor
+    // man 'er', men hvis man hiver skal den goere som du foreslaar"): a + TYPE chip DRAGGED onto
+    // the track lands on the bar under the finger - a dashed line in the type's colour, snapped
+    // as a moved tab snaps (snapBeat), with the bar and its distance to the playhead in a bubble.
+    // Let go over the track: addMarker() once; anywhere else: nothing. A TAP is as before.
+    property string flagDragType: ""        // the chip a finger drags ("": none) - one at a time
+    property real flagDragX: 0              // the finger, on the page
+    property real flagDragY: 0
+    property int flagDragBeat: -1           // the bar it would land on; -1: not over the track
+    property string flagSetText: ""         // "DROP SET · BAR 129" - 1.5 s after it landed
+    property int flagSetBeat: -1
+    function flagDragMove(type, item, x, y)
+    {
+        if (flagDragType !== type) return
+        var p = item.mapToItem(trackViewRoot, x, y)
+        flagDragX = p.x
+        flagDragY = p.y
+        var q = item.mapToItem(wfCanvas, x, y)
+        if (beatCount <= 0 || q.x < 0 || q.y < 0 || q.x > wfCanvas.width || q.y > wfCanvas.height)
+            flagDragBeat = -1
+        else
+            flagDragBeat = Math.max(1, Math.min(snapBeat(wfArea.beatAt(q.x)), beatCount))
+    }
+    function flagDragEnd(type, commit)
+    {
+        if (flagDragType !== type) return
+        var b = flagDragBeat
+        flagDragType = ""
+        flagDragBeat = -1
+        if (commit !== true || b <= 0 || !trackManager) return
+        trackManager.addMarker(b, type)
+        flagSetBeat = b
+        flagSetText = type.toUpperCase() + " " + qsTr("SET") + " · " + qsTr("BAR") + " " + barOf(b)
+        flagSetOff.restart()
+    }
+    function barsWord(n) { return n + " " + (n === 1 ? qsTr("BAR") : qsTr("BARS")) }
+    readonly property string flagDragText:
+    {
+        if (flagDragType === "" || flagDragBeat <= 0) return ""
+        var s = flagDragType.toUpperCase() + " · " + qsTr("BAR") + " " + barOf(flagDragBeat)
+        if (currentBeat <= 0) return s
+        var d = barOf(flagDragBeat) - barOf(currentBeat)
+        return s + " · " + (d > 0 ? qsTr("IN") + " " + barsWord(d)
+                                : (d < 0 ? barsWord(-d) + " " + qsTr("AGO") : qsTr("THIS BAR")))
+    }
+    Timer { id: flagSetOff; interval: 1500; onTriggered: trackViewRoot.flagSetText = "" }
+
     // R443_PLAN_LANE (N5 A): the plan of every section on the track - PLAN beside
     // MARKERS turns it on (OFF until he does; the engine remembers it)
     readonly property bool planShown: !!trackEngine && trackEngine.planLane === true && !markerEdit && beatCount > 0
@@ -2224,6 +2271,109 @@ Rectangle
                 }
             }
 
+            // R502_M_DROP_LINE: a + TYPE chip held over the track - a dashed line in its colour
+            // on the bar it would land on, the bar and its distance to the playhead above it;
+            // after it landed, "DROP SET · BAR 129" for 1.5 s on the same spot
+            Item
+            {
+                id: flagDropLayer
+                objectName: "flagDropLayer"
+                z: 4
+                x: wfCanvas.x
+                y: wfCanvas.y
+                width: wfCanvas.width
+                height: wfCanvas.height
+                readonly property int vf: trackViewRoot.viewFirst()
+                readonly property int vc: Math.max(1, trackViewRoot.viewCount())
+                function xOf(b) { return (b - vf) * width / vc }
+                readonly property color tone: trackViewRoot.markerColor(trackViewRoot.flagDragType)
+                readonly property bool lightTone: 0.299 * tone.r + 0.587 * tone.g + 0.114 * tone.b > 0.6
+                readonly property real topY: wfCanvas.stripH + Math.round(10 * trackViewRoot.ks)
+                Connections
+                {
+                    // SETUP or HELP over the page, the pencil put away, a new track: the chip goes back, nothing lands
+                    target: trackViewRoot
+                    function onSetupOpenChanged() { if (trackViewRoot.setupOpen) trackViewRoot.flagDragEnd(trackViewRoot.flagDragType, false) }
+                    function onHelpOpenChanged() { if (trackViewRoot.helpOpen) trackViewRoot.flagDragEnd(trackViewRoot.flagDragType, false) }
+                    function onMarkerEditChanged() { if (!trackViewRoot.markerEdit) trackViewRoot.flagDragEnd(trackViewRoot.flagDragType, false) }
+                }
+                Connections
+                {
+                    target: trackManager
+                    function onTrackChanged() { trackViewRoot.flagDragEnd(trackViewRoot.flagDragType, false) }
+                }
+                Item
+                {
+                    id: flagDropLine
+                    objectName: "flagDropLine"
+                    readonly property real lw: Math.max(2, Math.round(3 * trackViewRoot.ks))
+                    readonly property real dash: Math.max(8, Math.round(14 * trackViewRoot.ks))
+                    readonly property real gap: Math.max(5, Math.round(8 * trackViewRoot.ks))
+                    visible: trackViewRoot.flagDragType !== "" && trackViewRoot.flagDragBeat > 0
+                    x: flagDropLayer.xOf(Math.max(1, trackViewRoot.flagDragBeat)) - lw / 2
+                    y: wfCanvas.stripH
+                    width: lw
+                    height: flagDropLayer.height - y
+                    clip: true
+                    Repeater
+                    {
+                        model: Math.ceil(flagDropLine.height / (flagDropLine.dash + flagDropLine.gap))
+                        Rectangle
+                        {
+                            y: index * (flagDropLine.dash + flagDropLine.gap)
+                            width: flagDropLine.lw
+                            height: flagDropLine.dash
+                            color: flagDropLayer.tone
+                        }
+                    }
+                }
+                Rectangle
+                {
+                    id: flagDropBubble
+                    objectName: "flagDropBubble"
+                    visible: flagDropLine.visible
+                    readonly property string text: trackViewRoot.flagDragText
+                    width: flagDropText.implicitWidth + Math.round(36 * trackViewRoot.ks)
+                    height: Math.max(30, Math.round(42 * trackViewRoot.ks))
+                    x: Math.max(0, Math.min(flagDropLine.x + flagDropLine.lw / 2 - width / 2, flagDropLayer.width - width))
+                    y: flagDropLayer.topY
+                    radius: Math.round(8 * trackViewRoot.ks)
+                    color: flagDropLayer.tone
+                    Text
+                    {
+                        id: flagDropText
+                        anchors.centerIn: parent
+                        text: flagDropBubble.text
+                        color: flagDropLayer.lightTone ? "#101010" : "#FFFFFF"
+                        font.bold: true
+                        font.pixelSize: trackViewRoot.fs(18)
+                        font.letterSpacing: trackViewRoot.fs(18) * 0.06
+                    }
+                }
+                Rectangle
+                {
+                    id: flagSetNote
+                    objectName: "flagSetNote"
+                    visible: trackViewRoot.flagSetText !== "" && trackViewRoot.flagDragType === ""
+                    width: flagSetLabel.implicitWidth + Math.round(36 * trackViewRoot.ks)
+                    height: Math.max(30, Math.round(42 * trackViewRoot.ks))
+                    x: Math.max(0, Math.min(flagDropLayer.xOf(Math.max(1, trackViewRoot.flagSetBeat)) - width / 2, flagDropLayer.width - width))
+                    y: flagDropLayer.topY
+                    radius: Math.round(8 * trackViewRoot.ks)
+                    color: "#26262D"
+                    Text
+                    {
+                        id: flagSetLabel
+                        anchors.centerIn: parent
+                        text: trackViewRoot.flagSetText
+                        color: trackViewRoot.cText
+                        font.bold: true
+                        font.pixelSize: trackViewRoot.fs(18)
+                        font.letterSpacing: trackViewRoot.fs(18) * 0.06
+                    }
+                }
+            }
+
             // ---- the rail: the pencil, a warning, the verdict
             Rectangle
             {
@@ -2304,16 +2454,22 @@ Rectangle
                             model: [ "normal", "drive", "break", "build", "drop", "intro", "outro" ]
                             Rectangle
                             {
+                                id: addChip
                                 objectName: "addFlag:" + modelData
                                 width: flagTools.tw
                                 height: rail.bh
                                 radius: Math.round(10 * trackViewRoot.ks)
-                                color: addIn.down ? "#2C2C33" : trackViewRoot.cBtn
+                                // R502_M_CHIP_LOOK: while it is dragged the chip stays behind as an empty frame
+                                readonly property bool lifted: trackViewRoot.flagDragType === modelData
+                                color: lifted ? "transparent" : (addIn.down ? "#2C2C33" : trackViewRoot.cBtn)
+                                border.width: lifted ? 2 : 0
+                                border.color: trackViewRoot.cDim
                                 // R403_NO_LINES
-                                scale: addIn.down ? 0.965 : 1.0      // R402_PRESS
+                                scale: addIn.down && !lifted ? 0.965 : 1.0      // R402_PRESS
                                 Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                                 Row
                                 {
+                                    opacity: addChip.lifted ? 0.45 : 1.0
                                     anchors.centerIn: parent
                                     spacing: 7
                                     Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 10; height: 10; radius: 5; color: trackViewRoot.markerColor(modelData) }
@@ -2330,7 +2486,40 @@ Rectangle
                                 TouchInput
                                 {
                                     id: addIn
-                                    onReleasedAt: (x, y, inside) => { if (inside) trackManager.addMarker(trackManager.currentBeat > 0 ? trackManager.currentBeat : 1, modelData) }
+                                    // R502_M_CHIP_DRAG: a tap - the finger stays within the tremble a
+                                    // moved tab allows - sets the flag on the bar that is playing, as
+                                    // always. Past it the chip is lifted and follows the finger; let go
+                                    // over the track = the bar under it, anywhere else = nothing. The
+                                    // finger stays this chip's (mouse grab / its own touch point), so it
+                                    // fires nothing it crosses and a second finger elsewhere still works.
+                                    property real px0: 0
+                                    property real py0: 0
+                                    property bool lifting: false
+                                    onPressedAt: (x, y) => { px0 = x; py0 = y; lifting = false }
+                                    onMovedTo: (x, y) =>
+                                    {
+                                        if (!lifting)
+                                        {
+                                            if (Math.abs(x - px0) < Math.max(10, Math.round(12 * trackViewRoot.ks))
+                                                && Math.abs(y - py0) < Math.max(10, Math.round(12 * trackViewRoot.ks))) return
+                                            if (trackViewRoot.flagDragType !== "") return   // another chip is out: this one taps
+                                            lifting = true
+                                            trackViewRoot.flagDragType = modelData
+                                        }
+                                        trackViewRoot.flagDragMove(modelData, addIn, x, y)
+                                    }
+                                    onReleasedAt: (x, y, inside) =>
+                                    {
+                                        if (lifting)
+                                        {
+                                            lifting = false
+                                            trackViewRoot.flagDragMove(modelData, addIn, x, y)
+                                            trackViewRoot.flagDragEnd(modelData, true)
+                                            return
+                                        }
+                                        if (inside) trackManager.addMarker(trackManager.currentBeat > 0 ? trackManager.currentBeat : 1, modelData)
+                                    }
+                                    onCanceled: { if (lifting) { lifting = false; trackViewRoot.flagDragEnd(modelData, false) } }
                                 }
                             }
                         }
@@ -4846,6 +5035,64 @@ Rectangle
             width: parent.width - 2 * recentPopup.pad; height: recentPopup.footH
             text: "ALL SAVED LOOKS"; icon: "savedLooks"; fontPx: trackViewRoot.fs(13)
             onTapped: { trackViewRoot.savedRecentOpen = false; trackViewRoot.setupOpen = true; trackViewRoot.savedFavoritesOpen = true }
+        }
+    }
+
+    // R502_M_GHOST: the + TYPE chip in the finger's hand - over the page, just above the finger
+    // (a ring marks the finger), framed in its colour. Flat: no shadow, no glow. Takes no input.
+    Item
+    {
+        id: flagGhost
+        objectName: "flagGhost"
+        z: 600
+        anchors.fill: parent
+        visible: trackViewRoot.flagDragType !== ""
+        readonly property real ringR: Math.max(16, Math.round(24 * trackViewRoot.ks))
+        Rectangle
+        {
+            objectName: "flagGhostRing"
+            width: 2 * flagGhost.ringR; height: width; radius: width / 2
+            x: trackViewRoot.flagDragX - width / 2
+            y: trackViewRoot.flagDragY - height / 2
+            color: "transparent"
+            border.width: 2
+            border.color: Qt.rgba(1, 1, 1, 0.55)
+        }
+        Rectangle
+        {
+            id: flagGhostChip
+            objectName: "flagGhostChip"
+            width: flagTools.tw
+            height: rail.bh
+            // above the finger; where that would cover the bubble (a short track at 1366 x 768) beside it
+            readonly property real gapPx: Math.round(4 * trackViewRoot.ks)
+            readonly property real aboveY: trackViewRoot.flagDragY - flagGhost.ringR - gapPx - height
+            readonly property real bubbleFoot: trackViewRoot.flagDragType === "" ? 0
+                : flagDropBubble.mapToItem(trackViewRoot, 0, flagDropBubble.height).y + trackViewRoot.flagDragY * 0   // (read again as the finger moves)
+            readonly property bool beside: flagDropBubble.visible && aboveY < bubbleFoot + gapPx
+            readonly property real besideX: trackViewRoot.flagDragX + flagGhost.ringR + gapPx + width <= flagGhost.width
+                ? trackViewRoot.flagDragX + flagGhost.ringR + gapPx : trackViewRoot.flagDragX - flagGhost.ringR - gapPx - width
+            x: beside ? besideX : Math.max(0, Math.min(trackViewRoot.flagDragX - width / 2, flagGhost.width - width))
+            y: beside ? Math.max(bubbleFoot + gapPx, trackViewRoot.flagDragY - height / 2) : Math.max(0, aboveY)
+            radius: Math.round(10 * trackViewRoot.ks)
+            color: "#2C2C33"
+            border.width: 2
+            border.color: trackViewRoot.markerColor(trackViewRoot.flagDragType)
+            Row
+            {
+                anchors.centerIn: parent
+                spacing: 7
+                Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 10; height: 10; radius: 5; color: trackViewRoot.markerColor(trackViewRoot.flagDragType) }
+                Text
+                {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "+ " + trackViewRoot.flagDragType.toUpperCase()
+                    color: trackViewRoot.cText
+                    font.bold: true
+                    font.pixelSize: trackViewRoot.fs(13)
+                    font.letterSpacing: (trackViewRoot.fs(13)) * 0.06
+                }
+            }
         }
     }
 }
