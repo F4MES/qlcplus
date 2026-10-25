@@ -1199,6 +1199,7 @@ void TrackEngine::ensureTable()
     m_building = true;
     m_dirty = false;
     m_savedProgramCache.clear(); m_savedProgramIndex.clear(); // SAVED_LOOKS_IDENTITY
+    m_savedAutoCache.clear();        // R503_SAVED_TABLE_CACHE: groups/bans re-read - the figure cache with them (same count, other table)
     invalidateCandidates();          // m_funcs is about to be cleared and refilled
     m_eyeCache.clear();              // runde 338: the fixtures may have changed
     m_dimmerCache.clear();
@@ -6795,7 +6796,12 @@ QString TrackEngine::colourOverride() const { return m_override; }
 
 void TrackEngine::setColourOverride(QString colour)
 {
-    savedStop(); // SAVED_LOOKS_HAND: AUTO and a direct colour choice take control too
+    // R503_SAVED_TILE_KEEPS (runde 503; r501, Tobias 10-25: a saved look is "programmet, men med den farve
+    // motoren (eller jeg selv) har valgt"): his colour hand stopped the saved look playing, so one tile tap
+    // threw its figure and form away. A saved look carries no colour now - only UNDO's restore (its own
+    // colours) gives way to his newer colour choice, as before
+    if (m_savedPlaying.value(QStringLiteral("replayColour")).toBool())
+        savedStop(); // SAVED_LOOKS_HAND: AUTO and a direct colour choice take control too
     // the house rule holds for the palette tiles too
     if (engineBannedColour(colour))
         colour.clear();
@@ -6827,7 +6833,9 @@ QStringList TrackEngine::colourOverrides() const { return m_overrideSet; }
 
 void TrackEngine::toggleColourOverride(const QString &colour)
 {
-    savedStop(); // SAVED_LOOKS_HAND: his newer colour choice wins
+    // R503_SAVED_TILE_TOGGLE: a tile keeps the saved look playing (R503_SAVED_TILE_KEEPS) - UNDO's restore goes
+    if (m_savedPlaying.value(QStringLiteral("replayColour")).toBool())
+        savedStop(); // SAVED_LOOKS_HAND: his newer colour choice wins
     // Runde 304 (Tobias, 2026-09-29: "Når man vælger farve den skal bruge
     // selv, så kan man aktivere mere end én. Så f.eks. trykker man på blå og
     // lilla og så bruger den begge 2 i mix"). The room LEADS in one of them
@@ -6934,7 +6942,9 @@ QString TrackEngine::setPartnerOf(int leadIdx) const
 
 void TrackEngine::setColourMode(int mode)
 {
-    savedStop(); // SAVED_LOOKS_HAND: his newer colour choice wins
+    // R503_SAVED_TILE_MODE: FADE/CHASE keep the saved look playing (R503_SAVED_TILE_KEEPS) - UNDO's restore goes
+    if (m_savedPlaying.value(QStringLiteral("replayColour")).toBool())
+        savedStop(); // SAVED_LOOKS_HAND: his newer colour choice wins
     // R370_COLOUR_MODE (Tobias 10-06: "fade og chase ... naar man trykker paa
     // fade/chase, kan man vaelge flere farver (maaske med at den standard
     // vaelger to farver for en, saa man ikke trykker og der ikke sker noget)")
@@ -9640,7 +9650,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // SAVED_LOOKS_MEMORY: a one-section recall is not a new permanent colour preference.
     const int savedBoundary = m_realSecStart > 0 ? m_realSecStart : secStart;
     if (savedActive() && (m_savedPlayingFrom != savedBoundary || m_savedPlayingState != state)) savedStop();
-    if (!savedActive())
+    // R503_SAVED_MEMORY: an r501 saved look carries no colour - the room's colour under it is the engine's or his
+    // tile (R503_SAVED_TILE_KEEPS), so the colour memory reads it; UNDO's restore (its own colours) still does not count
+    if (!savedActive() || !m_savedPlaying.value(QStringLiteral("replayColour")).toBool())
         colourMemoryBeat(m_realSecStart > 0 ? m_realSecStart : (secStart > 0 ? secStart : beat), state, sectionChanged);
     syncBeat(beat, bpm);                             // R470_SYNC: round 2's blink (R472_SYNC_CLOCK: and the taps' clock)
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
@@ -11733,6 +11745,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (hold == false && isCalm == false
         && (m_forceOn || (m_dropTouched && m_dropSet.isEmpty() == false && m_dropPlanFor > 0 && beat >= m_dropPlanFor)))
         aloneBars.clear();
+    // R503_NIGHT_ALONE_NEXT (night 10-25, 02:56:52-59, a break at 96 %: NEXT threw the bars' alone
+    // away four times and three NEXTs in a row landed on the very same alone again - nothing changed
+    // on stage. The alone is drawn outside the cast order, so R483's NEXT memory never saw it):
+    // an alone NEXT threw away in this section is not drawn again (forgotten with the section
+    // kind, the track and SHOW OFF, as the rest of the memory)
+    if (aloneBars.isEmpty() == false && m_nextRejCasts.contains(QStringList(aloneBars)))
+    {
+        aloneBars.clear();
+        if (forceNext && m_nextSkipped.contains(QStringLiteral("cast")) == false)
+            m_nextSkipped << QStringLiteral("cast");
+    }
     // R385_BARS_FULL: two kinds - the whole-bar chase, or full light with the
     // slow lift. R401_ALONE_KIND: drawn when the alone starts, the other kind
     // than last time more often than not (it was strictly in turn)
@@ -14156,6 +14179,32 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     // Runde 260: who lights the room beside the base this beat - see
     // baseCovered(). Decided after every dark group of the beat is known.
+    // R503_SAFE_DARK (runde 503, SAFE; Tobias: "never move a lit laser" - the light goes off BEFORE a
+    // mirror moves). The dark after a re-aim was counted in BEATS only (one beat; two for a figure's
+    // lift or end): two beats inside one MasterTimer frame - a stall's queued beats, 14.5 ms apart after
+    // a track load in the harness, 27 ms apart in the night of 10-25 at 02:57 - relit the bars on the
+    // very frame their mirror moved (harness tilt_jump_lit, 1-6 frames, base and every fix alike). A bar
+    // group whose mirror moved (r503SafeAim) also stays dark 150 ms of the wall clock, and until the
+    // MasterTimer has written its new aim twice (a stalled timer: at most 1 s). On top of the beats,
+    // never instead: it only adds a dark group - never lights, never moves, nothing else waits (the next
+    // beat after it lights the bars where tick() says). Not under his held FLASH (as every laser dark).
+    {
+        const qint64 nowMs = m_clock.elapsed();
+        for (QHash<QString, qint64>::const_iterator it = m_r503AimMs.constBegin(); it != m_r503AimMs.constEnd(); ++it)
+        {
+            const qint64 since = nowMs - it.value();
+            if (since >= 1000 || m_flashHeld.contains(it.key()))
+                continue;
+            const quint32 aimId = m_active.value(QStringLiteral("pos:") + it.key(), Function::invalidId());
+            const Function *aim = (aimId != Function::invalidId()
+                                   && aimId == m_r503AimFid.value(it.key(), Function::invalidId()))
+                                ? m_doc->function(aimId) : nullptr;
+            const bool unwritten = aim != nullptr
+                                && (aim->isRunning() == false || aim->elapsed() < 2 * MasterTimer::tick());
+            if (since < 150 || unwritten)
+                darkGroups.insert(it.key());
+        }
+    }
     // R488_DX_BREATH_DARK: aandedraet - the effects out on the phrase's last beat (before the base cover)
     dropFormBreathDark(darkGroups, castSet, base, isDrop ? dropBar : -1, beatInBar);
     m_baseCover.clear();
@@ -15229,9 +15278,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // no pulse, the light stays where it is. Not the strobes' backbeat (on its claps, above).
             else if (pulseBeat && depth > 0.0)
             {
-                const bool grid = isBuild
-                               || (isBreak && key == base && fader >= 0.75 && isCalm == false);
-                if (r501PulseHit(beat, mv.pulseOn, grid, g.patternDevice) == false)
+                // R503_BLINK_PUMP (bug-fix runde 503): not the base's break pump. It is his own
+                // BLACKOUT taps made automatic (runde 342: "on the beat the DJ's tempo keeps"), every
+                // beat from 75 % - gated on the onsets it skipped 15-33 % of a real break's beats and
+                // the base sat on its pump floor for 3-6 beats at a time. "The original program
+                // working is paramount ... Better that the extra feature does less."
+                const bool grid = isBuild;
+                const bool r503Pump = isBreak && key == base && fader >= 0.75 && isCalm == false;
+                if (r503Pump == false && r501PulseHit(beat, mv.pulseOn, grid, g.patternDevice) == false)
                     pulseBeat = false;
             }
             if (g.patternDevice && pulseBeat == false)
@@ -17877,7 +17931,8 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
                 m_laserMoveDark.insert(group);
                 return true;
             }
-            m_laserMoveDark.remove(group);
+            if (m_laserMoveDark.remove(group))
+                r503SafeAim(group, Function::invalidId());   // R503_SAFE_AIM_LIFT: the dark beat - the mirror moves now
             // the centre first: lifted before the figure grows under it
             if (efx->yOffset() != y)
                 efx->setYOffset(y);
@@ -17941,7 +17996,8 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             reconfDark = true;
         }
     }
-    m_laserMoveDark.remove(group);
+    if (m_laserMoveDark.remove(group))
+        r503SafeAim(group, Function::invalidId());   // R503_SAFE_AIM_RECONF: the dark beat - the new figure moves the mirror
     efx->setAlgorithm(sw.shape < 0 ? EFX::Circle : EFX::Algorithm(sw.shape));
     efx->setYOffset(qBound(0, 127 + dy, 255));     // the centre before the size
     efx->setWidth(sw.shape < 0 ? 0 : width);
@@ -18623,6 +18679,7 @@ void TrackEngine::setBanned(quint32 fid, bool on)
         return;
     m_funcs[fid].banned = on;
     invalidateCandidates();          // no rebuild here (see below), so say it
+    m_savedAutoCache.clear();        // R503_SAVED_BAN_CACHE: a saved look's figure lookup skips a banned programme - its cache did not
     saveRoles();
     logSignal((on ? QStringLiteral("sig:ban:") : QStringLiteral("sig:unban:"))
               + QString::number(fid));
@@ -19255,6 +19312,7 @@ void TrackEngine::laserFaderCheck(qreal slider)
                             && int(later->yOffset()) > y)
                         {
                             later->setYOffset(y);
+                            r503SafeAim(key, Function::invalidId());   // R503_SAFE_AIM_FADER: the lift moved the mirror
                             m_darkUntil.insert(key, qMax(m_darkUntil.value(key, -1), m_lastBeat + 1));
                         }
                     });
@@ -20235,6 +20293,8 @@ void TrackEngine::release()
     r493DiscoReset(true);             // R493_A4_RESET_RELEASE: the ball's heads home dark, the roof down
     r493RoofReset();
     r498RushStop();                   // R498_R_STOP_RELEASE: the room rush's masks let go
+    r497BloomStop();                  // R503_ROOM_BLOOM_RELEASE: the bloom's / collapse's masks let go
+                                      // (SHOW OFF mid-bloom left the wash's rings forced lit/dark)
     foreach (const QString &slot, m_active.keys())
     {
         // Both masks go: with AUTO off the group's channels belong to the
@@ -20550,6 +20610,7 @@ void TrackEngine::idle()
     r493DiscoReset(true);                      // R493_A4_RESET_IDLE: a stopped deck - the ball and the roof go
     r493RoofReset();
     r498RushStop();                            // R498_R_STOP_IDLE: the room rush's masks let go
+    r497BloomStop();                           // R503_ROOM_BLOOM_IDLE: and the bloom's
     // R458_LAST_TRACK: the house light holds, and the last track stopping
     // (the DJ stops the deck, or BLT goes quiet) is the end of the night
     if (m_lastStage >= 3)
@@ -21102,6 +21163,15 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         return;
     }
 
+    // R503_SAFE_AIM_RUN: a new aim (or one brought back) moves the bars' mirror - every re-aim, home,
+    // LaserUPP, the drop forms' rise/inverted aims, the fader's "dark first, then home" (r503SafeAim)
+    if (slot.startsWith(QStringLiteral("pos:")))
+    {
+        const Function *aimFn = m_doc->function(fid);
+        if (m_active.value(slot, Function::invalidId()) != fid || aimFn == nullptr
+            || aimFn->isRunning() == false || aimFn->stopped())
+            r503SafeAim(slotGroup(slot), fid);
+    }
     level = qBound(0.0, level, 1.0);
     // a blackout: the function runs, at nothing
     qreal out = lightsOut() ? 0.0 : qBound(0.0, level * slotScale(slot, fid), 1.0);
@@ -21338,6 +21408,9 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
     if (fid == Function::invalidId())
         return;
 
+    // R503_SAFE_AIM_EFX: a bar figure that stops puts the beams straight back on the aim - a mirror move
+    if (slot.startsWith(QStringLiteral("efx:")))
+        r503SafeAim(slotGroup(slot), Function::invalidId());
     int attr = m_activeAttr.value(slot, -1);
     m_active.remove(slot);
     crumb(QStringLiteral("stop ") + slot + QLatin1Char(' ') + QString::number(fid) + (hard ? QStringLiteral(" hard") : QString()));   // R435_CRUMBS
@@ -21591,6 +21664,7 @@ void TrackEngine::stopAll()
     r493DiscoReset(true);                // R493_A4_RESET_STOPALL: the ball's heads home dark, the roof down
     r493RoofReset();
     r498RushStop();                      // R498_R_STOP_ALL: the room rush's masks let go
+    r497BloomStop();                     // R503_ROOM_BLOOM_STOPALL: and the bloom's (the pulse timer stops below)
     m_strobeRate = 0;
     m_pulseDepth.clear();
     m_breathe.clear();
@@ -26174,6 +26248,10 @@ void TrackEngine::dropFormReset(bool newTrack)
     {
         m_formDrops = 0;
         m_formTrack.clear();
+        // R503_ROOM_COLLAPSE_RESET: the bloom's "collapse ran for this drop" is a beat of the old
+        // track - a new track's bloom drop on the same beat lost its collapse
+        m_r497CollapseFor = -1;
+        m_r497BloomPrepFor = -1;
     }
 }
 
@@ -26262,6 +26340,11 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
             form = DF_CLASSIC;
         if (form == DF_KICK && dropFormKickReady() == false)
             form = DF_CLASSIC;           // an old show file without the kick programmes
+        // R503_EYES_KICK_LAND (r503 EYES): kick-chase under 60 % is only ever the 3-eye packet, and
+        // the packet is Tobias' exception "over 60" (10-22: "over 60 kan det vaere 3 oejne") - the
+        // forms' 3 % landing room let it land at 57-59 %, where the bars want whole bars or 13 eyes
+        if (form == DF_KICK && fader < trackDropFormMin(DF_KICK) / 100.0 - 1e-9)
+            form = DF_CLASSIC;
         // the rise lands only from its dark aim (dropFormRiseAim put it there)
         if ((form == DF_RISE || form == DF_INVRISE) && m_riseStage != 2)
             form = form == DF_INVRISE ? DF_INVERTED : DF_CLASSIC;
@@ -27305,6 +27388,15 @@ quint32 TrackEngine::dropFormKick(const QString &key, const QString &colour, qre
     // owns them. Once per beat (a section change runs tick() twice on one beat).
     if (m_formNow != DF_KICK || dropFormOwns(key) == false)
         return Function::invalidId();
+    // R503_EYES_KICK_FLOOR (r503 EYES): the packet is Tobias' own eye-rule exception "over 60" (10-22),
+    // but a kick-chase drop only ends under 55 % (on a bar line) - the harness (kick_edges) lit 3-eye
+    // packets at 45 % on beats 306-308. Under 60 % no kick programme: the bars run the classic drop's
+    // pick, held to every eye rule, at the home aim; the kicks take over again from 60 %
+    if (m_faderNow < trackDropFormMin(DF_KICK) / 100.0 - 1e-9)
+    {
+        m_formKickLaunch = false;
+        return Function::invalidId();
+    }
     if (beat != m_formKickBeat)
     {
         m_formKickBeat = beat;
@@ -28092,6 +28184,14 @@ void TrackEngine::lastTrackTick(bool showOn)
     if (minutes >= 600)
         m_lastWindowLatched = false;
     else if (window || minutes >= closingMinutes() - ENGINE_LAST_SHOW_MIN)
+        m_lastWindowLatched = true;
+    // R503_CLOCK_LATCH_RESTART (r500's latch lived in memory only: QLC+ started again - an update, a
+    // crash - in the repeated hour, 02:00-02:50 winter time, came up with LAST TRACK hidden again, and
+    // its faders-down fallback with it, the bug Tobias hit at 02:50 "last track virkede ikke"). The
+    // real seconds since the evening's 20:00 never go back: past 6 h 50 min (the wall clock's 02:50 on
+    // any other night) the window is open, whatever the wall clock says and however often it starts.
+    else if (QDateTime(QDate::currentDate().addDays(QTime::currentTime().hour() < 20 ? -1 : 0), QTime(20, 0))
+                 .secsTo(QDateTime::currentDateTime()) >= qint64(closingMinutes() - ENGINE_LAST_SHOW_MIN) * 60)
         m_lastWindowLatched = true;
     const bool shown = m_lastStage > 0
                     || (showOn && (window || m_lastWindowLatched) && m_testTrack == false && m_trackTitle.isEmpty() == false);
@@ -31857,6 +31957,7 @@ void TrackEngine::removeSavedLook(const QString &id)
     savedLoad();
     for (int i = m_savedLooks.count()-1; i >= 0; --i) if (m_savedLooks.at(i).toMap().value(QStringLiteral("id")).toString() == id) m_savedLooks.removeAt(i);
     for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();) if (it.value() == id) it = m_savedQueue.erase(it); else ++it;
+    savedNames();                        // R503_SAVED_RENAME: its twin loses the " 2" now, not at the next start
     savedWrite();
 }
 void TrackEngine::savedTrackContext(const QString &title, const QVariantList &markers, int beat)
@@ -34375,8 +34476,13 @@ void TrackEngine::r493DiscoBeat(const QSet<QString> &castSet, const QString &sta
     // the kick back: counted once a beat (a section change calls tick() twice on one beat)
     if (beat != m_r493DiscoKickBeat)
     {
+        // R503_LIVE_KICKRAW_BALL (night 10-25: 2 of 6 balls and 2 of 7 roofs ended "off:kick" on the
+        // break's 2nd beat): `kick` is BLT's SMOOTHED curve (qlc-smooth, 5 beats centred) - it carries
+        // the drop's kick 2 beats into the break. The start reads the RAW kick (r493Kickless): the end
+        // reads the raw one too; without it (an old BLT) as before
+        const int rawKick = r501KickAt(beat, false);
         m_r493DiscoKickBeat = beat;
-        m_r493DiscoKick = (kick >= 0.20) ? m_r493DiscoKick + 1 : 0;
+        m_r493DiscoKick = (rawKick >= 0 ? rawKick == 1 : kick >= 0.20) ? m_r493DiscoKick + 1 : 0;
     }
     const int travel = r493DiscoTravel();
     // his picks end a moment (a position goes at once - setPositionMode()); HOLD keeps one
@@ -34418,7 +34524,11 @@ void TrackEngine::r493DiscoBeat(const QSet<QString> &castSet, const QString &sta
     if (m_r493DiscoPhase == 3)
     {
         // home: the dark mask goes and the heads are the room's again
-        if (beat - m_r493DiscoFrom >= travel || beat < m_r493DiscoFrom)
+        // R503_LIVE_HOMEDARK (Tobias: "travel home dark"): the beats ran back - a DJ loop, the next
+        // track - while the heads are still on their way: the dark counts its travel from here
+        if (beat < m_r493DiscoFrom)
+            m_r493DiscoFrom = beat;
+        if (beat - m_r493DiscoFrom >= travel)
         {
             Function *dark = m_doc->function(m_r493DiscoDark);
             if (dark != nullptr && dark->name() == QStringLiteral("TRACK R493: disco dark"))
@@ -34432,7 +34542,9 @@ void TrackEngine::r493DiscoBeat(const QSet<QString> &castSet, const QString &sta
         return;
     m_r493DiscoSec = secStart;
     m_r493DiscoTitle = m_trackTitle;
-    if (beat - secStart > 3 || m_r493RoofOn || m_barsAloneNow || his || hold || fader < 0.20
+    // R503_LIVE_BALLPICK: R494 made a BLACKOUT/FLASH tap stop ENDING a ball (r493HisTakes), but "they
+    // still keep a NEW one from starting (r493HisPicks)" - the roof's start read it, the ball's did not
+    if (beat - secStart > 3 || m_r493RoofOn || m_barsAloneNow || his || hold || fader < 0.20 || r493HisPicks()
         || secEnd - secStart < R493_DISCO_KICKLESS || r493Kickless(secStart, R493_DISCO_KICKLESS, 1) == false)
         return;
     roomAnnounce();
@@ -34479,6 +34591,7 @@ void TrackEngine::r493DiscoBeat(const QSet<QString> &castSet, const QString &sta
     m_r493DiscoGroup = group;
     m_r493DiscoFx = heads;
     m_r493DiscoPhase = 1;
+    m_r493DiscoKick = 0;                 // R503_LIVE_STREAK_BALL: the drop's kick streak is not "the kick back"
     m_r493DiscoFrom = beat;
     m_r493DiscoRamp = 0.0;
     m_r493DiscoTarget = qBound(0.0, 0.60 + 0.40 * fader, 1.0);
@@ -34579,8 +34692,11 @@ void TrackEngine::r493RoofBeat(QSet<QString> &castSet, const QStringList &eligib
         return;
     if (beat != m_r493RoofKickBeat)
     {
+        // R503_LIVE_KICKRAW_ROOF: the raw per-beat kick, as the start's r493Kickless reads it - the
+        // smoothed `kick` carried the drop's kick into the break and ended the roof on its 2nd beat
+        const int rawKick = r501KickAt(beat, false);
         m_r493RoofKickBeat = beat;
-        m_r493RoofKick = (kick >= 0.20) ? m_r493RoofKick + 1 : 0;
+        m_r493RoofKick = (rawKick >= 0 ? rawKick == 1 : kick >= 0.20) ? m_r493RoofKick + 1 : 0;
     }
     if (m_r493RoofOn)
     {
@@ -34673,6 +34789,7 @@ void TrackEngine::r493RoofBeat(QSet<QString> &castSet, const QStringList &eligib
         b.clear();
     roomAnnounce();
     m_r493RoofOn = true;
+    m_r493RoofKick = 0;                  // R503_LIVE_STREAK_ROOF: the drop's kick streak is not "the kick back"
     m_r493RoofBars = bars;
     m_r493RoofFrom = beat;
     m_r493RoofA = a;

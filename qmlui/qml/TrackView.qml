@@ -173,6 +173,11 @@ Rectangle
             flagDragBeat = -1
         else
             flagDragBeat = Math.max(1, Math.min(snapBeat(wfArea.beatAt(q.x)), beatCount))
+        // R503_UI_LAST_BAR: snapping rounds up, so the last beats clamped to beatCount - mid-bar, beside
+        // a flag already on that bar's line (addMarker's same-bar check missed it: two flags on one bar).
+        // Never past the last bar line: the line and the flag stand where the bubble's BAR says.
+        var lastBar = snapBeat(beatCount) > beatCount ? snapBeat(beatCount) - 4 : snapBeat(beatCount)
+        if (flagDragBeat > lastBar && lastBar >= 1) flagDragBeat = lastBar
     }
     function flagDragEnd(type, commit)
     {
@@ -2495,14 +2500,18 @@ Rectangle
                                     property real px0: 0
                                     property real py0: 0
                                     property bool lifting: false
-                                    onPressedAt: (x, y) => { px0 = x; py0 = y; lifting = false }
+                                    // R503_UI_TAPONLY_FLAG: pulled while another chip was out = a tap for the whole
+                                    // touch - it does not lift later, far off its chip, once that one landed
+                                    property bool tapOnly: false
+                                    onPressedAt: (x, y) => { px0 = x; py0 = y; lifting = false; tapOnly = false }
                                     onMovedTo: (x, y) =>
                                     {
                                         if (!lifting)
                                         {
                                             if (Math.abs(x - px0) < Math.max(10, Math.round(12 * trackViewRoot.ks))
                                                 && Math.abs(y - py0) < Math.max(10, Math.round(12 * trackViewRoot.ks))) return
-                                            if (trackViewRoot.flagDragType !== "") return   // another chip is out: this one taps
+                                            if (tapOnly) return             // R503_UI_TAPONLY_GUARD
+                                            if (trackViewRoot.flagDragType !== "") { tapOnly = true; return }   // another chip is out: this one taps
                                             lifting = true
                                             trackViewRoot.flagDragType = modelData
                                         }
@@ -4997,7 +5006,7 @@ Rectangle
                     color: trackViewRoot.cBtn; radius: 6
                     Text
                     {
-                        x: 10; y: 8; width: parent.width - 140; elide: Text.ElideRight
+                        x: 10; y: 8; width: parent.width - 22 - recentUse.width; elide: Text.ElideRight   // R503_UI_RECENT_FIT
                         text: modelData.name; color: trackViewRoot.cText
                         font.pixelSize: trackViewRoot.fs(14); font.bold: true
                     }
@@ -5013,10 +5022,17 @@ Rectangle
                     {
                         objectName: "recentUse:" + index
                         x: parent.width - width - 6; y: 6
-                        width: 118; height: parent.height - 12
+                        id: recentUse
+                        // R503_UI_RECENT_BTN: 118 at 2048 as approved, grown with the popup (kw) - the text grows too
+                        width: Math.max(118, Math.round(118 * trackViewRoot.kw)); height: parent.height - 12
                         enabled: modelData.canQueue === true
                         active: modelData.queued === true
-                        text: active ? "QUEUED" : (enabled ? "NEXT " + modelData.section.toUpperCase() : modelData.reason || ("NO NEXT " + modelData.section.toUpperCase()))
+                        // R503_UI_RECENT_SHORT: the engine's long reasons ran out of this small button - said short here
+                        readonly property var shortWhy: ({ "GROUP UNAVAILABLE": "GROUP OFF", "COLOUR UNAVAILABLE": "NO COLOUR",
+                                                           "PROGRAM CHANGED": "PROGRAM GONE", "FULL AUTO FIRST": "FULL AUTO" })
+                        readonly property string why: modelData.reason || ("NO NEXT " + modelData.section.toUpperCase())
+                        text: active ? "QUEUED" : (enabled ? "NEXT " + modelData.section.toUpperCase()
+                                                           : (shortWhy[why] || why.replace("NO NEXT ", "NO ")))
                         fontPx: trackViewRoot.fs(11); tone: trackViewRoot.cGreen
                         touchInputEnabled: false
                         TapHandler {
