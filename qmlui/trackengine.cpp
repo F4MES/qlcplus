@@ -3804,6 +3804,38 @@ bool TrackEngine::barsWide(const QString &group) const
     return (walk && mv.bare && mv.width <= 1) == false;
 }
 
+/* ---- runde 505 ---- */
+// R505_ENG_LAND_FN (runde 505): the beat a drop flagged at `at` will really land on. tick()'s kick
+// wait (runde 172, the fake drop) holds the landing a bar at a time, up to eight, while the kick
+// curve on the bar line is under 0.20 - and that curve is BLT's centred five-beat mean of the RAW
+// kick (qlc-smooth; 0.2 of 255 apart on 709 beats of a real track), so the wait can be read ahead
+// on the raw one. The drop's features (its size for the build, the form plan) are measured from
+// there: on the night of 10-25 a fake drop was planned on its kickless bars (kick 4 %, size 0) and
+// landed on a size of 100. `at` itself where the kick is there, or the raw kick is not known.
+static int r505DropLandAt(const QVector<quint8> &kick, int beats, int at)
+{
+    if (kick.isEmpty() || kick.count() != beats || at < 1 || at > beats)
+        return at;
+    int land = at;
+    for (int k = 0; k < 8 && land + 4 <= beats; k++)
+    {
+        int sum = 0, n = 0;
+        for (int i = land - 2; i <= land + 2; i++)
+        {
+            if (i >= 1 && i <= beats)
+            {
+                sum += kick.at(i - 1);
+                n++;
+            }
+        }
+        // the smoothed curve on 0..255: 0.20 is 51 (a mean under 50.5 rounds under it)
+        if (n == 0 || 2 * sum >= 101 * n)
+            break;
+        land += 4;
+    }
+    return land;
+}
+
 /* ---- runde 360 ---- */
 // R360_DROP_SIZE: how far the music jumps where a drop arrives - the
 // waveform and the kick over its first eight beats against the eight before
@@ -11184,6 +11216,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // base is now outside it altogether: the room is never black while a
     // track is playing.
     bool silent = sectionEnergy >= 0.0 && sectionEnergy < 0.04;
+    // R505_ENG_SILENT (runde 505): ... and the gap between tracks is the ends of one. BLT's section
+    // energy is "loudness, but only where there is bass" (min of the two), so a break or build
+    // without bass reads 0.00-0.03 with the music playing: on the night of 10-25 1019 beats (681
+    // break, 338 build, 25 sections - every one in the middle of a track) stood on the base alone,
+    // no Minis (runde 235) and no effects, for that number. In the middle of a track the section is
+    // music: the cast as in any quiet break - the energy's own scaling (0.80-1.0) still makes it a
+    // quiet one, and the music's own silence is runde 356's dark, beat by beat. The first and the
+    // last section keep the rule, and so does a track without its waveform per beat.
+    if (silent && m_audLevel.isEmpty() == false && (m_realSecStart > 0 ? m_realSecStart : secStart) > 1
+        && secEnd <= m_audLevel.count())
+        silent = false;
 
     // how many effect groups join the base: a ramp of the energy, with the
     // fraction decided by dice once per section - 55 % and 65 % differ
@@ -11433,7 +11476,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // 64 beats out, a step in its top in the middle of the climb. Other
     // sections only the last 16 bars before a drop.
     else if (isDrop == false && m_nextDropBeat > beat && (m_nextDropBeat - beat <= 64 || (isBuild && m_nextDropBeat - beat <= 160)))
+    {
         m_nextDropSize = dropSizeAt(m_nextDropBeat);
+        // R505_ENG_LAND_BUILD: a drop that will wait for its kick is measured where it lands
+        const int landAt = r505DropLandAt(m_audKick, int(m_audLevel.count()), m_nextDropBeat);
+        if (landAt != m_nextDropBeat)
+            m_nextDropSize = dropSizeAt(landAt);
+    }
     else if (isDrop == false)
         m_nextDropSize = 1.0;
     if (isDrop == false && dropFormFullBuild(beat))
@@ -26188,7 +26237,12 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
     f.hitArmed = m_hitKind > 0 || m_hitAmokOwed;
     if (f.hitArmed)
         f.energy = 1.0;                  // his DROP HIT lands it at 100 % (hitAmok)
-    f.size = dropSizeAt(at);
+    // R505_ENG_LAND_PLAN (runde 505): the music is read where the drop will land - a fake drop
+    // waits for its kick (runde 172), and its kickless bars read as a soft, flat, melodic drop
+    // (night 10-25, Moeaike 361: kick 4 %, steady 13 %, size 0 -> kun-laser fit 98; it landed
+    // on a size of 100). The flag `at` stays the plan's key, seed and log beat.
+    const int land = r505DropLandAt(m_audKick, int(m_audLevel.count()), at);
+    f.size = dropSizeAt(land);
     f.bpm = bpm;
     f.firstDrop = !(m_formTrack == m_trackTitle && m_formDrops > 0);
     f.bars = dropFormBars().isEmpty() == false;
@@ -26205,11 +26259,11 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
             sum += v.at(i - 1) / 255.0;
         return sum / qreal(qMax(1, b - a + 1));
     };
-    if (n > 0 && at >= 1 && at + 31 <= n && m_audKick.count() == n)
+    if (n > 0 && land >= 1 && land + 31 <= n && m_audKick.count() == n)   // R505_ENG_LAND_FEAT
     {
-        f.kick = mean(m_audKick, at, at + 15);
+        f.kick = mean(m_audKick, land, land + 15);
         int kicks = 0;
-        for (int i = at; i <= at + 31; i++)
+        for (int i = land; i <= land + 31; i++)
             if (m_audKick.at(i - 1) >= 115)
                 kicks++;
         f.steady = kicks / 32.0;
@@ -26220,7 +26274,7 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
             bool neighbours = false, last = false;
             for (int i = 0; i < 8; i++)
             {
-                const bool hit = m_audKick.at(at + 8 * w + i - 1) >= 115;
+                const bool hit = m_audKick.at(land + 8 * w + i - 1) >= 115;   // R505_ENG_LAND_HALF
                 k += hit ? 1 : 0;
                 neighbours = neighbours || (hit && last);
                 last = hit;
@@ -26230,17 +26284,18 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
         }
         f.half = halfWins / 4.0;
         if (m_audMid.count() == n)
-            f.mid = mean(m_audMid, at, at + 31);
+            f.mid = mean(m_audMid, land, land + 31);
     }
-    if (n > 0 && m_audHigh.count() == n && at >= 12 && at + 7 <= n)
+    if (n > 0 && m_audHigh.count() == n && land >= 12 && land + 7 <= n)   // R505_ENG_LAND_MID
     {
         auto tone = [&](int a, int b) { return 0.5 * mean(m_audHigh, a, b) + 0.5 * mean(m_audLevel, a, b); };
-        f.tone = tone(at, at + 7);
+        f.tone = tone(land, land + 7);   // R505_ENG_LAND_TONE
         // the riser: its top in the 32 beats before the drop, and how far it
         // climbed to get there from its quietest point on the way
-        const int from = qMax(4, at - 32);
+        // R505_ENG_LAND_RISER: the riser up to the landing - the build's look holds through a wait
+        const int from = qMax(4, land - 32);
         qreal peak = -1.0, low = 2.0, lowToPeak = 2.0;
-        for (int b = from; b <= at - 1; b++)
+        for (int b = from; b <= land - 1; b++)
         {
             const qreal v = tone(qMax(1, b - 3), b);
             low = qMin(low, v);
@@ -26274,7 +26329,8 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
               .arg(int(qRound(100.0 * f.mid))).arg(int(qRound(100.0 * (f.buildPeak - f.tone))))
               .arg(int(qRound(100.0 * f.buildRise)))
               + (blocked ? QStringLiteral(":his") : QString())
-              + (f.half > 0.0 ? QStringLiteral(":half%1").arg(int(qRound(100.0 * f.half))) : QString()));
+              + (f.half > 0.0 ? QStringLiteral(":half%1").arg(int(qRound(100.0 * f.half))) : QString())
+              + (land != at ? QStringLiteral(":land%1").arg(land) : QString()));   // R505_ENG_LAND_LOG
     return form;
 }
 
@@ -32996,10 +33052,13 @@ int r493GenreClassify(const R493GenreFeat &f, const QString &tag, int *confOut, 
     auto down = [](qreal v, qreal a, qreal b) { return v < 0.0 ? 0.0 : qBound(0.0, (a - v) / (a - b), 1.0); };
     qreal s[R493_GENRES];
     s[R493_HOUSE] = 0.0;
-    // afro: percussion in the mids on the off quarters (congas, shakers) - or a measured shuffle
+    // afro: percussion in the mids on the off quarters (congas, shakers)
     s[R493_AFRO] = qMin(up(f.midPerc, 0.55, 0.72), up(f.offPerc, 0.65, 0.82));
-    if (f.swing >= 0.0)
-        s[R493_AFRO] = qMax(s[R493_AFRO], qMin(up(f.swing, 0.25, 0.45), up(f.midPerc, 0.40, 0.55)));
+    // R505_GENRE_NOSWING (runde 505, the night of 24-25 Oct, the first with BLT's swing): a measured
+    // shuffle is no longer afro evidence. It alone made 5 of 61 tracks afro house (Empire Of The Sun vs
+    // Topic, EWF September, MAMA SAY, Pon de river, Lipstick Lies) and lifted 2 more to 90; the tracks
+    // rekordbox tags afro ran straight (median swing 0.08), those it tags otherwise but we called afro
+    // swung (0.71), and four straight-grid tracks read 1.00 (clipped). Swing still keeps techno straight.
     // techno: fast, a kick that never stops, few mids and little percussion between the kicks
     s[R493_TECHNO] = qMin(qMin(up(f.bpm, 128.0, 132.0), up(f.kickSteady, 0.80, 0.95)),
                           qMin(qMin(up(f.kickShare, 0.65, 0.80), down(f.mids, 0.60, 0.52)),
@@ -33184,6 +33243,19 @@ void TrackEngine::r493GenreBeat(qreal bpm)
               .arg(int(qRound(bpm))).arg(pc(f.kickShare), pc(f.kickSteady), pc(f.mids), pc(f.midMove),
                                          pc(f.offPerc), pc(f.midPerc))
               .arg(f.key).arg(pc(f.swing)));
+    if (tag.isEmpty() == false)
+    {
+        // R505_GENRE_TAGLOG (runde 505): the DJ's rekordbox tag as read, so a night's log can be held
+        // up against it (24-25 Oct had to infer it from the confidence). After sig:genre-feat; only
+        // letters, digits, space, & and - (a log field), at most 32 characters.
+        QString t = tag.left(32);
+        for (QChar &c : t)
+            if (c.isLetterOrNumber() == false && c != QLatin1Char(' ') && c != QLatin1Char('&') && c != QLatin1Char('-'))
+                c = QLatin1Char('_');
+        const int tg = r493GenreOfTag(tag);
+        logSignal(QStringLiteral("sig:genre-tag:%1:%2")
+                  .arg(tg < 0 ? QStringLiteral("other") : QString::fromLatin1(r493GenreName(tg)), t));
+    }
 }
 
 qreal TrackEngine::r493GenreWeight() const
