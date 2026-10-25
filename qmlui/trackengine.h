@@ -248,6 +248,7 @@ struct TrackFuncInfo
                               // least one lamp on" (Tobias), 0..1
     TrackBarCoverage barCoverage; // C20261020: measured steps, never a name heuristic
     QByteArray outputKey;    // C20261020_FRESH: exact static output/timing; empty for opaque effects
+    QByteArray drawKey;      // R504_GEN_DJ_KEY: a front/back wave draws on its sibling wave's ticket (empty = outputKey)
     qreal beamShare = 1.0;    // runde 338: litShare counted in BEAMS - a laser bar's eight
                               // eyes each count, so "one eye per bar" is 1/8, not 1
     bool fullBank = false;    // runde 338: some step has 3/4 or more of the lamps it touches
@@ -348,9 +349,14 @@ struct TrackSweep
     // R385_BARS_FULL: the bars' slow lift in their alone break - never under
     // the home aim, whatever the slider allows a drop
     bool upOnly = false;
+    // R504_MIRROR_FIELD (runde 504, Tobias 10-25: the heads' figures mirrored left/right): the
+    // left side of the room (map x < 0.5) runs the pan mirror of its own figure, so the two sides
+    // move towards and away from each other (r504_mirror.inc.cpp); false = today's relation
+    bool roomMirror = false;
     bool operator==(const TrackSweep &o) const
     {
         return shape == o.shape && width == o.width && height == o.height && rotation == o.rotation
+            && roomMirror == o.roomMirror   // R504_MIRROR_EQ
             && beats == o.beats && spread == o.spread && mirror == o.mirror && fan == o.fan
             && fx == o.fx && fy == o.fy && dx == o.dx && dy == o.dy && minBeats == o.minBeats
             && paceRole == o.paceRole && laserForm == o.laserForm && upOnly == o.upOnly;
@@ -1394,6 +1400,13 @@ protected:
      *  role floor off the slider (runde 290). */
     int sweepFloor(const TrackSweep &sweep) const;
     QString sweepName(const TrackSweep &sweep) const;
+    // R504_MIRROR_DECL (runde 504): the heads' figures mirror left/right by the room (track_runtime/r504_mirror.inc.cpp)
+    static bool r504MirrorOf(int shape, int rotation, int fx, int fy, bool *backward, int *c);
+    void r504MirrorDraw(TrackSweep &sw, int heads, bool laser) const;
+    bool r504MirrorWanted(const TrackSweep &sw) const;
+    QVector<int> r504MirrorPlan(const QString &group, Function *func, const TrackSweep &sw, bool *backward, int *c);
+    static void r504MirrorHead(int startOffset, bool backward, int c, bool &runBackward, int &offset);
+    QHash<QString, TrackSweep> m_r504MirrorLogged;   // the figure sig:mirror was logged for, per group
     void stopSweeps();
     bool userAllowed(const TrackFuncInfo &info, const QString &group = QString()) const;
     void genFlash(bool on, const QString &colour = QString());

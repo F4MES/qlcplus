@@ -1606,6 +1606,36 @@ void TrackEngine::ensureTable()
         m_funcs.insert(info.id, info);
     }
 
+    // R504_GEN_DJ_SHARE (Tobias 10-25: the waves from the DJ and to the DJ go "i puljen som de
+    // andre"): an AUTO "... Wave From DJ ..." / "... Wave To DJ ..." (gen_programs r504) is a
+    // DIRECTION of a wave the pool already has, so it does not get a ticket of its own -
+    // pickMotionWeighted() files it under its sibling's output key and the lottery picks one of
+    // the aliases. From DJ shares the across wave's ticket, To DJ the Back wave's (the across
+    // one when the set has no Back): a wave draw is across or from-DJ, back or to-DJ, and the
+    // waves weigh what they weighed before r504.
+    {
+        QHash<QString, QByteArray> keyByName;
+        for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+            if (it.value().path.startsWith(ENGINE_AUTO_PATH) && it.value().outputKey.isEmpty() == false)
+                keyByName.insert(it.value().name, it.value().outputKey);
+        for (QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.begin(); it != m_funcs.end(); ++it)
+        {
+            TrackFuncInfo &dj = it.value();
+            dj.drawKey.clear();
+            if (dj.path.startsWith(ENGINE_AUTO_PATH) == false)
+                continue;
+            const bool fromDj = dj.name.contains(QStringLiteral(" Wave From DJ"));
+            if (fromDj == false && dj.name.contains(QStringLiteral(" Wave To DJ")) == false)
+                continue;
+            const QString across = QString(dj.name).replace(fromDj ? QStringLiteral(" Wave From DJ")
+                                                                   : QStringLiteral(" Wave To DJ"),
+                                                            QStringLiteral(" Wave"));
+            const QString back = QString(dj.name).replace(QStringLiteral(" Wave To DJ"), QStringLiteral(" Wave Back"));
+            dj.drawKey = (fromDj == false && keyByName.contains(back)) ? keyByName.value(back)
+                                                                      : keyByName.value(across);
+        }
+    }
+
     // guesses need the groups to exist first
     for (QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.begin(); it != m_funcs.end(); ++it)
     {
@@ -13861,6 +13891,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                         candidate.mirror = true;
                         candidate.fan = (key != base && fader >= 0.79) ? qMin(drawnFan, 45) : 0;   // R374_SPREAD   // a trail, not a criss-cross (review 294)
                     }
+                    if (candidate.mirror)        // R504_MIRROR_AUTO_TICK: the mirror is left/right by the room where it can be
+                        candidate.roomMirror = r504MirrorWanted(candidate);
                 }
                 m_sweep.insert(key, candidate);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
@@ -17692,6 +17724,7 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
                 sw.laserForm = int(rng->bounded(4));
         }
     }
+    r504MirrorDraw(sw, heads, laser);   // R504_MIRROR_DRAWN: the room mirror where the figure has one
     return sw;
 }
 
@@ -18011,16 +18044,26 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     efx->setRunOrder(Function::Loop);
     efx->setDirection(Function::Forward);
     efx->setDuration(ms);
+    // R504_MIRROR_APPLY (runde 504): on the wash heads with the room map, the left side runs the
+    // pan mirror of its own figure (r504_mirror.inc.cpp) - in place of every second head backwards.
+    // Empty plan: today's relation, bit for bit
+    bool r504Back = true;
+    int r504C = 0;
+    const QVector<int> r504Left = r504MirrorPlan(group, efx, sw, &r504Back, &r504C);
     int i = 0;
     foreach (EFXFixture *ef, efx->fixtures())
     {
-        ef->setDirection((sw.mirror && (i % 2) == 1) ? Function::Backward : Function::Forward);
+        bool runBackward = sw.mirror && (i % 2) == 1 && r504Left.isEmpty();
         // R383_LASER_FAST: the bars' forms - unison, middle out, the wave back
         const int nFx = int(efx->fixtures().count());
         const int step = sw.laserForm == 1 ? 0
                        : sw.laserForm == 2 ? qAbs(2 * i - (nFx - 1)) / 2
                        : sw.laserForm == 3 ? (nFx - 1 - i) : i;
-        ef->setStartOffset((sw.fan * step) % 360);
+        int offset = (sw.fan * step) % 360;
+        if (r504Left.count() == nFx && r504Left.at(i) == 1)
+            r504MirrorHead(efx->startOffset(), r504Back, r504C, runBackward, offset);
+        ef->setDirection(runBackward ? Function::Backward : Function::Forward);
+        ef->setStartOffset(offset);
         i++;
     }
     // R493_A3_EASE_START: a wash figure starting fresh grows out of its aim (soft movement)
@@ -18035,7 +18078,7 @@ QString TrackEngine::sweepName(const TrackSweep &sw) const
     if (sw.shape < 0)
         return QString();
     QString shape = EFX::algorithmToString(EFX::Algorithm(sw.shape)).toLower();
-    QString rel = sw.spread == 1 ? "~" : (sw.spread == 2 ? ">" : (sw.mirror ? "><" : (sw.fan ? "*" : "")));
+    QString rel = sw.spread == 1 ? "~" : (sw.spread == 2 ? ">" : ((sw.mirror || sw.roomMirror) ? "><" :   /* R504_MIRROR_NAME */ (sw.fan ? "*" : "")));
     if (sw.laserForm > 0)                // R383: = unison, <> middle out, << the wave back
         rel = sw.laserForm == 1 ? QStringLiteral("=") : (sw.laserForm == 2 ? QStringLiteral("<>") : QStringLiteral("<<"));
     return QString("(%1%2 %3 %4b)").arg(shape).arg(rel).arg(sw.width).arg(qMax(sweepFloor(sw), sw.beats));
@@ -31080,7 +31123,8 @@ quint32 TrackEngine::pickMotionWeighted(const QList<TrackFuncInfo *> &pool, int 
     {
         const int weight = copies.value(info->id) * (m_ratingOn ? rateWeight(*info) : 1);
         const qint64 last = qMax(m_recentUse.value(info->id, -1), m_recentOutput.value(info->outputKey, -1));
-        tickets.append({info->id, info->outputKey, weight, last});
+        // R504_GEN_DJ_TICKET: a front/back wave is an alias of its sibling wave (ensureTable)
+        tickets.append({info->id, info->drawKey.isEmpty() ? info->outputKey : info->drawKey, weight, last});
     }
     return trackProgrammeDraw(tickets, cursor, m_cooldownMs < 0 ? m_clock.elapsed() : m_cooldownMs,
                               ENGINE_COOLDOWN_MS, Function::invalidId());
@@ -31314,6 +31358,7 @@ static QVariantMap savedWriteTrackSweep(const TrackSweep& a) { QVariantMap m;
     m.insert(QStringLiteral("drawnF"), a.drawnF);
     m.insert(QStringLiteral("laserForm"), a.laserForm);
     m.insert(QStringLiteral("upOnly"), a.upOnly);
+    m.insert(QStringLiteral("roomMirror"), a.roomMirror);   // R504_MIRROR_SAVE
     return m;
 }
 static TrackSweep savedReadTrackSweep(const QVariantMap& m) { TrackSweep a;
@@ -31337,6 +31382,7 @@ static TrackSweep savedReadTrackSweep(const QVariantMap& m) { TrackSweep a;
     a.drawnF = qBound(-1.0, m.value(QStringLiteral("drawnF"), a.drawnF).toDouble(), 1.0);
     a.laserForm = qBound(0, m.value(QStringLiteral("laserForm"), a.laserForm).toInt(), 3);
     a.upOnly = m.value(QStringLiteral("upOnly"), a.upOnly).toBool();
+    a.roomMirror = m.value(QStringLiteral("roomMirror"), a.roomMirror).toBool();   // R504_MIRROR_LOAD
     return a;
 }
 
@@ -37179,4 +37225,171 @@ void TrackEngine::r498RushStop()
     m_r498RushMs = -1;
     m_r498RushBeatNow = -1;
     m_r498RushWithStrobes = false;
+}
+/* ---- runde 504: MIRROR the heads' figures mirror left/right by where they hang (R504_MIRROR) ----
+ *
+ * Tobias 10-25 ("nu hvor du har et fuldt overblik over rummet, kan du saa ikke bruge det til at
+ * optimere vores eksisterende programmer paa lyset?", point 4): the Shark heads' figures are
+ * mirrored left/right - the two sides of the room move towards and away from each other instead
+ * of all the same way.
+ *
+ * How, with the real QLC+ EFX (engine/src/efx.cpp, efxfixture.cpp): one EFX drives the group and
+ * the only per-head controls are EFXFixture::setDirection() and setStartOffset(). A head running
+ * Backward walks the shape's iterator the other way (calculateDirection: 2pi - t), and its start
+ * offset is added after that. For the shapes below there is a (direction, c) that makes the head's
+ * point EXACTLY the pan mirror of where it would be forward - same tilt, pan the other side of the
+ * figure's centre, at every moment:
+ *
+ *     own forward point        P(a + o)                 (a = the time angle incl. the propagation)
+ *     mirrored, Backward       P(2pi - a + o')  with o' = c - o - 2 x the EFX's own start offset
+ *     mirrored, Forward        P(a + o')        with o' = o + c
+ *
+ * Checked by brute force against a port of EFX::calculatePoint/rotateAndScale (720 points a
+ * figure, every start offset, every shape and Lissajous ratio the engine draws; work/MIRROR):
+ *
+ *     rotation 0 / 180 (pan mirror = the shape's x flip)   rotation 90 / 270 (= the shape's y flip)
+ *     Circle, Diamond, Leaf, SquareTrue   Backward 0       Backward 180
+ *     Eight                               Backward 0       Forward 180
+ *     Square                              Backward 90      Backward 270
+ *     SquareChoppy                        Backward 180     Backward 0
+ *     Lissajous fx:fy (phases 90/0)       Backward 0       fy odd: fx odd Backward 180, even Forward 180
+ *                                                          fy even: none
+ *     Line, Line2                         none (a line through the centre on the diagonal can never
+ *                                         be its own mirror: the mirror is the other diagonal)
+ *
+ * Any other rotation (45, 135, a circle's random angle) has no mirror on one EFX: the mirror of a
+ * figure turned r is the figure turned -r. Those keep today's behaviour, as do the lines.
+ *
+ *  - The draw (drawSweep) asks for the room mirror on a mirrorable figure: always where it drew
+ *    today's mirror (every second head backwards - FULL AUTO puts that on most groove/build/drop
+ *    figures, runde 254), and otherwise R504_MIRROR_SHARE of the time. The figure, its size, pace,
+ *    offsets and propagation are drawn exactly as before; only how the heads relate changes.
+ *  - It is applied (applySweep, the figure's start) only on a wash-head group (r493EnsureEase's:
+ *    pan, tilt and a zoom - the Shark Zoom Wash), with the room map (status "map") knowing every
+ *    head and both sides holding at least one. Left = x < 0.5 seen from the DJ (132, 96, 41, 23),
+ *    right = 59, 179, 1. The left side runs the mirror; the right side the figure as drawn.
+ *    Never the laser bars (no positions on the map, and their own figures), the animation lasers,
+ *    the Minis or the strobes. Anything else: the old per-index mirror, bit for bit.
+ *  - Tilt is the same as the head's own forward figure at every moment, so the over-the-horizon
+ *    reach (runde 211/212) and the eye rules see exactly what they saw. Positions (START
+ *    POSITION / CENTER COLUMN / STRAIGHT DOWN) and the floor round still get no figure at all; the
+ *    disco ball's heads (R493_X_YIELD) are flashed over the figure as before; the easing (r493 A3)
+ *    and the melody heads (r497 A4) work on the size and centre, which the mirror does not touch;
+ *    the duration is never touched (no move longer than planned).
+ *  - Saved looks (r501) store the flag with the sweep ("roomMirror") and replay it: a mirrored
+ *    figure replays mirrored; a look saved before r504 has no flag and replays as it was saved.
+ * Log: sig:mirror:<shape>:r<rotation>:<B|F><c>:L<left>R<right> once per figure it is applied to.
+ * ------------------------------------------------------------------------------------------ */
+
+#define R504_MIRROR_SHARE 0.80   // the room mirror on a mirrorable figure that drew no mirror of its own
+
+bool TrackEngine::r504MirrorOf(int shape, int rotation, int fx, int fy, bool *backward, int *c)
+{
+    // the (direction, c) that mirrors a head's figure in pan, or false where none exists
+    const int r = ((rotation % 360) + 360) % 360;
+    if (r % 90 != 0)
+        return false;
+    const bool quarter = (r % 180) == 90;     // turned a quarter: the shape's tilt flip is the pan mirror
+    bool b = true;
+    int k = 0;
+    switch (shape)
+    {
+    case EFX::Circle:
+    case EFX::Diamond:
+    case EFX::Leaf:
+    case EFX::SquareTrue:
+        k = quarter ? 180 : 0;
+        break;
+    case EFX::Eight:
+        b = quarter == false;
+        k = quarter ? 180 : 0;
+        break;
+    case EFX::Square:
+        k = quarter ? 270 : 90;
+        break;
+    case EFX::SquareChoppy:
+        k = quarter ? 0 : 180;
+        break;
+    case EFX::Lissajous:
+        if (fx <= 0 || fy <= 0)
+            return false;
+        if (quarter)
+        {
+            if (fy % 2 == 0)
+                return false;
+            b = (fx % 2) == 1;
+            k = 180;
+        }
+        break;
+    default:                                  // Line, Line2: no mirror on one EFX
+        return false;
+    }
+    if (backward != nullptr)
+        *backward = b;
+    if (c != nullptr)
+        *c = k;
+    return true;
+}
+
+void TrackEngine::r504MirrorDraw(TrackSweep &sw, int heads, bool laser) const
+{
+    // R504_MIRROR_DRAW: at the end of drawSweep, once shape and rotation are final (a tight drop
+    // swaps the shape late). Today's mirror becomes the room mirror where the figure has one;
+    // a figure that drew no mirror gets it R504_MIRROR_SHARE of the time
+    sw.roomMirror = false;
+    if (laser || heads < 2 || sw.shape < 0
+        || r504MirrorOf(sw.shape, sw.rotation, sw.fx, sw.fy, nullptr, nullptr) == false)
+        return;
+    sw.roomMirror = sw.mirror
+                 || QRandomGenerator::global()->bounded(1000) < int(1000.0 * R504_MIRROR_SHARE);
+}
+
+bool TrackEngine::r504MirrorWanted(const TrackSweep &sw) const
+{
+    // R504_MIRROR_AUTO: FULL AUTO puts the mirror on a figure (tick): the room's where it has one
+    return sw.shape >= 0 && r504MirrorOf(sw.shape, sw.rotation, sw.fx, sw.fy, nullptr, nullptr);
+}
+
+QVector<int> TrackEngine::r504MirrorPlan(const QString &group, Function *func, const TrackSweep &sw,
+                                         bool *backward, int *c)
+{
+    // per EFX head: 1 on the left (runs the mirror), 0 on the right; empty = not here (the old way)
+    QVector<int> left;
+    EFX *efx = qobject_cast<EFX *>(func);
+    if (efx == nullptr || sw.roomMirror == false || sw.shape < 0 || m_groups.value(group).lasers
+        || m_r493EaseGroups.contains(group) == false || roomPlaceholder())
+        return left;
+    if (sw.shape == int(EFX::Lissajous) && (efx->xPhase() != 90 || efx->yPhase() != 0))
+        return left;                          // the table is for QLC+'s own phases
+    if (r504MirrorOf(sw.shape, sw.rotation, sw.fx, sw.fy, backward, c) == false)
+        return left;
+    int nl = 0, nr = 0;
+    foreach (EFXFixture *ef, efx->fixtures())
+    {
+        qreal x = 0.0;
+        if (ef == nullptr || roomOf(ef->head().fxi, &x, nullptr) == false)
+            return QVector<int>();
+        const bool isLeft = x < 0.5;
+        left.append(isLeft ? 1 : 0);
+        (isLeft ? nl : nr)++;
+    }
+    if (nl == 0 || nr == 0)
+        return QVector<int>();
+    if ((m_r504MirrorLogged.value(group) == sw) == false)
+    {
+        m_r504MirrorLogged.insert(group, sw);
+        roomAnnounce();
+        logSignal(QStringLiteral("sig:mirror:%1:r%2:%3%4:L%5R%6")
+                  .arg(EFX::algorithmToString(EFX::Algorithm(sw.shape)).toLower())
+                  .arg(((sw.rotation % 360) + 360) % 360).arg(*backward ? QStringLiteral("B") : QStringLiteral("F")).arg(*c)
+                  .arg(nl).arg(nr));
+    }
+    return left;
+}
+
+void TrackEngine::r504MirrorHead(int startOffset, bool backward, int c, bool &runBackward, int &offset)
+{
+    // a left head: the pan mirror of its own forward figure (the head's offset o, the EFX's own start offset)
+    runBackward = backward;
+    offset = backward ? (((c - offset - 2 * startOffset) % 360) + 720) % 360 : (offset + c) % 360;
 }
