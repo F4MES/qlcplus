@@ -3901,6 +3901,53 @@ int TrackEngine::onsetHigh(int beat, int quarter) const
     return (m_onsetHigh.at(beat - 1) >> (4 * quarter)) & 0xf;
 }
 
+/* ---- runde 501, B: blinks that follow the music (R501_B_HIT_DEF) ----
+ * Tobias 10-25: "blinkene under chases virker sjaeldent godt, fordi de ikke foelger musikken,
+ * og det blinker tit selvom der ikke er et kick eller lignende (isaer animationslaserne)".
+ * tick() pulsed on the kick BLT's curve says is there - a curve smoothed over four beats
+ * (runde 323), so a fill, a dropped kick, a half-time bar or the build's last bars still read
+ * as a kick on it. The RAW per-beat kick (and the onsets per quarter) say what plays on THIS
+ * beat. A pulse is a blink: it lands only where the music hits there; no hit, no blink - the
+ * light stays where it is. Where nothing per beat is known the old rule holds, except on the
+ * animation laser (strict: it holds steady). The chases' own steps are not blinks and are
+ * left as they are; the strobes' backbeat (R358) already pulses on its claps. */
+int TrackEngine::r501KickAt(int beat, bool real) const
+{
+    // the raw kick counts only beat for beat with the waveform (setTrackAudio): 0.20 is R323's
+    // "no kick" line on the raw curve, 0.45 its "a kick" (the 115 the drop forms count)
+    if (m_audKick.isEmpty() || m_audKick.count() != m_audLevel.count() || beat < 1 || beat > m_audKick.count())
+        return -1;
+    return m_audKick.at(beat - 1) >= (real ? 115 : 51) ? 1 : 0;
+}
+
+int TrackEngine::r501OnsetAt(int beat, int quarter) const
+{
+    // the bass at R461's line (5), the mids and the highs at R358's (4); -1 without any curve
+    const int lo = onsetLow(beat, quarter), mi = onsetMid(beat, quarter), hi = onsetHigh(beat, quarter);
+    if (lo < 0 && mi < 0 && hi < 0)
+        return -1;
+    return (lo >= 5 || mi >= 4 || hi >= 4) ? 1 : 0;
+}
+
+bool TrackEngine::r501PulseHit(int beat, int pulseOn, bool grid, bool ani) const
+{
+    const int kick = r501KickAt(beat, false);
+    const int onset = r501OnsetAt(beat, 0);
+    // the animation laser: a gate blink only on a REAL kick or an onset on the beat - not known,
+    // it holds steady (never pulses blind)
+    if (ani)
+        return r501KickAt(beat, true) == 1 || onset == 1;
+    // a build's grid (runde 274) and a break's pump (runde 342): the snare roll and the hats are
+    // hits too - a kick or any onset; where the onsets are not known the grid stays as it was
+    if (grid)
+        return kick == 1 || onset != 0;
+    // a pulse on 2 and 4: a kick or a clap/snare (the highs) on the beat
+    if (pulseOn == 2)
+        return kick != 0 || onsetHigh(beat, 0) >= 4;
+    // the kick's pulse: no kick on this beat, no pulse (not known: the curve's rule above decides)
+    return kick != 0;
+}
+
 qreal TrackEngine::audMid(int beat) const
 {
     if (beat < 1 || beat > m_audMid.count())
@@ -12122,7 +12169,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (!accentColour.isEmpty()) accentColour = m_autoFadeFrom;
     }
     bool hard = sectionChanged && isDrop;
-    if (savedActive()) {
+    // R501_A_ACCENT_LIVE: a saved look's partner and accent colours come back only with UNDO - else the
+    // engine's own for the colour it drew (or his tiles)
+    if (savedActive() && m_savedPlaying.value(QStringLiteral("replayColour")).toBool()) {
         m_partnerPick = m_savedPlaying.value(QStringLiteral("partner")).toString();
         m_partnerSolo = m_savedPlaying.value(QStringLiteral("partnerSolo")).toBool();
         accentColour = m_savedPlaying.value(QStringLiteral("accent")).toString();
@@ -14669,6 +14718,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mf = m_sectionMotion.value(key, Function::invalidId());
             if (mf != Function::invalidId() && m_funcs.contains(mf) == false)
                 mf = Function::invalidId();
+            savedMotionIn(key, colour, mf);   // R501_A_HOOK_MOTION: a saved look's figure in the colour this group wears now
             // C20261020_BAR_HELD: HOLD cannot keep a now-disallowed eye figure.
             // A hard stop is required: its old LTP eye values must not survive
             // a soft fade while the whole-bar colour scene takes over.
@@ -15173,6 +15223,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 pulseBeat = (beatInBar % 2) == m_backbeatParity && onsetHigh(beat, 0) >= 4;
                 strength = qMax(strength, 0.90);
             }
+            // R501_B_FOLLOW (runde 501, B): a pulse is a blink, and it lands only where the music
+            // hits on this beat (r501PulseHit) - the raw kick for the kick's pulse, a kick or an
+            // onset for a build's grid and a break's pump, the animation laser strictly. No hit:
+            // no pulse, the light stays where it is. Not the strobes' backbeat (on its claps, above).
+            else if (pulseBeat && depth > 0.0)
+            {
+                const bool grid = isBuild
+                               || (isBreak && key == base && fader >= 0.75 && isCalm == false);
+                if (r501PulseHit(beat, mv.pulseOn, grid, g.patternDevice) == false)
+                    pulseBeat = false;
+            }
             if (g.patternDevice && pulseBeat == false)
                 depth = 0.0;
             if (depth > 0.0 && pulseBeat)
@@ -15272,7 +15333,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // on a beat the bars move on)
                 m_moveLevel.insert(key, darkGroups.contains(key) ? 0.0 : groupLevel);
             }
-            if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1 && (haveCurves == false || turn))
+            // R501_B_FLASHBAR: ... and a hit on the music's own hit - not where the raw kick is out
+            if (mv.flashBar && beatInBar == 0 && (bar % 2) == 1 && (haveCurves == false || turn)
+                && r501KickAt(beat, false) != 0)
                 moveHit = true;
         }
     }
@@ -25876,9 +25939,15 @@ static double trackDropFormFit(int form, const TrackDropFeatures &f)
         {
             // R488_DX_KICK: a steady four-on-the-floor with a real kick - the
             // chase IS the kick, so a drop that drops kicks has nothing to chase on
-            if (f.bars == false || kickKnown == false || f.steady < 0.90 || f.kick < 0.55)
+            // R501_B_KICK_FIT (runde 501, Tobias 10-25: "den saa SINDSSYG ud (de maa gerne komme
+            // oftere)"): since the bloom and the rush joined it competed with more forms. The gate a
+            // little wider where the kick is still clearly steady (a short fill in its first 32 beats:
+            // 85 % of them, a mean kick of 0.50) and +0.10 on its fit (0.70-0.94): on steady house
+            // drops about three times as often (5 -> 14 %), the classic drop still the common case
+            // and the bloom where it was (tests/B.md).
+            if (f.bars == false || kickKnown == false || f.steady < 0.85 || f.kick < 0.50)
                 return 0.0;
-            return 0.60 + 0.10 * trackClamp01((f.steady - 0.90) / 0.10) + 0.14 * trackClamp01((f.kick - 0.55) / 0.35);
+            return 0.70 + 0.10 * trackClamp01((f.steady - 0.90) / 0.10) + 0.14 * trackClamp01((f.kick - 0.55) / 0.35);
         }
         case DF_LASER:
         {
@@ -25958,6 +26027,10 @@ bool TrackEngine::dropFormBlocked(int at) const
     // R488_DX_HIS: his picks win - a form never runs over them
     if (m_fullAuto == false || m_hold || m_forceOn || m_dropForced || m_mixing || m_lastStage != 0)
         return true;
+    // R501_A_UNBLOCK (runde 501): his saved look queued (or playing) for this drop ran a form - the form
+    // is his pick then: planned ahead and landed (savedFormAt / savedFormLand in savedlooks.inc.cpp)
+    if (savedFormAt(at) > DF_CLASSIC)
+        return false;
     if (m_dropTouched && m_dropPlanFor > 0 && qAbs(m_dropPlanFor - at) <= 8)
         return true;
     if (savedActive())
@@ -26069,6 +26142,13 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
     const bool blocked = dropFormBlocked(at);
     if (blocked)
         form = DF_CLASSIC;
+    // R501_A_PLAN: the form of his saved look for this drop, whatever the dice said
+    const int savedForm = blocked ? -1 : savedFormAt(at);
+    if (savedForm > DF_CLASSIC)
+    {
+        form = savedForm;
+        logSignal(QStringLiteral("sig:saved-form-plan:%1@%2").arg(QLatin1String(trackDropFormName(form))).arg(at));
+    }
     m_formPlanScore = score;
     // why, for the log (the night's tracklog is how a form is judged afterwards)
     logSignal(QStringLiteral("sig:drop-form-plan:%1@%2:fit%3:size%4:kick%5:steady%6:mid%7:under%8:riser%9")
@@ -26173,6 +26253,8 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
             && fader + 0.03 >= trackDropFormMin(m_formPlan) / 100.0
             && (m_hitAmokFrom != beat || m_formPlan == DF_STORM))
             form = m_formPlan;
+        // R501_A_LANDING: a saved look playing this drop lands its own form (or the classic drop)
+        form = savedFormLand(secStart, form, hold || isCalm || still, fader, beat);
         if (form == DF_STORM && dropFormStrobes().isEmpty())
             form = DF_CLASSIC;
         if ((form == DF_INVERTED || form == DF_INVRISE || form == DF_RISE || form == DF_LASER || form == DF_KICK)
@@ -31158,6 +31240,299 @@ static TrackSweep savedReadTrackSweep(const QVariantMap& m) { TrackSweep a;
     return a;
 }
 
+// R501_A_HELPERS (runde 501, Tobias 10-25: "Naar man gemmer et look, skal det gemme praecis hvordan alt
+// bevaeger sig. Og naar man vaelger det look igen ... skal det vaere programmet, men med den farve
+// motoren (eller jeg selv) har valgt"). A look saved now is version 2: besides the moves, sweeps and
+// zoom it keeps the DROP FORM it ran (kick-chase comes back as kick-chase) and every group's AUTO
+// programme by its FIGURE - the programme's name without its colour word - so the replay runs the same
+// figure in the colour the room wears NOW (the engine's draw, or his tile). Its colours are not kept.
+// An old look (version 1) replays its movement the same way and ignores its colour.
+static QString savedFormWord(int form)
+{
+    // the drop form in plain words, for the look's name
+    switch (form)
+    {
+        case DF_STORM:    return QStringLiteral("STROBE STORM");
+        case DF_INVERTED: return QStringLiteral("INVERTED");
+        case DF_RISE:     return QStringLiteral("RISE");
+        case DF_SIDE:     return QStringLiteral("SIDE TO SIDE");
+        case DF_WAVE:     return QStringLiteral("WAVE");
+        case DF_BREATH:   return QStringLiteral("BREATH");
+        case DF_HALFTIME: return QStringLiteral("HALF TIME");
+        case DF_LASER:    return QStringLiteral("LASER ONLY");
+        case DF_INVRISE:  return QStringLiteral("INVERTED RISE");
+        case DF_KICK:     return QStringLiteral("KICK CHASE");
+        case DF_RUSH:     return QStringLiteral("RUSH");
+        case DF_BLOOM:    return QStringLiteral("BLOOM");
+        default:          return QString();
+    }
+}
+static QString savedFigureWords(const QString &name, const QString &colour, bool keepPartner)
+{
+    // the name without the words colourOf() reads as its colour (whole words only), and without the
+    // partner tag unless asked: "AUTO Bars Red Wave 1" -> "AUTO Bars Wave 1"
+    static const QHash<QString, QStringList> words = {
+        { QStringLiteral("magenta"), { "magenta", "magneta", "pink", "lilla", "purple" } },
+        { QStringLiteral("green"),   { "green", "groen" } },
+        { QStringLiteral("blue"),    { "blue", "blaa" } },
+        { QStringLiteral("red"),     { "red", "roed" } },
+        { QStringLiteral("white"),   { "white", "hvid" } },
+        { QStringLiteral("yellow"),  { "yellow", "gul" } } };
+    static const QStringList tags = { "Fire", "Ember", "Lime", "Ice", "Deep", "Rose", "Frost" };
+    const QStringList own = words.value(colour, QStringList() << colour);
+    QStringList out;
+    for (const QString &w : name.split(QLatin1Char(' '), Qt::SkipEmptyParts))
+    {
+        if (own.contains(w.toLower()) || (keepPartner == false && tags.contains(w)))
+            continue;
+        out << w;
+    }
+    return out.join(QLatin1Char(' '));
+}
+static QString savedFigureOf(const TrackFuncInfo &info, bool keepPartner)
+{
+    // a coloured AUTO programme's figure; empty for everything else (his own programmes keep their
+    // content hash, a colourless AUTO programme is the same in every colour already)
+    if (info.path.startsWith(ENGINE_AUTO_PATH) == false || info.colour.isEmpty() || info.generated)
+        return QString();
+    return savedFigureWords(info.name, info.colour, keepPartner);
+}
+static int savedFigureKind(const TrackFuncInfo &info)
+{
+    // which recipe a programme comes back by: 0 an AUTO programme's figure, 1 his own programme's
+    // figure (its name without the colour word), 2 the engine's generated scene (its name without the
+    // colour: "TRACK Colour: LaserBars red" is remade for every colour of the palette)
+    if (info.generated) return 2;
+    return info.path.startsWith(ENGINE_AUTO_PATH) ? 0 : 1;
+}
+static QString savedRecipeOf(const TrackFuncInfo &info, bool keepPartner)
+{
+    // the figure of any programme in its kind; a colourless generated scene by its name
+    if (info.generated)
+        return info.colour.isEmpty() ? info.name : savedFigureWords(info.name, info.colour, true);
+    if (info.colour.isEmpty())
+        return QString();
+    return info.path.startsWith(ENGINE_AUTO_PATH) ? savedFigureWords(info.name, info.colour, keepPartner)
+                                                  : savedFigureWords(info.name, info.colour, true);
+}
+static bool savedFormReserved(const QString &name)
+{
+    // a form's own programmes: the form brings them back itself
+    return name.startsWith(QStringLiteral("AUTO Bars Drop Storm")) || name.startsWith(QStringLiteral("AUTO Bars Drop Kick "));
+}
+quint32 TrackEngine::savedAutoFind(const QString &figure, const QString &group, const QString &colour, int kind) const
+{
+    // the figure's programme in this colour for this group: its own partner tag where the look's
+    // pair fits, else the plain figure, else the figure with a pair that fits. None: invalid (the
+    // engine draws for the group as always). kind (savedFigureKind): 0 the AUTO programmes, 1 his
+    // own (the same name but the colour word), 2 the engine's generated scenes
+    if (figure.isEmpty() || group.isEmpty() || (colour.isEmpty() && kind != 2))
+        return Function::invalidId();
+    if (m_savedAutoStamp != int(m_funcs.count()))
+    {
+        m_savedAutoCache.clear();
+        m_savedAutoStamp = int(m_funcs.count());
+    }
+    const QString cacheKey = figure + QLatin1Char('|') + group + QLatin1Char('|') + colour + QLatin1Char('|')
+                           + m_colour + QLatin1Char('|') + m_partnerPick + QLatin1Char('|') + QString::number(kind);
+    const auto cached = m_savedAutoCache.constFind(cacheKey);
+    if (cached != m_savedAutoCache.constEnd()
+        && (cached.value() == Function::invalidId() || (m_funcs.contains(cached.value()) && m_doc && m_doc->function(cached.value()))))
+        return cached.value();
+    const QString loose = savedFigureWords(figure, QString(), false);
+    quint32 best = Function::invalidId();
+    int bestScore = 0;
+    for (auto it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &info = it.value();
+        if (savedFigureKind(info) != kind || info.banned || info.groups.contains(group) == false
+            || savedFormReserved(info.name) || m_doc == nullptr || m_doc->function(it.key()) == nullptr)
+            continue;
+        if (kind != 0)
+        {
+            // his own and the generated: the same name in this colour (a colourless generated
+            // scene: the same name)
+            if ((kind == 2 && figure == info.name && info.colour.isEmpty())
+                || (info.colour == colour && colour.isEmpty() == false && savedRecipeOf(info, true) == figure))
+                if (best == Function::invalidId() || it.key() < best)
+                    best = it.key();
+            continue;
+        }
+        if (info.colour != colour)
+            continue;
+        const bool fits = pairFits(info, m_colour, m_partnerPick);
+        int score = 0;
+        if (fits && savedFigureOf(info, true) == figure)
+            score = 3;
+        else if (savedFigureOf(info, false) == loose)
+            score = info.partner.isEmpty() ? 2 : (fits ? 1 : 0);
+        if (score > bestScore || (score == bestScore && score > 0 && it.key() < best))
+        {
+            best = it.key();
+            bestScore = score;
+        }
+    }
+    m_savedAutoCache.insert(cacheKey, best);
+    return best;
+}
+void TrackEngine::savedMotionIn(const QString &key, const QString &colour, quint32 &mf)
+{
+    // tick()'s held programme for a group of a saved look playing: its AUTO figure in the colour the
+    // group wears THIS beat (the accent's trade, his tiles' spread), so the held-colour test after
+    // this keeps it instead of drawing another figure
+    if (savedActive() == false || m_savedPlaying.value(QStringLiteral("replayColour")).toBool()
+        || mf == Function::invalidId() || m_funcs.contains(mf) == false)
+        return;
+    if (m_savedPlaying.value(QStringLiteral("autoMotion")).toMap().contains(key) == false
+        && m_savedPlaying.value(QStringLiteral("motion")).toMap().contains(key) == false
+        && m_savedPlaying.value(QStringLiteral("generated")).toMap().contains(key) == false)
+        return;
+    const auto found = m_funcs.constFind(mf);
+    const TrackFuncInfo &info = *found;
+    if (info.colour.isEmpty() || info.colour == colour)
+        return;
+    const quint32 there = savedAutoFind(savedRecipeOf(info, true), key, colour, savedFigureKind(info));
+    if (there != Function::invalidId())
+    {
+        mf = there;
+        m_sectionMotion.insert(key, mf);
+    }
+}
+int TrackEngine::savedFormAt(int at) const
+{
+    // the drop form a saved look brings to the drop at `at`: the look playing there, or queued for it;
+    // -1 when none of his is there or it ran the classic drop
+    QVariantMap look;
+    if (savedActive() && m_savedPlayingState == QStringLiteral("drop") && qAbs(m_savedPlayingFrom - at) <= 8)
+        look = m_savedPlaying;
+    else
+        for (auto it = m_savedQueue.constBegin(); it != m_savedQueue.constEnd() && look.isEmpty(); ++it)
+            if (qAbs(it.key() - at) <= 8)
+            {
+                const QVariantMap queued = savedById(it.value());
+                if (queued.value(QStringLiteral("section")).toString() == QStringLiteral("drop"))
+                    look = queued;           // (a build's look queued just before it is not this drop's)
+            }
+    if (look.value(QStringLiteral("section")).toString() != QStringLiteral("drop")
+        || look.value(QStringLiteral("version")).toInt() < 2 || look.value(QStringLiteral("replayColour")).toBool())
+        return -1;
+    const int form = look.value(QStringLiteral("form")).toInt();
+    return (form > DF_CLASSIC && form < DF_COUNT) ? form : -1;
+}
+int TrackEngine::savedFormLand(int at, int form, bool quiet, qreal fader, int beat) const
+{
+    // the landing (dropFormBeat): a saved look playing this drop lands ITS form, or the classic drop -
+    // never the engine's own draw under his look. The checks after this (the strobes, the bars, the
+    // kick programmes, the rise's dark aim, the bloom's and the rush's rooms) still decide if it can run
+    if (savedActive() == false || m_savedPlayingState != QStringLiteral("drop") || qAbs(m_savedPlayingFrom - at) > 8)
+        return form;
+    const int want = savedFormAt(at);
+    // his hand on the rig wins as it does over the engine's own forms (dropFormBlocked's first line)
+    if (want <= DF_CLASSIC || quiet || m_hold || m_forceOn || m_dropForced || m_mixing
+        || fader + 0.03 < trackDropFormMin(want) / 100.0
+        || (m_hitAmokFrom == beat && want != DF_STORM))
+        return DF_CLASSIC;
+    return want;
+}
+bool TrackEngine::savedLayerOk() const
+{
+    // the bloom and the rush stand aside for a saved look - except the one that brings them
+    if (savedActive() == false || m_savedPlayingState != QStringLiteral("drop"))
+        return false;
+    const int form = savedFormAt(m_savedPlayingFrom);
+    return form == DF_BLOOM || form == DF_RUSH;
+}
+QString TrackEngine::savedLookName(const QVariantMap &look) const
+{
+    // what the look IS, in about 30 characters: "DROP · KICK CHASE · BARS+WASH",
+    // "BREAK · BARS WAVE · WASH" - the drop form or the lead group's figure, then the groups. Never
+    // the colour (a look replays in the colour of the room now)
+    auto groupWord = [this](const QString &key) -> QString {
+        if (m_groups.contains(key))
+        {
+            const auto found = m_groups.constFind(key);
+            const TrackGroup &g = *found;
+            if (g.patternDevice) return QStringLiteral("ANIM");
+            if (g.lasers)        return QStringLiteral("BARS");
+            if (g.strobes)       return QStringLiteral("STROBES");
+            if (smallWash(key))  return QStringLiteral("MINI");
+            return QStringLiteral("WASH");
+        }
+        const QString k = key.toLower();
+        if (k.contains(QStringLiteral("anim")))   return QStringLiteral("ANIM");
+        if (k.contains(QStringLiteral("laser")) || k.contains(QStringLiteral("bar"))) return QStringLiteral("BARS");
+        if (k.contains(QStringLiteral("strobe"))) return QStringLiteral("STROBES");
+        if (k.contains(QStringLiteral("mini")))   return QStringLiteral("MINI");
+        return QStringLiteral("WASH");
+    };
+    static const QStringList order = { "BARS", "WASH", "STROBES", "ANIM", "MINI" };
+    static const QStringList patterns = { "STILL", "CHASE", "BOUNCE", "ODD/EVEN", "HALVES", "SPARKLE", "FILL" };
+    const QStringList groups = look.value(QStringLiteral("groups")).toStringList();
+    QStringList words;
+    for (const QString &g : groups)
+        if (words.contains(groupWord(g)) == false)
+            words << groupWord(g);
+    std::sort(words.begin(), words.end(), [](const QString &a, const QString &b) { return order.indexOf(a) < order.indexOf(b); });
+    QString what = savedFormWord(look.value(QStringLiteral("form")).toInt());
+    if (what.isEmpty())
+    {
+        QString lead = look.value(QStringLiteral("lead")).toString();
+        if (groups.contains(lead) == false || groupWord(lead) == QStringLiteral("MINI"))
+        {
+            lead.clear();
+            for (const QString &w : order)
+                for (const QString &g : groups)
+                    if (lead.isEmpty() && w != QStringLiteral("MINI") && groupWord(g) == w)
+                        lead = g;
+            if (lead.isEmpty() && groups.isEmpty() == false)
+                lead = groups.first();
+        }
+        QString figure = look.value(QStringLiteral("autoMotion")).toMap().value(lead).toString();
+        if (figure.isEmpty())
+            figure = look.value(QStringLiteral("programmes")).toMap().value(lead).toString();
+        QString shape = figure.isEmpty() ? QString() : familyOf(figure).toUpper();
+        if (shape.isEmpty())
+        {
+            const TrackMove mv = savedReadTrackMove(look.value(QStringLiteral("moves")).toMap().value(lead).toMap());
+            shape = patterns.value(mv.pattern);
+        }
+        const QString leadWord = lead.isEmpty() ? QString() : groupWord(lead);
+        what = (leadWord + QLatin1Char(' ') + shape).trimmed();
+        words.removeAll(leadWord);
+    }
+    const QString dot = QStringLiteral(" ") + QChar(0x00B7) + QStringLiteral(" ");
+    const QString section = look.value(QStringLiteral("section")).toString().toUpper();
+    auto compose = [&](bool withSection) {
+        QString s = withSection && section.isEmpty() == false ? section + dot + what : what;
+        return words.isEmpty() ? s : s + dot + words.join(QLatin1Char('+'));
+    };
+    QString name = compose(true);
+    if (name.size() > 30 && words.count() > 1)
+    {
+        words.removeAll(QStringLiteral("MINI"));       // the small wash goes first
+        name = compose(true);
+    }
+    if (name.size() > 30)
+        name = compose(false);                          // the row shows the section's tag anyway
+    return name;
+}
+void TrackEngine::savedNames() const
+{
+    // every look named from what it stores (old ones too, on load): oldest first, so a newer look
+    // with the same name takes the number (" 2")
+    QSet<QString> taken;
+    for (int i = int(m_savedLooks.count()) - 1; i >= 0; --i)
+    {
+        QVariantMap row = m_savedLooks.at(i).toMap();
+        const QString stem = savedLookName(row);
+        QString name = stem;
+        for (int suffix = 2; taken.contains(name); ++suffix)
+            name = stem + QLatin1Char(' ') + QString::number(suffix);
+        taken.insert(name);
+        row[QStringLiteral("name")] = name;
+        m_savedLooks[i] = row;
+    }
+}
 void TrackEngine::savedLoad() const
 {
     if (m_savedLoaded) return;
@@ -31168,9 +31543,12 @@ void TrackEngine::savedLoad() const
     for (const auto &v : doc.array()) {
         const auto row = v.toObject().toVariantMap();
         const QString id = row.value(QStringLiteral("id")).toString();
-        if (row.value(QStringLiteral("version")).toInt() != 1 || id.isEmpty() || ids.contains(id)) continue;
+        // R501_A_LOAD_NAMES: version 2 (the movement) and the old version 1 (replayed without its colour)
+        const int version = row.value(QStringLiteral("version")).toInt();
+        if ((version != 1 && version != 2) || id.isEmpty() || ids.contains(id)) continue;
         ids.insert(id); m_savedLooks << row;
     }
+    savedNames();                        // old looks renamed from what they store ("RED / Chase" said the colour)
 }
 void TrackEngine::savedWrite()
 {
@@ -31259,9 +31637,29 @@ quint32 TrackEngine::savedProgramFind(const QString &key) const
 QVariantMap TrackEngine::savedCapture() const
 {
     if (m_lastState.isEmpty() || m_cast.isEmpty() || m_startScene || m_testTrack || m_blackout || m_flash || m_lastStage != 0 || !m_fullAuto) return {};
-    QVariantMap look, moves, sweeps, motion, zoom, zoomMode;
+    QVariantMap look, moves, sweeps, motion, zoom, zoomMode, autoMotion, programmes, generated;   // R501_A_CAPTURE_VARS
     QStringList cast = m_cast.values(); cast.sort();
-    look[QStringLiteral("version")] = 1; look[QStringLiteral("section")] = m_lookState.isEmpty() ? m_lastState : m_lookState;
+    // R501_A_SAVE_V2: version 2 - the drop form, the AUTO programmes by figure (below)
+    look[QStringLiteral("version")] = 2; look[QStringLiteral("section")] = m_lookState.isEmpty() ? m_lastState : m_lookState;
+    {
+        // the form on stage in this drop: kick-chase, strob-storm ... - the bloom and the rush land as
+        // the classic drop with their own layer, so they are the drop's landed form (m_formLast)
+        int form = DF_CLASSIC;
+        if (look.value(QStringLiteral("section")).toString() == QStringLiteral("drop"))
+        {
+            if (m_formNow != DF_CLASSIC)
+                form = m_formNow;
+            else if ((m_formLast == DF_BLOOM || m_formLast == DF_RUSH) && m_savedBeatBoundary > 0
+                     && m_formLandBeat >= m_savedBeatBoundary)
+                form = m_formLast;
+        }
+        look[QStringLiteral("form")] = form;
+        look[QStringLiteral("formName")] = QString::fromLatin1(trackDropFormName(form));
+        // its parameters as they ran (a record: the slider picks the kick's variant and the side's
+        // pace again where it replays - the bar eye rules belong to the energy it plays at)
+        if (form == DF_KICK) { look[QStringLiteral("kickFill")] = m_formKickFill; look[QStringLiteral("kickStep")] = m_formKickStep; }
+        if (form == DF_SIDE) look[QStringLiteral("formSide")] = m_formSideBeats;
+    }
     look[QStringLiteral("groups")] = cast; look[QStringLiteral("rig")] = savedRigKey(cast);
     look[QStringLiteral("colour")] = m_colour; look[QStringLiteral("partner")] = m_partnerPick;
     look[QStringLiteral("partnerSolo")] = m_partnerSolo; look[QStringLiteral("accent")] = m_accentPick;
@@ -31285,32 +31683,49 @@ QVariantMap TrackEngine::savedCapture() const
         }
         if (m_sweep.contains(key)) sweeps[key] = savedWriteTrackSweep(m_sweep.value(key));
         const quint32 id = m_sectionMotion.value(key, Function::invalidId());
-        if (m_funcs.contains(id) && !m_funcs.value(id).generated) {
-            const QString identity = savedProgramKey(id);
-            if (identity.isEmpty()) return {};
-            motion[key] = identity;
+        // R501_A_CAPTURE_AUTO: a coloured AUTO programme by its figure (any colour plays it), his own
+        // and the colourless ones by content as before; a form's own programmes come with the form
+        if (m_funcs.contains(id) && !m_funcs.value(id).generated && !savedFormReserved(m_funcs.value(id).name)) {
+            const QString figure = savedFigureOf(m_funcs.value(id), true);
+            if (!figure.isEmpty()) autoMotion[key] = figure;
+            else {
+                const QString identity = savedProgramKey(id);
+                if (identity.isEmpty()) return {};
+                motion[key] = identity;
+            }
+            programmes[key] = figure.isEmpty() ? m_funcs.value(id).name : figure;   // the look's name
+        } else if (m_funcs.contains(id) && m_funcs.value(id).generated) {
+            // the engine's generated scene by the recipe that remakes it: its name without the colour
+            generated[key] = savedRecipeOf(m_funcs.value(id), true);
         }
         if (m_zoom.contains(key)) zoom[key] = m_zoom.value(key);
         if (m_zoomMode.contains(key)) zoomMode[key] = m_zoomMode.value(key);
     }
     look[QStringLiteral("moves")] = moves; look[QStringLiteral("sweeps")] = sweeps;
     look[QStringLiteral("motion")] = motion; look[QStringLiteral("zoom")] = zoom; look[QStringLiteral("zoomMode")] = zoomMode;
+    look[QStringLiteral("autoMotion")] = autoMotion; look[QStringLiteral("programmes")] = programmes;   // R501_A_CAPTURE_END
+    look[QStringLiteral("generated")] = generated;
     return look;
 }
 QString TrackEngine::savedInvalid(const QVariantMap &look) const
 {
     const QStringList groups = look.value(QStringLiteral("groups")).toStringList();
-    if (look.value(QStringLiteral("version")).toInt() != 1 || groups.isEmpty()) return tr("INVALID LOOK");
+    const int version = look.value(QStringLiteral("version")).toInt();
+    if ((version != 1 && version != 2) || groups.isEmpty()) return tr("INVALID LOOK");
     if (!m_fullAuto) return tr("FULL AUTO FIRST");
     for (const QString &g : groups)
         if (!m_groups.contains(g) || m_groupOff.contains(g)) return tr("GROUP UNAVAILABLE");
     if (savedRigKey(groups) != look.value(QStringLiteral("rig")).toString()) return tr("RIG CHANGED");
+    // R501_A_INVALID: a saved look replays in the colour of the room now - its colours (an old look
+    // still has them) cannot make it unavailable. Only UNDO brings a look back in its own colours
+    if (look.value(QStringLiteral("replayColour")).toBool()) {
     const QString colour = look.value(QStringLiteral("colour")).toString();
     if (!m_palette.contains(colour) || engineBannedColour(colour)) return tr("COLOUR UNAVAILABLE");
     QStringList colours = look.value(QStringLiteral("overrides")).toStringList();
     colours << look.value(QStringLiteral("partner")).toString() << look.value(QStringLiteral("accent")).toString();
     for (const QString &c : colours)
         if (!c.isEmpty() && (!m_palette.contains(c) || engineBannedColour(c))) return tr("COLOUR UNAVAILABLE");
+    }
     const QVariantMap programs = look.value(QStringLiteral("motion")).toMap();
     for (auto it = programs.constBegin(); it != programs.constEnd(); ++it)
         if (savedProgramFind(it.value().toString()) == Function::invalidId()) return tr("PROGRAM CHANGED");
@@ -31365,8 +31780,20 @@ QVariantList TrackEngine::savedLooks() const
         row[QStringLiteral("target")] = queued > 0 ? queued : next;
         row[QStringLiteral("canQueue")] = queued > 0 || (why.isEmpty() && next > 0 && !m_savedContextTitle.isEmpty());
         row[QStringLiteral("reason")] = why.isEmpty() ? (next < 0 ? tr("NO NEXT %1").arg(type.toUpper()) : QString()) : why;
+        // R501_A_LIST_ORDER: no colour swatch for a colour that is not replayed (an old look's), and the
+        // row's second line says when it was saved beside the track
+        row.remove(QStringLiteral("colour"));
+        const qint64 at = row.value(QStringLiteral("savedAt")).toLongLong();
+        if (at > 0)
+            row[QStringLiteral("title")] = row.value(QStringLiteral("title")).toString() + QStringLiteral(" ") + QChar(0x00B7)
+                                        + QStringLiteral(" ") + QDateTime::fromMSecsSinceEpoch(at).toString(QStringLiteral("d MMM HH:mm"));
         out << row;
     }
+    // newest saved on top (Tobias 10-25: "det nyeste gemte skal staa oeverst"); looks from before the
+    // saved time keep the store's order under them
+    std::stable_sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("savedAt")).toLongLong() > b.toMap().value(QStringLiteral("savedAt")).toLongLong();
+    });
     return out;
 }
 QVariantList TrackEngine::recentSavedLooks() const
@@ -31374,9 +31801,10 @@ QVariantList TrackEngine::recentSavedLooks() const
     // R499_SAVED_RECENT_ALL (Tobias 10-25: the SAVED button "viser ikke noget selvom der er saved looks"):
     // the list took only looks already USED from it, so a look just saved never showed. Every saved
     // look now: the ones used latest first, then the rest newest saved first (the store's own order)
-    QVariantList out = savedLooks();
-    std::stable_sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
-        return a.toMap().value(QStringLiteral("used")).toLongLong() > b.toMap().value(QStringLiteral("used")).toLongLong();
+    // R501_A_RECENT_ORDER (Tobias 10-25: "det nyeste gemte skal staa oeverst"): newest SAVED first, as
+    // the full list - not the last used
+    QVariantList out = savedLooks(); std::stable_sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("savedAt")).toLongLong() > b.toMap().value(QStringLiteral("savedAt")).toLongLong();
     });
     return out;
 }
@@ -31388,37 +31816,39 @@ void TrackEngine::savedRemember()
     if (look.isEmpty() || look.value(QStringLiteral("title")).toString() != m_trackTitle || m_testTrack) {
         m_savedFeedback = tr("NO LOOK TO SAVE"); emit savedLooksChanged(); return;
     }
+    // R501_A_REMEMBER: the colours are not part of a saved look (it replays in the room's colour now),
+    // so the same movement saved in red and in blue is one look
+    for (const char *k : { "colour", "partner", "partnerSolo", "accent", "accentGroup", "overrides", "override",
+                           "overrideIdx", "colourMode", "replayColour" })
+        look.remove(QLatin1String(k));
     // Identity is the exact recipe, not its source track or runtime function IDs.
     QVariantMap identity = look; identity.remove(QStringLiteral("title"));
     const QString id = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument::fromVariant(identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
     look[QStringLiteral("id")] = id;
-    const QString lead = look.value(QStringLiteral("lead")).toString();
-    const auto move = savedReadTrackMove(look.value(QStringLiteral("moves")).toMap().value(lead).toMap());
-    const QStringList patterns = {tr("Still"),tr("Chase"),tr("Bounce"),tr("Odd/even"),tr("Halves"),tr("Sparkle"),tr("Fill")};
-    QString name = look.value(QStringLiteral("colour")).toString().toUpper() + QStringLiteral(" / ") + patterns.value(move.pattern);
-    QSet<QString> names;
-    for (const QVariant &v : m_savedLooks) names.insert(v.toMap().value(QStringLiteral("name")).toString());
-    const QString stem = name;
-    for (int suffix=2; names.contains(name); ++suffix) name = stem + QLatin1Char(' ') + QString::number(suffix);
-    look[QStringLiteral("name")] = name;
+    look[QStringLiteral("savedAt")] = QDateTime::currentMSecsSinceEpoch();   // newest saved on top
     for (int i = 0; i < m_savedLooks.count(); ++i) if (m_savedLooks.at(i).toMap().value(QStringLiteral("id")).toString() == id) {
         look[QStringLiteral("used")] = m_savedLooks.at(i).toMap().value(QStringLiteral("used"));
-        look[QStringLiteral("name")] = m_savedLooks.at(i).toMap().value(QStringLiteral("name"));
         m_savedLooks.removeAt(i); break;
     }
-    m_savedLooks.prepend(look); m_savedFeedback = QStringLiteral("SAVED"); savedWrite();
+    m_savedLooks.prepend(look); savedNames(); m_savedFeedback = QStringLiteral("SAVED"); savedWrite();
     logSignal(QStringLiteral("sig:saved-look:") + id.left(12));
 }
 void TrackEngine::queueSavedLook(const QString &id)
 {
     const QVariantMap look = savedById(id); if (look.isEmpty()) return;
     for (auto it = m_savedQueue.begin(); it != m_savedQueue.end(); ++it) if (it.value() == id) {
+        // R501_A_UNQUEUE_REPLAN: taken off again - the engine decides that drop's form itself again
+        if (m_riseStage == 0 && m_formPlanFor > 0 && qAbs(m_formPlanFor - it.key()) <= 8) m_formPlanFor = -1;
         m_savedQueue.erase(it); m_savedFeedback.clear(); emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged(); return;
     }
     const int next = savedNext(look.value(QStringLiteral("section")).toString());
     const QString why = savedInvalid(look);
     if (!why.isEmpty() || next < 0 || m_savedContextTitle.isEmpty()) { m_savedFeedback = why.isEmpty() ? tr("NO MATCHING SECTION") : why; emit savedLooksChanged(); return; }
     m_savedQueue[next] = id; m_savedFeedback = tr("QUEUED");
+    // R501_A_QUEUE_REPLAN: a drop look queued after the engine decided that drop's form - decided
+    // again on the next beat, so the look's own form is planned (the rise's dark aim, the bloom's
+    // collapse ...); not once a rise has begun going down
+    if (m_riseStage == 0 && m_formPlanFor > 0 && qAbs(m_formPlanFor - next) <= 8) m_formPlanFor = -1;
     setPlanLane(true); emit savedLooksChanged(); emit planLaneChanged(); emit dropSetChanged();
     logSignal(QStringLiteral("sig:saved-queue:") + id.left(12) + QLatin1Char('@') + QString::number(next));
 }
@@ -31504,10 +31934,14 @@ void TrackEngine::savedBeat(const QString &state, int beat, int boundary)
     for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();) if (it.key() + 3 < beat) it = m_savedQueue.erase(it); else ++it;
     if (!activate.isEmpty() && savedInvalid(activate).isEmpty()) {
         savedStop();
-        m_savedUserColours = {{QStringLiteral("override"),m_override},{QStringLiteral("overrides"),m_overrideSet},{QStringLiteral("idx"),m_overrideIdx},{QStringLiteral("mode"),m_colourMode}};
         m_savedPlaying = activate; m_savedPlayingFrom = boundary; m_savedPlayingState = state;
+        // R501_A_ACTIVATE: a saved look leaves his tiles and the engine's colour alone - only UNDO puts
+        // the look's own colours back (and gives his tiles back when it ends)
+        if (activate.value(QStringLiteral("replayColour")).toBool()) {
+        m_savedUserColours = {{QStringLiteral("override"),m_override},{QStringLiteral("overrides"),m_overrideSet},{QStringLiteral("idx"),m_overrideIdx},{QStringLiteral("mode"),m_colourMode}};
         m_override = activate.value(QStringLiteral("override")).toString(); m_overrideSet = activate.value(QStringLiteral("overrides")).toStringList();
         m_overrideIdx = activate.value(QStringLiteral("overrideIdx")).toInt(); m_colourMode = qBound(0,activate.value(QStringLiteral("colourMode")).toInt(),2);
+        }
         m_layerTimer.stop(); m_layerOwned.clear(); m_mixGlide = false;
         if (used) {
             qint64 sequence = 0; for (const QVariant &v : m_savedLooks) sequence = qMax(sequence, v.toMap().value(QStringLiteral("used")).toLongLong());
@@ -31528,7 +31962,10 @@ void TrackEngine::savedCast(QSet<QString> &cast, bool held, bool calm)
 void TrackEngine::savedColours()
 {
     if (!savedActive()) return;
-    m_colour = m_savedPlaying.value(QStringLiteral("colour")).toString();
+    // R501_A_NO_COLOUR: the room's colour is the engine's draw (or his tile) - a saved look's own colour
+    // comes back only with UNDO
+    if (m_savedPlaying.value(QStringLiteral("replayColour")).toBool())
+        m_colour = m_savedPlaying.value(QStringLiteral("colour")).toString();
     m_dropStyle = qBound(0,m_savedPlaying.value(QStringLiteral("dropStyle")).toInt(),5);
     m_dropFlow = qBound(0,m_savedPlaying.value(QStringLiteral("dropFlow")).toInt(),3);
     m_buildStyle = qBound(0,m_savedPlaying.value(QStringLiteral("buildStyle")).toInt(),3);
@@ -31546,8 +31983,31 @@ void TrackEngine::savedMoves(qreal energy)
     m_strobeOnKick=m_savedPlaying.value(QStringLiteral("onKick")).toBool();
     m_barDetailDraw=m_savedPlaying.value(QStringLiteral("barDetail")).toBool() && m_faderNow >= .75;
     m_barSingleDraw=m_savedPlaying.value(QStringLiteral("barSingle")).toBool() && m_faderNow >= 1.0 && m_lastState==QStringLiteral("drop");
+    // R501_A_MOVES_AUTO: the programmes in the room's colour now - a coloured AUTO programme (an old
+    // look keeps it by content) by its figure in that colour; none there: the engine draws for the group
+    const bool own = m_savedPlaying.value(QStringLiteral("replayColour")).toBool();
     const auto programs=m_savedPlaying.value(QStringLiteral("motion")).toMap();
-    for(auto it=programs.constBegin();it!=programs.constEnd();++it){const quint32 id=savedProgramFind(it.value().toString());if(id!=Function::invalidId())m_sectionMotion[it.key()]=id;}
+    for(auto it=programs.constBegin();it!=programs.constEnd();++it){
+        quint32 id=savedProgramFind(it.value().toString());
+        if(id!=Function::invalidId() && !own && !m_funcs.value(id).colour.isEmpty() && m_funcs.value(id).colour!=m_colour){
+            // the same figure in the room's colour: an AUTO one (an old look), or his own of the same
+            // name; none: the engine draws for the group (a programme in another colour is not held)
+            const TrackFuncInfo info=m_funcs.value(id);
+            const quint32 there=savedAutoFind(savedRecipeOf(info,true),it.key(),m_colour,savedFigureKind(info));
+            if(there!=Function::invalidId()||savedFigureKind(info)==0) id=there;
+        }
+        if(id!=Function::invalidId())m_sectionMotion[it.key()]=id;
+    }
+    const auto made=m_savedPlaying.value(QStringLiteral("generated")).toMap();
+    for(auto it=made.constBegin();it!=made.constEnd();++it){
+        const quint32 id=savedAutoFind(it.value().toString(),it.key(),m_colour,2);
+        if(id!=Function::invalidId())m_sectionMotion[it.key()]=id;
+    }
+    const auto autos=m_savedPlaying.value(QStringLiteral("autoMotion")).toMap();
+    for(auto it=autos.constBegin();it!=autos.constEnd();++it){
+        const quint32 id=savedAutoFind(it.value().toString(),it.key(),m_colour);
+        if(id!=Function::invalidId())m_sectionMotion[it.key()]=id;
+    }
 }
 void TrackEngine::savedSweep(const QString &group)
 {
@@ -31574,6 +32034,7 @@ void TrackEngine::savedBeforeNext()
     }
     if(m_forceNext)return; // several NEXT presses before one beat reject only one actual look
     m_savedUndo=savedCapture();m_savedUndoFrom=m_savedBeatBoundary;m_savedUndoState=m_lastState;
+    if(!m_savedUndo.isEmpty())m_savedUndo[QStringLiteral("replayColour")]=true;   // R501_A_UNDO_COLOUR: UNDO is the look as it stood
     savedStop();
     m_savedUndoBucket=-1;m_savedUndoDown.clear();m_savedUndoAutoDown.clear();
     m_savedUndoRejectCasts=m_nextRejCasts;m_savedUndoRejectColours=m_nextRejColours;
@@ -34439,7 +34900,8 @@ bool TrackEngine::r497BloomFree(const QString &key) const
     // his hand and the room's other owners of the wash: the rings stand aside
     // (r493HisPicks() without its m_flashHeld: the landing's own strobe salvo holds the strobe bank
     // there, and that is not his hand on the wash)
-    return m_fullAuto && m_forceOn == false && savedActive() == false && m_lastStage == 0 && m_labActive == false
+    // R501_A_BLOOM_FREE: ... unless the saved look playing is the bloom's (or the rush's) own drop
+    return m_fullAuto && m_forceOn == false && (savedActive() == false || savedLayerOk()) && m_lastStage == 0 && m_labActive == false
         && m_slabActive == false && m_clabActive == false && m_mixing == false && m_startScene == false
         && m_flash == false && m_hitAmokFrom < 0 && m_testTimer.isActive() == false
         && m_hold == false && m_positionMode.isEmpty()

@@ -2625,6 +2625,10 @@ private:
     QVector<quint16> m_onsetMid;         // ... and the mids'
     int onsetLow(int beat, int quarter) const;    // 0-15, or -1 without data
     int onsetMid(int beat, int quarter) const;
+    // R501_B_HIT_DECL (runde 501, B): does the music hit on this beat? 1 yes, 0 no, -1 not known
+    int r501KickAt(int beat, bool real) const;      // the RAW kick (BLT 323+): >= 0.20, or a real one >= 0.45
+    int r501OnsetAt(int beat, int quarter) const;   // an onset on this quarter (bass, mids or highs)
+    bool r501PulseHit(int beat, int pulseOn, bool grid, bool ani) const;   // a beat pulse may land here
     bool m_andBass = false;              // R461_AND_BASS: the bass on the "and" in this groove
     QHash<QString, int> m_andSeen;       // ... the base / Minis already hit on it this beat
     int m_pluckSlots = 0;                // R461_BREAK_PLUCK: the quarters a break's pattern hits (bits 0-3)
@@ -3044,6 +3048,16 @@ private:
     void savedMoves(qreal energy);
     void savedSweep(const QString &group);
     void savedZoom(const QString &group, int &want, int &mode);
+    // R501_A_DECL (runde 501): saved looks keep the movement - the drop form, AUTO programmes by figure
+    quint32 savedAutoFind(const QString &figure, const QString &group, const QString &colour, int kind = 0) const;
+    void savedMotionIn(const QString &key, const QString &colour, quint32 &mf);
+    int savedFormAt(int at) const;
+    int savedFormLand(int at, int form, bool quiet, qreal fader, int beat) const;
+    bool savedLayerOk() const;
+    QString savedLookName(const QVariantMap &look) const;
+    void savedNames() const;
+    mutable QHash<QString, quint32> m_savedAutoCache;   // figure|group|colour|room|partner -> programme
+    mutable int m_savedAutoStamp = -1;                   // ... for this many functions in the table
     bool m_forceNext;
     /** runde 338: a fixture's per-eye channels (4 or more) and its master
      *  dimmer, for beamShareOf/fullBankOf - read once per table build: the
