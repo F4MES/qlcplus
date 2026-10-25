@@ -28002,8 +28002,17 @@ void TrackEngine::lastTrackTick(bool showOn)
     const int minutes = lastTrackMinutesNow();
     // R463_LAST_SECS: ten minutes before closing in real seconds, until 06:00
     const bool window = minutes < 600 && lastTrackSecsToClose() <= qint64(ENGINE_LAST_SHOW_MIN) * 60;
+    // R500_LAST_DST (Tobias 25 Oct, the night the clocks went back: "last track virkede ikke"): 03:00
+    // exists once that night - winter time, an hour after the summer 03:00 - so the real-seconds window
+    // above opened only at 02:50 CET and the button was gone at 02:50 summer time, the hour he closes
+    // by. The wall clock's 02:50 opens it too, and once open it stays open until 06:00 (the clock
+    // falling back to 02:00 must not hide it again). Any other night the two are the same minute.
+    if (minutes >= 600)
+        m_lastWindowLatched = false;
+    else if (window || minutes >= closingMinutes() - ENGINE_LAST_SHOW_MIN)
+        m_lastWindowLatched = true;
     const bool shown = m_lastStage > 0
-                    || (showOn && window && m_testTrack == false && m_trackTitle.isEmpty() == false);
+                    || (showOn && (window || m_lastWindowLatched) && m_testTrack == false && m_trackTitle.isEmpty() == false);
     if (shown != m_lastShown)
     {
         m_lastShown = shown;

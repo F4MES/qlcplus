@@ -2780,6 +2780,7 @@ private:
     int m_lastBeatNow = 0;
     qreal m_lastBpm = 0.0;
     bool m_lastShown = false;              // the button's window
+    bool m_lastWindowLatched = false;      // R500_DECL_LATCH: the window opened tonight (until 06:00)
     bool m_showOnNow = false;
     qint64 m_houseMs = 0;                  // when the house light began (m_clock)
     qreal m_houseHaze = 0.0;               // the haze it fades down from
