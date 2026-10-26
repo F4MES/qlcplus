@@ -822,6 +822,8 @@ void TrackEngine::slotPulseTimer()
                     out = std::sqrt(out);
                 if (lightsOut())
                     out = 0.0;
+                if (r507SafeDark(key))
+                    out = 0.0;           // R507_SAFE_TIMER_MOT: a laser held dark, as run()
                 int attr = m_activeAttr.value(slot, -1);
                 if (attr >= 0)
                     func->adjustAttribute(out, attr);
@@ -841,12 +843,17 @@ void TrackEngine::slotPulseTimer()
             {
                 const qreal scaleNow = (g.strobes && landBurstNow()) ? 1.0 : trimOf(key) * masterOut();   // runde 357, R440_COLOUR_LEVEL
                 qreal out = lightsOut() ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * scaleNow, 1.0);
+                out = qBound(0.0, out * r507WaveRatio(key, i), 1.0);   // R507_WAVE_TIMER: the kick wave - this head's pulse at its own time
                 // the same on/off squaring setPart() does: an animation
                 // laser's dimmer is a switch, and 0.7 written to it 20 ms
                 // after the beat is whatever the fixture makes of it
                 if (g.patternDevice)
                     out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
+                if (g.patternDevice && r507DuelDark(key, i))
+                    out = 0.0;       // R507_DUEL_TIMER: the duel, as setPart()
                 out = qMax(out, lastWhiteDim(key));   // R479_LAST_WHITE_FLOORPULSE: as setPart()
+                if (r507SafeDark(key))
+                    out = 0.0;           // R507_SAFE_TIMER_PART: a laser held dark, as setPart()
                 m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
                 m_activeOut.insert(slot, out);
             }
@@ -857,6 +864,10 @@ void TrackEngine::slotPulseTimer()
     if (r497BloomFrame(now))             // R497_A1_TIMER_FRAME: the bloom's / collapse's rings on the wash
         any = true;
     if (r498RushFrame(now))              // R498_R_TIMER_FRAME: the room rush's front on the wash and the strobes
+        any = true;
+    if (r507SuckFrame(now))              // R507_SUCK_TIMER: the build's suck - his hand mid-beat lets go
+        any = true;
+    if (r507SafeFrame())                 // R507_SAFE_TIMER_FRAME: a laser held dark opens when it is safe
         any = true;
     if (any == false)
         m_pulseTimer.stop();
@@ -1635,6 +1646,34 @@ void TrackEngine::ensureTable()
             const QString back = QString(dj.name).replace(QStringLiteral(" Wave To DJ"), QStringLiteral(" Wave Back"));
             dj.drawKey = (fromDj == false && keyByName.contains(back)) ? keyByName.value(back)
                                                                       : keyByName.value(across);
+        }
+        // R507_STROBE_SHARE (Tobias 10-26, feature 6: "the strobe lightning closes in"): "Strobes
+        // Close In" (74 + 194, 82 + 163, 111 + 147) and "Strobes Burst Out" (the reverse, gen_programs
+        // r507) are not tickets of their own: like From DJ / To DJ they draw on the ticket of the
+        // figure they belong to. In a groove the strobe wave's (Close In: Strobes Wave, Burst Out:
+        // Strobes Wave Back); in a drop, where the strobes have no wave, the same pairs walking the
+        // row (Wide / Drop Row Outer In, Wide / Drop Row Inner Out). So the pool is not flooded.
+        for (QHash<quint32, TrackFuncInfo>::iterator it = m_funcs.begin(); it != m_funcs.end(); ++it)
+        {
+            TrackFuncInfo &ci = it.value();
+            if (ci.path.startsWith(ENGINE_AUTO_PATH) == false || ci.name.contains(QStringLiteral("Strobes ")) == false)
+                continue;
+            const bool closeIn = ci.name.contains(QStringLiteral(" Close In"));
+            if (closeIn == false && ci.name.contains(QStringLiteral(" Burst Out")) == false)
+                continue;
+            const QString figure = closeIn ? QStringLiteral(" Close In") : QStringLiteral(" Burst Out");
+            const QStringList siblings = closeIn
+                ? QStringList({ QStringLiteral(" Wave"), QStringLiteral(" Row Outer In"), QStringLiteral(" Outer In") })
+                : QStringList({ QStringLiteral(" Wave Back"), QStringLiteral(" Row Inner Out"), QStringLiteral(" Inner Out") });
+            for (const QString &sib : siblings)
+            {
+                const QString sibling = QString(ci.name).replace(figure, sib);
+                if (keyByName.contains(sibling))
+                {
+                    ci.drawKey = keyByName.value(sibling);
+                    break;
+                }
+            }
         }
     }
 
@@ -4073,6 +4112,9 @@ void TrackEngine::newTrackMemory(const QString &title)
     autoFadeStop(); m_autoFadePrevious = false;
     m_halfTime = false;
     dropFormReset(title != m_trackTitle);   // R488_DX_RESET: nothing planned for the new track yet
+    r507SuckStop(QStringLiteral("track"));   // R507_SUCK_TRACK: a new track (or sent again) - the suck lets go
+    m_r507SuckDecidedFor = -1;
+    m_r507SuckDrawn = false;
 }
 
 void TrackEngine::clearDjLoop()
@@ -10243,9 +10285,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the build's roll for this bar (r497_roll.inc.cpp)
     r497BloomBeat(beat, isDrop, nextState, beatsToNext, fader, hold, isCalm, still);
     r497RollBeat(beat, beatInBar, isBuild, isDrop, nextState, beatsToNext, hold, isCalm, still);
+    // R507_DUEL_BEAT_CALL (runde 507, DUEL): a duel of the animation lasers whose group left the cast
+    // ends (r507_duel.inc.cpp)
+    r507DuelBeat(beat);
     // R498_R_BEAT_CALL (runde 498, R): the room rush - a running one carries on, or one starts
     // here (the rush drop, the build's last bar, a drop's phrase turn) (r498_rush.inc.cpp)
     r498RushBeat(beat, isDrop, isBuild, nextState, beatsToNext, dropBar, beatInBar, fader, hold, isCalm, still);
+    // R507_SUCK_BEAT_CALL (runde 507, SUCK): the build sucks the room in - its last 8 bars go dark from
+    // the back wall forwards, the drop lands on everything at once (r507_suck.inc.cpp)
+    r507SuckBeat(beat, isDrop, isBuild, nextState, beatsToNext, fader, hold, isCalm, still, forceNext);
+    // R507_WAVE_BEAT_CALL (runde 507, WAVE): the kick wave - does it roll on this beat's hit (r507_wave.inc.cpp)
+    r507WaveBeat(beat, isDrop, beatInBar, fader, hold, isCalm, still, forceNext);
 
     // THE DROP SETTLES (analyse 10g). Tobias, 2026-09-27: "et drop starter jo
     // meget ekstremt, men saa laenge det ikke bliver ved med at vaere
@@ -14320,6 +14370,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             && cg.patternDevice == false && (cg.hasDimmer || cg.rgb))
             m_baseCover.insert(key);
     }
+    r507SafeHandover(castSet);           // R507_SAFE_HANDOVER_CALL: the outgoing laser type cut before anything lights
     bool anyPulse = !m_sequenceGroups.isEmpty();
     bool moveHit = false;
     // runde 153: did a strobe group draw one of the show's chases this beat?
@@ -14526,6 +14577,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                      && g.lasers == false) mv.subSteps = qMin(4, mv.subSteps * 2);
         }
 
+        // R507_WAVE_MOVE (runde 507, WAVE): the kick-wave drop's wash - every head lit, a pulse on every kick
+        if (isDrop && dropBar >= 0)
+            r507WaveMove(key, mv);
+        // R507_DUEL_MOVE (runde 507, DUEL): the animation lasers answer each other - drawn, a change of side
+        // on a hit, ended; while it plays the group's mask is static (r507_duel.inc.cpp)
+        if (g.patternDevice)
+            r507DuelMove(key, mv, state, beat, secStart, beatsToNext, isDrop, dropBar, beatInBar, fader, hold,
+                         isCalm, still, forceNext);
         // R488_DX_MOVE: the drop's form shapes the groups it owns - after the classic
         // shaping (SPEED is put on again in dropFormMove), before every ceiling and guard below
         if (isDrop && dropBar >= 0 && dropFormOwns(key))
@@ -15031,6 +15090,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mf = Function::invalidId();
             m_sectionMotion.remove(key);
         }
+        // R507_WAVE_NATIVE (runde 507, WAVE): ... and the kick-wave drop draws the wash itself - no programme
+        // owning its dimmers (one intensity for all heads), so each head can be late on its own. The
+        // classic pick stays in m_sectionMotion and comes back when the wave ends.
+        if (isDrop && dropBar >= 0 && mf != Function::invalidId() && r507WaveTakes(key))
+            mf = Function::invalidId();
         const quint32 formMf = (isDrop && dropBar >= 0) ? dropFormProgramme(key, colour, isDrop) : Function::invalidId();
         if (formMf != Function::invalidId())
         {
@@ -15481,6 +15545,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_motionDim.remove(key);
 
             m_liveMove.insert(key, mv);                  // the shaped move, for the sub-beat steps
+            // R507_DUEL_WAKE (runde 507, DUEL): an animation laser the duel lights again waits while its
+            // picture (mot:/col:/pos:) changes on this beat - dark before move (r507_duel.inc.cpp)
+            if (g.patternDevice)
+                r507DuelWake(key, beat);
             if ((heldFull(key)) == false)
             {
                 if (motionOwns)
@@ -15532,8 +15600,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     if (r493StabWanted() && m_pulseTimer.isActive() == false)   // R493_A1_TIMER_START: the stabs need its frames
         m_pulseTimer.start();
+    if (m_r507Safe.isEmpty() == false && m_pulseTimer.isActive() == false)   // R507_SAFE_TIMER_START: a held laser opens on its frames
+        m_pulseTimer.start();
     r497BloomStart();                    // R497_A1_BLOOM_START: the rings' first frame, the beat drawn
     r498RushStart();                     // R498_R_START: the room rush's first frame, the beat drawn
+    r507SuckStart();                     // R507_SUCK_START_CALL: the build's suck - this beat's wall, the beat drawn
 
     // the cast is settled here, before the hits: genFlash() reads m_cast to
     // find the groups it has to hand back, and a beat-old cast left a group
@@ -17303,11 +17374,15 @@ void TrackEngine::reapplyLevels()
             const bool landFree = m_groups.value(group).strobes && landBurstNow();   // runde 357
             const qreal trim = (heldFull(group) || landFree) ? 1.0 : trimOf(group);   // R440_COLOUR_LEVEL
             out *= (held ? 1.0 : pulseFactor(group)) * trim * ((heldFull(group) || landFree) ? 1.0 : masterOut());
+            if (held == false)
+                out *= r507WaveRatio(group, r507WavePartOf(slot));   // R507_WAVE_REAPPLY: the kick wave, as the timer
             // and the same on/off squaring setPart() does: an animation
             // laser's dimmer is a switch, and a fraction written to it is
             // rounded by the fixture in a way nobody can predict
             if (m_groups.value(group).patternDevice)
                 out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
+            if (m_groups.value(group).patternDevice && r507DuelDark(group, r507DuelPartOf(slot)))
+                out = 0.0;           // R507_DUEL_REAPPLY: the duel, as setPart()
             out = qMax(out, lastWhiteDim(group));   // R479_LAST_WHITE_FLOORLEVELS: as setPart()
         }
         else
@@ -17326,12 +17401,15 @@ void TrackEngine::reapplyLevels()
             }
         }
         out = lightsOut() ? 0.0 : qBound(0.0, out, 1.0);
+        if (slot.startsWith(QStringLiteral("pos:")) == false && r507SafeDark(group))
+            out = 0.0;                   // R507_SAFE_REAPPLY: a laser held dark, as setPart() (not the aim)
         m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
         m_activeOut.insert(slot, out);
     }
     r493DiscoLevel();                    // R493_A4_DISCO_REAPPLY: the ball's beam (BLACKOUT, MASTER, a trim)
     r497BloomFrame(m_clock.elapsed());   // R497_A1_REAPPLY: a lit ring follows a stab's dark, MASTER, a trim at once
     r498RushFrame(m_clock.elapsed());    // R498_R_REAPPLY: a lit lamp of the rush follows a stab's dark, MASTER, a trim
+    r507SuckFrame(m_clock.elapsed());    // R507_SUCK_REAPPLY: the build's suck, as the timer
 }
 
 qreal TrackEngine::pulseFactor(const QString &group) const
@@ -20433,6 +20511,9 @@ void TrackEngine::release()
     m_darkUntil.clear();              // AUTO is off: nothing is waiting to come back
     r493DiscoReset(true);             // R493_A4_RESET_RELEASE: the ball's heads home dark, the roof down
     r493RoofReset();
+    r507WaveStop(QString());          // R507_WAVE_STOP_RELEASE: the kick wave ends (SHOW OFF)
+    r507SuckStop(QStringLiteral("release"));   // R507_SUCK_STOP_RELEASE: the build's suck lets go (SHOW OFF)
+    r507DuelStop(QString(), -1);      // R507_DUEL_STOP_RELEASE: the animation lasers' duel ends (SHOW OFF)
     r498RushStop();                   // R498_R_STOP_RELEASE: the room rush's masks let go
     r497BloomStop();                  // R503_ROOM_BLOOM_RELEASE: the bloom's / collapse's masks let go
                                       // (SHOW OFF mid-bloom left the wash's rings forced lit/dark)
@@ -20750,6 +20831,9 @@ void TrackEngine::idle()
     m_hitReturning = false;                    // runde 356: a stopped deck is not a silent beat
     r493DiscoReset(true);                      // R493_A4_RESET_IDLE: a stopped deck - the ball and the roof go
     r493RoofReset();
+    r507WaveStop(QString());                   // R507_WAVE_STOP_IDLE: the kick wave ends
+    r507SuckStop(QStringLiteral("idle"));      // R507_SUCK_STOP_IDLE: the build's suck lets go
+    r507DuelStop(QString(), -1);               // R507_DUEL_STOP_IDLE: the animation lasers' duel ends
     r498RushStop();                            // R498_R_STOP_IDLE: the room rush's masks let go
     r497BloomStop();                           // R503_ROOM_BLOOM_IDLE: and the bloom's
     // R458_LAST_TRACK: the house light holds, and the last track stopping
@@ -21303,6 +21387,18 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         stopSlot(slot, hard);
         return;
     }
+    // R507_SAFE_RUN_PICTURE: an animation laser's col:/mot: scene (re)started writes its pattern and its
+    // CH13/CH14 position - the group goes dark BEFORE the scene reaches the MasterTimer (r507SafeHold)
+    if (slot.startsWith(QStringLiteral("col:")) || slot.startsWith(QStringLiteral("colx:"))
+        || slot.startsWith(QStringLiteral("mot:")))
+    {
+        const QString picGroup = slotGroup(slot);
+        const Function *picFn = m_doc->function(fid);
+        if (picGroup.isEmpty() == false && m_groups.value(picGroup).patternDevice
+            && (m_active.value(slot, Function::invalidId()) != fid || picFn == nullptr
+                || picFn->isRunning() == false || picFn->stopped()))
+            r507SafeHold(picGroup, Function::invalidId());
+    }
 
     // R503_SAFE_AIM_RUN: a new aim (or one brought back) moves the bars' mirror - every re-aim, home,
     // LaserUPP, the drop forms' rise/inverted aims, the fader's "dark first, then home" (r503SafeAim)
@@ -21336,6 +21432,8 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
             && m_groups.value(ownGroup).rgb)
             out = std::sqrt(out);
     }
+    if (slot.startsWith(QStringLiteral("pos:")) == false && r507SafeDark(slotGroup(slot)))
+        out = 0.0;                       // R507_SAFE_RUN_LEVEL: a laser held dark, as setPart() (not the aim)
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
@@ -21570,6 +21668,7 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
     // other slot owns the same ID: leave it alone
     if (m_active.values().contains(fid))
         return;
+    r507SafeOut(slot, fid);              // R507_SAFE_STOP: the other laser type / the new picture waits for this
 
     if (hard || attr < 0)
     {
@@ -21588,6 +21687,193 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
         // cast was still visibly lit twelve bars later.
         if (m_fadeTimer.isActive() == false)
             m_fadeTimer.start();
+    }
+}
+
+/* R507_SAFE_FUNCS (runde 507, SAFE). Tobias' absolute laser rules: "never the laser bars and an
+ * animation laser lit together when the engine picks" and "never move a lit laser; the light goes off
+ * before a mirror moves".
+ *
+ * (1) THE HANDOVER. tick() started the incoming laser type's functions (LaserBars come before Animation
+ * Laser in the group order) a few ms before it stopped the outgoing one's, so a MasterTimer frame in
+ * between had both lit (harness p461_ajna beat 186, one frame: both animation lasers at 255 with three
+ * bars lit). Now the outgoing type is stopped first (r507SafeHandover) and the incoming one is held dark
+ * on the wall clock: 150 ms, and until every function of the outgoing type has stopped and two frames
+ * have been written after that. Both directions.
+ *
+ * (2)+(3) THE PICTURE. An animation laser's col:/mot: scenes write CH14 (vertical position, the
+ * fixture's PositionTilt) and CH13 (horizontal) as well as the pattern: his programmes hold their own
+ * heights (FY FY ANI 0, Fingre Boelger 71, Boelger Moving 166, the rest 118) and the colour scenes 118.
+ * A new scene (a colour change, a new programme, a cast entry) moved a lit beam on the frame it was
+ * written (beat 658: CH14 0 -> 118 lit; beats 29, 129, 258, 578, 610: lit on the frame the picture
+ * changed). Now any change of the group's picture blanks it first, and it stays dark 150 ms and until
+ * the new scene has been written twice.
+ *
+ * Same style as R503_SAFE_DARK: on top of everything else, never instead; it only writes 0 where a
+ * level would have been, never lights, never moves; not under his held FLASH / pad. When it opens,
+ * reapplyLevels() puts back exactly what the engine had asked for. */
+#define R507_SAFE_MS 150
+#define R507_SAFE_CAP_MS 1000
+
+void TrackEngine::r507SafeHold(const QString &group, quint32 gone)
+{
+    if (group.isEmpty() || m_groups.contains(group) == false || m_groups.value(group).lasers == false
+        || m_flashHeld.contains(group))
+        return;
+    const qint64 now = m_clock.elapsed();
+    R507SafeGate &gate = m_r507Safe[group];
+    if (gate.ms <= 0 || now - gate.ms >= R507_SAFE_CAP_MS)
+    {
+        gate.gone.clear();
+        gate.hit = false;
+    }
+    gate.ms = now;
+    gate.clearMs = -1;
+    if (gone != Function::invalidId() && gate.gone.contains(gone) == false)
+        gate.gone.append(gone);
+    // dark NOW, before anything new reaches the MasterTimer: every slot of the group at 0
+    foreach (const QString &slot, m_active.keys())
+    {
+        if (slotGroup(slot) != group || slot.startsWith(QStringLiteral("pos:")))
+            continue;                    // the bars' aim is R503's: never touched here
+        Function *func = m_doc->function(m_active.value(slot));
+        if (func == nullptr)
+            continue;
+        if (m_activeOut.value(slot, 0.0) > 0.0)
+            gate.hit = true;
+        m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, 0.0));
+        m_activeOut.insert(slot, 0.0);
+    }
+    if (gate.hit && m_pulseTimer.isActive() == false)
+        m_pulseTimer.start();
+}
+
+bool TrackEngine::r507SafeClosed(const QString &group)
+{
+    QHash<QString, R507SafeGate>::iterator it = m_r507Safe.find(group);
+    if (it == m_r507Safe.end() || m_flashHeld.contains(group))
+        return false;
+    const qint64 now = m_clock.elapsed();
+    const qint64 since = now - it->ms;
+    if (since >= R507_SAFE_CAP_MS)
+        return false;                    // a stalled MasterTimer: at most a second, as R503_SAFE_DARK
+    bool closed = since < R507_SAFE_MS;
+    bool running = false;
+    foreach (quint32 fid, it->gone)
+    {
+        const Function *f = m_doc->function(fid);
+        if (f != nullptr && f->isRunning())
+            running = true;              // still on the DMX (or its stop not yet processed)
+    }
+    if (running)
+    {
+        it->clearMs = -1;
+        closed = true;
+    }
+    else if (it->clearMs < 0)
+    {
+        it->clearMs = now;
+        closed = true;
+    }
+    else if (now - it->clearMs < qint64(2 * MasterTimer::tick()))
+        closed = true;                   // two frames written without it
+    if (m_groups.value(group).patternDevice)
+    {
+        // the animation laser's new picture: on the DMX twice before the light
+        const QStringList pics = { QStringLiteral("col:"), QStringLiteral("colx:"), QStringLiteral("mot:") };
+        foreach (const QString &p, pics)
+        {
+            const quint32 fid = m_active.value(p + group, Function::invalidId());
+            const Function *f = fid != Function::invalidId() ? m_doc->function(fid) : nullptr;
+            if (f != nullptr && (f->isRunning() == false || f->stopped() || f->elapsed() < 2 * MasterTimer::tick()))
+                closed = true;
+        }
+    }
+    return closed;
+}
+
+bool TrackEngine::r507SafeDark(const QString &group)
+{
+    if (m_r507Safe.isEmpty() || group.isEmpty() || r507SafeClosed(group) == false)
+        return false;
+    m_r507Safe[group].hit = true;
+    if (m_pulseTimer.isActive() == false)
+        m_pulseTimer.start();            // its frames open the gate (r507SafeFrame)
+    return true;
+}
+
+bool TrackEngine::r507SafeFrame()
+{
+    if (m_r507Safe.isEmpty())
+        return false;
+    bool relight = false;
+    bool pending = false;
+    const qint64 now = m_clock.elapsed();
+    foreach (const QString &group, m_r507Safe.keys())
+    {
+        const R507SafeGate gate = m_r507Safe.value(group);
+        if (r507SafeClosed(group))
+        {
+            pending = pending || gate.hit;
+            continue;
+        }
+        if (gate.hit)
+        {
+            relight = true;
+            crumb(QStringLiteral("r507 safe ") + group + QStringLiteral(" lit after ")
+                  + QString::number(now - gate.ms) + QStringLiteral(" ms"));
+        }
+        m_r507Safe.remove(group);
+    }
+    if (relight)
+        reapplyLevels();                 // what the engine asked for, now that it is safe
+    return pending;
+}
+
+void TrackEngine::r507SafeOut(const QString &slot, quint32 fid)
+{
+    const QString group = slotGroup(slot);
+    if (group.isEmpty() || slot.startsWith(QStringLiteral("pos:")))
+        return;
+    const TrackGroup &g = m_groups.value(group);
+    if (g.lasers == false)
+        return;
+    // an animation laser's picture scene goes: what it drew (and where) changes - dark first
+    if (g.patternDevice && (slot.startsWith(QStringLiteral("col:")) || slot.startsWith(QStringLiteral("colx:"))
+                            || slot.startsWith(QStringLiteral("mot:"))))
+        r507SafeHold(group, fid);
+    // the other laser type lights only after this is off the DMX - not one already on stage with it
+    // (both on stage is his own pick: nothing to hand over)
+    foreach (const QString &other, m_groupOrder)
+    {
+        const TrackGroup &og = m_groups.value(other);
+        if (og.lasers && og.patternDevice != g.patternDevice && m_cast.contains(other) == false)
+            r507SafeHold(other, fid);
+    }
+}
+
+void TrackEngine::r507SafeHandover(const QSet<QString> &castSet)
+{
+    // a laser type leaving while the other one comes in: cut it BEFORE the loop starts anything
+    // (the loop below would cut it the same way, later - after LaserBars had already been started)
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &hg = m_groups.value(key);
+        if (hg.lasers == false || castSet.contains(key) || m_flashHeld.contains(key))
+            continue;
+        bool handover = false;
+        foreach (const QString &inKey, castSet)
+        {
+            const TrackGroup &ig = m_groups.value(inKey);
+            if (ig.lasers && ig.patternDevice != hg.patternDevice)
+                handover = true;
+        }
+        if (handover == false)
+            continue;
+        stopSlot("col:" + key, true);
+        stopSlot("mot:" + key, true);
+        for (int i = 0; i < hg.parts.count(); i++)
+            stopSlot(partSlot(key, i), true);
     }
 }
 
@@ -21672,12 +21958,17 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     const bool landFree = g.strobes && landBurstNow();
     qreal trim = (heldFlash || landFree) ? 1.0 : trimOf(group);   // R440_COLOUR_LEVEL
     qreal applied = qBound(0.0, level * pulseFactor(group) * trim * ((heldFlash || landFree) ? 1.0 : masterOut()), 1.0);
+    applied = qBound(0.0, applied * r507WaveRatio(group, index), 1.0);   // R507_WAVE_PART: the kick wave - this head's pulse at its own time
     // an animation laser's "dimmer" is a switch: on above a sliver, else off
     if (g.patternDevice)
         applied = (applied > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R442_ANI_MASTER
+    if (g.patternDevice && r507DuelDark(group, index))
+        applied = 0.0;               // R507_DUEL_PART: the answering animation laser waits for its turn
     // R479_LAST_WHITE_FLOORPART: the parts own the master dimmer (ReplaceBlend) - under the
     // last track's warm white they hold at least its level (0 without it, and in a BLACKOUT)
     applied = qMax(applied, lastWhiteDim(group));
+    if (r507SafeDark(group))
+        applied = 0.0;                   // R507_SAFE_PART: a laser held dark (the handover, a new picture)
     if (lightsOut())
         applied = 0.0;
 
@@ -21804,6 +22095,9 @@ void TrackEngine::stopAll()
     m_strobeUntil = -1;          // or the next tick walks straight back into a burst
     r493DiscoReset(true);                // R493_A4_RESET_STOPALL: the ball's heads home dark, the roof down
     r493RoofReset();
+    r507WaveStop(QString());             // R507_WAVE_STOP_ALL: the kick wave ends
+    r507SuckStop(QStringLiteral("stop"));      // R507_SUCK_STOP_ALL: the build's suck lets go
+    r507DuelStop(QString(), -1);         // R507_DUEL_STOP_ALL: the animation lasers' duel ends
     r498RushStop();                      // R498_R_STOP_ALL: the room rush's masks let go
     r497BloomStop();                     // R503_ROOM_BLOOM_STOPALL: and the bloom's (the pulse timer stops below)
     m_strobeRate = 0;
@@ -25973,6 +26267,7 @@ enum TrackDropFormId
     DF_HALFTIME, DF_LASER, DF_INVRISE, DF_KICK,
     DF_RUSH,                             // R498_R_DF_ENUM: a fast wave through the room (r498_rush.inc.cpp)
     DF_BLOOM,                            // R497_A1_DF_ENUM: the wash opens from the centre (r497_bloom.inc.cpp)
+    DF_KWAVE,                            // R507_WAVE_DF_ENUM: the kick wave (r507_wave.inc.cpp) - last: saved looks keep form ids
     DF_COUNT
 };
 
@@ -26001,7 +26296,8 @@ static const char *trackDropFormName(int form)
         "classic", "strob-storm", "omvendt", "rejsen-op", "side-mod-side", "bolgen",
         "aandedraet", "halvtid", "kun-laser", "omvendt-rejse", "kick-chase",
         "rush",                          // R498_R_DF_NAME (before the bloom, as in the enum)
-        "bloom" };                       // R497_A1_DF_NAME
+        "bloom",                         // R497_A1_DF_NAME
+        "kick-wave" };                   // R507_WAVE_DF_NAME
     return (form >= 0 && form < DF_COUNT) ? names[form] : "classic";
 }
 
@@ -26022,6 +26318,7 @@ static int trackDropFormMin(int form)
         case DF_KICK:     return 60;
         case DF_BLOOM:    return 60;     // R497_A1_DF_MIN: with the build's stabs
         case DF_RUSH:     return 60;     // R498_R_DF_MIN: the room rush (2 beats a sweep under 70 %)
+        case DF_KWAVE:    return 80;     // R507_WAVE_DF_MIN: the kick wave, from 80 % ENERGY
         default:          return 0;
     }
 }
@@ -26048,6 +26345,7 @@ struct TrackDropFeatures
     int last = DF_CLASSIC;    // the last drop's form: never the same special twice running
     bool bloomRoom = false;   // R497_A1_DF_FEAT: the room map knows the wash whole (r497BloomReady)
     bool rushRoom = false;    // R498_R_DF_FEAT: the room map knows the wash whole (r498RushReady)
+    bool waveRoom = false;    // R507_WAVE_DF_FEAT: the map knows the wash whole, a part a head (r507WaveReady)
 };
 
 static double trackClamp01(double v)
@@ -26149,6 +26447,16 @@ static double trackDropFormFit(int form, const TrackDropFeatures &f)
                 return 0.0;
             const double hit = f.kick >= 0.0 ? trackClamp01((f.kick - 0.50) / 0.40) : 0.3;
             return 0.58 + 0.12 * trackClamp01((f.size - 0.30) / 0.60) + 0.10 * hit;
+        }
+        case DF_KWAVE:
+        {
+            // R507_WAVE_DF_FIT (runde 507): each kick rolls through the wash from the DJ to the back
+            // wall - it needs a kick on nearly every beat. In the bloom's and the rush's band (0.58-0.76,
+            // under kick-chase's 0.70-0.94): on the real-curve plans about 7 % of the drops from 80 %,
+            // the classic drop's share untouched (tests/WAVE.md); none without the map
+            if (f.waveRoom == false || kickKnown == false || f.steady < 0.75 || f.kick < 0.45)
+                return 0.0;
+            return 0.58 + 0.09 * trackClamp01((f.steady - 0.75) / 0.25) + 0.09 * trackClamp01((f.kick - 0.45) / 0.40);
         }
         case DF_KICK:
         {
@@ -26298,6 +26606,7 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
     f.strobes = dropFormStrobes().isEmpty() == false && fader >= ENGINE_STROBE_ON;
     f.bloomRoom = r497BloomReady();      // R497_A1_DF_DECIDE: no map, no bloom - the draw as before
     f.rushRoom = r498RushReady();        // R498_R_DF_DECIDE: no map, no rush - the draw as before
+    f.waveRoom = r507WaveReady();        // R507_WAVE_DF_DECIDE: no map, no kick wave - the draw as before
     f.riseRoom = at - beat >= 3;
     f.buildRoom = at - beat >= 8;
     f.last = m_formLast;
@@ -26502,13 +26811,18 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
         // R498_R_DF_LAND (runde 498): the rush lands only where it can run now
         if (form == DF_RUSH && r498RushLand(beat) == false)
             form = DF_CLASSIC;
+        // R507_WAVE_DF_LAND (runde 507): the kick wave lands only where it can roll now (from 80 %)
+        if (form == DF_KWAVE && r507WaveLand(beat, fader) == false)
+            form = DF_CLASSIC;
         dropFormEnd(QStringLiteral("new-drop"));
         m_formNow = form;
         m_formDrops++;
         m_formLast = form;
         m_formWhite = false;
         m_formSingle = false;
-        if (form == DF_RUSH)
+        if (form == DF_KWAVE)
+            m_formNow = DF_CLASSIC;          // R507_WAVE_DF_CLASSIC: drawn as a form, the kick-wave drop itself is the classic one
+        else if (form == DF_RUSH)
             m_formNow = DF_CLASSIC;          // R498_R_DF_CLASSIC: drawn as a form, the rush drop itself is the classic one
         else if (form == DF_BLOOM)
             m_formNow = DF_CLASSIC;          // R497_A1_BLOOM_CLASSIC: drawn as a form, the drop itself is the classic one
@@ -31515,6 +31829,7 @@ static QString savedFormWord(int form)
         case DF_KICK:     return QStringLiteral("KICK CHASE");
         case DF_RUSH:     return QStringLiteral("RUSH");
         case DF_BLOOM:    return QStringLiteral("BLOOM");
+        case DF_KWAVE:    return QStringLiteral("KICK WAVE");   // R507_WAVE_SAVED_WORD
         default:          return QString();
     }
 }
@@ -31900,7 +32215,8 @@ QVariantMap TrackEngine::savedCapture() const
         {
             if (m_formNow != DF_CLASSIC)
                 form = m_formNow;
-            else if ((m_formLast == DF_BLOOM || m_formLast == DF_RUSH) && m_savedBeatBoundary > 0
+            // R507_WAVE_SAVED_FORM: ... and the kick wave, the same way
+            else if ((m_formLast == DF_BLOOM || m_formLast == DF_RUSH || m_formLast == DF_KWAVE) && m_savedBeatBoundary > 0
                      && m_formLandBeat >= m_savedBeatBoundary)
                 form = m_formLast;
         }
@@ -37513,4 +37829,1095 @@ void TrackEngine::r504MirrorHead(int startOffset, bool backward, int c, bool &ru
     // a left head: the pan mirror of its own forward figure (the head's offset o, the EFX's own start offset)
     runBackward = backward;
     offset = backward ? (((c - offset - 2 * startOffset) % 360) + 720) % 360 : (offset + c) % 360;
+}
+/* =====================================================================
+ *  THE KICK WAVE (runde 507, agent WAVE) - appended to trackengine.cpp by
+ *  feature_trackview_engine.py from track_runtime/r507_wave.inc.cpp
+ *  (R507_INF_FILES, R507_WAVE_FILE).
+ *
+ *  Tobias, 2026-10-26 ("Lav: 1, 2, 3, 6" - this is 1): "Each kick hits the
+ *  lamps by the DJ first and rolls out towards the back wall."
+ *
+ *  WHAT. In a drop the wash pulses on the kick: full on the hit, falling to
+ *  its floor in a quarter beat (pulseFactor). With the kick wave each head's
+ *  pulse lands a little later the further it hangs from the DJ (the room
+ *  map's y, rig_room.json): the front row hits on the beat, the back wall up
+ *  to an eighth of a beat later (R507_WAVE_SPAN, never more than
+ *  R507_WAVE_MAX_MS), so the hit reads as a wave rolling through the room and
+ *  the last head has landed long before the next half beat. With the map's
+ *  Sharks: 132 + 59 (y .15) on the beat, then 23, 96, 179, 41, and 1 (y .69)
+ *  last - at 128 BPM 0, 0, 11, 20, 27, 45 and 59 ms.
+ *
+ *  HOW. Nothing new drives the wash: the engine's own per-head dimmer parts
+ *  (one hidden scene per fixture, ensureDimmerScenes) are what the pulse
+ *  already rides on. A part's level is the group's level x its pattern mask x
+ *  pulseFactor(group); r507WaveRatio() multiplies that by (the pulse curve at
+ *  the head's own time, now - its delay) / (the curve now). Before its delay a
+ *  head still shows the tail of the pulse before (the last kick, or the R461
+ *  and-bass re-hit), after it the new hit - so every other factor of the level
+ *  (MASTER, the trim, BLACKOUT, the stabs' dark, the last track's white) stays
+ *  exactly as the engine draws it. Three places apply it, where the parts get
+ *  their level: setPart() (the beat), slotPulseTimer() (the 20 ms frames) and
+ *  reapplyLevels() (a fader moved). Not the strobes, the laser bars, the
+ *  animation laser or the Minis: only the moving-head wash the map knows
+ *  whole (r498RushWash), with a part for every head.
+ *  THE WASH IS THE FORM'S. In a drop at 80 %+ the wash mostly runs an AUTO
+ *  programme that owns its dimmers (one intensity for all its heads), where no
+ *  head can be late on its own. So, like the forms' own groups (dropFormNative:
+ *  side-mod-side, bolgen ...), the kick-wave drop draws the wash itself: no
+ *  programme under it (r507WaveTakes - the classic drop keeps its pick in
+ *  m_sectionMotion and gets it back when the wave ends), every head lit and a
+ *  pulse on every kick (r507WaveMove: static, one step a beat, depth 0.55 or
+ *  more). Colour, aim, the figure (EFX) and zoom are the classic drop's.
+ *
+ *  THE MUSIC'S RULES STAY. A beat without a hit (r501PulseHit) makes no
+ *  wave: the ratio is 1 unless the group's pulse started in THIS beat. The
+ *  r506 hold (a beat without a hit under music as loud) is the group's own.
+ *  The R461 and-bass re-hit rolls like the kick (the base's only re-hit;
+ *  R358's groove re-hits never touch the base). Never under eighths or
+ *  sixteenths, a rhythm chase or a programme that owns the dimmers.
+ *
+ *  WHEN. A drop form, DF_KWAVE "kick-wave" (dropforms.inc.cpp), drawn by the
+ *  forms' own draw from 80 % ENERGY: it shares the tickets of the bloom, the
+ *  rush and the other forms (never twice running, never the track's first
+ *  drop, the classic drop the common case), fits a steady drop with a real
+ *  kick in the bloom's and the rush's band (0.58-0.76), and needs the map. It
+ *  lands as the classic drop (m_formNow stays classic, like the bloom and the
+ *  rush) and, like every form, runs at most 16 bars (ENGINE_FORM_BEATS) and
+ *  ends where a form ends: the drop is over, a jump back, CALM / STILL, NEXT,
+ *  his pick (RIG/PLAN, his drop set, a mix, LAST TRACK, a saved look that did
+ *  not save it, the labs, the start scene, AUTO off), the slider 5 % under
+ *  80 % on a bar line, the drop settling; and a new track, SHOW OFF
+ *  (release), idle, stopAll. A saved look of a kick-wave drop saves it (the
+ *  form, m_formLast) and its replay lands it again.
+ *  THE ROLL PAUSES (the wash as the engine draws it, at once - every frame
+ *  asks again) under HOLD, FLASH, pads, BLACKOUT, DROP HIT armed or running,
+ *  positions, the test track, the group switched off, the disco ball, the
+ *  laser roof, under 80 %, and while the bloom, the rush or the curtain hold
+ *  the wash.
+ *  Placeholder map or a lamp the map does not know: r507WaveReady() is false,
+ *  the form's fit is 0 and the draw is exactly today's.
+ *  Log: sig:drop-form:kick-wave (the forms), sig:kick-wave:<ms>ms on its first
+ *  rolling beat, sig:kick-wave:end:<why>; a crumb carries the heads in order.
+ * ===================================================================== */
+
+#define R507_WAVE_SPAN       0.125       // the last head lands an eighth of a beat after the first
+#define R507_WAVE_MAX_MS     90.0        // ... and never later than this (a slow track)
+#define R507_WAVE_MIN_FADER  0.80        // from 80 % ENERGY
+#define R507_WAVE_MIN_SPREAD 0.10        // the wash must reach this far into the room (y) to roll
+
+QString TrackEngine::r507WaveWash() const
+{
+    // R507_WAVE_FILE: the wash it rolls on - the rush's (the moving-head wash the map knows whole,
+    // the base first), with one dimmer part per head
+    const QString key = r498RushWash();
+    if (key.isEmpty())
+        return QString();
+    const TrackGroup &g = m_groups.value(key);
+    if (g.parts.count() != g.fixtures.count() || g.patternDevice || g.strobes || g.lasers)
+        return QString();
+    return key;
+}
+
+bool TrackEngine::r507WavePhases(const QString &key, QVector<qreal> *phase) const
+{
+    // each head's place in the wave: 0 the row by the DJ .. 1 the back wall (the map's y)
+    if (key.isEmpty() || m_groups.contains(key) == false)
+        return false;
+    const TrackGroup &g = m_groups.value(key);
+    const int n = int(g.fixtures.count());
+    if (n < 3 || g.parts.count() != n)
+        return false;
+    QVector<qreal> ys(n, 0.0);
+    qreal lo = 2.0, hi = -1.0;
+    for (int i = 0; i < n; i++)
+    {
+        qreal y = 0.0;
+        if (roomOf(g.fixtures.at(i), nullptr, &y) == false)
+            return false;
+        ys[i] = y;
+        lo = qMin(lo, y);
+        hi = qMax(hi, y);
+    }
+    if (hi - lo < R507_WAVE_MIN_SPREAD)
+        return false;
+    if (phase != nullptr)
+    {
+        phase->resize(n);
+        for (int i = 0; i < n; i++)
+            (*phase)[i] = qBound(0.0, (ys.at(i) - lo) / (hi - lo), 1.0);
+    }
+    return true;
+}
+
+bool TrackEngine::r507WaveReady() const
+{
+    // dropFormDecide: may the kick wave be drawn at all (its fit is 0 without it)
+    return r507WavePhases(r507WaveWash(), nullptr);
+}
+
+bool TrackEngine::r507WaveFree(const QString &key) const
+{
+    // the roll, now: his hand (r507WaveHis) and everything that holds the wash for a moment (the
+    // bloom's list, r497BloomFree) - HOLD, FLASH, BLACKOUT, DROP HIT, positions, pads ...
+    return r507WaveHis() == false && m_flash == false && m_blackout == false && m_hitAmokFrom < 0
+        && m_testTimer.isActive() == false && m_hold == false && m_positionMode.isEmpty() && m_hitKind == 0
+        && m_hitAmokOwed == false && m_r493DiscoPhase == 0 && m_r493RoofOn == false
+        && m_groupOff.contains(key) == false
+        && m_padFlash.contains(key) == false && m_flashHeld.contains(key) == false;
+}
+
+qreal TrackEngine::r507WaveMaxMs() const
+{
+    // the back wall's delay: an eighth of a beat, at most R507_WAVE_MAX_MS
+    return m_beatMs > 0.0 ? qMin(R507_WAVE_MAX_MS, m_beatMs * R507_WAVE_SPAN) : 0.0;
+}
+
+bool TrackEngine::r507WaveLand(int beat, qreal fader)
+{
+    // R507_WAVE_DF_LAND (dropforms' landing): the kick-wave drop lands - only where it can roll now
+    const QString key = r507WaveWash();
+    QVector<qreal> phase;
+    if (key.isEmpty() || fader < R507_WAVE_MIN_FADER - 1e-9 || r507WaveFree(key) == false || r507WaveHis()
+        || r507WavePhases(key, &phase) == false)
+        return false;
+    m_r507WaveFor = beat;
+    m_r507WaveTitle = m_trackTitle;
+    m_r507WaveKey = key;
+    m_r507WavePhase = phase;
+    m_r507WaveOn = false;
+    m_r507WaveLogged = false;
+    return true;
+}
+
+bool TrackEngine::r507WaveHis() const
+{
+    // his hand took the section (a form ends there too): AUTO off, RIG/PLAN, his drop set, a mix,
+    // LAST TRACK, the labs, the start scene, a saved look playing that did not save the kick wave
+    const bool savedOk = savedActive() == false
+        || (m_savedPlayingState == QStringLiteral("drop") && savedFormAt(m_savedPlayingFrom) == DF_KWAVE);
+    return m_fullAuto == false || m_forceOn || m_lastStage != 0 || m_mixing || m_dropTouched || m_startScene
+        || m_labActive || m_slabActive || m_clabActive || savedOk == false;
+}
+
+bool TrackEngine::r507WaveTakes(const QString &key) const
+{
+    // R507_WAVE_TAKES: the kick-wave drop draws this wash itself (no programme owning its dimmers)
+    return m_r507WaveFor >= 0 && key == m_r507WaveKey && m_r507WaveTitle == m_trackTitle;
+}
+
+void TrackEngine::r507WaveMove(const QString &key, TrackMove &mv) const
+{
+    // R507_WAVE_MOVE (tick(), the moves): the kick-wave drop's wash - every head lit, a pulse on
+    // every kick, one step a beat; its colour, aim, figure and zoom stay the classic drop's
+    if (r507WaveTakes(key) == false)
+        return;
+    mv.ownChaser = false;
+    mv.pattern = ENGINE_PAT_STATIC;
+    mv.rhythm = 0;
+    mv.stepBeats = 1;
+    mv.subSteps = 1;
+    mv.width = 1;
+    mv.formMask = 0;
+    mv.texture = 0.0;
+    mv.breatheBars = 0;
+    mv.flashBar = false;
+    mv.bare = false;
+    mv.pulseOn = 0;
+    mv.pulse = qBound(0.55, mv.pulse, 1.0);
+}
+
+void TrackEngine::r507WaveBeat(int beat, bool isDrop, int beatInBar, qreal fader, bool hold, bool isCalm,
+                               bool still, bool forceNext)
+{
+    // R507_WAVE_BEAT_CALL (tick(), every beat after the drop forms, the bloom and the rush): the
+    // kick-wave drop goes on, ends as a form ends, and rolls on this beat's hit or pauses
+    if (m_r507WaveFor < 0)
+    {
+        m_r507WaveOn = false;
+        return;
+    }
+    QString why;
+    if (m_r507WaveTitle != m_trackTitle)
+        why = QStringLiteral("track");
+    else if (isDrop == false)
+        why = QStringLiteral("drop-over");
+    else if (beat < m_r507WaveFor)
+        why = QStringLiteral("jump-back");
+    else if (beat >= m_r507WaveFor + ENGINE_FORM_BEATS && beatInBar == 0)
+        why = QStringLiteral("played");
+    else if (isCalm || still)
+        why = QStringLiteral("calm");
+    else if (forceNext)
+        why = QStringLiteral("next");
+    else if (r507WaveHis())
+        why = QStringLiteral("his");
+    else if (fader + 0.05 < R507_WAVE_MIN_FADER && beatInBar == 0)
+        why = QStringLiteral("energy");
+    else if (m_dropCalm)
+        why = QStringLiteral("settled");
+    if (why.isEmpty() == false)
+    {
+        r507WaveStop(why);
+        return;
+    }
+    const QString key = r507WaveWash();
+    if (key != m_r507WaveKey && key.isEmpty() == false)
+    {
+        // the wash changed under it (a table rebuild): its heads' places again
+        QVector<qreal> phase;
+        if (r507WavePhases(key, &phase))
+        {
+            m_r507WaveKey = key;
+            m_r507WavePhase = phase;
+        }
+    }
+    m_r507WaveOn = key.isEmpty() == false && key == m_r507WaveKey && fader >= R507_WAVE_MIN_FADER - 1e-9
+                && hold == false && r507WaveFree(key)
+                && m_r497BloomMode == 0 && m_r498RushState == 0 && m_r497CurtainOn == false;
+    if (m_r507WaveOn && m_r507WaveLogged == false && m_doc != nullptr)
+    {
+        m_r507WaveLogged = true;
+        // the heads in the order the wave meets them, with their delay at this tempo
+        const TrackGroup &g = m_groups.value(key);
+        QList<QPair<qreal, int> > order;
+        for (int i = 0; i < m_r507WavePhase.count() && i < g.fixtures.count(); i++)
+            order << qMakePair(m_r507WavePhase.at(i), i);
+        std::sort(order.begin(), order.end());
+        QStringList heads;
+        for (const QPair<qreal, int> &o : order)
+        {
+            Fixture *fx = m_doc->fixture(g.fixtures.at(o.second));
+            if (fx != nullptr)
+                heads << QStringLiteral("%1+%2").arg(fx->address() + 1).arg(int(qRound(o.first * r507WaveMaxMs())));
+        }
+        crumb(QStringLiteral("r507 kick wave %1: %2").arg(beat).arg(heads.join(QStringLiteral(" > "))));
+        if (m_testTrack == false)
+            logSignal(QStringLiteral("sig:kick-wave:%1ms").arg(int(qRound(r507WaveMaxMs()))));
+    }
+}
+
+int TrackEngine::r507WavePartOf(const QString &slot) const
+{
+    // a dimmer part's index from its slot ("dim:<group>#<index>", partSlot)
+    const int hash = slot.lastIndexOf(QLatin1Char('#'));
+    bool ok = false;
+    const int index = hash < 0 ? -1 : slot.mid(hash + 1).toInt(&ok);
+    return ok ? index : -1;
+}
+
+qreal TrackEngine::r507WaveRatio(const QString &group, int index)
+{
+    // R507_WAVE_RATIO: what this head's pulse is at ITS time (now - its delay) over the group's pulse
+    // now - 1.0 whenever the wave does not roll, so the level is exactly the engine's
+    if (m_r507WaveOn == false || group != m_r507WaveKey || index < 0 || index >= m_r507WavePhase.count()
+        || m_beatMs <= 0.0)
+        return 1.0;
+    // the pulse's starts, the one before kept: a head before its delay still shows that one's tail
+    const qint64 start = m_pulseStart.value(group, -1);
+    if (start != m_r507WaveCur)
+    {
+        m_r507WavePrev = m_r507WaveCur;
+        m_r507WavePrevStrength = m_r507WaveCurStrength;
+        m_r507WaveCur = start;
+    }
+    m_r507WaveCurStrength = m_pulseStrength.value(group, 1.0);
+    const qreal depth = m_pulseDepth.value(group, 0.0);
+    const TrackGroup &g = m_groups.value(group);
+    // a beat without a hit makes no wave (r501): the pulse must have started in this beat. Nor the
+    // r506 hold, eighths of its own, a rhythm chase, a programme owning the dimmers, a held flash
+    if (depth <= 0.0 || start < 0 || start < m_beatStartMs || g.strobes || g.lasers || g.patternDevice
+        || m_r506HoldStart.contains(group) || m_motionDim.contains(group) || m_flashHeld.contains(group))
+        return 1.0;
+    const TrackMove mv = m_liveMove.value(group);
+    if (mv.subSteps > 1 || (mv.pattern == ENGINE_PAT_CHASE && mv.rhythm > 0))
+        return 1.0;
+    if (m_r497BloomMode != 0 || m_r498RushState != 0 || m_r497CurtainOn || r507WaveFree(group) == false)
+        return 1.0;
+    const qreal lag = m_r507WavePhase.at(index) * r507WaveMaxMs();
+    if (lag < 1.0)
+        return 1.0;                      // the front row: on the beat, as the engine draws it
+    // pulseFactor's curve for a wash (not a strobe): full on the hit, to (1 - depth) in a quarter beat
+    const qreal tau = qMax(40.0, m_beatMs * 0.25);
+    auto curve = [depth, tau](qreal t, qreal strength) {
+        return (1.0 - depth) + depth * strength * std::exp(-qMax(0.0, t) / tau);
+    };
+    const qreal t = qreal(m_clock.elapsed() - start);
+    const qreal shown = curve(t, m_r507WaveCurStrength);
+    if (shown < 0.02)
+        return 1.0;
+    qreal want = 1.0 - depth;
+    if (t >= lag)
+        want = curve(t - lag, m_r507WaveCurStrength);
+    else if (m_r507WavePrev >= 0 && m_r507WavePrev < start)
+        want = curve(qreal(m_clock.elapsed() - m_r507WavePrev) - lag, m_r507WavePrevStrength);
+    return want / shown;
+}
+
+void TrackEngine::r507WaveStop(const QString &why)
+{
+    // R507_WAVE_STOP: the wave is over - every head's pulse is the group's again
+    if (m_r507WaveFor >= 0 && m_r507WaveLogged && m_testTrack == false && why.isEmpty() == false)
+        logSignal(QStringLiteral("sig:kick-wave:end:%1").arg(why));
+    m_r507WaveFor = -1;
+    m_r507WaveOn = false;
+    m_r507WaveLogged = false;
+    m_r507WaveTitle.clear();
+    m_r507WaveCur = -1;
+    m_r507WavePrev = -1;
+}
+/* =====================================================================
+ *  THE BUILD SUCKS THE ROOM IN (runde 507, agent SUCK) - appended to
+ *  trackengine.cpp by feature_trackview_engine.py from
+ *  track_runtime/r507_suck.inc.cpp (R507_INF_FILES, R507_SUCK_FILE).
+ *
+ *  Tobias, 2026-10-26 ("Lav: 1, 2, 3, 6" - this is 2): "In the build's last
+ *  8 bars the room goes dark from the back wall forwards, in y order: the
+ *  back wall first, and at the end only the lamps right at the DJ are lit.
+ *  Then the drop lands on everything at once."
+ *
+ *  WHAT. A layer over the build, like the bloom's collapse: the build's own
+ *  look (its programme, pulse, stabs, riser) keeps running underneath. A
+ *  wall moves from the back wall (the room map's y, rig_room.json) to the
+ *  front row on the beat grid over the build's last 8 bars (32 beats; a
+ *  shorter build: over what it has, 2 bars at least - BLT flags most real
+ *  builds as their last 2 bars (8 beats on the r460/r461 library tracks), and
+ *  the suck never starts in the break before them). Every lamp behind the wall is held
+ *  dark: the wash (the Sharks) and the strobe bank, when the strobes may play
+ *  at all - so on the build's last lit beat only the front row (y <= 0.20:
+ *  132 + 59 of the wash, 163, 194 and 147 of the strobes) is lit. With the
+ *  map's lamps and no black beat: 74 dark on the window's 2nd beat, 82 on the
+ *  3rd, 1 the 5th, 41 the 12th, 111 the 14th, 179 the 21st, 96 the 25th and
+ *  23 the 30th of 32. Where R374's black beat applies (62 %, a drop of 0.40+)
+ *  the wall reaches the front row on the beat before it, and the black beat
+ *  stays black. On the drop's first beat every mask lets go in the same tick
+ *  the drop is drawn: the drop lands on everything at once.
+ *
+ *  HOW. The bloom's and the rush's own path to the DMX (r497_bloom, r498_rush):
+ *  a hidden scene per lamp with its intensity channels at nought, FLASHED
+ *  (ReplaceBlend, forced LTP), so it holds over whatever drives the lamp -
+ *  the engine's parts, a pattern, an AUTO programme that owns the dimmers.
+ *  Only dark: never a colour, aim, zoom or speed, never lit. The lamps come
+ *  from the rush's groups (r498RushWash / r498RushStrobes: the map knows the
+ *  group whole), never the Minis, the laser bars or the animation lasers.
+ *  Placeholder map: no wash, nothing here runs - the engine as today.
+ *
+ *  WHEN. A build into a real drop (the kick lands on the flag - not a fake
+ *  drop's wait, r505DropLandAt - and the music jumps, size 0.30+), from 70 %
+ *  ENERGY, drawn once per drop when its last 8 bars begin (it may then wait
+ *  for the room - the disco ball's heads travelling home dark over the
+ *  build's first beats, a beat of HOLD - until 6 beats before the drop, and
+ *  runs from where it starts): it takes the
+ *  BUILD RUSH's ticket (r498 (b), which runs on every such build from 70 %) -
+ *  R507_SUCK_SHARE of them, never two builds running in a track - so the
+ *  build gets one of the two, never more effects. Never where the bloom is
+ *  planned (its collapse owns that beat), nor before the drops that land calm
+ *  or keep the build's look (omvendt, omvendt-rejse, kun-laser).
+ *  Never under his picks (the bloom's list r497BloomFree: RIG/PLAN, his drop
+ *  set, saved looks, DROP/DROP HIT, HOLD/CALM/STILL, positions, FLASH/pads,
+ *  LAST TRACK, the labs, a mix; and BLACKOUT, the disco ball, the laser roof,
+ *  the curtain, a DJ loop, a pad or held flash on the strobes). A hit scene of
+ *  his show on the wash or the strobes keeps its beat: the masks let go for
+ *  that beat and are back on the next.
+ *  LETS GO (and never comes back for that drop): the drop line, HOLD/CALM/
+ *  STILL, NEXT, his hand mid-beat, ENERGY 5 % under 70, a DJ loop or a jump
+ *  back, the drop flag moving, the build ending without the drop, a stalled
+ *  deck (two beats with no beat), a new track, SHOW OFF, idle, stopAll.
+ *  Log: sig:suck:on@<drop>:<beats>, sig:suck:end:<why>; the crumb carries the
+ *  lamps and the beat each goes dark.
+ * ===================================================================== */
+
+#define R507_SUCK_BEATS      32          // the build's last 8 bars
+#define R507_SUCK_MIN_BEATS  8           // a shorter build: over what it has, 2 bars at least (BLT's usual build flag)
+#define R507_SUCK_START_MIN  6           // the start may wait for the room this long (6 beats to the drop at the latest)
+#define R507_SUCK_FRONT      0.20        // the front row by the DJ (y): lit to the end
+#define R507_SUCK_MIN_FADER  0.70        // from 70 % ENERGY
+#define R507_SUCK_MIN_SIZE   0.30        // a real drop: the music jumps (R360's size)
+#define R507_SUCK_SHARE      0.40        // the build rush's tickets it takes (r498 (b))
+
+bool TrackEngine::r507SuckPlanOk(int at) const
+{
+    // R507_SUCK_FILE: the drop's own plan - no suck before a bloom (its collapse owns the
+    // beat), nor before the drops that land calm or keep the build's look; his picks win
+    if (dropFormBlocked(at) || savedFormAt(at) > DF_CLASSIC || m_r497CollapseFor == at)
+        return false;
+    if (m_formPlanTitle != m_trackTitle || m_formPlanFor != at)
+        return true;                     // no form planned for it: the classic drop
+    return m_formPlan != DF_BLOOM && m_formPlan != DF_INVERTED && m_formPlan != DF_INVRISE
+        && m_formPlan != DF_LASER;
+}
+
+bool TrackEngine::r507SuckFree() const
+{
+    // his hand and the room's other owners: the bloom's list, BLACKOUT, his drop set, a saved
+    // look, the curtain, a bloom or a rush running, a DJ loop - and the strobes his
+    const QString wash = r498RushWash();
+    if (wash.isEmpty() || (m_r507SuckFor >= 0 && wash != m_r507SuckWash))
+        return false;
+    if (r497BloomFree(wash) == false || savedActive() || m_blackout || m_dropTouched || m_r497CurtainOn
+        || m_r497BloomMode != 0 || m_r498RushState != 0 || djLoopOn())
+        return false;
+    const QString strobes = m_r507SuckStrobeKey;
+    return strobes.isEmpty() || (m_padFlash.contains(strobes) == false && m_flashHeld.contains(strobes) == false
+                                 && m_groupOff.contains(strobes) == false);
+}
+
+bool TrackEngine::r507SuckLamps(qreal fader)
+{
+    // the lamps and where they hang: the wash, then the strobe bank when the strobes may play;
+    // a dark mask for each lamp behind the front row (made once - its values never change)
+    if (m_doc == nullptr)
+        return false;
+    const QString wash = r498RushWash();
+    QString strobes = r498RushStrobes();
+    if (strobes.isEmpty() == false
+        && (fader < ENGINE_STROBE_ON || m_groupOff.contains(strobes) || m_groupTrim.value(strobes, 1.0) <= 0.01
+            || m_padFlash.contains(strobes) || m_flashHeld.contains(strobes)
+            || m_groups.value(strobes).generatable() == false))
+        strobes.clear();
+    if (wash.isEmpty())
+        return false;
+    QVector<quint32> fx;
+    QVector<qreal> ys;
+    QStringList keys;
+    keys << wash;
+    if (strobes.isEmpty() == false)
+        keys << strobes;
+    qreal front = R507_SUCK_FRONT, nearest = 2.0;
+    for (int k = 0; k < keys.count(); k++)
+    {
+        foreach (quint32 fid, m_groups.value(keys.at(k)).fixtures)
+        {
+            qreal y = 0.0;
+            if (fx.contains(fid))
+                continue;
+            if (roomOf(fid, nullptr, &y) == false)
+                return false;
+            fx << fid;
+            ys << y;
+            if (k == 0)
+                nearest = qMin(nearest, y);
+        }
+    }
+    // a wash with no lamp in the front row: its nearest lamp stays lit to the end
+    if (nearest > front && nearest <= 1.0)
+        front = nearest;
+    QString cacheKey;
+    for (int i = 0; i < fx.count(); i++)
+        cacheKey += QString::number(fx.at(i)) + QLatin1Char(ys.at(i) > front + 1e-9 ? 'd' : 'f');
+    auto alive = [this](const QVector<quint32> &ids, int n) {
+        if (ids.count() != n)
+            return false;
+        for (quint32 id : ids)
+            if (id != Function::invalidId() && m_doc->function(id) == nullptr)
+                return false;
+        return true;
+    };
+    if (cacheKey != m_r507SuckCache || alive(m_r507SuckDark, int(fx.count())) == false)
+    {
+        QVector<quint32> darkIds(fx.count(), Function::invalidId());
+        for (int i = 0; i < fx.count(); i++)
+        {
+            if (ys.at(i) <= front + 1e-9)
+                continue;                // the front row: never masked
+            Fixture *fxi = m_doc->fixture(fx.at(i));
+            if (fxi == nullptr)
+                return false;
+            QList<SceneValue> dark;
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch != nullptr && qch->group() == QLCChannel::Intensity)
+                    dark.append(SceneValue(fx.at(i), ch, 0));
+            }
+            if (dark.isEmpty())
+                return false;
+            const int was = int(m_r507SuckFx.indexOf(fx.at(i)));
+            Scene *ds = r497BloomScene(was >= 0 && was < m_r507SuckDark.count() ? m_r507SuckDark.at(was) : Function::invalidId(),
+                                       QStringLiteral("TRACK R507: suck dark %1").arg(fxi->address() + 1));
+            if (ds == nullptr)
+                return false;
+            foreach (const SceneValue &sv, dark)
+                ds->setValue(sv);
+            ds->setBlendMode(Universe::ReplaceBlend);
+            darkIds[i] = ds->id();
+        }
+        m_r507SuckDark = darkIds;
+        m_r507SuckCache = cacheKey;
+    }
+    m_r507SuckWash = wash;
+    m_r507SuckStrobeKey = strobes;
+    m_r507SuckFx = fx;
+    m_r507SuckY = ys;
+    m_r507SuckFront = front;
+    m_r507SuckShown = QVector<bool>(fx.count(), false);
+    return true;
+}
+
+void TrackEngine::r507SuckBeat(int beat, bool isDrop, bool isBuild, const QString &nextState, int beatsToNext,
+                               qreal fader, bool hold, bool isCalm, bool still, bool forceNext)
+{
+    // R507_SUCK_BEAT_CALL (tick(), every beat after the drop forms, the bloom and the rush): a
+    // running suck carries on into its next beat or lets go; else one may be drawn here
+    if (m_r507SuckTitle != m_trackTitle)
+    {
+        r507SuckStop(QStringLiteral("track"));
+        m_r507SuckTitle = m_trackTitle;
+        m_r507SuckDecidedFor = -1;
+        m_r507SuckDrawn = false;
+        m_r507SuckPrev = false;
+    }
+    const int at = m_nextDropBeat;
+    if (m_r507SuckFor >= 0)
+    {
+        QString why;
+        if (isDrop || beat >= m_r507SuckFor)
+            why = QStringLiteral("drop");            // "then the drop lands on everything at once"
+        else if (beat < m_r507SuckBeatNow)
+            why = QStringLiteral("jump-back");       // a DJ loop jumped back
+        else if (at != m_r507SuckFor)
+            why = QStringLiteral("no-drop");         // the flag moved or went
+        else if (isBuild == false)
+            why = QStringLiteral("no-build");
+        else if (hold || isCalm || still)
+            why = QStringLiteral("calm");
+        else if (forceNext)
+            why = QStringLiteral("next");
+        else if (fader + 0.05 < R507_SUCK_MIN_FADER)
+            why = QStringLiteral("energy");
+        else if (r507SuckFree() == false || r507SuckPlanOk(m_r507SuckFor) == false)
+            why = QStringLiteral("his");
+        if (why.isEmpty() == false)
+        {
+            r507SuckStop(why);
+            return;
+        }
+        // this beat's wall now, before the beat is drawn: a lamp the wall passes goes dark on the
+        // beat line itself (masked after the draw it showed the beat's first frame lit)
+        m_r507SuckBeatNow = beat;
+        m_r507SuckMs = -1;
+        m_r507SuckPaused = false;
+        r507SuckApply();
+        return;
+    }
+    // the draw: once per drop, on the first build beat of its last 8 bars - what the music and
+    // the rules say; the start waits (a few beats at most) for the room: the disco ball's heads
+    // travelling home dark over a build's first beats, HOLD for a beat, a pad
+    if (isDrop || isBuild == false || at <= beat)
+        return;
+    if (nextState == QStringLiteral("drop") && beat + beatsToNext != at)
+        return;
+    const int left = at - beat;
+    if (left > R507_SUCK_BEATS)
+        return;
+    if (m_r507SuckDecidedFor != at)
+    {
+        if (left < R507_SUCK_MIN_BEATS)
+            return;
+        m_r507SuckDecidedFor = at;
+        m_r507SuckDrawn = false;
+        const bool prev = m_r507SuckPrev;
+        m_r507SuckPrev = false;
+        if (prev || fader < R507_SUCK_MIN_FADER - 1e-9 || r498RushReady() == false || r507SuckPlanOk(at) == false)
+            return;
+        // a real drop: the kick lands on the flag (not a fake drop's wait) and the music jumps
+        if (r505DropLandAt(m_audKick, int(m_audLevel.count()), at) != at || m_nextDropSize < R507_SUCK_MIN_SIZE)
+            return;
+        // the build's ticket, shared with the build rush: a dice of the track and the drop (the
+        // global random generator is never drawn, so every other draw stays as it was)
+        if ((r498RushDice(m_trackTitle, at, 0x5355434bu) & 0xffffu) / 65535.0 >= R507_SUCK_SHARE)
+            return;
+        m_r507SuckDrawn = true;
+        crumb(QStringLiteral("r507 suck %1: drawn at %2").arg(at).arg(beat));
+    }
+    if (m_r507SuckDrawn == false || left < R507_SUCK_START_MIN)
+        return;
+    if (hold || isCalm || still || forceNext || fader < R507_SUCK_MIN_FADER - 1e-9 || r507SuckPlanOk(at) == false
+        || r507SuckLamps(fader) == false || r507SuckFree() == false)
+        return;                          // not now: the next beat asks again
+    m_r507SuckDrawn = false;             // it starts once
+    // the wall reaches the front row on the build's last lit beat: the one before the drop, or
+    // before R374's black beat (which stays black)
+    const bool black = fader >= 0.62 && m_nextDropSize >= 0.40 && m_flash == false && djLoopOn() == false;
+    const int last = qMax(beat + 1, at - 1 - (black ? 1 : 0));
+    qreal top = m_r507SuckFront;
+    for (int i = 0; i < m_r507SuckY.count(); i++)
+        top = qMax(top, m_r507SuckY.at(i));
+    const int span = last - beat;
+    m_r507SuckDarkAt = QVector<int>(m_r507SuckFx.count(), -1);
+    QList<QPair<int, int> > order;
+    for (int i = 0; i < m_r507SuckFx.count(); i++)
+    {
+        const qreal y = m_r507SuckY.at(i);
+        if (y <= m_r507SuckFront + 1e-9 || i >= m_r507SuckDark.count() || m_r507SuckDark.at(i) == Function::invalidId())
+            continue;
+        // the wall on beat k of the window: top - (top - front) * k / span; dark once it is in front of the lamp
+        for (int k = 0; k <= span; k++)
+        {
+            const qreal wall = top - (top - m_r507SuckFront) * qreal(k) / qreal(qMax(1, span));
+            if (y > wall + 1e-9)
+            {
+                m_r507SuckDarkAt[i] = beat + k;
+                break;
+            }
+        }
+        if (m_r507SuckDarkAt.at(i) < 0)
+            m_r507SuckDarkAt[i] = last;
+        order << qMakePair(m_r507SuckDarkAt.at(i), i);
+    }
+    if (order.isEmpty())
+        return;
+    m_r507SuckFor = at;
+    m_r507SuckFrom = beat;
+    m_r507SuckLast = last;
+    m_r507SuckBeatNow = beat;
+    m_r507SuckMs = -1;
+    m_r507SuckPaused = false;
+    m_r507SuckPrev = true;
+    m_r498RushBuildFor = at;             // the build rush's ticket for this drop is the suck's
+    std::stable_sort(order.begin(), order.end());
+    QStringList lamps;
+    for (const QPair<int, int> &o : std::as_const(order))
+    {
+        Fixture *fxi = m_doc->fixture(m_r507SuckFx.at(o.second));
+        if (fxi != nullptr)
+            lamps << QStringLiteral("%1%2@%3").arg(o.second >= m_groups.value(m_r507SuckWash).fixtures.count() ? QStringLiteral("s") : QString())
+                                              .arg(fxi->address() + 1).arg(o.first - beat + 1);
+    }
+    crumb(QStringLiteral("r507 suck %1 (%2..%3, black %4): %5").arg(at).arg(beat).arg(last).arg(black ? 1 : 0)
+          .arg(lamps.join(QLatin1Char(' '))));
+    if (m_testTrack == false)
+        logSignal(QStringLiteral("sig:suck:on@%1:%2").arg(at).arg(at - beat));
+}
+
+void TrackEngine::r507SuckStart()
+{
+    // R507_SUCK_START_CALL (tick(), the beat drawn): this beat's wall, the first frame, the timer
+    if (m_r507SuckFor < 0 || m_doc == nullptr)
+        return;
+    if (m_r507SuckBeatNow != m_lastBeat || m_beatMs <= 0.0)
+    {
+        r507SuckStop(QStringLiteral("beat"));
+        return;
+    }
+    m_r507SuckMs = m_beatStartMs;
+    // a hit scene of his show on the wash or the strobes this beat (the "flash" slot) keeps its
+    // beat: the masks let go for it and come back on the next
+    const quint32 hitScene = m_active.value(QStringLiteral("flash"), Function::invalidId());
+    m_r507SuckPaused = hitScene != Function::invalidId()
+                    && (m_funcs.value(hitScene).groups.contains(m_r507SuckWash)
+                        || (m_r507SuckStrobeKey.isEmpty() == false && m_funcs.value(hitScene).groups.contains(m_r507SuckStrobeKey)));
+    r507SuckFrame(m_clock.elapsed());
+    if (m_r507SuckFor >= 0 && m_pulseTimer.isActive() == false)
+        m_pulseTimer.start();
+}
+
+bool TrackEngine::r507SuckFrame(qint64 now)
+{
+    // R507_SUCK_TIMER (the pulse timer, reapplyLevels): the masks for this beat; his hand mid-beat
+    // lets go at once
+    if (m_r507SuckFor < 0 || m_doc == nullptr)
+        return false;
+    if (m_beatMs <= 0.0 || (m_r507SuckMs >= 0 && now - m_r507SuckMs > qint64(2.0 * m_beatMs)))
+    {
+        r507SuckStop(QStringLiteral("stalled"));     // no next beat came (the deck stopped): let go
+        return false;
+    }
+    if (r507SuckFree() == false)
+    {
+        r507SuckStop(QStringLiteral("his"));
+        return false;
+    }
+    if (m_r507SuckMs < 0)
+        return true;                     // the next beat is being drawn: the masks hold as they are
+    r507SuckApply();
+    return true;
+}
+
+void TrackEngine::r507SuckApply()
+{
+    // the masks for the beat it is in: dark from each lamp's beat on (none while a hit of his
+    // show keeps its beat) - the new one flashed, an old one let go
+    if (m_r507SuckFor < 0 || m_doc == nullptr)
+        return;
+    const int n = int(m_r507SuckFx.count());
+    if (m_r507SuckShown.count() != n)
+        m_r507SuckShown = QVector<bool>(n, false);
+    for (int i = 0; i < n; i++)
+    {
+        const int from = i < m_r507SuckDarkAt.count() ? m_r507SuckDarkAt.at(i) : -1;
+        Function *darkF = i < m_r507SuckDark.count() ? m_doc->function(m_r507SuckDark.at(i)) : nullptr;
+        const bool want = m_r507SuckPaused == false && from >= 0 && m_r507SuckBeatNow >= from && darkF != nullptr;
+        if (m_r507SuckShown.at(i) == want)
+            continue;
+        if (want)
+            darkF->flash(m_doc->masterTimer(), true, true);
+        else if (darkF != nullptr)
+            darkF->unFlash(m_doc->masterTimer());
+        m_r507SuckShown[i] = want;
+    }
+}
+
+void TrackEngine::r507SuckStop(const QString &why)
+{
+    // every mask let go: the room is what the engine draws
+    if (m_doc != nullptr)
+    {
+        for (int i = 0; i < m_r507SuckShown.count(); i++)
+        {
+            if (m_r507SuckShown.at(i) == false)
+                continue;
+            Function *darkF = i < m_r507SuckDark.count() ? m_doc->function(m_r507SuckDark.at(i)) : nullptr;
+            if (darkF != nullptr)
+                darkF->unFlash(m_doc->masterTimer());
+        }
+    }
+    m_r507SuckShown.fill(false);
+    const bool was = m_r507SuckFor >= 0;
+    m_r507SuckFor = -1;
+    m_r507SuckMs = -1;
+    m_r507SuckBeatNow = -1;
+    m_r507SuckPaused = false;
+    if (was && why.isEmpty() == false)
+    {
+        crumb(QStringLiteral("r507 suck end: %1").arg(why));
+        if (m_testTrack == false && why != QStringLiteral("release") && why != QStringLiteral("idle")
+            && why != QStringLiteral("stop"))
+            logSignal(QStringLiteral("sig:suck:end:%1").arg(why));
+    }
+}
+/* =====================================================================
+ *  THE ANIMATION LASER DUEL (runde 507, agent DUEL) - appended to
+ *  trackengine.cpp by feature_trackview_engine.py from
+ *  track_runtime/r507_duel.inc.cpp (R507_INF_FILES, R507_DUEL_FILE).
+ *
+ *  Tobias, 2026-10-26 ("Lav: 1, 2, 3, 6" - this is 3): "The two animation
+ *  lasers stand in opposite corners and shoot at each other. Instead of
+ *  always both together: one plays a bar/phrase, the other answers, and on
+ *  the phrase's climax both."
+ *
+ *  WHAT. While the engine has the Animation Laser group lit, the two lasers
+ *  (fixture 14 at DMX 203 and 15 at DMX 219 - one in the corner by the DJ,
+ *  one in the back-right corner; which is which is not known and does not
+ *  matter) take turns: one plays a turn, the other answers the next. A turn
+ *  is one bar in a drop from 85 % and two bars otherwise, on the downbeat,
+ *  and the turns alternate straight through the duel. The 8-bar phrase's
+ *  last bar, a drop's landing bar and the section's last bar (the phrase
+ *  turn) are BOTH.
+ *
+ *  HOW. Nothing new drives the laser: the engine already gives each fixture
+ *  its own hidden dimmer part (ensureDimmerScenes, one part a fixture, CH1
+ *  Main switch), written with ReplaceBlend above his pattern scenes, and the
+ *  existing square gate (pulseFactor) already writes those parts 0 or 255.
+ *  The duel only adds a 0 for the answering laser where the engine squares
+ *  the part (setPart, reapplyLevels, slotPulseTimer: R442_ANI_MASTER). It
+ *  never lights anything: a part the engine darkens (BLACKOUT, MASTER, a
+ *  move's dark beat, the bars' interlock, the gate's shut slice, a group
+ *  switched off) stays dark, and the playing laser is exactly what the engine
+ *  draws. So both are dark only where the existing gate (or a guard) already
+ *  darkens the group. His scenes are never touched; the patterns, colours and
+ *  CH13/CH14 are his scenes' (the animation laser has no aim the engine
+ *  moves, r503SafeAim). While it duels, the group's generated mask is static
+ *  (the engine's own take-turns-per-beat mask stands aside - two masks could
+ *  darken both); the gate and his pattern pick are unchanged.
+ *
+ *  DARK BEFORE MOVE. A laser the duel has kept dark comes back only on a
+ *  beat where the group's pattern, colour and position functions (mot:,
+ *  col:, pos:) are the ones it had the beat before (r507DuelWake): a new
+ *  pattern or aim is put on while it is still dark, and it lights on a
+ *  later hit - never on the frame its picture changes.
+ *
+ *  THE HIT RULE (r501, strict). A turn changes only on a beat with a real
+ *  kick or onset (r501PulseHit, the animation laser's own rule); on a beat
+ *  without one the current side holds, and the change lands on the next beat
+ *  that has a hit. Starting the duel (one laser out) is a change too. At a
+ *  soft end (the section is over, ENERGY under 70 %) the dark laser comes
+ *  back on the next hit, at most 8 beats later.
+ *
+ *  WHEN. A drawn option, once per section, on drops (from the landed kick)
+ *  and real breaks at 70 % ENERGY or more, with the group in the engine's
+ *  cast: 40 % of such sections (a dice of the track and the section - the
+ *  engine's random generator is never drawn, so everything else draws as
+ *  before), never two sections running. Never under his picks (AUTO off,
+ *  RIG/PLAN, his drop set, a mix, LAST TRACK, the labs, the start scene, any
+ *  saved look - none of them saved a duel), HOLD/CALM/STILL, NEXT, DROP HIT
+ *  armed or running: those end it at once (both, as the engine draws). It
+ *  ends too when the group leaves the cast (the bars' turn) or the track
+ *  changes, and pauses (both, as the engine draws) under FLASH, a pad or held
+ *  flash on the group, BLACKOUT, and while a programme of his owns the
+ *  dimmers (m_motionDim: then the parts are not his laser's writer).
+ *  Only a pattern-device group of exactly two fixtures with a dimmer part
+ *  each - any other rig: nothing here runs.
+ *  Log: sig:duel:<1|2>bar on its first beat, sig:duel:end:<why>; a crumb per
+ *  change ("r507 duel <beat>: 203|219|both", "... wait" for a held wake).
+ * ===================================================================== */
+
+#define R507_DUEL_MIN_FADER  0.70        // the animation laser's own line (ENGINE_ANI_ON)
+#define R507_DUEL_P          0.40        // the share of the sections it may play that it draws
+#define R507_DUEL_FAST       0.85        // one bar a turn in a drop from here, two bars below
+#define R507_DUEL_PHRASE     8           // bars a phrase: its last bar is both
+#define R507_DUEL_LET_GO     8           // a soft end: the dark laser back on the next hit, at most this many beats
+
+static quint32 r507DuelDice(const QString &title, int beat, quint32 salt)
+{
+    // a dice of the track and the section (murmur3's finaliser, as the rush's): the global random
+    // generator is never drawn, so every other draw of the engine stays as it was
+    quint32 st = quint32(qHash(title)) ^ (quint32(beat) * 2654435761u) ^ salt;
+    st ^= st >> 16; st *= 0x85ebca6bu; st ^= st >> 13; st *= 0xc2b2ae35u; st ^= st >> 16;
+    return st;
+}
+
+QString TrackEngine::r507DuelGroup() const
+{
+    // R507_DUEL_FILE: the animation laser group - a pattern device of two fixtures, each with its
+    // own dimmer part (ensureDimmerScenes): "" when the rig has no such group
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.patternDevice == false || g.fixtures.count() != 2 || g.parts.count() != 2)
+            continue;
+        if (g.parts.at(0) == Function::invalidId() || g.parts.at(1) == Function::invalidId())
+            continue;
+        return key;
+    }
+    return QString();
+}
+
+bool TrackEngine::r507DuelHis() const
+{
+    // his hand took the section: AUTO off, RIG/PLAN, his drop set, a mix, LAST TRACK, the labs, the
+    // start scene, a saved look playing (none saves a duel), DROP HIT armed or running, the test
+    return m_fullAuto == false || m_forceOn || m_dropTouched || m_mixing || m_lastStage != 0 || m_startScene
+        || m_labActive || m_slabActive || m_clabActive || savedActive() || m_hitKind != 0 || m_hitAmokOwed
+        || m_hitAmokFrom >= 0 || m_testTimer.isActive();
+}
+
+bool TrackEngine::r507DuelFree(const QString &key) const
+{
+    // a moment's pause - both as the engine draws them: FLASH, a pad or held flash on the group,
+    // BLACKOUT, a programme of his owning the dimmers
+    return m_flash == false && m_blackout == false && m_padFlash.contains(key) == false
+        && m_flashHeld.contains(key) == false && m_motionDim.contains(key) == false;
+}
+
+void TrackEngine::r507DuelSet(int side, int beat)
+{
+    // one change of side (0 the first laser, 1 the second, 2 both) - a laser it lights again waits
+    // for r507DuelWake (dark before move); logged as a crumb
+    if (side == m_r507DuelSide)
+        return;
+    if (m_r507DuelSide == 0 || m_r507DuelSide == 1)
+    {
+        const int dark = 1 - m_r507DuelSide;      // the laser the duel kept dark until now
+        if (side == 2 || side == dark)
+            m_r507DuelWake = dark;
+    }
+    m_r507DuelSide = side;
+    m_r507DuelSwaps++;
+    const TrackGroup &g = m_groups.value(m_r507DuelKey);
+    QString who = QStringLiteral("both");
+    if (side == 0 || side == 1)
+    {
+        Fixture *fx = (m_doc != nullptr && side < g.fixtures.count()) ? m_doc->fixture(g.fixtures.at(side)) : nullptr;
+        who = fx != nullptr ? QString::number(fx->address() + 1) : QString::number(side);
+    }
+    crumb(QStringLiteral("r507 duel %1: %2").arg(beat).arg(who));
+}
+
+void TrackEngine::r507DuelBeat(int beat)
+{
+    // R507_DUEL_BEAT_CALL (tick(), every beat before the cast): a duel whose laser left the cast (the
+    // bars' turn, a section without it) or whose track changed is over - both as the engine draws
+    if (m_r507DuelOn == false && m_r507DuelSide == 2)
+        return;
+    if (m_r507DuelTitle != m_trackTitle)
+        r507DuelStop(QStringLiteral("track"), -1);
+    else if (m_r507DuelSeen >= 0 && beat > m_r507DuelSeen + 1)
+        r507DuelStop(QStringLiteral("out"), -1);
+}
+
+void TrackEngine::r507DuelMove(const QString &key, TrackMove &mv, const QString &state, int beat, int secStart,
+                               int beatsToNext, bool isDrop, int dropBar, int beatInBar, qreal fader, bool hold,
+                               bool isCalm, bool still, bool forceNext)
+{
+    // R507_DUEL_MOVE (tick(), the moves - every beat the animation laser is in the cast): the duel is
+    // drawn, carries on, changes side on a hit, or ends; while it plays the group's mask is static
+    if (key.isEmpty() || key != r507DuelGroup())
+        return;
+    const bool hit = r501PulseHit(beat, 0, false, true);   // the animation laser's strict hit (r501)
+    const bool isBreak = state == QStringLiteral("break");
+    const bool here = (isDrop && dropBar >= 0) || isBreak;
+    m_r507DuelSeen = beat;
+    m_r507DuelHit = hit;
+
+    // 1. a running duel ends
+    if (m_r507DuelOn)
+    {
+        QString why;
+        bool hard = true;
+        if (m_r507DuelTitle != m_trackTitle)
+            why = QStringLiteral("track");
+        else if (beat < m_r507DuelFrom)
+            why = QStringLiteral("jump-back");
+        else if (isCalm || still || hold)
+            why = QStringLiteral("calm");
+        else if (forceNext)
+            why = QStringLiteral("next");
+        else if (r507DuelHis())
+            why = QStringLiteral("his");
+        else if (secStart != m_r507DuelSec || here == false)
+        {
+            why = QStringLiteral("section");
+            hard = false;
+        }
+        else if (fader + 0.05 < R507_DUEL_MIN_FADER && beatInBar == 0)
+        {
+            why = QStringLiteral("energy");
+            hard = false;
+        }
+        if (why.isEmpty() == false)
+            r507DuelStop(why, hard ? -1 : beat);
+    }
+    // ... a soft end lets the dark laser back on the next hit (at most R507_DUEL_LET_GO beats)
+    if (m_r507DuelOn == false && m_r507DuelSide != 2)
+    {
+        if (m_r507DuelTitle != m_trackTitle || beat < m_r507DuelEndAt || r507DuelHis() || hold || isCalm || still
+            || beat - m_r507DuelEndAt >= R507_DUEL_LET_GO)
+            r507DuelStop(QString(), -1);
+        else if (hit)
+            r507DuelSet(2, beat);        // through the wake: dark before move
+    }
+
+    // 2. the draw: once a section, the first beat it may play with the group in the cast
+    if (m_r507DuelOn == false && here && (m_r507DuelDrawn != secStart || m_r507DuelDrawnTitle != m_trackTitle)
+        && fader >= R507_DUEL_MIN_FADER - 1e-9
+        && hold == false && isCalm == false && still == false && forceNext == false && r507DuelHis() == false
+        && (beatsToNext <= 0 || beatsToNext > 8))
+    {
+        // never two sections running: the section drawn before this one (this track) did not play it
+        const bool twice = m_r507DuelDrawnTitle == m_trackTitle && m_r507DuelRanTitle == m_trackTitle
+                        && m_r507DuelRanSec == m_r507DuelDrawn;
+        m_r507DuelDrawn = secStart;
+        m_r507DuelDrawnTitle = m_trackTitle;
+        const quint32 dice = r507DuelDice(m_trackTitle, secStart, 0x4455454cu);
+        const bool drawn = twice == false && (dice & 0xffffu) / 65535.0 < R507_DUEL_P;
+        if (drawn)
+        {
+            m_r507DuelOn = true;
+            m_r507DuelKey = key;
+            m_r507DuelTitle = m_trackTitle;
+            m_r507DuelSec = secStart;
+            m_r507DuelFrom = beat;
+            m_r507DuelSpan = (isDrop && fader >= R507_DUEL_FAST - 1e-9) ? 1 : 2;
+            m_r507DuelFirst = int((dice >> 16) & 1u);
+            m_r507DuelEndAt = -1;
+            m_r507DuelSwaps = 0;
+            m_r507DuelRanTitle = m_trackTitle;
+            m_r507DuelRanSec = secStart;
+            if (m_testTrack == false)
+                logSignal(QStringLiteral("sig:duel:%1bar").arg(m_r507DuelSpan));
+        }
+    }
+    if (m_r507DuelOn == false)
+    {
+        if (m_r507DuelSide == 0 || m_r507DuelSide == 1)
+            r507DuelStatic(mv);          // a soft end still holding a side: no second mask on top
+        return;
+    }
+
+    // 3. the side this bar wants: the phrase's last bar, a drop's landing bar and the section's last
+    // bar are both; else the turns, alternating straight through (the phrase's turns counted on)
+    const int bar = isDrop ? dropBar : qMax(0, (beat - secStart) / 4);
+    const int inPhrase = bar % R507_DUEL_PHRASE;
+    const int span = qMax(1, m_r507DuelSpan);
+    const int turnsBefore = (bar / R507_DUEL_PHRASE) * ((R507_DUEL_PHRASE - 1 + span - 1) / span);
+    const bool lastBar = beatsToNext > 0 && beatsToNext <= 4;
+    int want = 2;
+    if (inPhrase != R507_DUEL_PHRASE - 1 && (isDrop && dropBar == 0) == false && lastBar == false)
+        want = (m_r507DuelFirst + turnsBefore + inPhrase / span) % 2;
+    // ... and it changes only on a beat with a real hit (r501): no hit, the current side holds
+    if (want != m_r507DuelSide && hit)
+        r507DuelSet(want, beat);
+    r507DuelStatic(mv);
+}
+
+void TrackEngine::r507DuelStatic(TrackMove &mv) const
+{
+    // while it duels the group's own mask is static - the engine's take-turns mask (CHASE, ODDEVEN,
+    // PINGPONG, bare) would darken the laser whose turn it is; the gate (pulse) and his pick stay
+    mv.pattern = ENGINE_PAT_STATIC;
+    mv.bare = false;
+    mv.subSteps = 1;
+    mv.rhythm = 0;
+    mv.formMask = 0;
+    mv.width = 1;
+}
+
+void TrackEngine::r507DuelWake(const QString &key, int beat)
+{
+    // R507_DUEL_WAKE (tick(), after this beat's pattern/colour pick, before the parts are set): a laser
+    // the duel kept dark lights again only on a hit where the group's mot:/col:/pos: are the ones it
+    // had the beat before - else it waits, dark, for the next such hit (dark before move)
+    if (key != m_r507DuelKey || key.isEmpty())
+        return;
+    const QString fids = QStringLiteral("%1|%2|%3")
+        .arg(m_active.value(QStringLiteral("mot:") + key, Function::invalidId()))
+        .arg(m_active.value(QStringLiteral("col:") + key, Function::invalidId()))
+        .arg(m_active.value(QStringLiteral("pos:") + key, Function::invalidId()));
+    const bool same = m_r507DuelFidsBeat == beat - 1 && fids == m_r507DuelFids;
+    m_r507DuelFids = fids;
+    m_r507DuelFidsBeat = beat;
+    if (m_r507DuelWake < 0)
+        return;
+    if (same && m_r507DuelHit && m_r507DuelSeen == beat)
+        m_r507DuelWake = -1;             // lit from this beat
+    else if (m_r507DuelWakeLog != beat)
+    {
+        m_r507DuelWakeLog = beat;
+        crumb(QStringLiteral("r507 duel %1: wait %2").arg(beat).arg(same ? QStringLiteral("hit") : QStringLiteral("picture")));
+    }
+}
+
+int TrackEngine::r507DuelPartOf(const QString &slot) const
+{
+    // a dimmer part's index from its slot ("dim:<group>#<index>", partSlot)
+    const int hash = slot.lastIndexOf(QLatin1Char('#'));
+    bool ok = false;
+    const int index = hash < 0 ? -1 : slot.mid(hash + 1).toInt(&ok);
+    return ok ? index : -1;
+}
+
+bool TrackEngine::r507DuelDark(const QString &group, int index) const
+{
+    // R507_DUEL_DARK (setPart, reapplyLevels, slotPulseTimer - where the engine squares the switch):
+    // is this laser the one answering? Only ever darkens: the playing one is what the engine draws
+    if (m_r507DuelKey.isEmpty() || group != m_r507DuelKey || index < 0 || index > 1
+        || m_r507DuelTitle != m_trackTitle)
+        return false;
+    // a change still waiting to wake its laser has not happened yet: the side before it plays on
+    // (so the two are never both out for it)
+    const int side = m_r507DuelWake >= 0 ? 1 - m_r507DuelWake : m_r507DuelSide;
+    if ((side != 0 && side != 1) || index == side)
+        return false;
+    return r507DuelFree(group) && r507DuelHis() == false && m_hold == false;
+}
+
+void TrackEngine::r507DuelStop(const QString &why, int softAt)
+{
+    // R507_DUEL_STOP: the duel is over. Hard (softAt < 0): both as the engine draws them, now. Soft
+    // (the section is over, ENERGY): the dark laser comes back on the next hit (r507DuelMove)
+    if (m_r507DuelOn && m_testTrack == false && why.isEmpty() == false)
+        logSignal(QStringLiteral("sig:duel:end:%1").arg(why));
+    if (m_r507DuelOn && why.isEmpty() == false)
+        crumb(QStringLiteral("r507 duel end %1 (%2 changes)").arg(why).arg(m_r507DuelSwaps));
+    m_r507DuelOn = false;
+    m_r507DuelSec = -1;
+    if (softAt < 0 || (m_r507DuelSide != 0 && m_r507DuelSide != 1))
+    {
+        m_r507DuelSide = 2;
+        m_r507DuelWake = -1;
+        m_r507DuelEndAt = -1;
+    }
+    else
+        m_r507DuelEndAt = softAt;
 }

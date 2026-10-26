@@ -1407,6 +1407,101 @@ protected:
     QVector<int> r504MirrorPlan(const QString &group, Function *func, const TrackSweep &sw, bool *backward, int *c);
     static void r504MirrorHead(int startOffset, bool backward, int c, bool &runBackward, int &offset);
     QHash<QString, TrackSweep> m_r504MirrorLogged;   // the figure sig:mirror was logged for, per group
+    // R507_INF_DECL (runde 507): one marker per feature, each replaced by its owner
+    // R507_DECL_WAVE
+    // R507_WAVE_DECL (runde 507, WAVE): the kick wave - "each kick hits the lamps by the DJ first and
+    // rolls out towards the back wall" (r507_wave.inc.cpp)
+    QString r507WaveWash() const;                       // the wash it rolls on ("" none: no wave)
+    bool r507WavePhases(const QString &key, QVector<qreal> *phase) const;   // 0 by the DJ .. 1 the back wall
+    bool r507WaveReady() const;                         // dropFormDecide: the map knows the wash whole
+    bool r507WaveFree(const QString &key) const;        // his picks and the room's other owners: no wave
+    qreal r507WaveMaxMs() const;                        // the back wall's delay at this tempo
+    bool r507WaveLand(int beat, qreal fader);           // the drop forms' landing: the kick-wave drop
+    bool r507WaveHis() const;                           // his hand took the section: the wave ends
+    bool r507WaveTakes(const QString &key) const;       // the kick-wave drop draws this wash itself
+    void r507WaveMove(const QString &key, TrackMove &mv) const;   // ... every head lit, a pulse a kick
+    void r507WaveBeat(int beat, bool isDrop, int beatInBar, qreal fader, bool hold, bool isCalm, bool still,
+                      bool forceNext);
+    int r507WavePartOf(const QString &slot) const;      // a dimmer part's index from its slot
+    qreal r507WaveRatio(const QString &group, int index);   // a head's pulse at its own time / the group's
+    void r507WaveStop(const QString &why);
+    int m_r507WaveFor = -1;                     // the kick-wave drop's landing beat (-1 none)
+    QString m_r507WaveTitle;                    // ... of this track
+    QString m_r507WaveKey;                      // the wash it rolls on
+    bool m_r507WaveOn = false;                  // it rolls on this beat's hit
+    bool m_r507WaveLogged = false;
+    QVector<qreal> m_r507WavePhase;             // per part: 0 the row by the DJ .. 1 the back wall
+    qint64 m_r507WaveCur = -1;                  // the group's pulse start last seen ...
+    qint64 m_r507WavePrev = -1;                 // ... and the one before (a late head shows its tail)
+    qreal m_r507WaveCurStrength = 1.0;
+    qreal m_r507WavePrevStrength = 1.0;
+    // R507_DECL_SUCK
+    // R507_SUCK_DECL (runde 507, SUCK): the build sucks the room in - "in the build's last 8 bars the
+    // room goes dark from the back wall forwards ... then the drop lands on everything at once" (r507_suck.inc.cpp)
+    bool r507SuckPlanOk(int at) const;                  // the drop's plan and his picks allow it
+    bool r507SuckFree() const;                          // his hand and the room's other owners: no suck
+    bool r507SuckLamps(qreal fader);                    // the wash + strobes, their y, the dark masks
+    void r507SuckBeat(int beat, bool isDrop, bool isBuild, const QString &nextState, int beatsToNext,
+                      qreal fader, bool hold, bool isCalm, bool still, bool forceNext);
+    void r507SuckStart();                               // tick(), the beat drawn: this beat's wall
+    bool r507SuckFrame(qint64 now);                     // the pulse timer and reapplyLevels
+    void r507SuckApply();                               // the masks for the beat it is in
+    void r507SuckStop(const QString &why);              // every mask let go
+    int m_r507SuckFor = -1;                     // the drop it runs into (-1 none)
+    int m_r507SuckDecidedFor = -1;              // the drop the draw was made for (once a drop)
+    QString m_r507SuckTitle;
+    bool m_r507SuckPrev = false;                // the last build drawn in this track was sucked
+    bool m_r507SuckDrawn = false;               // drawn for m_r507SuckDecidedFor, not started yet
+    int m_r507SuckFrom = -1;                    // the window's first beat ...
+    int m_r507SuckLast = -1;                    // ... and its last lit beat (the front row alone)
+    int m_r507SuckBeatNow = -1;                 // the beat it is in
+    qint64 m_r507SuckMs = -1;                   // ... that beat's start, once tick() has drawn it
+    bool m_r507SuckPaused = false;              // a hit scene of his show this beat: masks off for it
+    QString m_r507SuckWash;
+    QString m_r507SuckStrobeKey;                // "" the wash alone
+    qreal m_r507SuckFront = 0.20;               // the front row's edge (y)
+    QVector<quint32> m_r507SuckFx;              // the lamps: the wash, then the strobes
+    QVector<qreal> m_r507SuckY;                 // ... where they hang (0 the DJ .. 1 the back wall)
+    QVector<int> m_r507SuckDarkAt;              // ... the beat each goes dark (-1 never: the front row)
+    QVector<quint32> m_r507SuckDark;            // ... its dark mask (hidden scene, flashed)
+    QVector<bool> m_r507SuckShown;
+    QString m_r507SuckCache;                    // the lamps the masks were made for
+    // R507_DECL_DUEL
+    // R507_DUEL_DECL (runde 507, DUEL): the animation lasers answer each other - "one plays a bar/phrase,
+    // the other answers, and on the phrase's climax both" (r507_duel.inc.cpp)
+    QString r507DuelGroup() const;                      // the animation laser group of two ("" none)
+    bool r507DuelHis() const;                           // his hand took the section: no duel
+    bool r507DuelFree(const QString &key) const;        // FLASH, pads, BLACKOUT, his programme: a pause
+    void r507DuelSet(int side, int beat);               // one change of side
+    void r507DuelBeat(int beat);                        // a duel whose laser left the cast ends
+    void r507DuelWake(const QString &key, int beat);    // a laser lit again: dark before move
+    void r507DuelMove(const QString &key, TrackMove &mv, const QString &state, int beat, int secStart,
+                      int beatsToNext, bool isDrop, int dropBar, int beatInBar, qreal fader, bool hold,
+                      bool isCalm, bool still, bool forceNext);
+    void r507DuelStatic(TrackMove &mv) const;           // the group's own mask static while it duels
+    int r507DuelPartOf(const QString &slot) const;      // a dimmer part's index from its slot
+    bool r507DuelDark(const QString &group, int index) const;   // the answering laser: dark
+    void r507DuelStop(const QString &why, int softAt);
+    bool m_r507DuelOn = false;                  // a duel plays in this section
+    QString m_r507DuelKey;                      // the animation laser group
+    QString m_r507DuelTitle;                    // ... of this track
+    int m_r507DuelSec = -1;                     // the section it plays in
+    int m_r507DuelFrom = -1;                    // its first beat
+    int m_r507DuelSide = 2;                     // 0 the first laser lit, 1 the second, 2 both (the engine's)
+    int m_r507DuelSpan = 2;                     // bars a turn
+    int m_r507DuelFirst = 0;                    // the laser that opens the first phrase
+    int m_r507DuelEndAt = -1;                   // a soft end: the beat it ended (the dark laser back on a hit)
+    int m_r507DuelSwaps = 0;
+    int m_r507DuelDrawn = -1;                   // the section last drawn for ...
+    QString m_r507DuelDrawnTitle;               // ... in this track
+    int m_r507DuelRanSec = -1;                  // the section it last played ...
+    QString m_r507DuelRanTitle;                 // ... in this track (never two sections running)
+    int m_r507DuelSeen = -1;                    // the last beat the group was in the cast
+    bool m_r507DuelHit = false;                 // that beat had the animation laser's strict hit
+    int m_r507DuelWake = -1;                    // a laser a change lights again, still dark (-1 none)
+    int m_r507DuelWakeLog = -1;
+    QString m_r507DuelFids;                     // the group's mot:/col:/pos: on ...
+    int m_r507DuelFidsBeat = -1;                // ... this beat
     void stopSweeps();
     bool userAllowed(const TrackFuncInfo &info, const QString &group = QString()) const;
     void genFlash(bool on, const QString &colour = QString());
@@ -1634,6 +1729,25 @@ private:
     // older than a second does nothing.
     QHash<QString, qint64> m_r503AimMs;
     QHash<QString, quint32> m_r503AimFid;
+    // R507_SAFE_DECL (runde 507, SAFE; Tobias: "never the laser bars and an animation laser lit together",
+    // "never move a lit laser - the light goes off BEFORE a mirror moves"). A laser group held dark on the
+    // wall clock, as R503_SAFE_DARK holds the bars after a re-aim: 150 ms, and until what had to go is
+    // provably off the DMX (its functions stopped, then two MasterTimer frames) and, on an animation laser,
+    // its new picture (col:/mot: scene) has been written twice. At most 1 s. Only ever darkens.
+    struct R507SafeGate
+    {
+        qint64 ms = 0;                   // m_clock ms of the last reason
+        qint64 clearMs = -1;             // first ms every function in `gone` was seen stopped
+        QList<quint32> gone;             // what must be off the DMX first (the other laser type, an old picture)
+        bool hit = false;                // the gate kept light off: relight when it opens
+    };
+    QHash<QString, R507SafeGate> m_r507Safe;
+    void r507SafeHold(const QString &group, quint32 gone);       // a reason: dark from NOW
+    bool r507SafeClosed(const QString &group);                    // still held?
+    bool r507SafeDark(const QString &group);                      // the level hooks: true = write 0
+    bool r507SafeFrame();                                         // the pulse timer: open, relight
+    void r507SafeOut(const QString &slot, quint32 fid);           // stopSlot(): a laser function goes
+    void r507SafeHandover(const QSet<QString> &castSet);          // tick(): the outgoing laser type first
     void r503SafeAim(const QString &group, quint32 aim)
     {
         if (group.isEmpty() || m_groups.contains(group) == false)
