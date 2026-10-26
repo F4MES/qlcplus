@@ -637,6 +637,8 @@ void TrackEngine::slotDocSettled()
     m_baseCover.clear();                 // runde 260: only tick() says who covers the base
     m_pulseDepth.clear();
     m_pulseStart.clear();
+    m_r506HoldStart.clear();             // R506_CLEAR_HOLD
+    m_r506HoldBeat.clear();
     m_breathe.clear();
     m_texture.clear();
     m_moveHistory.clear();
@@ -4009,6 +4011,27 @@ bool TrackEngine::r501PulseHit(int beat, int pulseOn, bool grid, bool ani) const
         return kick != 0 || onsetHigh(beat, 0) >= 4;
     // the kick's pulse: no kick on this beat, no pulse (not known: the curve's rule above decides)
     return kick != 0;
+}
+
+bool TrackEngine::r506LevelHolds(int beat) const
+{
+    // R506_LEVEL_HOLDS: is the music on this beat as loud as the two bars before it? Not when it is
+    // quiet in itself (under a fifth of the track's top, silentBeat()'s line) or a quarter under
+    // the mean of the 8 beats before. On his tracks: Nesta's kick drop-outs inside a drop hold
+    // (level 0.85-1.0 of the bars before), Ajna's phrase-end stops fall (0.40); the break's empty
+    // half-time beats (level 0-3) fall. Not known: it falls, as r501 did.
+    if (beat < 2 || beat > m_audLevel.count())
+        return false;
+    const int here = m_audLevel.at(beat - 1);
+    if (here < 51)
+        return false;
+    int sum = 0, n = 0;
+    for (int b = qMax(1, beat - 8); b < beat; ++b)
+    {
+        sum += m_audLevel.at(b - 1);
+        ++n;
+    }
+    return n > 0 && 4 * here * n >= 3 * sum;
 }
 
 qreal TrackEngine::audMid(int beat) const
@@ -15347,6 +15370,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // R358_BACKBEAT: claps or a snare on 2 and 4 - the strobes pulse
             // on THEM, not on the kick (a pulse never passes the level: MASTER
             // and the trim hold, runde 357)
+            bool r506Hold = false;   // R506_HOLD_DECL: no hit on this beat, but the music as loud
             if (m_backbeat && g.strobes && depth > 0.0 && isBuild == false && preDrop == false
                 && (isDrop || tier == 1))
             {
@@ -15359,18 +15383,38 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // no pulse, the light stays where it is. Not the strobes' backbeat (on its claps, above).
             else if (pulseBeat && depth > 0.0)
             {
-                // R503_BLINK_PUMP (bug-fix runde 503): not the base's break pump. It is his own
-                // BLACKOUT taps made automatic (runde 342: "on the beat the DJ's tempo keeps"), every
-                // beat from 75 % - gated on the onsets it skipped 15-33 % of a real break's beats and
-                // the base sat on its pump floor for 3-6 beats at a time. "The original program
-                // working is paramount ... Better that the extra feature does less."
-                const bool grid = isBuild;
-                const bool r503Pump = isBreak && key == base && fader >= 0.75 && isCalm == false;
-                if (r503Pump == false && r501PulseHit(beat, mv.pulseOn, grid, g.patternDevice) == false)
+                // R506_HOLD (runde 506, Tobias 10-26): the break's pump listens to the music again, as
+                // every other blink does since r501 (runde 503 had let it pump blind). What r501 got
+                // wrong was the beat WITHOUT a hit: the light hung on its pump floor (30-50 %, 7-30 %
+                // in a drop) for 3-6 beats - it looked like the light dropped out. Now a beat with no
+                // hit HOLDS the light up while the music stays as loud (a fill, a kick that drops out
+                // under a loud bar); where the song really gets quieter it still falls. His words:
+                // "kun hvis lyset stadig dykker naar der er huller ... naar sangen pludseligt bliver
+                // stille(ere)". Only a pulse on every beat (pulseOn 0), never the strobes, the laser
+                // bars or the animation laser (which keeps its own gate rule below).
+                const bool grid = isBuild || (isBreak && key == base && fader >= 0.75 && isCalm == false);
+                if (r501PulseHit(beat, mv.pulseOn, grid, g.patternDevice) == false)
+                {
                     pulseBeat = false;
+                    r506Hold = mv.pulseOn == 0 && g.strobes == false && g.lasers == false
+                            && g.patternDevice == false && r506LevelHolds(beat);
+                }
             }
             if (g.patternDevice && pulseBeat == false)
                 depth = 0.0;
+            // R506_HOLD_KEEP: the hold rises from where the last hit left the light to full over half
+            // a beat (pulseLevel) - an opening, not a new blink - and stays up over a run of such beats
+            if (r506Hold && depth > 0.0)
+            {
+                if (m_r506HoldBeat.value(key, -9) != beat - 1 || m_r506HoldStart.contains(key) == false)
+                    m_r506HoldStart.insert(key, m_clock.elapsed());
+                m_r506HoldBeat.insert(key, beat);
+            }
+            else
+            {
+                m_r506HoldStart.remove(key);
+                m_r506HoldBeat.remove(key);
+            }
             if (depth > 0.0 && pulseBeat)
             {
                 m_pulseStart.insert(key, m_clock.elapsed());
@@ -17358,7 +17402,12 @@ qreal TrackEngine::pulseFactor(const QString &group) const
             // for a strobe, which has to be lit and dark again inside a tenth.
             qreal tau = pg.strobes ? qMax(20.0, m_beatMs * 0.09)
                                    : qMax(40.0, m_beatMs * 0.25);
-            factor *= (1.0 - depth) + depth * strength * std::exp(-t / tau);
+            qreal pulsed = (1.0 - depth) + depth * strength * std::exp(-t / tau);
+            // R506_HOLD_RISE: a beat with no hit under music as loud holds the light up - it opens
+            // to full over half a beat from where the last hit left it (no step, no new blink)
+            if (m_r506HoldStart.contains(group) && pg.strobes == false && m_beatMs > 0.0)
+                pulsed += (1.0 - pulsed) * qBound(0.0, qreal(now - m_r506HoldStart.value(group)) / (m_beatMs * 0.5), 1.0);
+            factor *= pulsed;
         }
     }
 

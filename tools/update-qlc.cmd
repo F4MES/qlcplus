@@ -17,8 +17,8 @@ exit /b
      stops it), installs silently, puts the new PSMAIN.qxw where your QLC+
      shortcut opens it (the old one kept beside it as PSMAIN.qxw.bak-<time>)
      and starts QLC+ again if it was running
-  4. BLT's qlc_shared_functions.clj goes to Downloads\qlc-update (BLT reads it
-     from its own window - paste it there yourself if it changed); the one it
+  4. BLT's qlc_shared_functions.clj goes to Downloads\qlc-update (BLT loads it at
+     start through its loader line - restart BLT if it changed); the one it
      replaces is kept as qlc_shared_functions.clj.bak-<time>
   5. rollback-qlc.cmd goes to Downloads\qlc-update too: it puts back the build,
      the show file and BLT's functions from before (runde 467)
@@ -265,7 +265,7 @@ if ($clj) {
     }
     Copy-Item -Path $cljNew -Destination $cljPath -Force
     Remove-Item -Path $cljNew -ErrorAction SilentlyContinue
-    Say "BLT's shared functions are in $cljPath (paste them into BLT if they changed)."
+    Say "BLT's shared functions are in $cljPath (restart BLT to load them if they changed)."
 }
 
 # ---- 5. rollback-qlc.cmd beside the installers (runde 467) ----
