@@ -1921,6 +1921,8 @@ private:
     int m_strobeSpent;        // strobe beats used in that window
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
     QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
+    QMap<QString, qint64> m_r506HoldStart; // R506_DECL_HOLDMAP: groups holding up through a beat with no hit
+    QMap<QString, int> m_r506HoldBeat;     // ... and the last beat they held on
     QMap<QString, qreal> m_pulseStrength;  // how hard that beat hit, 0.5..1 - the kick's say
     QMap<QString, int> m_subStepSeen;      // the last sub-step the pulse timer masked, per group
     QMap<QString, int> m_breathe;          // groups on a slow sine, and over how many bars
@@ -2658,6 +2660,7 @@ private:
     int r501KickAt(int beat, bool real) const;      // the RAW kick (BLT 323+): >= 0.20, or a real one >= 0.45
     int r501OnsetAt(int beat, int quarter) const;   // an onset on this quarter (bass, mids or highs)
     bool r501PulseHit(int beat, int pulseOn, bool grid, bool ani) const;   // a beat pulse may land here
+    bool r506LevelHolds(int beat) const;   // R506_DECL_LEVELHOLDS: no quieter than the bars before
     bool m_andBass = false;              // R461_AND_BASS: the bass on the "and" in this groove
     QHash<QString, int> m_andSeen;       // ... the base / Minis already hit on it this beat
     int m_pluckSlots = 0;                // R461_BREAK_PLUCK: the quarters a break's pattern hits (bits 0-3)
