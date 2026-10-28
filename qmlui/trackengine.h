@@ -1586,6 +1586,9 @@ protected:
     QString m_r509SplitTitle;                   // the outgoing track it was drawn in
     int m_r509SplitMixes = 0;                   // mixes counted in that track (the dice)
     int m_r509SplitStrobesIn = -1;              // strobe heads in the new colour, last logged
+    // R510_MASKS_SPLIT_DECL (runde 510, MASKS; Tobias 10-28: "HOLD skal springe tilbage")
+    bool r509SplitHeld() const;                         // HOLD on a split: the outgoing colour shown whole
+    bool m_r509SplitHeldLog = false;            // ... as last logged (sig:split:hold-back / hold-off)
     // R509_DECL_DRAMA
     // R509_DRAMA_DECL (runde 509, DRAMA): the night's budget of big moments, the last drop is biggest
     // (r509_drama.inc.cpp) - weights on the existing draws, no new effects
