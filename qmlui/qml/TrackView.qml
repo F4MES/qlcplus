@@ -2322,7 +2322,9 @@ Rectangle
                     clip: true
                     Repeater
                     {
-                        model: Math.ceil(flagDropLine.height / (flagDropLine.dash + flagDropLine.gap))
+                        // R511_UI_DASH_MODEL: never below 0 - before the track card has its height the line's
+                        // height is negative ("Model size of -4 is less than 0" in the log)
+                        model: Math.max(0, Math.ceil(flagDropLine.height / (flagDropLine.dash + flagDropLine.gap)))
                         Rectangle
                         {
                             y: index * (flagDropLine.dash + flagDropLine.gap)
@@ -2700,8 +2702,13 @@ Rectangle
                                     {
                                         if (wasHeld) { wasHeld = false; return }
                                         if (!inside) return
+                                        // R511_UI_SAVED_STALE: savedFeedback keeps the LAST save's "SAVED" - a thumb up
+                                        // that saved nothing (rate() returns early between tracks) said SAVED again.
+                                        // SAVED only when the newest saved look really is newer after this tap
+                                        var newestAt = function() { var r = trackEngine ? trackEngine.savedLooks : []; return r.length > 0 ? (Number(r[0].savedAt) || 0) : 0 }
+                                        var savedBefore = modelData > 0 ? newestAt() : 0
                                         if (trackEngine) trackEngine.rate(modelData)
-                                        if (modelData > 0) trackViewRoot.savedSaveFeedback = trackEngine && trackEngine.savedFeedback === "SAVED"
+                                        if (modelData > 0) trackViewRoot.savedSaveFeedback = !!trackEngine && trackEngine.savedFeedback === "SAVED" && newestAt() > savedBefore
                                         thumb.lit = true
                                         thumbFlash.restart()
                                     }
@@ -4351,9 +4358,11 @@ Rectangle
             {
                 model: [
                     // R455_HELP (Tobias 10-14: "Opdater nu ogsaa vores Help knap, til alt det nye")
-                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (a warm white grows over the track, lasers out and strobes steady at the outro, full white at the music's end or when the DJ's fader goes down, 5 min, haze down, then dark). Tap twice again to undo." },   // R479_LAST_WHITE_HELP
+                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (lasers out, a warm white grows to full white at the music's end or when the DJ's fader goes down; 5 min, haze down, then dark). Tap twice again to undo." },   // R479_LAST_WHITE_HELP
+                    // R511_UI_HELP_FIT: at 1366 x 768 this column and MARKERS & THUMBS ran into the deck below (6 / 35 px)
+                    // - said shorter (nothing on the page moves); + TYPE's drag (R502) said too
                     { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br><b>HIT</b> on a DROP flag - a hit is armed for that drop (<b>DROP HIT</b> in LIVE).<br>Warnings appear in the bar under the track." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b> sets a marker on the bar playing. Each marker gets a tab at the foot of the track: tap it to <b>RETYPE</b> or <b>DELETE</b>, drag it to move - it lands when you let go. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment; thumbs up also saves the whole look. Hold one to rate a single group. <b>SAVED</b> opens recent saved looks: swipe to scroll, tap outside to close. Pick <b>NEXT TYPE</b> to use a look in the next matching section; tap <b>QUEUED</b> to cancel. <b>ALL SAVED LOOKS</b> opens the full list.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin outline: its guess for later), a red line = yours, <b>MEM</b> = yours from the last time this track played. Tap the <b>next</b> section - or any later one - to pick its lamps: the next one is the same plan as RIG, a later one becomes it when its turn comes. A section that has begun can not be changed." },   // R484_PL_HELP
+                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b>: a tap = a marker on the bar playing; dragged onto the track = the bar under your finger. Its tab under the track: tap = <b>RETYPE</b> / <b>DELETE</b>, drag = move. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment (up also saves the look); hold one to rate a single group. <b>SAVED</b>: recent looks - <b>NEXT TYPE</b> plays one in the next such section, <b>QUEUED</b> cancels, <b>ALL SAVED LOOKS</b> is the full list.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin: a guess), a red line = yours, <b>MEM</b> = yours last time. Tap the <b>next</b> section or a later one to pick its lamps (the next = RIG's plan) - not once it has begun." },   // R484_PL_HELP
                     { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from its logo on the taskbar.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
                 ]
                 Column

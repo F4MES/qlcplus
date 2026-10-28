@@ -1057,7 +1057,12 @@ public:
     void setBlackout(bool on);
     /** R450_TEST_TRACK: the Track page's made-up track is playing - nothing
      *  is learned from it and nothing is written to the tracklog */
-    void setTestTrack(bool on) { m_testTrack = on; }
+    // R511_OLD_TEST_TITLE (bug, harness r511 OLD): STOP TEST emptied the page but the engine kept the made-up
+    // track's title - the LAST TRACK button stood over the empty page from 02:50, and BLT's "every fader down"
+    // fallback (R484_LF_AUTO) could arm it on the stopped test track and put the house light up (haze and fan
+    // to 0, haze AUTO off). The test track going off forgets it, as before any track; a real track that takes
+    // over is loaded after the stop (R450_TT_BLT), so it is never the one forgotten
+    void setTestTrack(bool on) { if (m_testTrack && on == false) m_trackTitle.clear(); m_testTrack = on; }
     bool testTrackOn() const { return m_testTrack; }
     bool stutter() const { return m_stutter; }          // R420_STUTTER
     void setStutter(bool on);

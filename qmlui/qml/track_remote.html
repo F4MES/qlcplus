@@ -264,9 +264,13 @@ document.addEventListener('visibilitychange', () => {
   // R475_PHONE_BACK: the reply gets half a second - an old lastState dropped the socket first
   if (ws && ws.readyState === 1) { lastState = Date.now() - 1000; ws.send('TRACK|state'); }
 });
+// R511_REMOTE_CONNECTING (r511 bug round): when it was made - a socket that has not opened in 5 s is
+// dropped and another one tried (a lost first SYN when the Wi-Fi came back: the page waited for the
+// browser's own TCP timeout, up to a minute and more, under NO CONNECTION)
+let wsAt = 0;
 function connect() {
   if (mockOn) return;
-  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/qlcplusWS'); }
+  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/qlcplusWS'); wsAt = Date.now(); }
   catch (e) { $('offline').classList.add('on'); setTimeout(connect, 1500); return; }
   ws.onopen = () => { lastState = Date.now(); send('state'); };
   ws.onmessage = e => onLine(e.data);
@@ -277,6 +281,13 @@ setInterval(() => {
   // the state - and the heartbeat: it names what a finger still holds here
   const held = Object.keys(holding).filter(k => holding[k]).concat(Object.keys(restHeld));   // R484_HZ_PHONE_BEAT: and the haze over 70
   send('state' + (held.length ? '|' + held.join(',') : ''));
+  // R511_REMOTE_STUCK: one still connecting after 5 s is as dead - dropped, and a new one at once
+  if (ws && ws.readyState === 0 && Date.now() - wsAt > 5000) {
+    const stuck = ws; ws = null;
+    stuck.onclose = stuck.onmessage = stuck.onopen = null;
+    try { stuck.close(); } catch (e) {}
+    connect();
+  }
   // R463_PAGE: a socket open but silent for 1.5 s (Wi-Fi gone without a close) is dead
   if (ws && ws.readyState === 1 && lastState && Date.now() - lastState > 1500) {
     $('offline').classList.add('on');

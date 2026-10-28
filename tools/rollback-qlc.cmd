@@ -80,7 +80,12 @@ function Find-Previous($s) {
         $f = $all | Where-Object { (Rev-Of $_.Name) -eq $hist[$i] } | Select-Object -First 1
         if ($f) { return $f }
     }
-    return $all | Where-Object { (Rev-Of $_.Name) -ne $s.exeRev -and $s.rolledBack -notcontains (Rev-Of $_.Name) } | Select-Object -First 1
+    # R511_UPDATER_OLDER (runde 511): without a history entry, only an installer older than the running
+    # build's own - a newer one that never installed (a cut-off download, an installer that failed or
+    # was declined) is not "the build before": rollback installed it and marked the running one rolled back
+    $cur = $all | Where-Object { (Rev-Of $_.Name) -eq $s.exeRev } | Select-Object -First 1
+    return $all | Where-Object { (Rev-Of $_.Name) -ne $s.exeRev -and $s.rolledBack -notcontains (Rev-Of $_.Name) -and
+                                 (-not $cur -or $_.LastWriteTime -lt $cur.LastWriteTime) } | Select-Object -First 1
 }
 
 # the QLC+ shortcut that opens the show - as update-qlc.cmd finds it
@@ -122,7 +127,7 @@ function Find-Backup($path) {
 # put a backup back; what was there is kept as <file>.rolledback-<time>
 function Put-Back($backup, $path) {
     if (Test-Path $path) {
-        $keep = "{0}.rolledback-{1}" -f $path, (Get-Date -Format "yyyyMMdd-HHmm")
+        $keep = "{0}.rolledback-{1}" -f $path, (Get-Date -Format "yyyyMMdd-HHmmss")   # R511_UPDATER_BAK_KEEP: to the second (-Force overwrote)
         Copy-Item -Path $path -Destination $keep -Force
         Say "  kept what was there as $keep"
     }
@@ -132,6 +137,12 @@ function Put-Back($backup, $path) {
 function Close-Qlc {
     $procs = Get-QlcProcesses
     if ($procs.Count -eq 0) { return $false }
+    # R511_UPDATER_SHOW_ON (runde 511, his rule: SHOW ON blocks closing QLC+): update-qlc.cmd stops here
+    # (R475_SHOW_ON); rollback-qlc.cmd closed QLC+ - and the light - with the show on. Nothing is changed yet
+    if (Test-Path (Join-Path (Split-Path $state) "show-on")) {
+        Say "SHOW is ON in QLC+ - QLC+ left running, nothing rolled back. SHOW OFF, then run rollback-qlc.cmd again." "Red"
+        exit 3
+    }
     foreach ($p in $procs) { try { [void]$p.CloseMainWindow() } catch { } }
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-QlcProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
