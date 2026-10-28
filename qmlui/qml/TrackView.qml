@@ -4406,7 +4406,7 @@ Rectangle
                 { l: "ENERGY",       b: "How hard the show plays - your hand takes over. <b>AUTO</b>: the clock moves it through the night. <b>ALL AUTO</b> (above, when one is off) puts them all back, including HAZE & FAN." },
                 { l: "SECTION",      b: "Force a section until the music reaches its next one - then it follows the music again. The one the music is in is filled. Tap it again or <b>AUTO</b> to let go now." },   // R429_SECTION_ONCE
                 { l: "POSITION",     b: "Hold the heads in one position. <b>AUTO</b>: the engine moves them." },
-                { l: "COLOUR",       b: "Tap colours to make your own mix. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },
+                { l: "COLOUR",       b: "Tap colours to make your own mix - it holds until the next section, then <b>AUTO</b> again. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },   // R512_TILES_HELP
                 { l: "COLOUR MODE",  b: "<b>FADE</b>: the mix glides over. <b>CHASE</b>: it steps on the kick. <b>SPEED</b>: the pace of moves and chases." },
                 { l: "HAZE MACHINE", b: "Haze and fan by hand. <b>HAZE</b> is elastic above HAZE LIMIT (SETUP, ADVANCED): hold above the thin line for extra haze, then release to return to the limit. <b>AUTO</b>: haze and fan follow HAZE & FAN BY CLOCK (SETUP, ADVANCED) - learned from your hand; your hand on either takes them back." }   // R484_HZ_HELP
             ]
