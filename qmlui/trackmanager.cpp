@@ -4297,6 +4297,20 @@ void TrackManager::runEngine(bool sectionChanged)
                 nextDrop = mb;
         }
         m_engine->setNextDropBeat(nextDrop);
+        // R509_DRAMA_FLAGS: the track's drop starts, sorted - a drop flagged in parts is one drop
+        QVector<QPair<int, bool> > flags;
+        for (int i = 0; i < m_markers.count(); i++)
+        {
+            const QVariantMap mk = m_markers.at(i).toMap();
+            flags.append(qMakePair(mk.value(QStringLiteral("beat")).toInt(),
+                                   mk.value(QStringLiteral("type")).toString() == QStringLiteral("drop")));
+        }
+        std::sort(flags.begin(), flags.end());
+        QVector<int> drops;
+        for (int i = 0; i < flags.count(); i++)
+            if (flags.at(i).second && (i == 0 || flags.at(i - 1).second == false))
+                drops.append(flags.at(i).first);
+        m_engine->r509DramaFlags(drops);
     }
     int tickStart = secStart;                 // R236_LOOP_TICK_START
     if (m_loopTop > 0 && m_jumpTo < secStart && beat <= m_loopTop)
