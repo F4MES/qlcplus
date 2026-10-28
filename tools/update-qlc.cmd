@@ -83,9 +83,14 @@ function Get-Asset($release, $name) {
 
 function Fetch($asset, $target) {
     Say ("  downloading {0} ({1:N1} MB) ..." -f $asset.name, ($asset.size / 1MB))
-    Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $target
-    $got = (Get-Item $target).Length
+    # R511_UPDATER_PART (runde 511): into <name>.part first, in its place only when it is whole. A cut-off
+    # download wrote straight over the target: the kept rollback-qlc.cmd half written, or half an
+    # installer under its build's name that rollback-qlc.cmd then took for "the build before"
+    $part = "$target.part"
+    Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $part
+    $got = (Get-Item -LiteralPath $part).Length
     if ($got -ne $asset.size) { throw ("{0}: got {1} bytes, expected {2}" -f $asset.name, $got, $asset.size) }
+    Move-Item -LiteralPath $part -Destination $target -Force
 }
 
 function Get-QlcProcesses { return @(Get-Process -Name "qlcplus-qml", "qlcplus" -ErrorAction SilentlyContinue) }
@@ -230,7 +235,9 @@ if ($exeFile -or $showFile) {
     }
     if ($showFile) {
         if (Test-Path $ShowPath) {
-            $bak = "{0}.bak-{1}" -f $ShowPath, (Get-Date -Format "yyyyMMdd-HHmm")
+            # R511_UPDATER_BAK_SHOW (runde 511): to the second - an update and an update -Force in the same
+            # minute wrote the second backup over the first, and the show from before was gone
+            $bak = "{0}.bak-{1}" -f $ShowPath, (Get-Date -Format "yyyyMMdd-HHmmss")
             Copy-Item -Path $ShowPath -Destination $bak
             Say "  the old show file is kept as $bak"
         }
@@ -259,7 +266,7 @@ if ($clj) {
     Fetch $clj $cljNew
     # runde 467: the one it replaces is kept (rollback-qlc.cmd puts it back)
     if ((Test-Path $cljPath) -and (Get-FileHash $cljPath).Hash -ne (Get-FileHash $cljNew).Hash) {
-        $cljBak = "{0}.bak-{1}" -f $cljPath, (Get-Date -Format "yyyyMMdd-HHmm")
+        $cljBak = "{0}.bak-{1}" -f $cljPath, (Get-Date -Format "yyyyMMdd-HHmmss")   # R511_UPDATER_BAK_CLJ: to the second
         Copy-Item -Path $cljPath -Destination $cljBak
         Say "  the old BLT functions are kept as $cljBak"
     }

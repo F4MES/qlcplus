@@ -1494,9 +1494,11 @@ Rectangle
                 }
                 Repeater
                 {
+                    // R511_UI_POS_ENGLISH: the last Danish words on the page (UI text is English) -
+                    // the same words the layout page says since R378/R388; the keys are unchanged
                     model: [ { key: "start", label: qsTr("START POSITION") },
-                             { key: "column", label: qsTr("S\u00d8JLE MIDT") },
-                             { key: "down", label: qsTr("LIGE NED") } ]
+                             { key: "column", label: qsTr("CENTER COLUMN") },
+                             { key: "down", label: qsTr("STRAIGHT DOWN") } ]
                     TrackTile
                     {
                         Layout.fillWidth: true

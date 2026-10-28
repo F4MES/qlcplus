@@ -22008,7 +22008,18 @@ void TrackEngine::tickFades()
         }
         else
         {
-            func->adjustAttribute(lightsOut() ? 0.0 : level, attr);
+            // R511_OLD_LAST_FADE_FLOOR (bug, harness r511 OLD: the outro's first beat): a house group's
+            // dimmer parts that leave the cast under LAST TRACK fade out here - and they own its master
+            // dimmers (ReplaceBlend), so the strobe lamps' warm white went from 48 % to 1 % in 0.3 s and
+            // snapped back to 51 %. They fade to the white's level instead, as setPart() floors them
+            // (R479_LAST_WHITE_FLOORPART); without LAST TRACK lastWhiteDim() is 0 - the fade as before
+            qreal shown = level;
+            foreach (const QString &key, m_houseFadeRoot)
+            {
+                if (m_groups.value(key).parts.contains(fid))
+                    shown = qMax(shown, lastWhiteDim(key));
+            }
+            func->adjustAttribute(lightsOut() ? 0.0 : shown, attr);
             m_fadeLevel.insert(fid, level);
         }
     }
@@ -32019,6 +32030,15 @@ static bool savedFormReserved(const QString &name)
     // a form's own programmes: the form brings them back itself
     return name.startsWith(QStringLiteral("AUTO Bars Drop Storm")) || name.startsWith(QStringLiteral("AUTO Bars Drop Kick "));
 }
+static bool savedBarsLegal(const TrackGroup &g, const TrackFuncInfo &info, qreal fader, bool drop, bool single)
+{
+    // R511_SAVED_BARS_LEGAL (r511 SAVED): a bar programme the eye rules (barcoverage.h) allow at the slider NOW -
+    // exactly tick()'s C20261020_BAR_HELD test, which hard-stops any other on the bars
+    if (g.lasers == false || g.patternDevice)
+        return true;
+    const TrackBarCoverage &c = info.barCoverage;
+    return c.allows(fader, drop) && (c.whole || (c.minEyes >= 2 && c.minTotalEyes >= 10) || single);
+}
 quint32 TrackEngine::savedAutoFind(const QString &figure, const QString &group, const QString &colour, int kind) const
 {
     // the figure's programme in this colour for this group: its own partner tag where the look's
@@ -32091,7 +32111,10 @@ void TrackEngine::savedMotionIn(const QString &key, const QString &colour, quint
     if (info.colour.isEmpty() || info.colour == colour)
         return;
     const quint32 there = savedAutoFind(savedRecipeOf(info, true), key, colour, savedFigureKind(info));
-    if (there != Function::invalidId())
+    // R511_SAVED_MOTION_IN_LEGAL (r511 SAVED): the figure in this colour only where the bar eye rules allow it now
+    // (R511_SAVED_MOVES_RULES) - else tick() hard-stops it on this beat and the next
+    if (there != Function::invalidId()
+        && savedBarsLegal(m_groups.value(key), m_funcs.value(there), m_faderNow, m_lastState == QStringLiteral("drop"), m_barSingleDraw))
     {
         mf = there;
         m_sectionMotion.insert(key, mf);
@@ -32190,6 +32213,11 @@ QString TrackEngine::savedLookName(const QVariantMap &look) const
         if (figure.isEmpty())
             figure = look.value(QStringLiteral("programmes")).toMap().value(lead).toString();
         QString shape = figure.isEmpty() ? QString() : familyOf(figure).toUpper();
+        // R511_SAVED_NAME_FRAGMENT (r511 SAVED): familyOf() reads a-z/0-9 only, so his own "Boelger Moving Ani" (o-slash) named the
+        // look "DROP - ANIM B" (harness) and "BLAA CHASE" / "FAST ROED" (a-ring, o-slash) gave "BL" / "R" - a fragment says nothing:
+        // the move's pattern word below instead (never the colour, as before)
+        if (shape.size() < 3)
+            shape.clear();
         if (shape.isEmpty())
         {
             const TrackMove mv = savedReadTrackMove(look.value(QStringLiteral("moves")).toMap().value(lead).toMap());
@@ -32352,7 +32380,10 @@ QVariantMap TrackEngine::savedCapture() const
             // R510_DROPS_SAVED_TRACK (r510 DROPS): ... of THIS track - a drop entered mid-way (a handover into its
             // drop, R360 late landing, or a cut) never landed, and the last track's kick wave at a later beat
             // number was saved as this drop's form (harness cut90: "KICK WAVE" saved on Bad and Boujee)
-            else if ((m_formLast == DF_BLOOM || m_formLast == DF_RUSH || m_formLast == DF_KWAVE) && m_savedBeatBoundary > 0
+            // R511_SAVED_FORM_AHEAD (r511 SAVED, REV P4): ... and landed before NOW - a DJ hot cue back into an earlier
+            // drop of the same track (entered mid-drop, no landing) saved the LATER drop's kick wave as this drop's form
+            // (harness sv1: hot cue 140 > 45, a thumb at 52 in the drop at 33 saved "KICK WAVE" landed at 113)
+            else if ((m_formLast == DF_BLOOM || m_formLast == DF_RUSH || m_formLast == DF_KWAVE) && m_savedBeatBoundary > 0 && m_formLandBeat <= m_curBeat
                      && m_formLandBeat >= m_savedBeatBoundary && m_formTrack == m_trackTitle)
                 form = m_formLast;
         }
@@ -32690,6 +32721,19 @@ void TrackEngine::savedMoves(qreal energy)
     // R501_A_MOVES_AUTO: the programmes in the room's colour now - a coloured AUTO programme (an old
     // look keeps it by content) by its figure in that colour; none there: the engine draws for the group
     const bool own = m_savedPlaying.value(QStringLiteral("replayColour")).toBool();
+    // R511_SAVED_MOVES_RULES (r511 SAVED): what the room's rules forbid NOW is not put back on a group - the engine
+    // draws for it, as for a figure the show no longer has: (1) a programme he BANNED after saving the look (the
+    // figure path skips bans since R503_SAVED_BAN_CACHE, the content path - his own programmes, an old look's - did
+    // not); (2) a bar eye figure the eye rules do not allow at the slider now (saved at 90 %, replayed at 65 %):
+    // tick()'s C20261020_BAR_HELD hard-stopped it, and with it the engine's own pick in the slot, on EVERY beat
+    const bool dropNow = m_lastState == QStringLiteral("drop");
+    auto keep = [this, dropNow](const QString &key, quint32 id) {
+        const auto info = m_funcs.constFind(id);
+        if (info == m_funcs.constEnd() || info->banned
+            || savedBarsLegal(m_groups.value(key), *info, m_faderNow, dropNow, m_barSingleDraw) == false)
+            return;
+        m_sectionMotion[key] = id;
+    };
     const auto programs=m_savedPlaying.value(QStringLiteral("motion")).toMap();
     for(auto it=programs.constBegin();it!=programs.constEnd();++it){
         quint32 id=savedProgramFind(it.value().toString());
@@ -32700,17 +32744,17 @@ void TrackEngine::savedMoves(qreal energy)
             const quint32 there=savedAutoFind(savedRecipeOf(info,true),it.key(),m_colour,savedFigureKind(info));
             if(there!=Function::invalidId()||savedFigureKind(info)==0) id=there;
         }
-        if(id!=Function::invalidId())m_sectionMotion[it.key()]=id;
+        if(id!=Function::invalidId())keep(it.key(),id);   // R511_SAVED_MOVES_KEEP_1
     }
     const auto made=m_savedPlaying.value(QStringLiteral("generated")).toMap();
     for(auto it=made.constBegin();it!=made.constEnd();++it){
         const quint32 id=savedAutoFind(it.value().toString(),it.key(),m_colour,2);
-        if(id!=Function::invalidId())m_sectionMotion[it.key()]=id;
+        if(id!=Function::invalidId())keep(it.key(),id);   // R511_SAVED_MOVES_KEEP_2
     }
     const auto autos=m_savedPlaying.value(QStringLiteral("autoMotion")).toMap();
     for(auto it=autos.constBegin();it!=autos.constEnd();++it){
         const quint32 id=savedAutoFind(it.value().toString(),it.key(),m_colour);
-        if(id!=Function::invalidId())m_sectionMotion[it.key()]=id;
+        if(id!=Function::invalidId())keep(it.key(),id);   // R511_SAVED_MOVES_KEEP_3
     }
 }
 void TrackEngine::savedSweep(const QString &group)
@@ -41127,7 +41171,12 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
     // the night: peak, tokens, weight
     const qint64 now = m_clock.elapsed();
     const qint64 secs = r509DramaSecs();
-    const qreal share = m_testTrack ? -1.0 : r509DramaClockShare(secs);
+    // R511_REV_DRAMA_TEST_FILL (runde 511, REV): the tokens refill on the night's clock on the test track
+    // too. Its peak 1 is for its draws ("the draws as before"), but it also refilled the minutes before its
+    // first beat at the peak's 0.50 a minute - and since r510 (R510_CLOCK_KEPT_GAP) that is every minute
+    // QLC+ was away: a restart in the warm-up (an update, a crash) checked on the test track came back
+    // with 3 tokens, more than r509's fresh 2 (harness r511: 0 kept, 20 min away -> tok30, not tok10)
+    const qreal share = r509DramaClockShare(secs);
     const double peak = r509DramaPeak(share, fader);
     if (kept > 0)                        // R510_CLOCK_KEPT_GAP: the minutes QLC+ was away, as a gap between beats
         m_r509Tokens = qMin(R509_DRAMA_TOK_MAX, m_r509Tokens + r509DramaRefill(peak) * qreal(kept) / 60.0);
@@ -41135,8 +41184,8 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
         m_r509Tokens = qMin(R509_DRAMA_TOK_MAX,
                             m_r509Tokens + r509DramaRefill(peak) * qreal(now - m_r509TokMs) / 60000.0);
     m_r509TokMs = now;
-    m_r509Peak = peak;
-    m_r509NightW = r509DramaNightW(peak, m_r509Tokens);
+    m_r509Peak = m_testTrack ? 1.0 : peak;   // R511_REV_DRAMA_TEST_PEAK: the test track's draws as before (peak 1)
+    m_r509NightW = r509DramaNightW(m_r509Peak, m_r509Tokens);
 
     // the big moments that played: each spends a token
     // (a landing of THIS track: a new track clears m_formTrack, and the old landing is not spent twice -

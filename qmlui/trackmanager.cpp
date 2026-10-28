@@ -2161,6 +2161,13 @@ void TrackManager::midiFader(int idx, int raw, qint64 now)
             take = false;
         if (m.anchorRaw < 0)
             m.anchorRaw = raw;
+        // R511_REMOTE_FADER_ANCHOR (r511 bug round): "where it rested" follows the fader - a move of more
+        // than a step is its new place. It stayed where the fader was first heard (or let go): a fader once
+        // moved without taking over was "moved" all night, and when ENERGY AUTO's clock (or HAZE AUTO)
+        // brought the value to it, ONE jitter step of the pot took it over - AUTO off by a pot's noise.
+        // A hand, however slow, still moves more than a step from its last place every other message
+        else if (moved)
+            m.anchorRaw = raw;
         m.lastRaw = raw;
         if (take == false)
             return;
@@ -2218,6 +2225,12 @@ void TrackManager::midiFader(int idx, int raw, qint64 now)
 void TrackManager::midiButton(int idx, int raw, qint64 now)
 {
     MidiMap &m = m_midiMaps[idx];
+    // R511_REMOTE_PC_PRESS (r511 bug round): a Program Change has no release - the MIDI plugin hands QLC+
+    // 127 every time, never 0 - so a button learned on one acted on the first press and never again
+    // ("was" stayed down): every one is a press
+    const quint32 pc = m.channel & 0x0FFF;
+    if (pc >= 384 && pc <= 511)
+        m.lastRaw = 0;
     const bool was = m.lastRaw > 0;
     m.lastRaw = raw;
     const bool press = raw > 0 && was == false;
@@ -2446,6 +2459,15 @@ void TrackManager::midiLearnHeard(quint32 universe, quint32 channel, int raw)
     }
     else if (raw == 0)
         return;                          // a release is no press
+    else if (kind == MidiHold && c >= 384 && c <= 511)
+    {
+        // R511_REMOTE_PC_HOLD (r511 bug round): held while the pad is down needs a release - a Program
+        // Change never sends one: FLASH WHITE (or BLACKOUT) learned on it went on and stayed on
+        midiSetBanner(3, QStringLiteral("That was a program change - ") + midiName(target) + QStringLiteral(" needs a pad that lets go"),
+                      QStringLiteral("Press a pad or a button that sends a note or a CC, or CANCEL."), target);
+        emit midiChanged();
+        return;
+    }
 
     m_midiUndo = m_midiMaps;
     QString was;                         // what this channel drove before
