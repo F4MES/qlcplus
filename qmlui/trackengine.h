@@ -926,6 +926,7 @@ public:
     void micShutdown();
     /* ---- R445_DROP_HIT (track_runtime/drophit.inc.cpp) ---- */
     int hitKind() const;
+    bool hitZero() const { return m_hitZero; }   // R513_LIVE_HIT_ZERO_GET: DROP HIT has the room from ENERGY 0's start scene
     int hitLast() const;
     void setHitKind(int kind);
     /* ---- R443_PLAN_LANE (track_runtime/planlane.inc.cpp) ---- */
@@ -1658,6 +1659,8 @@ protected:
     void r509ThemePool(QStringList &pool) const;
     QString r509ThemeDrawn(const QString &drawn, bool forceNext);
     void r509ThemeBeat(int beat, bool changeColour, bool forceNext);
+    QString r509ThemeAccent() const;            // R513_COLOUR_DECL_THEME: a returning drop theme's colour as the accent
+    QString r509HeldAccent(const QString &accent) const;   // ... and the accent HOLD keeps through a track change
     QString m_r509ThemeTitle;                   // the track the themes' colours belong to
     QHash<QString, QString> m_r509ThemeColours; // "<section>#<n>" -> its colour
     QHash<QString, QList<QVector<qreal> > > m_r509ThemeSigs;   // per section type: each theme's sound
@@ -2288,6 +2291,13 @@ private:
     // (Tobias' own BLACKOUT taps) that chop a build and a break at the top.
     // Rides every output the BLACKOUT clamp rides (lightsOut()).
     bool lightsOut() const { return m_blackout || m_autoDark; }
+    // R513_LIVE_PAD_DARK (r513 brief 2b: "flash pads beat the music's own dark, like the FLASH button"; r469's
+    // pads stayed black under a pause stop's dark, R356's silent beats and the black beat before a drop): the
+    // music's dark on every group but one his finger holds on its pad, for as long as it is held. BLACKOUT
+    // still wins. A slot with no group (the FLASH button's own "flash") reads lightsOut() as before.
+    bool lightsOutFor(const QString &group) const
+    { return m_blackout || (m_autoDark && (group.isEmpty() || m_padFlash.contains(group) == false)); }
+    void padDarkMask(const QString &key);
     void setAutoDark(bool on);
     void clearMusicDark();
     bool silentBeat(int beat) const;
@@ -2394,6 +2404,12 @@ public:
     void hitCast(int beat, QSet<QString> &castSet);
     void hitUndark();
     void hitReset();
+    // R513_LIVE_HIT_ZERO_DECL (r513 brief 2c): ENERGY 0's start scene in the show is an effect, not a stop - an
+    // armed DROP HIT stays armed under it, and the drop that lands there goes amok as DROP HIT promises
+    bool m_startZero = false;            // the start scene up is ENERGY 0's in the show (setStartScene(true, true))
+    bool m_hitZero = false;              // DROP HIT took the room from that start scene; its amok runs from 0
+    int m_hitZeroBeat = -1;              // ... from this beat (a landing that never comes lets go after 8 bars)
+    qreal hitZeroLevel() const;          // the amok's level for the fader, without hitAmok()'s counting
     // R480_HIT_DECL (Tobias 10-17: "saa gaar det helt amok!") - track_runtime/drophit.inc.cpp
     int m_hitStrobeFrom = -1;            // his burst's first beat (DARK: the beat after the bang)
     int m_hitStrobePlayed = 0;           // ... the beats it has played (a DJ loop counts)
@@ -3158,6 +3174,7 @@ private:
     bool m_roomAuto;
     bool m_closingOn = false;              // the closing sequence (SETTINGS_ENGINE_CLOSING) - R458_CLOSING_OFF
     qreal m_closingDim = 1.0;              // closingCap() as last applied to the light (closingTick)
+    bool m_closingLidWas = false;          // R513_OLD_CLOSING_LIDWAS: LAST TRACK's lid ruled on the last closingTick
     // R458_LAST_TRACK (track_runtime/lasttrack.inc.cpp)
     int m_lastStage = 0;                   // 0 off, 1 armed, 2 outro, 3 house light, 4 dark
     QString m_lastTitle;                   // the track that was made the last
@@ -3241,6 +3258,10 @@ private:
     QString colourMemRecall(int from, const QString &section);
     void colourMemApply(const QString &entry);
     void colourMemoryBeat(int beat, const QString &state, bool sectionChanged);
+    // R513_COLOUR_DECL_MEM: the replay that waits for HOLD to be let go (colourmem.inc.cpp)
+    QString m_colMemWait;                  // what it brings: "set|mode", or empty = back to AUTO
+    bool m_colMemWaiting = false;
+    void colourMemHoldBeat(int beatInBar);
     void colourMemoryTrack();
     void colourMemForget(const QString &title);
     // R512_TILES_DECL (Tobias 10-28: "Farvefliserne skal altid skifte tilbage til AUTO ved sektionsskifte" -

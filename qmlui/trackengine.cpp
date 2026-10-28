@@ -820,7 +820,7 @@ void TrackEngine::slotPulseTimer()
                     && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
                     && m_groups.value(key).rgb)
                     out = std::sqrt(out);
-                if (lightsOut())
+                if (lightsOutFor(key))   // R513_LIVE_PAD_PULSEMOT
                     out = 0.0;
                 if (r507SafeDark(key))
                     out = 0.0;           // R507_SAFE_TIMER_MOT: a laser held dark, as run()
@@ -842,7 +842,7 @@ void TrackEngine::slotPulseTimer()
             if (func != nullptr)
             {
                 const qreal scaleNow = (g.strobes && landBurstNow()) ? 1.0 : trimOf(key) * masterOut();   // runde 357, R440_COLOUR_LEVEL
-                qreal out = lightsOut() ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * scaleNow, 1.0);
+                qreal out = lightsOutFor(key) ? 0.0 : qBound(0.0, m_activeLevel.value(slot, 0.0) * f * scaleNow, 1.0);   // R513_LIVE_PAD_PULSEPART
                 out = qBound(0.0, out * r507WaveRatio(key, i), 1.0);   // R507_WAVE_TIMER: the kick wave - this head's pulse at its own time
                 // the same on/off squaring setPart() does: an animation
                 // laser's dimmer is a switch, and 0.7 written to it 20 ms
@@ -4719,7 +4719,8 @@ void TrackEngine::setAutoDark(bool on)
         Function *df = m_doc->function(dfid);
         if (df == nullptr)
             continue;
-        if (on && m_blackout == false)
+        // R513_LIVE_PAD_AUTODARK: not the dark mask of a group his pad holds (lightsOutFor)
+        if (on && m_blackout == false && m_padFlash.contains(m_darkScenes.key(dfid)) == false)
             df->flash(m_doc->masterTimer(), true, true);
         else
             df->unFlash(m_doc->masterTimer());
@@ -6431,6 +6432,7 @@ void TrackEngine::setGroupEnabled(QString key, bool enable)
         m_padWasColLevel.remove(key);
         m_syncOwned.remove(key);
         m_flashHeld.remove(key);
+        padDarkMask(key);                // R513_LIVE_PAD_GROUPOFF: its dark mask as the music has it again
         emit flashGroupsChanged();
     }
     if (enable == false && key == m_echoKey)
@@ -9815,6 +9817,31 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
     labShutdown(false);          // R410_LAB: so does the lab (the table rebuilds below)
+    // R513_LIVE_HIT_LIFT (r513 brief 2c: "Check what DROP HIT does if the drop lands while ENERGY is still 0; it
+    // should still go fully amok, as DROP HIT promises"): under ENERGY 0's start scene nothing ran, so an armed
+    // hit never saw its drop. The drop's first bar with DROP HIT armed takes the start scene down and the drop
+    // lands at 100 % (the fader raise after m_faderReal) with his hit. Over - the amok glided out, the drop ended unlanded,
+    // his slider up, LAST TRACK - his slider has the room again: at 0 that is the start scene (a hit that never
+    // landed stays armed for the next drop).
+    if (m_hitZero && (m_startScene || energy > 0.0 || m_lastStage != 0
+                      || (m_hitKind == 0 && m_hitAmokFrom < 0 && m_hitAmokOwed == false)
+                      || (m_hitKind != 0 && m_hitAmokFrom < 0 && (state != QStringLiteral("drop") || beat < m_hitZeroBeat
+                                                                   || beat - m_hitZeroBeat >= 32))))
+    {
+        m_hitZero = false;
+        logSignal(QStringLiteral("sig:drop-hit-zero:end"));
+        if (m_startScene == false && energy <= 0.0 && m_lastStage == 0)
+            setStartScene(true, true);
+    }
+    else if (m_startScene && m_startZero && m_hitKind != 0 && m_lastStage == 0 && m_testTrack == false
+             && energy <= 0.0 && state == QStringLiteral("drop") && sectionChanged
+             && beat >= secStart && beat - secStart < 4)
+    {
+        m_hitZero = true;                // first: setStartScene() tells the manager at once (R185's listener)
+        m_hitZeroBeat = beat;
+        setStartScene(false);
+        logSignal(QStringLiteral("sig:drop-hit-zero:lift:%1").arg(m_hitKind));
+    }
     if (m_startScene)            // the opening picture is up: nothing else runs
     {
         clearMusicDark();        // runde 356
@@ -10072,6 +10099,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         fader = qMin(closing, qMin(1.0, energy / (0.80 + 0.20 * qBound(0.0, sectionEnergy, 1.0)) + 1e-6));
     m_faderNow = fader;
     m_faderReal = fader;                 // R480_HIT_REAL: his number, under a DROP HIT's amok too
+    // R513_LIVE_HIT_ZERO_FADER: DROP HIT took the room from ENERGY 0's start scene (the lift above) - the
+    // amok's level from the start of the beat, so STILL and the drop's 30 % line read it (his slider at 0
+    // would hide the drop and hold everything); hitAmok() below then raises nothing more. m_faderReal stays 0
+    if (m_hitZero)
+    {
+        const qreal z = hitZeroLevel();
+        fader = qMin(closing, qMax(fader, z));
+        energy = qMin(closing, qMax(energy, z));
+        m_faderNow = fader;
+    }
     // How long the kick has been away, in beats - the vocal passage the
     // analysis did not flag as a break. Counted once per beat: a section
     // change runs tick() a second time on the same beat, and that would
@@ -10137,6 +10174,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     qreal prog = qBound(0.0, qreal(beat - secStart) / qreal(len), 1.0);
     int bar = (beat - secStart) / 4;
     int beatInBar = (beat - secStart) % 4;
+    colourMemHoldBeat(beatInBar);        // R513_COLOUR_MEM_HOOK: the colour memory's replay HOLD held back
     // ... and the line is read on the BAR LINE (runde 279), like the strobes'
     // pool and the composition's tier (runde 199): read on every beat, the
     // clock's 22:45 step, the closing lid or a hand crossing 30 % on beat 2
@@ -12335,6 +12373,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             bool allowWhite = m_accentWasWhite == false && rng->bounded(4) == 0;
             m_accentPick = accentFor(m_colour, allowWhite);
             m_accentWasWhite = (m_accentPick == QStringLiteral("white"));
+            // R513_COLOUR_ACCENT_HOOK (r513, Tobias 10-28: "bare lav det som du synes er bedst"): a returning
+            // drop theme's colour is the drop's accent (r509_colour.inc.cpp) - drawn after accentFor so the dice
+            // run as before; a colour that is no pair with the room's leaves the normal accent
+            const QString themeAccent = r509ThemeAccent();
+            if (themeAccent.isEmpty() == false)
+            {
+                if (m_testTrack == false)
+                    logSignal(QStringLiteral("sig:theme-colour:accent:%1:%2").arg(m_r509ThemeCurKey, themeAccent));
+                m_accentPick = themeAccent;
+                m_accentWasWhite = false;
+            }
         }
         accentColour = m_accentPick;
     }
@@ -17504,7 +17553,7 @@ void TrackEngine::reapplyLevels()
                     out = std::sqrt(qBound(0.0, out, 1.0));
             }
         }
-        out = lightsOut() ? 0.0 : qBound(0.0, out, 1.0);
+        out = lightsOutFor(group) ? 0.0 : qBound(0.0, out, 1.0);   // R513_LIVE_PAD_REAPPLY
         if (slot.startsWith(QStringLiteral("pos:")) == false && r507SafeDark(group))
             out = 0.0;                   // R507_SAFE_REAPPLY: a laser held dark, as setPart() (not the aim)
         m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
@@ -19841,6 +19890,14 @@ void TrackEngine::closingTick(bool showOn)
     const bool lastLid = (m_lastStage == 1 || m_lastStage == 2)
                       && (m_closingOn == false || m_roomAuto == false
                           || -lastTrackSecsToClose() < qint64(ENGINE_LAST_WAIT_MIN) * 60);
+    // R513_OLD_CLOSING_HANDOVER (Tobias: "LAST TRACK, SHOW OFF and the clock's closing must always put both
+    // haze AND fan to 0"): LAST TRACK's outro lid handing the room to the clock's closing - its hour's wait ran
+    // out mid-outro, it was undone mid-outro, ENERGY went back to the clock - found the light lidded already,
+    // so "the closing starts" never came: the fan (and a VC haze fader) ran on in the dark. Seen from the
+    // clock, the closing starts now: the lid as if it had been open (the lines below set it to dim at once)
+    if (m_closingLidWas && lastLid == false && dim < 1.0)
+        m_closingDim = 1.0;
+    m_closingLidWas = lastLid;
     const bool closingStarts = dim < 1.0 && m_closingDim >= 1.0;
     if (qAbs(dim - m_closingDim) > 0.004 || (dim == 0.0) != (m_closingDim == 0.0))
     {
@@ -20212,7 +20269,20 @@ void TrackEngine::setStartScene(bool on, bool keepTiles)
                 m_startColour = true;
             }
         }
+        // R513_LIVE_HIT_KEEP (r511 OLD found it; r513 brief 2c: "DROP HIT stays armed at ENERGY 0 ... His pick wins.
+        // ENERGY 0's start scene is an effect, not a stop"): pulling ENERGY to 0 in the show (keepTiles) went
+        // through stopAll() -> hitReset() and disarmed his DROP HIT. It stays armed; everything else the show
+        // stop resets (a running amok, its flash, its dark) is reset as before
+        const int keepHit = keepTiles ? m_hitKind : 0;
         stopAll();
+        m_startZero = keepTiles;
+        m_hitZero = false;
+        if (keepHit != 0 && m_hitKind == 0)
+        {
+            m_hitKind = keepHit;
+            logSignal(QStringLiteral("sig:drop-hit-kept:%1").arg(keepHit));
+            emit hitChanged();
+        }
         startLook();
     }
     else
@@ -20228,6 +20298,7 @@ void TrackEngine::setStartScene(bool on, bool keepTiles)
             m_overrideIdx = 0;
         }
         m_startColour = false;
+        m_startZero = false;                 // R513_LIVE_HIT_OFFZERO
         foreach (const QString &slot, m_active.keys())
         {
             // not the OFF and BLACKOUT masks: with SHOW OFF nothing puts them
@@ -21343,7 +21414,9 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
         m_mixGlide = false;
         m_mixGlideKey.clear();
     }
+    const QString heldAccent = m_accentPick;   // R513_COLOUR_HOLD_ACCENT: HOLD keeps it
     m_accentPick.clear();        // drawn for the last track's colour (runde 171)
+    m_accentPick = r509HeldAccent(heldAccent);
     // positions are kept: a new track is not a reason to swing the lasers
     m_lastState.clear();
     m_autoStageKeys.clear();
@@ -21531,7 +21604,8 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     }
     level = qBound(0.0, level, 1.0);
     // a blackout: the function runs, at nothing
-    qreal out = lightsOut() ? 0.0 : qBound(0.0, level * slotScale(slot, fid), 1.0);
+    // R513_LIVE_PAD_RUN: the music's dark, not on a group his pad holds (lightsOutFor)
+    qreal out = lightsOutFor(slotGroup(slot)) ? 0.0 : qBound(0.0, level * slotScale(slot, fid), 1.0);
     // A chase that OWNS the dimmers (runde 173/174). Its intensity scales
     // every QLCChannel::Intensity channel of its steps - the dimmer AND red,
     // green and blue - so when it paints the colour itself (the colour scene
@@ -21542,7 +21616,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     // unpulsed level for a frame before the pulse timer pulled it down - a
     // strobe at 5 % jumping to full. The same two steps are in
     // slotPulseTimer() and reapplyLevels().
-    if (slot.startsWith(QStringLiteral("mot:")) && lightsOut() == false)
+    if (slot.startsWith(QStringLiteral("mot:")) && lightsOutFor(slotGroup(slot)) == false)   // R513_LIVE_PAD_MOTRUN
     {
         const QString ownGroup = slotGroup(slot);
         if (m_motionDim.contains(ownGroup) && m_flashHeld.contains(ownGroup) == false)
@@ -22100,7 +22174,7 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
     applied = qMax(applied, lastWhiteDim(group));
     if (r507SafeDark(group))
         applied = 0.0;                   // R507_SAFE_PART: a laser held dark (the handover, a new picture)
-    if (lightsOut())
+    if (lightsOutFor(group))             // R513_LIVE_PAD_PART: a held pad's group is not in the music's dark
         applied = 0.0;
 
     if (m_active.value(slot, Function::invalidId()) == fid)
@@ -25969,6 +26043,16 @@ qreal TrackEngine::hitAmok(int beat, bool lands, bool isDrop)
         return qreal(ENGINE_HIT_GLIDE - g) / qreal(ENGINE_HIT_GLIDE + 1);
     hitAmokEnd();
     return 0.0;
+}
+
+qreal TrackEngine::hitZeroLevel() const
+{
+    // R513_LIVE_HIT_ZERO_LEVEL: hitAmok()'s level as the last beat left it - 1 until the landing and for the
+    // amok's bars, then the glide back to his slider (0) over ENGINE_HIT_GLIDE beats
+    if (m_hitAmokFrom < 0 || m_hitAmokPlayed < m_hitAmokFull)
+        return 1.0;
+    const int g = m_hitAmokPlayed - m_hitAmokFull;
+    return g < ENGINE_HIT_GLIDE ? qreal(ENGINE_HIT_GLIDE - g) / qreal(ENGINE_HIT_GLIDE + 1) : 0.0;
 }
 
 void TrackEngine::hitAmokEnd()
@@ -30030,6 +30114,12 @@ void TrackEngine::flashGroup(const QString &key, bool on)
             if (other == m_echoKey)
                 stopEcho();
         }
+        // R513_LIVE_PAD_PRESS (r513 brief 2b): pressed inside the music's own dark (a pause stop, a silent beat,
+        // the black beat before a drop, a stab) - this group's dark mask lets go now, as FLASH lets go of the
+        // whole dark (R510_LIVE_FLASH_DARK); the rest of the rig stays dark. lightsOutFor() lifts its levels
+        padDarkMask(key);
+        if (m_autoDark)
+            reapplyLevels();
         crumb(QStringLiteral("pad ") + key);            // R435_CRUMBS
         emit flashGroupsChanged();
         emit liveChanged();
@@ -30092,6 +30182,7 @@ void TrackEngine::flashGroup(const QString &key, bool on)
     }
     m_padWasCol.remove(key);
     m_padWasColLevel.remove(key);
+    padDarkMask(key);                    // R513_LIVE_PAD_RELEASE: let go inside the same dark - the beat's own dark is back
     crumb(QStringLiteral("pad off ") + key);            // R435_CRUMBS
     emit flashGroupsChanged();
     emit liveChanged();
@@ -30119,7 +30210,26 @@ void TrackEngine::padFlashClear()
     m_padWasCol.clear();
     m_padWasColLevel.clear();
     m_syncOwned.clear();
+    foreach (const QString &dk, m_darkScenes.keys())
+        padDarkMask(dk);                 // R513_LIVE_PAD_CLEAR: no pad left - every dark mask as the music has it
     emit flashGroupsChanged();
+}
+
+void TrackEngine::padDarkMask(const QString &key)
+{
+    // R513_LIVE_PAD_MASK (r513 brief 2b): the group's own dark mask (runde 356, flashed by setAutoDark) follows
+    // lightsOutFor(): off while his pad holds the group inside the music's dark, on again when the pad lets go
+    // and the dark is still there. Nothing changes outside the music's dark or under BLACKOUT.
+    if (m_doc == nullptr || m_darkScenes.contains(key) == false)
+        return;
+    Function *df = m_doc->function(m_darkScenes.value(key));
+    if (df == nullptr)
+        return;
+    const bool want = m_autoDark && m_blackout == false && m_padFlash.contains(key) == false;
+    if (want && df->flashing() == false)
+        df->flash(m_doc->masterTimer(), true, true);
+    else if (want == false && df->flashing())
+        df->unFlash(m_doc->masterTimer());
 }
 
 /* R479_PAD_ONE_LASER (night review 10-17): an Animation Laser pad lit while the
@@ -30341,6 +30451,12 @@ void TrackEngine::colourMemoryBeat(int beat, const QString &state, bool sectionC
             m_colMemHand = true;
         m_colMemSection = state;
         m_colMemFrom = beat;
+        // R513_COLOUR_MEM_HOLD (r512 TILES, lead r513 - Tobias 10-28: "bare lav det som du synes er bedst"): the
+        // replay below changed his tiles at a section start while HOLD was on - HOLD is "no colour changes". Under
+        // HOLD (and ENERGY 0, which holds - as R512's tiles) it waits: it comes in on the first bar line after
+        // HOLD is let go in this section (colourMemHoldBeat); a new section reads its own memory as before
+        m_colMemWaiting = false;
+        const bool memHeld = m_hold || m_faderNow < 0.03;
         if (m_colMemHand)
         {
             // his play: what he carries into this section, as it is
@@ -30350,7 +30466,21 @@ void TrackEngine::colourMemoryBeat(int beat, const QString &state, bool sectionC
         else
         {
             const QString want = colourMemRecall(beat, state);
-            if (want.isEmpty() == false)
+            if (want.isEmpty() == false && want != now && memHeld)
+            {
+                m_colMemWait = want;     // R513_COLOUR_MEM_WAIT: HOLD - last time's colours wait for its release
+                m_colMemWaiting = true;
+                logSignal(QStringLiteral("sig:colour-memory-wait:") + state);
+            }
+            else if (want.isEmpty() && m_colMemRecalled && memHeld
+                     && (m_overrideSet.isEmpty() == false || m_colourMode != 0))
+            {
+                m_colMemWait.clear();    // ... and so does the going back to AUTO after a replayed section
+                m_colMemWaiting = true;
+                m_colMemRecalled = false;
+                logSignal(QStringLiteral("sig:colour-memory-wait:") + state);
+            }
+            else if (want.isEmpty() == false)
             {
                 if (want != now)
                     colourMemApply(want);
@@ -30385,15 +30515,52 @@ void TrackEngine::colourMemoryTrack()
     // R512_TILES_NEWTRACK (Tobias 10-28: "altid ... tilbage til AUTO ved sektionsskifte"): a new play is a
     // section change too - his tiles go back to AUTO first, so this play starts from AUTO (the end of this file)
     tilesNewTrack();
-    if (m_colMemRecalled && m_colMemHand == false && (m_overrideSet.isEmpty() == false || m_colourMode != 0))
+    // R513_COLOUR_MEM_TRACK (lead r513): under HOLD a replayed set stays on into the new play, as R512 keeps his
+    // tiles there - the first real section change after HOLD is let go takes it back (tilesBackToAuto)
+    if (m_colMemRecalled && m_colMemHand == false && (m_overrideSet.isEmpty() == false || m_colourMode != 0)
+        && m_hold == false && m_faderNow >= 0.03)
         setColourOverride(QString());
     m_colMemHand = false;
     m_colMemRecalled = false;
     m_colMemSection.clear();
     m_colMemFrom = -1;
+    m_colMemWaiting = false;             // a wait belongs to the section of the play it was read in
     m_colMemAfterStart = false;
     m_colMemLast = colourMemNow();
     m_tilesSeen = colourMemNow();        // R512_TILES_TRACKREAD: what the play starts with is not his hand
+}
+
+void TrackEngine::colourMemHoldBeat(int beatInBar)
+{
+    // R513_COLOUR_MEM_RELEASE (tick(), every beat, before the room's colour is decided): the replay HOLD held back at
+    // this section's start comes in on the first bar line after HOLD (and ENERGY 0) is let go - not mid-bar. His hand
+    // in the meantime (a tile, AUTO, FADE/CHASE) is his and ends the wait; so does the next section
+    if (m_colMemWaiting == false)
+        return;
+    if (m_colMemHand || m_testTrack || m_trackTitle.isEmpty())
+    {
+        m_colMemWaiting = false;
+        return;
+    }
+    if (m_hold || m_faderNow < 0.03 || beatInBar != 0 || m_startScene || m_startColour
+        || (savedActive() && m_savedPlaying.value(QStringLiteral("replayColour")).toBool()))
+        return;
+    m_colMemWaiting = false;
+    if (m_colMemWait.isEmpty())
+    {
+        if (m_overrideSet.isEmpty() == false || m_colourMode != 0)
+            setColourOverride(QString());
+    }
+    else
+    {
+        if (m_colMemWait != colourMemNow())
+            colourMemApply(m_colMemWait);
+        m_colMemRecalled = true;
+        logSignal(QStringLiteral("sig:colour-remembered:") + m_colMemSection + QLatin1Char(':')
+                  + (m_colMemWait.section(QLatin1Char('|'), 0, 0).isEmpty() ? QStringLiteral("auto") : m_colMemWait));
+    }
+    m_colMemLast = colourMemNow();       // the engine's own: not his hand (the memory, R512's tiles)
+    m_tilesSeen = colourMemNow();
 }
 
 void TrackEngine::colourMemForget(const QString &title)
@@ -38959,6 +39126,7 @@ void TrackEngine::r507SuckStop(const QString &why)
  *  cast: 40 % of such sections (a dice of the track and the section - the
  *  engine's random generator is never drawn, so everything else draws as
  *  before), never two sections running. Never under his picks (AUTO off,
+ *  his SECTION press (R513_LIVE_DUEL_DOC: it ends the duel as NEXT does),
  *  RIG/PLAN, his drop set, a mix, LAST TRACK, the labs, the start scene, any
  *  saved look - none of them saved a duel), HOLD/CALM/STILL, NEXT, DROP HIT
  *  armed or running: those end it at once (both, as the engine draws). It
@@ -39009,7 +39177,9 @@ bool TrackEngine::r507DuelHis() const
     // start scene, a saved look playing (none saves a duel), DROP HIT armed or running, the test
     return m_fullAuto == false || m_forceOn || m_dropTouched || m_mixing || m_lastStage != 0 || m_startScene
         || m_labActive || m_slabActive || m_clabActive || savedActive() || m_hitKind != 0 || m_hitAmokOwed
-        || m_hitAmokFrom >= 0 || m_testTimer.isActive();
+        || m_hitAmokFrom >= 0 || m_testTimer.isActive()
+        || m_pressHeld.isEmpty() == false;   // R513_LIVE_DUEL_SECTION (r510 LIVE; r513: "the duel ends on his section
+                                             // pick"): a SECTION press ends it on the next beat as NEXT does - his section
 }
 
 bool TrackEngine::r507DuelFree(const QString &key) const
@@ -40795,8 +40965,8 @@ void TrackEngine::r509BarsBeat(QSet<QString> &castSet, const QStringList &eligib
  *  - Never: under his colour tile(s) (the curtain's gate: then the whole room is his tile), a
  *    saved look, the start scene, LAST TRACK, the labs (the curtain's gate too), RIG/PLAN on the
  *    section (m_forceOn), outside FULL AUTO, nor started under HOLD/CALM. CALM pressed during a
- *    split freezes it where it stands, as it freezes the curtain and the glide. HOLD pressed during
- *    a split SNAPS IT BACK (R510_MASKS_SPLIT_DOC, Tobias 10-28: "HOLD skal springe tilbage" - r509
+ *    split snaps it back exactly as HOLD does (R513_LIVE_CALM_DOC; r509-r512 froze it where it stood).
+ *    HOLD pressed during a split SNAPS IT BACK (R510_MASKS_SPLIT_DOC, Tobias 10-28: "HOLD skal springe tilbage" - r509
  *    froze it): while HOLD is on, the wash, the Minis and the strobes show the outgoing colour whole
  *    (r509SplitHeld); the border stands where it was and shows again when HOLD is let go; a
  *    handover under HOLD keeps the outgoing colour, the one the room shows (R375's nearer colour).
@@ -40843,8 +41013,10 @@ bool TrackEngine::r509SplitHeld() const
     // (r497CurtainGlide), the Minis (r497CurtainColour) and the strobes (r509SplitColour) - for as long as
     // it is on. The border (m_r497CurtainK) stands where it was and the glide stays frozen, as before;
     // HOLD let go shows the split again. Never in the handover's finish (the new track's room then).
-    // CALM still freezes the split where it stands.
-    return m_hold && m_r509SplitOn && m_r497CurtainOn && m_mixGlideFinish == false;
+    // R513_LIVE_CALM_HELD (r513, Tobias 10-28 via the lead: "CALM works like HOLD for a split mix"; r510 left
+    // CALM freezing the split half old, half new): CALM snaps the split back to the outgoing colour too - the
+    // same heads, the same release (CALM let go or run out: the split shows again from where it stood)
+    return (m_hold || m_lastBeat < m_calmUntil) && m_r509SplitOn && m_r497CurtainOn && m_mixGlideFinish == false;
 }
 
 bool TrackEngine::r509SplitOwns(const QString &key) const
@@ -41139,6 +41311,18 @@ static double r509DramaEarly(int early, int tracks)
 
 /* ---- the engine side ---- */
 
+// R513_DRAMA_EVE_FN (runde 513, Tobias: "bare lav det som du synes er bedst" - r510 CLOCK P4, r511 REV P2):
+// the night's budget starts at 2 at 20:00. The night's key runs noon to noon (nightKey), and before 20:00
+// the peak is 1 (no night known), so any music after noon - a sound check, the afternoon - refilled at 0.50
+// a minute and the night began with 3. True from the key's own turn (noon; the real seconds of nightKey make
+// it 11:00 / 13:00 on the two DST Sundays) to 20:00 on the key's own day; the morning after (the evening's
+// key, 06:00 .. noon) is not "before the night" and stays as it was.
+static bool r513DramaBeforeEve(const QString &night)
+{
+    return night.isEmpty() == false && night == QDate::currentDate().toString(Qt::ISODate)
+        && QTime::currentTime().hour() < 20;
+}
+
 // R510_CLOCK_KEPT_FNS (r510 CLOCK): the night's budget lived in memory only. A QLC+ start mid-night
 // (an update, a crash - the night of 24-25 Oct had three) gave the warm-up 2 fresh tokens however
 // many were spent, and forgot tonight's mix-outs before a last drop. It is kept with the night's key
@@ -41243,6 +41427,14 @@ qreal TrackEngine::r509DramaClockShare(qint64 secs) const
 
 void TrackEngine::r509DramaSpend(const QString &what)
 {
+    // R513_DRAMA_TEST_SPEND (runde 513, r510 CLOCK P3 / r511 REV P1, Tobias: "bare lav det som du synes er
+    // bedst"): the test track leaves tonight's budget alone. Its own big moments (two 95 % drops) spent
+    // tonight's tokens, and since r510 (R510_CLOCK_KEPT_SPEND) the spend was WRITTEN to QSettings and outlived
+    // a restart - although R450 says the test track learns nothing. Its tracks were never counted
+    // (r509DramaOut), its draws keep peak 1 (R511_REV_DRAMA_TEST_PEAK), its quarter hour is not logged nor kept.
+    // R513_DRAMA_EVE_SPEND: nor is anything spent before tonight's 20:00 - the budget waits at 2 (the beat)
+    if (m_testTrack || r513DramaBeforeEve(m_r509Night))
+        return;
     m_r509Tokens = qMax(0.0, m_r509Tokens - 1.0);
     r510ClockDramaSave(m_r509Night, m_r509Tokens, m_r509Tracks, m_r509Early);   // R510_CLOCK_KEPT_SPEND
     if (m_testTrack == false)
@@ -41284,6 +41476,16 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
         if (kept >= 0 && m_testTrack == false)
             logSignal(QStringLiteral("sig:drama-kept:tok%1:early%2/%3:away%4")
                       .arg(int(qRound(10.0 * m_r509Tokens))).arg(m_r509Early).arg(m_r509Tracks).arg(int(kept / 60)));
+        // R513_DRAMA_EVE_KEPT (runde 513, "the night starts at 2 at 20:00"): a budget written BEFORE tonight's
+        // 20:00 (a sound check, then QLC+ started again in the evening) is not tonight's: 2 tokens and no refill
+        // for the hours away - exactly the first beat after 20:00 of an engine that ran all afternoon. Real
+        // seconds on both sides (kept, and the seconds since 20:00), so a DST night compares right too.
+        const qint64 eve = r509DramaSecs();
+        if (kept >= 0 && eve >= 0 && kept > eve)
+        {
+            m_r509Tokens = R509_DRAMA_TOK_START;
+            kept = 0;
+        }
     }
     // a DJ leaving the track: the old track's drops ahead, as its last beat saw them
     if (m_trackTitle != m_r509Title)
@@ -41307,6 +41509,22 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
     // first beat at the peak's 0.50 a minute - and since r510 (R510_CLOCK_KEPT_GAP) that is every minute
     // QLC+ was away: a restart in the warm-up (an update, a crash) checked on the test track came back
     // with 3 tokens, more than r509's fresh 2 (harness r511: 0 kept, 20 min away -> tok30, not tok10)
+    // R513_DRAMA_HIT_PEAK (runde 513, r510 CLOCK P1, Tobias: "bare lav det som du synes er bedst"): his DROP HIT
+    // is the peak. tick() hands this beat the fader DROP HIT's amok raised (R480_HIT_AMOK) - but only from the
+    // landing, and only as far as the glide back still holds it. Armed (waiting for its drop, or DARK's owed
+    // kick) or firing (the amok and its glide), DRAMA reads the slider as at the top: the night is the peak -
+    // the refill at the peak's rate, weight 1 for a moment decided now. The drop's form under his DROP HIT is
+    // his as before (r509DramaForm), and his slider, the closing lid and the cast are untouched: this is
+    // DRAMA's own copy of the fader.
+    if (m_hitKind > 0 || m_hitAmokOwed || m_hitAmokFrom >= 0)
+        fader = 1.0;
+    // R513_DRAMA_TEST_FADER (runde 513, "the test track leaves the budget alone"): ... and its slider is not the
+    // night's either. R511_REV_DRAMA_TEST_FILL put the test track's refill on the night's clock, but the peak
+    // still read the slider: a rig check at 95 % refilled at 0.50 a minute (native test r513, the warm-up: 1.0
+    // token kept a minute before, 2 minutes of test track at 95 % -> 2.5 tokens; now 1.15). On the test track the refill
+    // is the clock's alone - as the same minutes of silence; its draws keep peak 1 (R511_REV_DRAMA_TEST_PEAK)
+    if (m_testTrack)
+        fader = 0.0;
     const qreal share = r509DramaClockShare(secs);
     const double peak = r509DramaPeak(share, fader);
     if (kept > 0)                        // R510_CLOCK_KEPT_GAP: the minutes QLC+ was away, as a gap between beats
@@ -41315,6 +41533,15 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
         m_r509Tokens = qMin(R509_DRAMA_TOK_MAX,
                             m_r509Tokens + r509DramaRefill(peak) * qreal(now - m_r509TokMs) / 60000.0);
     m_r509TokMs = now;
+    // R513_DRAMA_EVE_START (runde 513, "the night starts at 2 at 20:00"): before tonight's 20:00 the budget
+    // waits at 2 - no refill, nothing spent - and the first beat after 20:00 starts from it with no refill for
+    // the hours before (m_r509TokMs -1, as on the noon line, R510_CODE_DRAMA_NIGHT). The afternoon's draws
+    // are unchanged: their peak is 1 (no night known), their weight 1 whatever the tokens.
+    if (r513DramaBeforeEve(night))
+    {
+        m_r509Tokens = R509_DRAMA_TOK_START;
+        m_r509TokMs = -1;
+    }
     m_r509Peak = m_testTrack ? 1.0 : peak;   // R511_REV_DRAMA_TEST_PEAK: the test track's draws as before (peak 1)
     m_r509NightW = r509DramaNightW(m_r509Peak, m_r509Tokens);
 
@@ -41459,6 +41686,11 @@ qreal TrackEngine::r509DramaForm(int at, bool his, bool *firstDrop)
  *     section, only colours of the palette. Forgotten with the track (a new
  *     title, as m_motifs). Log: sig:theme-colour:new|back|held|his|next:
  *     <section>#<n>:<colour>.
+ *     R513_COLOUR_DROP_DOC (r513): in DROPS the room's colour follows the
+ *     normal rules again (contrast with the last drop); a returning drop
+ *     theme's colour is the drop's ACCENT instead, when HARMONY pairs it
+ *     with the room's (r509ThemeAccent). Log: sig:theme-colour:accent:
+ *     drop#<n>:<colour>.
  * ===================================================================== */
 
 #define R509_COLOUR_KICK_MIN_FADER 0.90     // from 90 % ENERGY
@@ -41768,6 +42000,12 @@ QString TrackEngine::r509ThemeWant() const
     if (m_r509ThemePending == false || m_r509ThemeBack == false || m_r509ThemeCtx != m_motifContext
         || m_r509ThemeTitle != m_trackTitle || r509ThemeAuto() == false)
         return QString();
+    // R513_COLOUR_DROP_WANT (r513, the lead's pick - Tobias 10-28: "bare lav det som du synes er bedst"): the
+    // theme colour stays full in breaks, builds and grooves; in a DROP the room follows the normal rules again
+    // ("contrast with the last drop", C20261020) and the theme's colour comes in as the drop's ACCENT instead
+    // (r509ThemeAccent). The drop theme is still recorded, so its colour is known when it returns
+    if (m_r509ThemeKey.startsWith(QStringLiteral("drop#")))
+        return QString();
     const QString c = m_r509ThemeColours.value(m_r509ThemeKey);
     return r509ThemeOk(c) ? c : QString();
 }
@@ -41795,6 +42033,8 @@ void TrackEngine::r509ThemePool(QStringList &pool) const
     if (m_r509ThemePending == false || m_r509ThemeCtx != m_motifContext || m_r509ThemeTitle != m_trackTitle
         || m_r509ThemeColours.contains(m_r509ThemeKey))
         return;
+    if (m_r509ThemeKey.startsWith(QStringLiteral("drop#")))
+        return;                          // R513_COLOUR_DROP_POOL: a drop draws by the normal rules (r509ThemeWant)
     for (auto it = m_r509ThemeColours.constBegin(); it != m_r509ThemeColours.constEnd(); ++it)
     {
         if (pool.count() > 1 && pool.contains(it.value()))
@@ -41810,6 +42050,23 @@ QString TrackEngine::r509ThemeDrawn(const QString &drawn, bool forceNext)
         return drawn;
     const QString c = r509ThemeWant();
     return c.isEmpty() ? drawn : c;
+}
+
+QString TrackEngine::r509HeldAccent(const QString &accent) const
+{
+    // R513_COLOUR_HELD_FN (trackLoaded(); r510 MASKS q2, lead r513): HOLD is "no colour changes", but a track change
+    // cleared the accent and the next drop beat drew a new one - the strobes went red -> blue at a handover under
+    // HOLD. Under HOLD (and ENERGY 0, which holds) the accent stays, while it is still a pair with the room's colour
+    // (a glide past half way under HOLD hands the room the next colour, R375) - as accentFor draws it: HARMONY
+    // (engineMixesWith), or white under blue, magenta and cyan. Else empty: drawn anew, as before
+    if ((m_hold || m_faderNow < 0.03) == false || accent.isEmpty() || accent == m_colour
+        || m_palette.contains(accent) == false || engineBannedColour(accent))
+        return QString();
+    const bool whiteFits = m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
+                        || m_colour == QStringLiteral("cyan");
+    if (engineMixesWith().value(m_colour).contains(accent) || (accent == QStringLiteral("white") && whiteFits))
+        return accent;
+    return QString();
 }
 
 void TrackEngine::r509ThemeBeat(int beat, bool changeColour, bool forceNext)
@@ -41861,6 +42118,24 @@ void TrackEngine::r509ThemeBeat(int beat, bool changeColour, bool forceNext)
     if (what.isEmpty() == false && m_testTrack == false)
         logSignal(QStringLiteral("sig:theme-colour:%1:%2:%3").arg(what, m_r509ThemeKey,
                                                                    have.isEmpty() ? m_colour : have));
+}
+
+QString TrackEngine::r509ThemeAccent() const
+{
+    // R513_COLOUR_THEME_ACCENT (r513, the lead's pick - Tobias 10-28: "bare lav det som du synes er bedst"): a
+    // returning DROP theme's colour comes in as the drop's accent on one group (tick()'s accent draw, the
+    // strobes or the Minis today) while the room itself takes the normal drop draw. Only the theme playing
+    // now (this drop's motif context), heard before in this track, AUTO only (never under his tile, a set,
+    // FADE/CHASE, the start scene or LAST TRACK), never white, banned or thrown away by NEXT, and only a
+    // colour HARMONY pairs with the room's (engineMixesWith, as accentFor) - else the normal accent
+    if (m_r509ThemeTitle != m_trackTitle || m_r509ThemeCurCtx != m_motifContext || m_r509ThemeCurKey != m_r509ThemeKey
+        || m_r509ThemeCurCtx != m_r509ThemeCtx || m_r509ThemeBack == false
+        || m_r509ThemeCurKey.startsWith(QStringLiteral("drop#")) == false || r509ThemeAuto() == false)
+        return QString();
+    const QString c = m_r509ThemeColours.value(m_r509ThemeCurKey);
+    if (r509ThemeOk(c) == false || c == m_colour || engineMixesWith().value(m_colour).contains(c) == false)
+        return QString();
+    return c;
 }
 /* ---- runde 509: WANDER - the light wanders in long grooves (R509_WANDER_FILE) ----
  *

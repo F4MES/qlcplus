@@ -162,8 +162,8 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     // R185_START_AUTO_TRACK: however the start scene comes down - its tile,
     // release(), SHOW OFF - it is no longer the one SHOW ON put up
     connect(m_engine, &TrackEngine::liveChanged, this, [this]() {
-        if (m_startAuto && m_engine->startScene() == false)
-            m_startAuto = false;
+        if (m_startAuto && m_engine->startScene() == false && m_engine->hitZero() == false)
+            m_startAuto = false;   // R513_LIVE_HIT_ZERO_AUTO: DROP HIT has the room from ENERGY 0
     });
     m_engine->announceRoom();
     if (m_view != nullptr)
@@ -1956,14 +1956,33 @@ int TrackManager::midiKind(const QString &target) const
 
 QString TrackManager::midiName(const QString &target) const
 {
+    // R513_OLD_MIDI_NAME (r511 REMOTE P1): "Last heard" names the control on EVERY MIDI message, and
+    // midiTargets() walks the whole show for it (groups(), ~3 ms) - a moving fader sends ~50 a second, on
+    // the GUI thread. A target's name never changes: a group's, a colour's and a section's is its key in
+    // capitals (exactly as midiTargets() makes it), the fixed controls' are looked up once and kept
+    if (target.startsWith(QLatin1String("groupTrim:")))
+        return target.mid(10).toUpper();
+    if (target.startsWith(QLatin1String("colour:")))
+        return target.mid(7).toUpper();
+    if (target.startsWith(QLatin1String("section:")))
+        return target.mid(8).toUpper();
+    static QHash<QString, QString> known;
+    const QHash<QString, QString>::const_iterator hit = known.constFind(target);
+    if (hit != known.constEnd())
+        return hit.value();
+    QString name = target.section(QLatin1Char(':'), -1).toUpper();
     const QVariantList list = midiTargets();
     for (const QVariant &v : list)
     {
         const QVariantMap m = v.toMap();
         if (m.value(QStringLiteral("t")).toString() == target)
-            return m.value(QStringLiteral("name")).toString();
+        {
+            name = m.value(QStringLiteral("name")).toString();
+            break;
+        }
     }
-    return target.section(QLatin1Char(':'), -1).toUpper();
+    known.insert(target, name);
+    return name;
 }
 
 QString TrackManager::midiSource(quint32 universe, quint32 channel, bool shortForm) const
@@ -2859,7 +2878,13 @@ void TrackManager::remoteWatch()
         else if (what == QLatin1String("stutter"))
             m_engine->setStutter(false);
         else if (what == QLatin1String("haze"))
+        {
+            // R513_OLD_PHONE_HAZE (Tobias 10-28: a dropped phone only ends the burst, never HAZE AUTO): the
+            // phone going quiet is no hand - "limit", as R491's MIDI burst end: back to the limit (AUTO steps on
+            // from there) and a HAZE AUTO armed during the hold stays on. As a hand it switched AUTO off
+            m_engine->atmosNext(QStringLiteral("limit"));
             m_engine->setHaze(m_engine->hazeRest());   // R484_HZ_PHONE_GONE: back to its rest - never off
+        }
         else
             m_engine->setFlash(false);
         qDebug() << "[TRACK remote] the phone went quiet - let go of" << what;
