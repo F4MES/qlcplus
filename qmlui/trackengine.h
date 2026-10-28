@@ -3243,6 +3243,17 @@ private:
     void colourMemoryBeat(int beat, const QString &state, bool sectionChanged);
     void colourMemoryTrack();
     void colourMemForget(const QString &title);
+    // R512_TILES_DECL (Tobias 10-28: "Farvefliserne skal altid skifte tilbage til AUTO ved sektionsskifte" -
+    // they held until he tapped AUTO): back to AUTO at every real section change (colourmem.inc.cpp)
+    QString m_tilesSeen = QStringLiteral("|0");   // the tiles (colourMemNow) as the last beat left them
+    int m_tilesHandBeat = -1;              // the beat his hand's last change to them was seen on
+    int m_tilesSecStart = -1;              // the real section start they were last read in
+    bool m_tilesQuiet = false;             // the section's own AUTO is not his hand: no sig:colour-auto
+    int m_tilesRedraw = 0;                 // 1: the room draws the engine's colour on this beat, 2: on the next
+    void tilesHandSeen(int beat);
+    void tilesSectionBeat(int beat, int start, const QString &state, bool newSection);
+    bool tilesBackToAuto(int beat, int start, const QString &state);
+    void tilesNewTrack();
     // R470_SYNC (track_runtime/sync.inc.cpp)
     bool m_syncOpen = false;
     int m_syncStep = 0;

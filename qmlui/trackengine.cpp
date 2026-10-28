@@ -9799,12 +9799,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // R470_COLOUR_MEMORY (R472_COLMEM_FROM: by the section's start - R475_MEMBY_REALSTART: its
     // real one: in a DJ loop over the flag tick()'s is 32 beats back, his colours went to AUTO)
     // SAVED_LOOKS_MEMORY: a one-section recall is not a new permanent colour preference.
+    tilesHandSeen(beat);                             // his hand on the tiles since the last beat - before the engine's own
     const int savedBoundary = m_realSecStart > 0 ? m_realSecStart : secStart;
     if (savedActive() && (m_savedPlayingFrom != savedBoundary || m_savedPlayingState != state)) savedStop();
+    // R512_TILES_TICK (Tobias 10-28: "Farvefliserne skal altid skifte tilbage til AUTO ved sektionsskifte" - they
+    // held until AUTO): a real section change takes his tiles back to AUTO - after a saved look's UNDO gave his own
+    // back (just above), before the colour memory reads the section (its replay of a remembered one comes after)
+    tilesSectionBeat(beat, savedBoundary, state, sectionChanged || m_sectionOwed);
     // R503_SAVED_MEMORY: an r501 saved look carries no colour - the room's colour under it is the engine's or his
     // tile (R503_SAVED_TILE_KEEPS), so the colour memory reads it; UNDO's restore (its own colours) still does not count
     if (!savedActive() || !m_savedPlaying.value(QStringLiteral("replayColour")).toBool())
         colourMemoryBeat(m_realSecStart > 0 ? m_realSecStart : (secStart > 0 ? secStart : beat), state, sectionChanged);
+    m_tilesSeen = colourMemNow();                    // R512_TILES_MEMSEEN: the memory's replay is not his hand
     syncBeat(beat, bpm);                             // R470_SYNC: round 2's blink (R472_SYNC_CLOCK: and the taps' clock)
     if (m_testTimer.isActive())  // a track started under the self test: the test yields
         selfTest();
@@ -10043,6 +10049,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     m_forceNext = false;
     m_nextFiled = false;                 // R485_A5_NEXT_ONCE_TICK: the next NEXT rejects the look this beat draws
     savedBeat(state, beat, m_realSecStart > 0 ? m_realSecStart : secStart); // SAVED_LOOKS_BEAT
+    m_tilesSeen = colourMemNow();        // R512_TILES_UNDOSEEN: nor is a saved look's UNDO putting its colours on
     // ENERGY at zero is the restaurant: the base stands in its colour and
     // nothing moves or changes - no pulse, no patterns, no colour rotation,
     // no positions. A hold the slider imposes.
@@ -10842,6 +10849,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         changeColour = false;            // R488_DX_HOLD_COLOUR: omvendt lands in the build's colour
     if (forceNext)
         changeColour = true;
+    // R512_TILES_REDRAW (lead r512, Tobias 10-28: "skifte tilbage til AUTO ved sektionsskifte"): his tiles went back
+    // to AUTO on this flag - the room takes the engine's own colour now, in every section type, as a section's
+    // own change draws it (HOLD and a mix still hold it below, CALM above)
+    if (m_tilesRedraw == 1)
+    {
+        m_tilesRedraw = 0;
+        if (isCalm == false)
+            changeColour = true;
+    }
     // R358_REPEAT: the repeat lands in the first one's colour
     if (m_reuseColour.isEmpty() == false && m_reuseColour != m_colour && sectionChanged
         && m_override.isEmpty() && isCalm == false)
@@ -18781,6 +18797,10 @@ bool TrackEngine::nextVariety(QStringList &priority, int effects, const QString 
 
 void TrackEngine::logSignal(const QString &tag)
 {
+    // R512_TILES_QUIET: the AUTO a section change makes (colourmem.inc.cpp) is not his hand - its sig:colour-auto
+    // counted as a manual intervention and stood in the night report's "operator's hand"; sig:tiles-auto says it
+    if (m_tilesQuiet && tag == QLatin1String("sig:colour-auto"))
+        return;
     qualitySignal(tag);
     // The section kind rides along: the state column is where it normally
     // lives, and a marker takes that column over. Without it a verdict cannot
@@ -21204,6 +21224,7 @@ void TrackEngine::setNextKey(const QString &key)
 
 void TrackEngine::trackLoaded(const QString &title, const QString &key)
 {
+    tilesHandSeen(m_curBeat);            // R512_TILES_FIRSTSEEN: a tap since the last beat is his - before UNDO's gives back
     savedReset(); // SAVED_LOOKS_TRACK: no queued look or UNDO can leak into another track
     if (title != m_trackTitle)
         qualityFinish(QStringLiteral("track-change"));
@@ -30183,6 +30204,10 @@ void TrackEngine::padLaserCast(QSet<QString> &castSet, bool heldCast, qreal fade
  *    section.
  *  - the replay: only while he has not touched the colours in this play.
  *    His hand takes over at once and for the rest of the track.
+ *    R512_TILES_MEMDOC: his hand itself lasts one section now (Tobias 10-28: "Farvefliserne skal altid
+ *    skifte tilbage til AUTO ved sektionsskifte") - the play is written as it went: the section he
+ *    coloured in his colours, the next ones AUTO; a replayed section goes back to AUTO at the next
+ *    change unless that one is remembered too (the end of this file).
  *  - title -> { "<section start beat>": "section|set|mode", "_t": secs },
  *    400 tracks; FORGET in the cache forgets it with the picks.
  * ===================================================================== */
@@ -30357,6 +30382,9 @@ void TrackEngine::colourMemoryBeat(int beat, const QString &state, bool sectionC
 void TrackEngine::colourMemoryTrack()
 {
     // trackLoaded(), another title: last time's colours do not go on into it
+    // R512_TILES_NEWTRACK (Tobias 10-28: "altid ... tilbage til AUTO ved sektionsskifte"): a new play is a
+    // section change too - his tiles go back to AUTO first, so this play starts from AUTO (the end of this file)
+    tilesNewTrack();
     if (m_colMemRecalled && m_colMemHand == false && (m_overrideSet.isEmpty() == false || m_colourMode != 0))
         setColourOverride(QString());
     m_colMemHand = false;
@@ -30365,6 +30393,7 @@ void TrackEngine::colourMemoryTrack()
     m_colMemFrom = -1;
     m_colMemAfterStart = false;
     m_colMemLast = colourMemNow();
+    m_tilesSeen = colourMemNow();        // R512_TILES_TRACKREAD: what the play starts with is not his hand
 }
 
 void TrackEngine::colourMemForget(const QString &title)
@@ -30375,6 +30404,108 @@ void TrackEngine::colourMemForget(const QString &title)
     else if (m_colMem.remove(title) == 0)
         return;
     QSettings().setValue(QStringLiteral("trackengine/colour-memory"), m_colMem);
+}
+
+/* ---- R512_TILES_FILE (runde 512): his colour tiles go back to AUTO at every section change ----
+ *
+ *  Tobias, 2026-10-28: "Farvefliserne skal altid skifte tilbage til AUTO ved sektionsskifte."
+ *  They held until he tapped AUTO (his set, FADE / CHASE, runde 304/370), and the colour memory
+ *  above said his hand held "for the rest of the track". Only his lamp-group picks were one section.
+ *
+ *  - When: a REAL section change - TrackManager's sectionChanged with a new real start (its own
+ *    R205/R235 gates: an edited start, a DJ loop, flags passing under a SECTION press are not one;
+ *    nor is the press itself, a role edit, NEXT, or a resume on the same section) - and a new play
+ *    of a track (trackLoaded(), which TrackManager calls only for one, R187).
+ *  - What: exactly the AUTO tile, setColourOverride(QString()): the set, FADE / CHASE and a saved
+ *    look's UNDO colours go. His lamp-group picks (RIG/PLAN) are not touched.
+ *  - And the room takes the engine's own colour AT the flag, in every section type (lead, r512: "a
+ *    lit AUTO tile over his colour would look like it didn't revert"): tick()'s colour decision
+ *    draws as if the section had drawn a change (m_tilesRedraw) - the palette, HARMONY, camelot,
+ *    r509's theme colour, never white as the room. HOLD, CALM and a running mix still say no, as
+ *    they do to every change of the room's colour; a new play draws on its first beat.
+ *  - Not his hand: no sig:colour-auto (the quality count, the night report) - sig:tiles-auto:<section>
+ *    instead - and the colour memory does not read it as a touch (m_colMemLast): the section he
+ *    coloured is remembered, the next ones as AUTO, and the replay of a remembered section starts in
+ *    his colours and goes back to AUTO at the next change - unless that one is remembered in the
+ *    same colours (then nothing is taken off to be put back on).
+ *  - Kept: under HOLD (and ENERGY 0, which holds) - "no colour changes": the first real section
+ *    change after it is let go takes them back (not the release itself: a colour change in the
+ *    middle of a section, off the bar line, is what HOLD's release must never cause).
+ *    And a tile changed in the last 8 beats before the change is for the section it starts -
+ *    once, as R479_PRESS_KEEP_HOLD keeps a SECTION press made in the last two bars.
+ */
+
+#define ENGINE_TILES_LATE 8                 // a change this many beats before the section is for it
+
+void TrackEngine::tilesHandSeen(int beat)
+{
+    // first in tick() (and trackLoaded()): a change since the last beat is his - the tiles, AUTO,
+    // FADE / CHASE, MIDI, the phone. The engine's own (the memory's replay, a saved look's UNDO,
+    // the AUTO below) are read in right after they are made, so they never land here
+    const QString now = colourMemNow();
+    if (now != m_tilesSeen)
+    {
+        m_tilesSeen = now;
+        m_tilesHandBeat = beat;
+    }
+}
+
+void TrackEngine::tilesSectionBeat(int beat, int start, const QString &state, bool newSection)
+{
+    // a start that moved without TrackManager saying "new section" is the same one moved (R205)
+    const bool moved = m_tilesSecStart >= 0 && start != m_tilesSecStart;
+    m_tilesSecStart = start;
+    // the redraw is for the beat it was asked on (a new play's: its first beat) - never a later one
+    m_tilesRedraw = m_tilesRedraw == 2 ? 1 : 0;
+    if (moved && newSection)
+        tilesBackToAuto(beat, start, state);
+}
+
+bool TrackEngine::tilesBackToAuto(int beat, int start, const QString &state)
+{
+    const bool late = m_tilesHandBeat >= 0 && m_tilesHandBeat <= beat && beat - m_tilesHandBeat <= ENGINE_TILES_LATE;
+    if (m_override.isEmpty() && m_overrideSet.isEmpty() && m_colourMode == 0)
+    {
+        m_tilesHandBeat = -1;
+        return false;                    // AUTO already
+    }
+    if (m_startScene || m_startColour)
+        return false;                    // the opening picture's colours go with it, as before
+    const QString why = state.isEmpty() ? QStringLiteral("track") : state;
+    if (m_hold || m_faderNow < 0.03)
+    {
+        logSignal(QStringLiteral("sig:tiles-kept:hold:") + why);   // the next change after HOLD takes them
+        return false;
+    }
+    m_tilesHandBeat = -1;
+    if (late)
+    {
+        logSignal(QStringLiteral("sig:tiles-kept:late:") + why);   // tapped for this section: until the next
+        return false;
+    }
+    // the colour memory brings this section back in exactly these colours (it was his last time too)
+    if (m_colMemHand == false && m_testTrack == false && state.isEmpty() == false
+        && colourMemRecall(start, state) == colourMemNow())
+        return false;
+    const QString was = colourMemNow();
+    m_tilesQuiet = true;
+    setColourOverride(QString());        // the AUTO tile's own path
+    m_tilesQuiet = false;
+    logSignal(QStringLiteral("sig:tiles-auto:") + why);
+    if (m_colMemLast == was)
+        m_colMemLast = colourMemNow();   // the memory: not his hand
+    m_tilesSeen = colourMemNow();
+    m_tilesRedraw = 1;                   // the engine's own colour, at the flag
+    return true;
+}
+
+void TrackEngine::tilesNewTrack()
+{
+    // trackLoaded(): a new play of a track is a section change too (the mix's handover included)
+    if (tilesBackToAuto(m_curBeat, -1, QString()))
+        m_tilesRedraw = 2;               // drawn on the new play's first beat
+    m_tilesSecStart = -1;                // its first beat starts the count afresh
+    m_tilesHandBeat = -1;                // the old track's beats
 }
 /* =====================================================================
  *  SYNC (runde 470) - appended to trackengine.cpp by
