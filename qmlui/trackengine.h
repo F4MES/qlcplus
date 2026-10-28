@@ -1467,6 +1467,233 @@ protected:
     QVector<bool> m_r507SuckShown;
     QString m_r507SuckCache;                    // the lamps the masks were made for
     // R507_DECL_DUEL
+    // R509_INF_DECL (runde 509): one marker per feature, each replaced by its owner
+    // R509_DECL_PAUSE
+    // R509_PAUSE_DECL (runde 509, PAUSE): the pause hit - the room dark on an abrupt stop inside a drop or
+    // a groove, the first beat back a full-room hit, "ikke altid hvid, ogsaa i rummets farve" (r509_pause.inc.cpp)
+    bool r509PauseStopAt(int s, int *back, int *before) const;   // a stop starts on s: its comeback beat
+    int r509PauseFind(int beat, int *from, int *back) const;     // 1 a stop beat, 2 its comeback, 0 neither
+    QString r509PauseWash() const;                      // the wash the hit lands on
+    QString r509PauseStrobes() const;                   // the strobe bank ("" none)
+    bool r509PauseFree() const;                         // his hand and the room's other owners: no pause
+    bool r509PauseOn() const;                           // R509_PAUSE_QUERY: a pause's dark or hit is running
+    QString r509PauseAccent(int beat) const;            // the room's accent (a harmony partner)
+    bool r509PauseBeat(int beat, const QString &state, const QString &nextState, int beatsToNext, qreal fader,
+                       bool hold, bool isCalm, bool still, bool musicDarkOk);   // tick(): this beat dark? (the hit armed)
+    void r509PauseArm(int beat, const QString &state, qreal fader);   // the comeback's colour
+    void r509PausePlan();                               // tick()'s stabs: the beat before a stop darkens its line
+    void r509PauseLamps();                              // the wash + strobes
+    bool r509PauseMasks(const QString &washHue, const QString &strobeHue);   // the per-lamp masks
+    Scene *r509PauseScene(const QHash<QString, quint32> &named, quint32 id, const QString &name);   // one mask
+    void r509PauseStart();                              // tick(), the beat drawn: the hit's first frame
+    void r509PauseStrobe(int beat, bool quiet, bool affordable, bool burst);  // driveStrobe: one blink, one burst
+    bool r509PauseFrame(qint64 now);                    // the pulse timer and reapplyLevels
+    void r509PauseStop();                               // every mask let go
+    void r509PauseReset();                              // SHOW OFF, idle, stopAll
+    QString m_r509PauseTitle;                        // the track the stops were read for
+    int m_r509PauseState = 0;                        // 0 none, 1 the hit armed, 2 the hit lit
+    int m_r509PauseFrom = -1;                        // the stop being darkened: its first beat ...
+    int m_r509PauseBack = -1;                        // ... its comeback beat
+    int m_r509PauseBefore = 0;                       // ... and the level of the 8 beats before it
+    bool m_r509PauseInDrop = false;                  // ... which was in a drop
+    int m_r509PauseDarkLast = -1;                    // the last beat a pause darkened
+    int m_r509PausePreFor = -1;                      // the stop the chop plan darkens into (its first beat)
+    int m_r509PauseHitBeat = -1;                     // the comeback beat the hit is for
+    qint64 m_r509PauseMs = -1;                       // ... its start, once tick() has drawn it
+    qreal m_r509PauseFader = 0.0;
+    QString m_r509PauseHue;                          // the hit's colour
+    QString m_r509PauseHueKind;                      // accent, white, tile, room
+    bool m_r509PauseHitWhite = false;
+    int m_r509PauseHits = 0;                         // pause hits this night ...
+    int m_r509PauseWhiteAt = -100;                   // ... the last white one's number
+    qint64 m_r509PauseWhiteMs = -1;                  // ... and its clock
+    bool m_r509PauseWithStrobes = false;             // the strobes blink with this hit
+    bool m_r509PauseStrobeAsked = false;
+    bool m_r509PauseStrobeMasks = false;             // the strobes have masks in the hit's colour
+    QString m_r509PauseWashKey;
+    QString m_r509PauseStrobeKey;
+    QVector<quint32> m_r509PauseFx;                  // the lamps: the wash, then the strobes
+    QVector<bool> m_r509PauseIsStrobe;
+    QVector<quint32> m_r509PauseLit;                 // per lamp: its colour mask ...
+    QVector<quint32> m_r509PauseDim;                 // ... its dimmer mask (carries the level) ...
+    QVector<quint32> m_r509PauseDark;                // ... and a strobe's dark one
+    QVector<int> m_r509PauseShown;                   // 0 none, 1 dark, 2 lit
+    QString m_r509PauseCache;                        // what the masks were filled for
+    // R509_DECL_BARS
+    // R509_BARS_DECL (runde 509, BARS): the laser bars count down to the drop and follow the
+    // arpeggio - "kun som et program motoren kan traekke" (r509_bars.inc.cpp)
+    QString r509BarsKey() const;                        // the laser bars ("" none)
+    QList<int> r509BarsOrder(const QString &key) const; // their parts from the back wall to the DJ
+    QString r509BarsBusy(const QString &key) const;     // who else has the bars: "his" / "room" / "" (ours may)
+    bool r509BarsCountPlanOk(int at) const;                 // the drop's plan allows a countdown
+    int r509BarsArpNotes(int beat) const;                   // the quarters of a beat with a note (-1 unknown)
+    bool r509BarsArpLine(int from) const;                   // a sixteenth line over the coming 8 beats
+    bool r509BarsLive() const;                          // a countdown / an arpeggio holds the bars now
+    bool r509BarsWhole(const QString &key) const;       // tick(): no AUTO programme on them
+    void r509BarsMove(const QString &key, TrackMove &mv) const;   // tick(): their still picture, our mask
+    int r509BarsCountLit(int beat) const;                   // the countdown's bars lit on a beat
+    int r509BarsArpStep(qint64 now) const;                  // the arpeggio's step at this moment
+    QVector<qreal> r509BarsMask(const QString &group) const;      // patternMask: the parts lit
+    bool r509BarsArpScenes();                               // the eye pairs' hidden scenes (from 75 %)
+    void r509BarsArpEyes(int pos);                          // the pair flashed (-1 none)
+    bool r509BarsFrame(qint64 now);                     // the pulse timer
+    void r509BarsStart();                               // tick(), the beat drawn
+    void r509BarsStop(const QString &why);
+    void r509BarsBeat(QSet<QString> &castSet, const QStringList &eligible, const QString &state, int beat,
+                      int secStart, int secEnd, bool isDrop, bool isBuild, const QString &nextState,
+                      int beatsToNext, qreal fader, qreal kick, bool hold, bool isCalm, bool still,
+                      bool silent, bool forceNext);
+    static constexpr int r509BarsMaskCount = 509;           // TrackMove::formMask: the countdown ...
+    static constexpr int r509BarsMaskArp = 510;             // ... and the arpeggio (over the drop forms' 1-3)
+    int m_r509BarsMode = 0;                         // 0 none, 1 the countdown, 2 the arpeggio
+    QString m_r509BarsKey;                          // the bars it holds
+    QString m_r509BarsTitle;                        // ... in this track
+    int m_r509BarsBeat = -1;                        // the beat it was last asked on
+    int m_r509BarsPre = -1;                         // the first beat it holds the bars (dark before the first step)
+    int m_r509BarsAt = -1;                          // the countdown: the drop it counts to
+    int m_r509BarsFirst = -1;                       // ... its first lit step
+    int m_r509BarsSteps = 0;                        // ... its steps
+    int m_r509BarsPeriod = 1;                       // ... beats a step
+    bool m_r509BarsTwo = false;                     // ... from 75 %: the two back bars to start
+    int m_r509BarsCountFor = -1;                    // the drop the countdown was drawn for (once a drop)
+    bool m_r509BarsCountPrev = false;               // the last build drawn counted down (never two running)
+    int m_r509BarsArpSec = -1;                      // the break the arpeggio was drawn for (once a break)
+    bool m_r509BarsCountWon = false;                // the countdown's ticket won, waiting for the room
+    bool m_r509BarsArpWon = false;                  // the arpeggio's ticket won, waiting for the room
+    QString m_r509BarsWhy;                          // the last reason a won ticket waited (the crumb once)
+    int m_r509BarsArpFrom = -1;                     // its first beat
+    int m_r509BarsArpBase = 0;                      // the steps before this beat
+    int m_r509BarsArpMask = 0;                      // this beat's steps (quarter bits)
+    int m_r509BarsArpLastQ = -100;                  // the last step (beat * 4 + quarter)
+    int m_r509BarsArpQuiet = 0;                     // beats in a row without a line
+    int m_r509BarsKicks = 0;                        // kick beats in a row (the raw kick)
+    bool m_r509BarsEyes = false;                    // the arpeggio's eye pairs (from 75 %)
+    bool m_r509BarsEyeOk = false;                   // ... their scenes are made
+    QList<int> m_r509BarsOrder;                     // the bars' parts from the back wall
+    QVector<quint32> m_r509BarsEyeIds;              // the 7 pair scenes
+    QString m_r509BarsEyeCache;                     // ... made for this colour scene
+    int m_r509BarsEyeShown = -1;                    // the pair flashed (-1 none)
+    // R509_DECL_SPLIT
+    // R509_SPLIT_DECL (runde 509, SPLIT): the mix in two halves, "men kun nogle gange" (r509_split.inc.cpp)
+    bool r509SplitActive() const;                       // the room is split between two decks now
+    bool r509SplitOwns(const QString &key) const;       // the split paints this strobe bank's colour
+    void r509SplitStop(const QString &why);             // lets go (logged when it ran)
+    int r509SplitTarget(const QString &key, int target, int n, int beat, bool frozen);   // the curtain's border
+    void r509SplitBeat();                               // every beat, after the curtain's
+    quint32 r509SplitColour(const QString &key, const QString &colour);   // the strobes by the border
+    bool m_r509SplitOn = false;                 // this mix is a split
+    QString m_r509SplitKey;                     // the curtain's group it rides on
+    QString m_r509SplitTitle;                   // the outgoing track it was drawn in
+    int m_r509SplitMixes = 0;                   // mixes counted in that track (the dice)
+    int m_r509SplitStrobesIn = -1;              // strobe heads in the new colour, last logged
+    // R509_DECL_DRAMA
+    // R509_DRAMA_DECL (runde 509, DRAMA): the night's budget of big moments, the last drop is biggest
+    // (r509_drama.inc.cpp) - weights on the existing draws, no new effects
+public:
+    void r509DramaFlags(const QVector<int> &drops);     // trackmanager, every tick: the track's drop starts
+protected:
+    void r509DramaBeat(int beat, qreal fader);          // tick(): every beat, before the drop's form is decided
+    int r509DramaAhead(int pos) const;                  // drops still ahead of pos (-1 unknown)
+    qreal r509DramaWeight(int pos) const;               // night x the drops ahead of pos (< 0: night only): suck, duel, rush
+    qreal r509DramaForm(int at, bool his, bool *firstDrop);   // dropFormDecide: the big tickets
+    bool r509DramaWhiteOk() const;                      // the white landing's gap, longer in the warm-up
+    qint64 r509DramaSecs() const;                       // real seconds since the evening's 20:00, -1 outside
+    qreal r509DramaClockShare(qint64 secs) const;       // ENERGY by clock then over its top, -1 unknown
+    void r509DramaSpend(const QString &what);           // a big moment played: one token
+    void r509DramaOut(const QString &title, int ahead); // the DJ left a track: early or after its last drop
+    QVector<int> m_r509Drops;                   // the current track's drop starts (trackmanager)
+    QString m_r509Night;                        // the night the budget is for (nightKey)
+    qreal m_r509Tokens = 2.0;                   // big moments in hand
+    qint64 m_r509TokMs = -1;                    // the last refill (m_clock)
+    qreal m_r509Peak = 1.0;                     // this beat's peak, 0 warm-up .. 1
+    qreal m_r509NightW = 1.0;                   // this beat's night weight (1 = the draws as before)
+    int m_r509Quarter = -1;                     // the quarter hour last logged
+    int m_r509Tracks = 0;                       // tracks left tonight after a heard drop ...
+    int m_r509Early = 0;                        // ... with a drop still ahead (a mix-out before the last drop)
+    QString m_r509Counted;                      // the track already counted
+    QString m_r509Title;                        // the track the beat belongs to
+    bool m_r509Landed = false;                  // ... landed a drop
+    bool m_r509Mix = false;                     // a mix was on last beat
+    int m_r509AheadNow = -1;                    // drops ahead of the last beat
+    int m_r509LandSeen = -1;                    // the moments already spent: a form landing,
+    QString m_r509LandTitle;
+    int m_r509SuckSeen = -1;                    // ... a suck,
+    int m_r509DuelSeen = -1;                    // ... a duel,
+    QString m_r509DuelTitle;
+    int m_r509RushSeen = -100000;               // ... a phrase rush,
+    qint64 m_r509WhiteSeen = -1;                // ... a white landing
+    // R509_DECL_COLOUR
+    // R509_COLOUR_DECL (runde 509, COLOUR): the white kick on the wash and colour follows the theme
+    // (r509_colour.inc.cpp)
+    QString r509ColourKickWash() const;
+    bool r509ColourKickFree(const QString &key) const;
+    quint32 r509ColourKickScene(const QString &key);
+    void r509ColourKickStop(const QString &why);
+    void r509ColourKickBeat(int beat, bool isDrop, int dropBar, int beatInBar, qreal fader, bool hold,
+                            bool isCalm, bool still);
+    bool r509ColourKickFrame(qint64 now);
+    QString m_r509KickKey;                      // the wash being tinted ("" none)
+    quint32 m_r509KickScene = 0xFFFFFFFFu;      // the hidden tint scene (Function::invalidId())
+    QString m_r509KickSceneFor;                 // ... made for this wash and these heads
+    qint64 m_r509KickMs = -1;                   // the tint now falling (m_clock), -1 none
+    int m_r509KickBeat = -100;                  // the last tinted beat
+    int m_r509KickCount = 0;                    // tints in this drop
+    int m_r509KickTop = 255;                    // the track's loudest beat
+    QString m_r509KickTopFor;
+    int m_r509KickTopN = -1;
+    bool r509ThemeAuto() const;
+    bool r509ThemeOk(const QString &colour) const;
+    void r509ThemeSeen(const QString &section, int from, const QVector<qreal> &sig);
+    QString r509ThemeWant() const;
+    bool r509ThemeForce(int beat, bool sectionChanged, bool forceNext, bool isCalm, bool sectionSoon,
+                        bool isDrop, int secStart);
+    void r509ThemePool(QStringList &pool) const;
+    QString r509ThemeDrawn(const QString &drawn, bool forceNext);
+    void r509ThemeBeat(int beat, bool changeColour, bool forceNext);
+    QString m_r509ThemeTitle;                   // the track the themes' colours belong to
+    QHash<QString, QString> m_r509ThemeColours; // "<section>#<n>" -> its colour
+    QHash<QString, QList<QVector<qreal> > > m_r509ThemeSigs;   // per section type: each theme's sound
+    QHash<QString, QList<QList<int> > > m_r509ThemeFroms;      // ... and the section starts it played at
+    QString m_r509ThemeKey, m_r509ThemeCtx;     // the theme arriving now (its motif context)
+    QString m_r509ThemeCurKey, m_r509ThemeCurCtx;   // the theme playing (NEXT inside it)
+    bool m_r509ThemeBack = false;               // ... returning (heard before in this track)
+    bool m_r509ThemePending = false;            // seen this beat, not yet recorded
+    // R509_DECL_WANDER
+    // R509_WANDER_DECL (runde 509, WANDER): a warm spot wanders round the room in long grooves,
+    // "men kun nogle gange" (r509_wander.inc.cpp)
+    QString r509WanderWash() const;                     // the wash it runs on ("" none / no map)
+    bool r509WanderFree(const QString &key) const;      // his hand and the room's other owners: no wander
+    bool r509WanderActive() const;                      // R509_WANDER_QUERY: a spot wanders now
+    bool r509WanderScenes(const QString &key);          // one hidden FILTER scene per head
+    bool r509WanderStart(const QString &key, int beat); // the path from the map, the scenes on
+    void r509WanderBeat(const QString &state, int beat, int secStart, int secEnd, bool hold, bool isCalm,
+                        bool still, bool forceNext);     // tick(): the draw, his hand, the section's end
+    bool r509WanderFrame(qint64 now);                   // the pulse timer: each head's level now
+    void r509WanderStop(const QString &why);            // every scene let go (logged when it ran)
+    bool m_r509WanderOn = false;                // a spot wanders now
+    bool m_r509WanderWon = false;               // this section's dice said yes
+    bool m_r509WanderNoMore = false;            // NEXT ended it: not again in this section
+    bool m_r509WanderFirst = false;             // still coming in (2 bars), not back (1 bar)
+    QString m_r509WanderTitle;                  // the track the section's draw belongs to
+    int m_r509WanderSec = -1;                   // the section drawn (its first beat)
+    int m_r509WanderBeat = -1;                  // this tick's beat
+    int m_r509WanderFrom = -1;                  // the beat it started on (the spot's clock)
+    int m_r509WanderPause = -1;                 // a beat of the music's stop or its comeback
+    int m_r509WanderLap = 12;                   // bars a lap
+    int m_r509WanderDir = 1;                    // 1 clockwise seen from the DJ, -1 the other way
+    int m_r509WanderHot = -1;                   // the head at full, last logged
+    qreal m_r509WanderOff = 0.0;                // where it starts (0, .25, .5, .75 of a lap)
+    qreal m_r509WanderPresence = 0.0;           // 0 the engine's own picture .. 1 the spot at full depth
+    qint64 m_r509WanderMs = -1;                 // the last frame
+    qreal m_r509WanderBox[4] = { 0.0, 0.0, 1.0, 1.0 };   // x0, y0, x1, y1 of the heads
+    QString m_r509WanderKey;                    // the wash
+    QString m_r509WanderAside;                  // what it stands aside for now ("" nothing)
+    QList<quint32> m_r509WanderFx;              // the wash's fixtures, in the group's order
+    QVector<qreal> m_r509WanderX;               // their place on the map
+    QVector<qreal> m_r509WanderY;
+    QVector<quint32> m_r509WanderScene;         // the filter scene per head
+    QVector<int> m_r509WanderAttr;              // its intensity override
+    QVector<qreal> m_r509WanderShown;           // the level it has now
     // R507_DUEL_DECL (runde 507, DUEL): the animation lasers answer each other - "one plays a bar/phrase,
     // the other answers, and on the phrase's climax both" (r507_duel.inc.cpp)
     QString r507DuelGroup() const;                      // the animation laser group of two ("" none)
