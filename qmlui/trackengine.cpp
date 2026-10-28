@@ -8077,6 +8077,16 @@ void TrackEngine::setFlash(bool pressed)
         // not on the next beat (runde 215)
         reapplyLevels();
     }
+    // R510_LIVE_FLASH_DARK (runde 510, LIVE): his FLASH wins over the music's own dark AT ONCE. A pause
+    // stop's dark (r509), a silent beat and the black beat before a drop (R356) are never drawn under
+    // FLASH (musicDarkOk), but a press in the middle of such a beat waited for the next beat: the dark
+    // masks held every lamp black and the strobes stayed at 0 on the DMX for the whole press (r510 LIVE
+    // harness, Ajna's 3-beat stop at 240). Pressed: the dark lets go now. Let go within the same beat
+    // (the beat's tick saw no FLASH): that beat's own dark comes back. The next tick decides as ever.
+    m_silenceDark = pressed == false && (m_musicDarkEvent == QStringLiteral("pause-dark")
+                                         || m_musicDarkEvent == QStringLiteral("silence-dark")
+                                         || m_musicDarkEvent == QStringLiteral("drop-black"));
+    slotChopTimer();                     // the dark masks follow m_silenceDark (stabs: none under FLASH)
     emit liveChanged();
 }
 
@@ -10699,6 +10709,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_lookActive = key;
                 m_lookRepeat++;
                 m_reuseColour = isDrop ? QString() : mem.colour; // C20261020: contrasting automatic drops
+                // R510_COLOUR_REUSE_WHITE (r510 COLOUR): the first build is remembered in the colour it wore -
+                // his WHITE tile too - and the repeat then made white the AUTO room colour ("hvid kun til hits
+                // og accenter; en hvid base ser ud som arbejdslys"): the repeat draws instead
+                if (m_reuseColour == QStringLiteral("white"))
+                    m_reuseColour.clear();
                 m_reuseStyle = -1;
                 m_reuseCoin = mem.landCoin;
                 m_reuseMotion = isDrop ? QHash<QString, quint32>() : mem.motion;
@@ -20590,6 +20605,7 @@ void TrackEngine::release()
     r507DuelStop(QString(), -1);      // R507_DUEL_STOP_RELEASE: the animation lasers' duel ends (SHOW OFF)
     r509PauseReset();                 // R509_PAUSE_RESET_RELEASE: a pause's hit lets go (SHOW OFF)
     r509SplitStop(QStringLiteral("release"));   // R509_SPLIT_STOP_RELEASE: the mix split lets go (SHOW OFF)
+    r509ColourKickStop(QStringLiteral("release"));   // R510_CODE_KICK_RELEASE: the white kick lets go (SHOW OFF; its count stayed)
     r509WanderStop(QStringLiteral("release"));  // R509_WANDER_STOP_RELEASE: the wandering spot lets go (SHOW OFF)
     r498RushStop();                   // R498_R_STOP_RELEASE: the room rush's masks let go
     r497BloomStop();                  // R503_ROOM_BLOOM_RELEASE: the bloom's / collapse's masks let go
@@ -20913,6 +20929,7 @@ void TrackEngine::idle()
     r507DuelStop(QString(), -1);               // R507_DUEL_STOP_IDLE: the animation lasers' duel ends
     r509PauseReset();                          // R509_PAUSE_RESET_IDLE: a pause's hit lets go
     r509SplitStop(QStringLiteral("idle"));     // R509_SPLIT_STOP_IDLE: the mix split lets go
+    r509ColourKickStop(QStringLiteral("idle"));     // R510_CODE_KICK_IDLE: the white kick lets go (its count stayed)
     r509WanderStop(QStringLiteral("idle"));    // R509_WANDER_STOP_IDLE: the wandering spot lets go
     r498RushStop();                            // R498_R_STOP_IDLE: the room rush's masks let go
     r497BloomStop();                           // R503_ROOM_BLOOM_IDLE: and the bloom's
@@ -21275,7 +21292,9 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     const bool glided = m_mixGlide && m_mixGlideTo == m_nextColour && m_mixGlideP > 0.0
                      && (m_hold == false || m_mixGlideP >= 0.5);   // R375_GLIDE_HOLD: the nearer colour
     m_mixGlideEnd = -1;
-    const bool baseTurned = m_nextColour.isEmpty() == false
+    // R510_MASKS_HOLD_LAND (Tobias 10-28: "HOLD skal springe tilbage"): a split mix under HOLD shows the
+    // outgoing colour (r509SplitHeld) - the handover keeps it, as R375 keeps the nearer colour under HOLD
+    const bool baseTurned = m_nextColour.isEmpty() == false && r509SplitHeld() == false
         && (glided
             || (baseCol != Function::invalidId() && m_funcs.value(baseCol).colour == turnWant)
             || (baseMot != Function::invalidId() && m_funcs.value(baseMot).coversColour
@@ -22180,6 +22199,7 @@ void TrackEngine::stopAll()
     r507DuelStop(QString(), -1);         // R507_DUEL_STOP_ALL: the animation lasers' duel ends
     r509PauseReset();                    // R509_PAUSE_RESET_ALL: a pause's hit lets go
     r509SplitStop(QStringLiteral("stop"));     // R509_SPLIT_STOP_ALL: the mix split lets go
+    r509ColourKickStop(QStringLiteral("stop"));     // R510_CODE_KICK_STOPALL: the white kick lets go (its count stayed)
     r509WanderStop(QStringLiteral("stop"));    // R509_WANDER_STOP_ALL: the wandering spot lets go
     r498RushStop();                      // R498_R_STOP_ALL: the room rush's masks let go
     r497BloomStop();                     // R503_ROOM_BLOOM_STOPALL: and the bloom's (the pulse timer stops below)
@@ -27000,7 +27020,12 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
     if (m_formNow != DF_CLASSIC && lands == false)
     {
         QString why;
-        if (isDrop == false)
+        // R510_DROPS_FORM_TRACK (r510 DROPS): a new track ends the form, as it ends the kick wave, the bloom
+        // and the rush - the old track's kick-chase ran on over the next track's drop when the DJ cut to it
+        // without a mix, at a beat inside the old form's 16 bars (harness cut90: form-kick-chase on Locklead)
+        if (m_formTrack != m_trackTitle)
+            why = QStringLiteral("track");
+        else if (isDrop == false)
             why = QStringLiteral("drop-over");
         else if (beat < m_formFrom)
             why = QStringLiteral("jump-back");
@@ -32324,8 +32349,11 @@ QVariantMap TrackEngine::savedCapture() const
             if (m_formNow != DF_CLASSIC)
                 form = m_formNow;
             // R507_WAVE_SAVED_FORM: ... and the kick wave, the same way
+            // R510_DROPS_SAVED_TRACK (r510 DROPS): ... of THIS track - a drop entered mid-way (a handover into its
+            // drop, R360 late landing, or a cut) never landed, and the last track's kick wave at a later beat
+            // number was saved as this drop's form (harness cut90: "KICK WAVE" saved on Bad and Boujee)
             else if ((m_formLast == DF_BLOOM || m_formLast == DF_RUSH || m_formLast == DF_KWAVE) && m_savedBeatBoundary > 0
-                     && m_formLandBeat >= m_savedBeatBoundary)
+                     && m_formLandBeat >= m_savedBeatBoundary && m_formTrack == m_trackTitle)
                 form = m_formLast;
         }
         look[QStringLiteral("form")] = form;
@@ -36327,7 +36355,9 @@ bool TrackEngine::r497CurtainGlide(const QString &key, quint32 fa, quint32 fb, q
         || fa == Function::invalidId() || fb == Function::invalidId() || fa == fb)
         return false;
     const int n = int(m_r497CurtainOrder.count());
-    const int k = qBound(0, m_r497CurtainK, n);
+    // R510_MASKS_HOLD_WASH (Tobias 10-28: "HOLD skal springe tilbage"): HOLD on a split mix - the wash in
+    // the outgoing colour whole while it is on (r509SplitHeld; a plain curtain still freezes)
+    const int k = r509SplitHeld() ? 0 : qBound(0, m_r497CurtainK, n);
     quint32 fid = fa;
     if (k >= n)
         fid = fb;
@@ -36359,7 +36389,8 @@ quint32 TrackEngine::r497CurtainColour(const QString &key, const QString &colour
     if (a.isEmpty() || b.isEmpty() || a == b || colourForGroup(key, colour) != a)
         return Function::invalidId();
     const int n = int(m_r497CurtainOrder.count());
-    const int k = qBound(0, m_r497CurtainK, n);
+    // R510_MASKS_HOLD_MINIS: HOLD on a split mix - the Minis keep the outgoing colour too (r509SplitHeld)
+    const int k = r509SplitHeld() ? 0 : qBound(0, m_r497CurtainK, n);
     if (k <= 0 || n < 2)
         return Function::invalidId();
     // the border: half way between the last head in the old colour and the first in the new
@@ -40538,7 +40569,10 @@ void TrackEngine::r509BarsBeat(QSet<QString> &castSet, const QStringList &eligib
             m_r509BarsEyes = true;
         else if (fader < R509_BARS_EYES - 1e-9)
             m_r509BarsEyes = false;
-        m_r509BarsEyeOk = m_r509BarsEyes && beatsToNext > 1 && r509BarsArpScenes();
+        // R510_SAFE_ARP_FIVE (runde 510, SAFE): the pairs light every bar of the group with 2 eyes, so on
+        // fewer than 5 bars they are under the 10 eyes barcoverage.h asks for from 75 % (4 bars: 8 eyes).
+        // r509's own promise was "par paa 5+ barer"; with fewer bars the whole bar walks, as under 75 %
+        m_r509BarsEyeOk = m_r509BarsEyes && beatsToNext > 1 && m_r509BarsOrder.count() * 2 >= 10 && r509BarsArpScenes();
         if (had && m_r509BarsEyeOk == false)
         {
             // pairs to whole bars: dark until the unflash is on the DMX, then the whole bar walks
@@ -40585,9 +40619,12 @@ void TrackEngine::r509BarsBeat(QSet<QString> &castSet, const QStringList &eligib
  *    never drawn, so every other draw of the engine stays as it was. R509_SPLIT_P = 0.34.
  *  - Never: under his colour tile(s) (the curtain's gate: then the whole room is his tile), a
  *    saved look, the start scene, LAST TRACK, the labs (the curtain's gate too), RIG/PLAN on the
- *    section (m_forceOn), outside FULL AUTO, nor started under HOLD/CALM. HOLD/CALM pressed
- *    during a split freeze it where it stands, as they freeze the curtain and the glide (HOLD is
- *    "no colour changes": letting the split go would itself be a colour change).
+ *    section (m_forceOn), outside FULL AUTO, nor started under HOLD/CALM. CALM pressed during a
+ *    split freezes it where it stands, as it freezes the curtain and the glide. HOLD pressed during
+ *    a split SNAPS IT BACK (R510_MASKS_SPLIT_DOC, Tobias 10-28: "HOLD skal springe tilbage" - r509
+ *    froze it): while HOLD is on, the wash, the Minis and the strobes show the outgoing colour whole
+ *    (r509SplitHeld); the border stands where it was and shows again when HOLD is let go; a
+ *    handover under HOLD keeps the outgoing colour, the one the room shows (R375's nearer colour).
  *  - Camelot-cut (r493): a clash keeps the next colour out of the mix, so no glide, no curtain,
  *    no split - the room holds and cuts as before. The mix colour handover is the curtain's own:
  *    the turn the engine reads stays the glide's half way, the handover adopts as before.
@@ -40624,6 +40661,17 @@ bool TrackEngine::r509SplitActive() const
     return m_r509SplitOn && m_r497CurtainOn;
 }
 
+bool TrackEngine::r509SplitHeld() const
+{
+    // R510_MASKS_SPLIT_HELD (Tobias 10-28: "HOLD skal springe tilbage"; r509 froze the split under HOLD):
+    // HOLD during a split mix shows the OUTGOING colour whole on every head the split paints - the wash
+    // (r497CurtainGlide), the Minis (r497CurtainColour) and the strobes (r509SplitColour) - for as long as
+    // it is on. The border (m_r497CurtainK) stands where it was and the glide stays frozen, as before;
+    // HOLD let go shows the split again. Never in the handover's finish (the new track's room then).
+    // CALM still freezes the split where it stands.
+    return m_hold && m_r509SplitOn && m_r497CurtainOn && m_mixGlideFinish == false;
+}
+
 bool TrackEngine::r509SplitOwns(const QString &key) const
 {
     // R509_SPLIT_OWNS: the split paints this strobe group's colour - no colour-painting programme on it
@@ -40639,6 +40687,7 @@ void TrackEngine::r509SplitStop(const QString &why)
         return;
     m_r509SplitOn = false;
     m_r509SplitStrobesIn = -1;
+    m_r509SplitHeldLog = false;                  // R510_MASKS_HOLD_RESET: the next split logs its own HOLD
     logSignal(QStringLiteral("sig:split:off:") + why);
 }
 
@@ -40697,6 +40746,14 @@ void TrackEngine::r509SplitBeat()
     else if (m_fullAuto == false || m_forceOn || savedActive() || m_override.isEmpty() == false
              || m_overrideSet.isEmpty() == false || m_lastStage != 0 || m_startScene)
         r509SplitStop(QStringLiteral("his"));
+    // R510_MASKS_HOLD_LOG: HOLD snapping the split back to the outgoing colour (and letting go) is on the log
+    const bool held = r509SplitHeld();
+    if (held != m_r509SplitHeldLog)
+    {
+        m_r509SplitHeldLog = held;
+        if (m_testTrack == false)
+            logSignal(held ? QStringLiteral("sig:split:hold-back") : QStringLiteral("sig:split:hold-off"));
+    }
 }
 
 quint32 TrackEngine::r509SplitColour(const QString &key, const QString &colour)
@@ -40717,7 +40774,8 @@ quint32 TrackEngine::r509SplitColour(const QString &key, const QString &colour)
         || a == QStringLiteral("white") || b == QStringLiteral("white"))
         return Function::invalidId();
     const int n = int(m_r497CurtainOrder.count());
-    const int k = qBound(0, m_r497CurtainK, n);
+    // R510_MASKS_HOLD_STROBES: HOLD on the split - every strobe head in the outgoing colour (r509SplitHeld)
+    const int k = r509SplitHeld() ? 0 : qBound(0, m_r497CurtainK, n);
     if (n < 2)
         return Function::invalidId();
     // the border as the curtain's followers read it: half way between the last head in the old
@@ -40906,6 +40964,42 @@ static double r509DramaEarly(int early, int tracks)
 
 /* ---- the engine side ---- */
 
+// R510_CLOCK_KEPT_FNS (r510 CLOCK): the night's budget lived in memory only. A QLC+ start mid-night
+// (an update, a crash - the night of 24-25 Oct had three) gave the warm-up 2 fresh tokens however
+// many were spent, and forgot tonight's mix-outs before a last drop. It is kept with the night's key
+// (nightKey, noon to noon), as haze AUTO and the clock's row are: written when a token is spent, a
+// track is counted or a quarter hour is logged - never per beat - and read once, when the engine
+// meets the night. Another night's (or a broken) value is not read: 2 tokens, as before.
+#define R510_CLOCK_DRAMA_SETTING "trackengine/drama-night"
+
+static void r510ClockDramaSave(const QString &night, double tokens, int tracks, int early)
+{
+    if (night.isEmpty())
+        return;
+    QSettings().setValue(QStringLiteral(R510_CLOCK_DRAMA_SETTING),
+                         QStringLiteral("%1;%2;%3;%4;%5").arg(night).arg(tokens, 0, 'f', 3).arg(tracks).arg(early)
+                             .arg(QDateTime::currentSecsSinceEpoch()));
+}
+
+// tonight's budget as it was written, and the real seconds since then (-1: nothing for tonight)
+static qint64 r510ClockDramaLoad(const QString &night, qreal *tokens, int *tracks, int *early)
+{
+    const QStringList p = QSettings().value(QStringLiteral(R510_CLOCK_DRAMA_SETTING)).toString().split(QLatin1Char(';'));
+    if (p.count() != 5 || p.at(0) != night)
+        return -1;
+    bool okT = false, okN = false, okE = false, okAt = false;
+    const double t = p.at(1).toDouble(&okT);
+    const int n = p.at(2).toInt(&okN);
+    const int e = p.at(3).toInt(&okE);
+    const qint64 at = p.at(4).toLongLong(&okAt);
+    if (okT == false || okN == false || okE == false || okAt == false || n < 0 || e < 0 || e > n)
+        return -1;
+    *tokens = qBound(0.0, t, R509_DRAMA_TOK_MAX);
+    *tracks = n;
+    *early = e;
+    return qMax<qint64>(0, QDateTime::currentSecsSinceEpoch() - at);
+}
+
 void TrackEngine::r509DramaFlags(const QVector<int> &drops)
 {
     // R509_DRAMA_FILE: trackmanager, every tick - the current track's drop starts (sorted, merged)
@@ -40975,6 +41069,7 @@ qreal TrackEngine::r509DramaClockShare(qint64 secs) const
 void TrackEngine::r509DramaSpend(const QString &what)
 {
     m_r509Tokens = qMax(0.0, m_r509Tokens - 1.0);
+    r510ClockDramaSave(m_r509Night, m_r509Tokens, m_r509Tracks, m_r509Early);   // R510_CLOCK_KEPT_SPEND
     if (m_testTrack == false)
         logSignal(QStringLiteral("sig:drama-spend:%1:tok%2").arg(what).arg(int(qRound(10.0 * m_r509Tokens))));
 }
@@ -40990,6 +41085,7 @@ void TrackEngine::r509DramaOut(const QString &title, int ahead)
     if (ahead > 0)
         m_r509Early++;
     logSignal(QStringLiteral("sig:drama-out:%1:early%2/%3").arg(ahead).arg(m_r509Early).arg(m_r509Tracks));
+    r510ClockDramaSave(m_r509Night, m_r509Tokens, m_r509Tracks, m_r509Early);   // R510_CLOCK_KEPT_OUT
 }
 
 void TrackEngine::r509DramaBeat(int beat, qreal fader)
@@ -40997,6 +41093,7 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
     // R509_DRAMA_BEAT_CALL (tick(), every beat, before the drop's form is decided): the night, the
     // tokens, the moments that played since the last beat, a DJ leaving the track
     const QString night = nightKey();
+    qint64 kept = -1;                    // R510_CLOCK_KEPT_LOCAL: the seconds since tonight's budget was written
     if (night != m_r509Night)
     {
         m_r509Night = night;
@@ -41004,6 +41101,14 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
         m_r509Tracks = 0;
         m_r509Early = 0;
         m_r509Quarter = -1;
+        // R510_CODE_DRAMA_NIGHT (runde 510, CODE): no refill across the night line - the last refill was
+        // last night's last beat, and the hours since then filled the new night to the cap (3, not 2)
+        m_r509TokMs = -1;
+        // R510_CLOCK_KEPT_READ: QLC+ started again tonight - the budget as it was, not 2 fresh tokens
+        kept = r510ClockDramaLoad(night, &m_r509Tokens, &m_r509Tracks, &m_r509Early);
+        if (kept >= 0 && m_testTrack == false)
+            logSignal(QStringLiteral("sig:drama-kept:tok%1:early%2/%3:away%4")
+                      .arg(int(qRound(10.0 * m_r509Tokens))).arg(m_r509Early).arg(m_r509Tracks).arg(int(kept / 60)));
     }
     // a DJ leaving the track: the old track's drops ahead, as its last beat saw them
     if (m_trackTitle != m_r509Title)
@@ -41024,7 +41129,9 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
     const qint64 secs = r509DramaSecs();
     const qreal share = m_testTrack ? -1.0 : r509DramaClockShare(secs);
     const double peak = r509DramaPeak(share, fader);
-    if (m_r509TokMs >= 0 && now > m_r509TokMs)
+    if (kept > 0)                        // R510_CLOCK_KEPT_GAP: the minutes QLC+ was away, as a gap between beats
+        m_r509Tokens = qMin(R509_DRAMA_TOK_MAX, m_r509Tokens + r509DramaRefill(peak) * qreal(kept) / 60.0);
+    else if (m_r509TokMs >= 0 && now > m_r509TokMs)
         m_r509Tokens = qMin(R509_DRAMA_TOK_MAX,
                             m_r509Tokens + r509DramaRefill(peak) * qreal(now - m_r509TokMs) / 60000.0);
     m_r509TokMs = now;
@@ -41076,6 +41183,7 @@ void TrackEngine::r509DramaBeat(int beat, qreal fader)
         logSignal(QStringLiteral("sig:drama-night:peak%1:w%2:tok%3")
                   .arg(int(qRound(100.0 * peak))).arg(int(qRound(100.0 * m_r509NightW)))
                   .arg(int(qRound(10.0 * m_r509Tokens))));
+        r510ClockDramaSave(m_r509Night, m_r509Tokens, m_r509Tracks, m_r509Early);   // R510_CLOCK_KEPT_QUARTER
     }
 }
 
@@ -41438,8 +41546,12 @@ void TrackEngine::r509ThemeSeen(const QString &section, int from, const QVector<
     {
         const QVector<qreal> &s = sigs.at(i);
         bool same = s.count() == sig.count();
+        // R510_COLOUR_SAME_FROM (r510 COLOUR): the very section it was heard at is the same place, not a
+        // neighbour 0 beats away - a DJ jumping back to a drop (hot cue), a loop across a drop's line or
+        // the track sent again made a NEW theme of the same section every time (up to 8), and that new
+        // theme then kept away from its own colour (r509ThemePool)
         for (int f : froms.at(i))
-            same = same && qAbs(from - f) >= 32;
+            same = same && (f == from || qAbs(from - f) >= 32);
         for (int j = 0; same && j < 4; j++)
             same = sig.at(j) >= 0.0 && s.at(j) >= 0.0 && qAbs(sig.at(j) - s.at(j)) <= R509_COLOUR_THEME_MEAN;
         int known = 0, alike = 0;
@@ -41553,7 +41665,12 @@ void TrackEngine::r509ThemeBeat(int beat, bool changeColour, bool forceNext)
         what = have.isEmpty() ? QString() : QStringLiteral("his");   // his tile holds: the theme waits
     else if (have.isEmpty())
     {
-        if (m_colour.isEmpty() == false && m_colour != QStringLiteral("white") && engineBannedColour(m_colour) == false)
+        // R510_COLOUR_CAM_OWED (r510 COLOUR): not while a key clash's cut is still owed (r493, state 3) - the
+        // room still wears the OLD track's colour until the next downbeat, and a groove the new track landed
+        // in mid-bar kept that colour as its theme: when the groove came back, so did the colour the clash
+        // had cut away. The theme takes its colour the next time it is heard
+        if (m_colour.isEmpty() == false && m_colour != QStringLiteral("white") && engineBannedColour(m_colour) == false
+            && m_r493CamState != 3)
         {
             m_r509ThemeColours.insert(m_r509ThemeKey, m_colour);
             what = QStringLiteral("new");
@@ -41602,7 +41719,8 @@ void TrackEngine::r509ThemeBeat(int beat, bool changeColour, bool forceNext)
  *     over a bar for a mix (two decks on air, the curtain, r509SplitActive()).
  *    When they are over it comes back over a bar, where the spot has got to by then.
  *  - Lets go (the scenes stopped): the section's end (sig:wander:off:section), the track
- *    changing (track), his hand (his: RIG/PLAN, a saved look, his colour tile(s), HOLD, CALM,
+ *    changing (track), his hand (his: RIG/PLAN, a saved look, his ONE colour tile - several go on,
+ *    R510_MASKS_WANDER_DOC, Tobias 10-28 - HOLD, CALM,
  *    STILL, a position, FLASH/pads, BLACKOUT, DROP HIT, LAST TRACK, the labs, the start scene,
  *    the self test, AUTO off, the wash off), the disco ball or the laser roof taking wash heads
  *    (his, as the bloom's own list), NEXT (next: not again in this section), SHOW OFF
@@ -41663,14 +41781,16 @@ QString TrackEngine::r509WanderWash() const
 bool TrackEngine::r509WanderFree(const QString &key) const
 {
     // his hand and the room's other owners of the wash: no wander (the bloom's list without the
-    // mix - a mix is waited out, not a stop - plus a saved look at all, his colour tile(s) and
-    // BLACKOUT)
+    // mix - a mix is waited out, not a stop - plus a saved look at all, his ONE colour tile and
+    // BLACKOUT). R510_MASKS_WANDER_TILES (Tobias 10-28: "Vandrende lys skal ogsaa koere under
+    // farvefliserne hvis der er valgt flere"): with SEVERAL tiles picked it goes on under them - it
+    // only dims the wash, it never touches a colour; one tile (or the start scene's red) stops it
     return key.isEmpty() == false && m_fullAuto && m_forceOn == false && savedActive() == false
         && m_lastStage == 0 && m_labActive == false && m_slabActive == false && m_clabActive == false
         && m_startScene == false && m_flash == false && m_blackout == false && m_hitAmokFrom < 0
         && m_testTimer.isActive() == false && m_hold == false && m_positionMode.isEmpty()
         && m_hitKind == 0 && m_hitAmokOwed == false && m_r493DiscoPhase == 0 && m_r493RoofOn == false
-        && m_override.isEmpty() && m_overrideSet.isEmpty()
+        && (m_overrideSet.count() >= 2 || (m_override.isEmpty() && m_overrideSet.isEmpty()))   // R510_MASKS_WANDER_SET
         && m_padFlash.contains(key) == false && m_flashHeld.contains(key) == false
         && m_groupOff.contains(key) == false;
 }
@@ -41820,6 +41940,11 @@ void TrackEngine::r509WanderBeat(const QString &state, int beat, int secStart, i
 {
     // R509_WANDER_HOOK_BEAT (tick(), every beat after the drop forms and the other room pictures):
     // the section's draw, his hand, the section's end
+    // R510_MASKS_WANDER_LOOP (bug): the spot ran on beat - m_r509WanderFrom, so a DJ loop (or any jump
+    // back) inside the section threw it back round the room on every pass - a 4-beat loop on an 8-bar lap
+    // an eighth of the way, an 8-beat one a quarter - where it should glide. Its clock goes on by one beat
+    if (m_r509WanderOn && beat < m_r509WanderBeat && m_trackTitle == m_r509WanderTitle && secStart == m_r509WanderSec)
+        m_r509WanderFrom -= m_r509WanderBeat + 1 - beat;
     m_r509WanderBeat = beat;
     const bool groove = state == QStringLiteral("normal") || state == QStringLiteral("drive");
     if (m_trackTitle != m_r509WanderTitle || secStart != m_r509WanderSec)
