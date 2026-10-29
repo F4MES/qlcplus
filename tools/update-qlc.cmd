@@ -95,6 +95,48 @@ function Fetch($asset, $target) {
 
 function Get-QlcProcesses { return @(Get-Process -Name "qlcplus-qml", "qlcplus" -ErrorAction SilentlyContinue) }
 
+# R514_UPDATER_EXE_CHECK (Tobias 10-29: after the e98b1a5 install his shortcuts said QLC+ was gone):
+# the installer's code 0 is not proof - qlcplus-qml.exe has to be in the install folder afterwards.
+# Only reads (registry, shortcut, Defender's history); changes nothing
+function Get-QlcExe {
+    $dir = (Get-ItemProperty -Path "HKCU:\Software\qlcplus" -Name Install_Dir -ErrorAction SilentlyContinue).Install_Dir
+    if (-not $dir) { $dir = "C:\QLC+5" }
+    return ("{0}\qlcplus-qml.exe" -f "$dir".TrimEnd("\"))     # not Join-Path: it throws for a drive that is not there
+}
+
+function Get-ShortcutTarget($sc) {
+    if (-not $sc) { return "" }
+    try { return "$((New-Object -ComObject WScript.Shell).CreateShortcut($sc.Link).TargetPath)" } catch { return "" }
+}
+
+function Show-Defender {
+    try {
+        $hits = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object { "$($_.Resources)" -match "qlc" } |
+                  Sort-Object InitialDetectionTime -Descending | Select-Object -First 3)
+        if ($hits.Count -eq 0) { Say "  Windows Defender has no QLC+ detection on record." ; return }
+        foreach ($h in $hits) {
+            $name = (Get-MpThreat -ErrorAction SilentlyContinue | Where-Object { $_.ThreatID -eq $h.ThreatID } | Select-Object -First 1).ThreatName
+            Say ("  Windows Defender {0}: {1} -> {2}" -f $h.InitialDetectionTime, $name, ("$($h.Resources)")) "Red"
+        }
+        Say "  Windows Security > Virus & threat protection > Protection history: Restore / Allow it, then update-qlc.cmd -Force." "Yellow"
+    } catch { Say "  (Windows Defender's history not readable here: $($_.Exception.Message))" "Yellow" }
+}
+
+# the build installed before $rev, put back silently; "" when there is none or it did not come back
+function Restore-Previous($s, $rev) {
+    $hist = @($s.history | Where-Object { $_ -and $_ -ne $rev })
+    for ($i = $hist.Count - 1; $i -ge 0; $i--) {
+        $f = Join-Path $work ("QLC-rig-setup-{0}.exe" -f $hist[$i])
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        Say ("  putting QLC+ {0} back on (silent) ..." -f $hist[$i]) "Yellow"
+        $q = Start-Process -FilePath $f -ArgumentList "/S" -Wait -PassThru
+        if ($q.ExitCode -eq 0 -and (Test-Path -LiteralPath (Get-QlcExe))) { return $hist[$i] }
+        Say ("  QLC+ {0} did not come back either (code {1})." -f $hist[$i], $q.ExitCode) "Red"
+        return ""
+    }
+    return ""
+}
+
 # the QLC+ shortcut that opens the show (-o / --open "<file>.qxw"): where the
 # show file lives, and how QLC+ is started again afterwards
 function Find-Shortcut {
@@ -223,12 +265,30 @@ if ($exeFile -or $showFile) {
         Say "  installing QLC+ $rev $(if ($Interactive) { '' } else { '(silent)' }) ..."
         if ($Interactive) { $p = Start-Process -FilePath $exeFile -Wait -PassThru }
         else              { $p = Start-Process -FilePath $exeFile -ArgumentList "/S" -Wait -PassThru }
-        if ($p.ExitCode -eq 0) {
+        $qlcExe = Get-QlcExe                                   # R514_UPDATER_EXE_CHECK
+        if ($p.ExitCode -eq 0 -and -not (Test-Path -LiteralPath $qlcExe)) {
+            # code 0, but no program: not marked installed, the build before goes back on by itself
+            Say "The installer said OK, but $qlcExe is NOT there - QLC+ $rev is not marked installed." "Red"
+            Show-Defender
+            $back = Restore-Previous $s $rev
+            if ($back) {
+                $s.exeRev = $back
+                $s.rolledBack = @($s.rolledBack | Where-Object { $_ -ne $rev }) + @($rev)
+                Save-State $s
+                Say "QLC+ $back is back on. $rev is not installed again by itself (update-qlc.cmd -Force tries it again)." "Green"
+            } else {
+                Say "No build before to put back - run the installer by hand: $exeFile (or rollback-qlc.cmd)." "Red"
+            }
+        } elseif ($p.ExitCode -eq 0) {
             $s.exeRev = $rev
             if ($rev) { $s.history = @($s.history | Where-Object { $_ -ne $rev }) + @($rev) }   # runde 467
             $s.rolledBack = @($s.rolledBack | Where-Object { $_ -ne $rev })
             Save-State $s
             Say "QLC+ $rev installed." "Green"
+            $tgt = Get-ShortcutTarget $sc
+            if ($tgt -and -not (Test-Path -LiteralPath $tgt)) {
+                Say ("  but your shortcut {0} points at {1}, which does not exist - QLC+ is {2}" -f (Split-Path $sc.Link -Leaf), $tgt, $qlcExe) "Red"
+            }
         } else {
             Say ("The installer ended with code {0} - nothing marked as installed. It is in {1}." -f $p.ExitCode, $exeFile) "Yellow"
         }
