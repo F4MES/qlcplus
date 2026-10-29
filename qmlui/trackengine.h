@@ -1670,6 +1670,62 @@ protected:
     bool m_r509ThemeBack = false;               // ... returning (heard before in this track)
     bool m_r509ThemePending = false;            // seen this beat, not yet recorded
     // R509_DECL_WANDER
+    // R514_INF_DECL (runde 514)
+    // R514_DECL_ANI
+    // R514_ANI_DECL (runde 514, ANI; Tobias: "rotationen i tempo, stoerrelsen vokser gennem et build og springer paa
+    // droppet"): the animation laser's CH10 turns in tempo / its CH8 follows the build and the drop - only on a
+    // picture whose turn or size pump he kept in LASER LAB (r514_ani.inc.cpp)
+    int r514AniApproval(const QString &key, QString &look, QHash<quint32, QPoint> &own) const;   // 0 / 1 turn / 2 size / 3
+    Scene *r514AniScene(const QString &key);            // the hidden CH8/CH10 scene (Replace)
+    void r514AniWrite(const QString &key, const QHash<quint32, QPoint> &want);   // x CH8, y CH10 per laser
+    void r514AniRelease(const QString &why);            // back to the picture's own values, then the scene stops
+    void r514AniFinish(int gen);                        // ... R514_ANI_LETGO_MS later
+    void r514AniOut(const QString &slot);               // run() / stopSlot(): the picture changes - let go now
+    void r514AniBeatStart(int beat);                    // tick(): out of the cast, a new track
+    void r514AniBeat(const QString &key, const QString &state, int beat, int secStart, int beatsToNext,
+                     const QString &nextState, bool isDrop, int dropBar, qreal bpm, bool hold, bool isCalm,
+                     bool still);                       // tick(), the cast loop: this beat's turn and size
+    quint32 m_r514AniScene = 0xFFFFFFFFu;       // the hidden scene (Function::invalidId())
+    bool m_r514AniOn = false;                   // the motion runs
+    bool m_r514AniDirty = false;                // the scene holds values of ours (running, or letting go)
+    QString m_r514AniKey;                       // the group
+    QString m_r514AniLook;                      // the lab look it moves (K)
+    QString m_r514AniTitle;                     // ... in this track
+    int m_r514AniMode = 0;                      // 1 turn, 2 size
+    int m_r514AniSeen = -100;                   // the last beat the group was in the cast
+    int m_r514AniGen = 0;                       // a let-go's stop is for this generation only
+    QHash<quint32, QPoint> m_r514AniOwn;        // per laser: the picture's own CH8 (x) and CH10 (y)
+    QHash<quint32, QPoint> m_r514AniVals;       // ... and what the scene writes now
+    int m_r514AniLogSec = -1;                   // sig:ani-motion once a section and mode
+    QString m_r514AniLogTitle;
+    int m_r514AniLogMode = 0;
+    // R514_DECL_GRAD
+    // R514_GRAD_DECL (runde 514, GRAD - Tobias 10-29: "en glidende gradient over de 8 oejne, fra rummets
+    // farve til accentfarven, som 'loeber' langs baren paa slaget"): r514_grad.inc.cpp
+    QStringList r514GradBands(const QString &room, const QString &accent) const;   // the 8 eyes' colours
+    QString r514GradBusy(const QString &key, quint32 splitScene, quint32 mf, bool calm) const;
+    void r514GradEnd(const QString &why);
+    quint32 r514GradScene(const QString &key, const QStringList &bands, int off, const QString &room,
+                          const QString &accent);                // the col: scene of one step
+    quint32 r514GradColour(const QString &key, const QString &colour, quint32 splitScene, quint32 mf,
+                           int beat, int secStart, bool isDrop, qreal fader, bool hold, bool calm);
+    bool r514GradRan() const;                   // R514_GRAD_SAVED: the bars wear it now (a saved look records it)
+    QString m_r514GradKey;                      // the bar group that carries it
+    quint32 m_r514GradMot = 0xFFFFFFFFu;        // the bars' last programme (its fade-out is waited for)
+    QString m_r514GradTitle;                    // the track its tickets belong to
+    QString m_r514GradWhy;                      // the last reason a won ticket waited (one crumb a reason)
+    QString m_r514GradPair;                     // "<room>><accent>" on show
+    int m_r514GradSec = -1;                     // the section its ticket was drawn for
+    int m_r514GradBeat = -1;                    // the last beat seen
+    int m_r514GradShownBeat = -100;             // the last beat it was worn
+    int m_r514GradOff = 0;                      // the slide: eyes moved so far (0..7)
+    int m_r514GradDir = 1;                      // ... and which way (drawn with the ticket)
+    bool m_r514GradWon = false;                 // this section's ticket
+    bool m_r514GradShowing = false;             // the bars wear it now
+    QHash<QString, quint32> m_r514GradScenes;   // name -> its scene, made this night
+    QHash<QString, quint32> m_r514GradNamed;    // name -> id from ONE pass over the show
+    QHash<QString, int> m_r514GradCount;        // name -> its values when filled
+    QHash<QString, QPair<quint32, quint32> > m_r514GradProbe;   // name -> a (fixture, eye) it set non-zero
     // R509_WANDER_DECL (runde 509, WANDER): a warm spot wanders round the room in long grooves,
     // "men kun nogle gange" (r509_wander.inc.cpp)
     QString r509WanderWash() const;                     // the wash it runs on ("" none / no map)
