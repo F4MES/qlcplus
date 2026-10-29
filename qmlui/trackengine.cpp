@@ -10357,6 +10357,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the build's roll for this bar (r497_roll.inc.cpp)
     r497BloomBeat(beat, isDrop, nextState, beatsToNext, fader, hold, isCalm, still);
     r497RollBeat(beat, beatInBar, isBuild, isDrop, nextState, beatsToNext, hold, isCalm, still);
+    // R514_ANI_BEAT_CALL (runde 514, ANI): the animation laser's turn / size lets go when its group left the
+    // cast or the track changed (r514_ani.inc.cpp)
+    r514AniBeatStart(beat);
     // R507_DUEL_BEAT_CALL (runde 507, DUEL): a duel of the animation lasers whose group left the cast
     // ends (r507_duel.inc.cpp)
     r507DuelBeat(beat);
@@ -15274,6 +15277,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mf = Function::invalidId();
             m_sectionMotion.remove(key);
         }
+        // R514_GRAD_HOOK (runde 514, GRAD - Tobias 10-29: "en glidende gradient over de 8 oejne, fra rummets
+        // farve til accentfarven"): in a drawn share of the sections the bars wear a sliding gradient in their
+        // col: slot - only where no programme draws them (their colour scene lights all 8 eyes): colour only,
+        // never which eyes are lit, never the dimmer or the aim (r514_grad.inc.cpp)
+        if (g.lasers && g.patternDevice == false)
+            splitScene = r514GradColour(key, colour, splitScene, mf, beat, secStart, isDrop, fader, hold, isCalm || still);
         quint32 cf = splitScene != Function::invalidId() ? splitScene : colourFunction(key, colour);
         const quint32 cfWanted = cf;      // runde 285: the colour scene the group should wear
         // The programme paints a colour on every lamp in this group, so the
@@ -15695,6 +15704,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // picture (mot:/col:/pos:) changes on this beat - dark before move (r507_duel.inc.cpp)
             if (g.patternDevice)
                 r507DuelWake(key, beat);
+            // R514_ANI_TICK (runde 514, ANI; Tobias: "rotationen i tempo, stoerrelsen vokser gennem et build og
+            // springer paa droppet"): the animation laser's CH10 turn / CH8 size for this beat, after its picture
+            // pick - only on a picture he kept turning / pumping in LASER LAB, never a light (r514_ani.inc.cpp)
+            if (g.patternDevice)
+                r514AniBeat(key, state, beat, secStart, beatsToNext, nextState, isDrop, dropBar, bpm, hold,
+                            isCalm, still);
             if ((heldFull(key)) == false)
             {
                 if (motionOwns)
@@ -20694,6 +20709,7 @@ void TrackEngine::release()
     r507WaveStop(QString());          // R507_WAVE_STOP_RELEASE: the kick wave ends (SHOW OFF)
     r507SuckStop(QStringLiteral("release"));   // R507_SUCK_STOP_RELEASE: the build's suck lets go (SHOW OFF)
     r507DuelStop(QString(), -1);      // R507_DUEL_STOP_RELEASE: the animation lasers' duel ends (SHOW OFF)
+    r514AniRelease(QStringLiteral("release"));   // R514_ANI_STOP_RELEASE: CH8/CH10 back to the picture's own (SHOW OFF)
     r509PauseReset();                 // R509_PAUSE_RESET_RELEASE: a pause's hit lets go (SHOW OFF)
     r509SplitStop(QStringLiteral("release"));   // R509_SPLIT_STOP_RELEASE: the mix split lets go (SHOW OFF)
     r509ColourKickStop(QStringLiteral("release"));   // R510_CODE_KICK_RELEASE: the white kick lets go (SHOW OFF; its count stayed)
@@ -21018,6 +21034,7 @@ void TrackEngine::idle()
     r507WaveStop(QString());                   // R507_WAVE_STOP_IDLE: the kick wave ends
     r507SuckStop(QStringLiteral("idle"));      // R507_SUCK_STOP_IDLE: the build's suck lets go
     r507DuelStop(QString(), -1);               // R507_DUEL_STOP_IDLE: the animation lasers' duel ends
+    r514AniRelease(QStringLiteral("idle"));    // R514_ANI_STOP_IDLE: CH8/CH10 back to the picture's own
     r509PauseReset();                          // R509_PAUSE_RESET_IDLE: a pause's hit lets go
     r509SplitStop(QStringLiteral("idle"));     // R509_SPLIT_STOP_IDLE: the mix split lets go
     r509ColourKickStop(QStringLiteral("idle"));     // R510_CODE_KICK_IDLE: the white kick lets go (its count stayed)
@@ -21349,6 +21366,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     // costs a few kilobytes every four minutes.
     saveRoles();
     m_trackTitle = title;
+    r514AniRelease(QStringLiteral("track"));   // R514_ANI_TRACK: a new track - CH8/CH10 back to the picture's own
     setIncomingProfile(QString(), QString(), -1.0);
     m_sequenceGroups.clear();
     m_restUntil = -1;
@@ -21590,7 +21608,10 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         if (picGroup.isEmpty() == false && m_groups.value(picGroup).patternDevice
             && (m_active.value(slot, Function::invalidId()) != fid || picFn == nullptr
                 || picFn->isRunning() == false || picFn->stopped()))
+        {
             r507SafeHold(picGroup, Function::invalidId());
+            r514AniOut(slot);            // R514_ANI_RUN_PICTURE: a new picture - the turn / size lets go at once
+        }
     }
 
     // R503_SAFE_AIM_RUN: a new aim (or one brought back) moves the bars' mirror - every re-aim, home,
@@ -21840,6 +21861,7 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
     quint32 fid = m_active.value(slot, Function::invalidId());
     if (fid == Function::invalidId())
         return;
+    r514AniOut(slot);                    // R514_ANI_STOP_PICTURE: the animation laser's picture goes - its turn / size too
 
     // R503_SAFE_AIM_EFX: a bar figure that stops puts the beams straight back on the aim - a mirror move
     if (slot.startsWith(QStringLiteral("efx:")))
@@ -22303,6 +22325,7 @@ void TrackEngine::stopAll()
     r507WaveStop(QString());             // R507_WAVE_STOP_ALL: the kick wave ends
     r507SuckStop(QStringLiteral("stop"));      // R507_SUCK_STOP_ALL: the build's suck lets go
     r507DuelStop(QString(), -1);         // R507_DUEL_STOP_ALL: the animation lasers' duel ends
+    r514AniRelease(QStringLiteral("stop"));    // R514_ANI_STOP_ALL: CH8/CH10 back to the picture's own
     r509PauseReset();                    // R509_PAUSE_RESET_ALL: a pause's hit lets go
     r509SplitStop(QStringLiteral("stop"));     // R509_SPLIT_STOP_ALL: the mix split lets go
     r509ColourKickStop(QStringLiteral("stop"));     // R510_CODE_KICK_STOPALL: the white kick lets go (its count stayed)
@@ -32702,6 +32725,9 @@ QVariantMap TrackEngine::savedCapture() const
     look[QStringLiteral("buildStyle")] = m_buildStyle; look[QStringLiteral("floorRound")] = m_floorRound;
     look[QStringLiteral("onKick")] = m_strobeOnKick;
     look[QStringLiteral("barDetail")] = m_barDetailDraw; look[QStringLiteral("barSingle")] = m_barSingleDraw;
+    // R514_GRAD_SAVED (runde 514, GRAD): whether the bars wore the sliding gradient - written only when they
+    // did, so every other look keeps its identity; replayed, it runs again exactly then (r514_grad.inc.cpp)
+    if (r514GradRan()) look[QStringLiteral("grad")] = true;
     look[QStringLiteral("title")] = m_trackTitle;
     for (const QString &key : cast) {
         if (m_moves.contains(key)) {
@@ -42564,4 +42590,975 @@ bool TrackEngine::r509WanderFrame(qint64 now)
               .arg(fx != nullptr ? int(fx->address()) + 1 : -1).arg(sx, 0, 'f', 2).arg(sy, 0, 'f', 2));
     }
     return true;
+}
+
+/* =====================================================================
+ *  THE ANIMATION LASER IN TIME (runde 514, agent ANI) - appended to
+ *  trackengine.cpp by feature_trackview_engine.py from
+ *  track_runtime/r514_ani.inc.cpp (R514_INF_FILES, R514_ANI_FILE).
+ *
+ *  Tobias, 2026-10-29 ("Lav 4, 6 fra den nye liste" - this is 4): "Motoren
+ *  styrer i dag kun, hvilket moenster animationslaseren viser. Moensterets
+ *  rotation og stoerrelse kunne foelge musikken: rotationen i tempo,
+ *  stoerrelsen vokser gennem et build og springer paa droppet."
+ *
+ *  WHAT. While the engine has the animation laser group in its cast with a
+ *  picture it may move, CH10 (rotation about the centre: 128-191 clockwise
+ *  speed, 192-255 counter-clockwise) turns the picture in tempo - one turn
+ *  per 4 bars in a break, 2 in a groove, a build and a drop under 85 %, 1 in
+ *  a drop from 85 % and in a build's last 4 bars - its direction turning on
+ *  every 8-bar phrase, the two lasers turning opposite ways while the r507
+ *  duel plays. Or CH8 (manual size, CH9 0-15) follows the music: it grows
+ *  through a build's last 8 bars, draws in on the build's last beat and snaps
+ *  large on the drop's first beat, stays large through the drop and breathes
+ *  slowly (8 bars) in a break.
+ *
+ *  WHICH PICTURES (laser safety, absolute). TOO LOW in LASER LAB is the
+ *  operator's verdict on a look, not a number: no limit can be computed for
+ *  a pattern whose shape, scan angle (the SIZE-XY menu) and mount are not
+ *  known. And turning is not only a question of size: his flat fans turned a
+ *  quarter put their beams down into the room at his own size. So the
+ *  engine only does what he has already watched that very picture do at
+ *  CH14 = 118, with TOO LOW in his hand: LASER LAB's VARIANTS. A picture
+ *  turns only when its look K and "K/spin" (CH10 200, a full turn) are kept
+ *  and neither is banned; its size moves only when "K/pump" (CH8 0 <-> 120,
+ *  CH9 0) is kept - within 0..120, the range his kept "K Pump" programme
+ *  already plays. Never both at once (no look of his ever showed both): a
+ *  look with both kept grows through the build and snaps on the drop's
+ *  landing bar, and turns from the drop's second bar, its size back first.
+ *  The picture is K when every one of its geometry channels (graphic,
+ *  pattern, built-in effect, size, scaling, rotations, positions, wave,
+ *  drawing) is exactly what the lab writes for K - his kept look's own
+ *  programme, or a busking scene that is exactly that look. Anything else -
+ *  a chaser or EFX of his, a picture whose two lasers differ, a channel left
+ *  to a value held from before - is not moved. So nothing moves on a rig
+ *  where nothing was approved (the busking scenes are not lab looks).
+ *
+ *  HIS PROGRAMMES WIN. The 44 scenes of his in PSMAIN that touch them write
+ *  CH8 = CH9 = CH10 = 0 (a full channel snapshot from his programmer: size
+ *  and angle at rest), his colour scenes not at all, none anything else; that resting value
+ *  is what K's own values are, so it is not "his programme setting them".
+ *  The lab's variant programmes (K Spin, K Turn, K Pump, K Zoom) do set
+ *  them: those are not K and are never touched.
+ *
+ *  HOW. One hidden scene of ours, "TRACK R514: ani motion <group>", CH8 and
+ *  CH10 of each laser - nothing else, never the dimmer (CH1), the flips
+ *  (CH11/CH12) or the position (CH13/CH14) - with Universe::ReplaceBlend:
+ *  the layer above his scenes (GenericFader::playbackOrder 1), under a flash
+ *  button with Override and the Simple Desk. Its values change on the
+ *  running scene (Scene::setValue). It is not an m_active slot, so
+ *  R507_SAFE's picture gate never sees it: turning and size steps are part
+ *  of the running picture and never start the dark gap; a real picture
+ *  change (pattern, colour, CH13/CH14 - a col:/colx:/mot: function started
+ *  or stopped) still starts dark exactly as before, and it also lets the
+ *  motion go at once (r514AniOut) - the next beat starts it again from rest
+ *  when the new picture may move. In one write the channel going back to
+ *  rest is written first, so no frame between shows a size and a turn
+ *  together.
+ *
+ *  LETTING GO. CH8/CH10 go back to the picture's own values: written into
+ *  the running scene, which stops R514_ANI_LETGO_MS later - a stop in the
+ *  same breath would lose the write (the haze lesson, R475: stop() is
+ *  handled before the frame) and QLC+ keeps an LTP value after its scene
+ *  stops, so a colour-only scene of his (Flad vifte: CH1/CH2/CH14 only)
+ *  would otherwise turn. On: the picture changing or leaving, the group out
+ *  of the cast, ENERGY under 70 % (only from 70 % when the engine picks),
+ *  his hand (r507DuelHis: AUTO off, RIG/PLAN, his drop set, a mix, LAST
+ *  TRACK, the labs, the start scene, a saved look, DROP HIT, the test, his
+ *  SECTION press), FLASH, BLACKOUT, a pad or held flash on the group, the
+ *  group off, a track change, idle, STOP ALL and SHOW OFF. HOLD, CALM and
+ *  the still slider freeze it: what runs keeps running, nothing changes.
+ *  It never lights anything, so the laser bars' interlock, the 70 % line,
+ *  the r501 hit rule (turning and size are not blinks) and the duel's
+ *  turns are the engine's as before.
+ *
+ *  Unmeasured: how fast CH10 turns per value. R514_ANI_CAL_* assumes the
+ *  lab's spin (200 = counter-clockwise step 8) is a quarter turn a second
+ *  and the speed is linear in the value; a turn per 2 bars at 128 BPM is
+ *  then step 9 (137 / 201). And which way CH8 grows: the fixture file says
+ *  BeamZoomSmallBig (0 small); if the laser does it the other way the build
+ *  shrinks instead - still inside 0..120, so still only what he approved.
+ *  Log: sig:ani-motion:<spin|size|both>:<look> once a section,
+ *  sig:ani-motion:end:<why>; a crumb on each start and end.
+ * ===================================================================== */
+
+#define R514_ANI_PUMP_TOP    120         // the lab's pump: CH8 0 <-> 120 (tracklab labValues)
+#define R514_ANI_CW          128         // CH10 128-191: clockwise, speed
+#define R514_ANI_CCW         192         // CH10 192-255: counter-clockwise, speed
+#define R514_ANI_CAL_STEP    8           // the lab's spin, CH10 200 = counter-clockwise step 8 ...
+#define R514_ANI_CAL_RPS     0.25        // ... assumed a quarter turn a second (not measured)
+#define R514_ANI_SPEED_MAX   24          // a turn a bar at 150 BPM is step 20: never a fast spin
+#define R514_ANI_GROW_BEATS  32          // a build grows over its last 8 bars (all of it if shorter)
+#define R514_ANI_BREATH      32          // a break breathes over 8 bars
+#define R514_ANI_FAST        0.85        // a turn a bar in a drop from here
+#define R514_ANI_LETGO_MS    120         // the own values on the DMX this long before the scene stops
+
+static quint32 r514AniDice(const QString &title, int beat)
+{
+    // a dice of the track and the section (murmur3's finaliser): the engine's random generator is
+    // never drawn, so every other draw stays as it was
+    quint32 st = quint32(qHash(title)) ^ (quint32(beat) * 2654435761u) ^ 0x414e494du;
+    st ^= st >> 16; st *= 0x85ebca6bu; st ^= st >> 13; st *= 0xc2b2ae35u; st ^= st >> 16;
+    return st;
+}
+
+int TrackEngine::r514AniApproval(const QString &key, QString &look, QHash<quint32, QPoint> &own) const
+{
+    // R514_ANI_FILE: may the picture the engine runs on this group move? 0 no, 1 turn, 2 size, 3 both
+    // - only what LASER LAB shows he watched this look do at CH14 = 118 and kept. own: per laser, the
+    // picture's own CH8 (x) and CH10 (y)
+    look.clear();
+    own.clear();
+    if (m_doc == nullptr || key.isEmpty() || key != m_labGroup || m_groups.contains(key) == false)
+        return 0;
+    const TrackGroup &g = m_groups.value(key);
+    if (g.patternDevice == false || g.fixtures.isEmpty())
+        return 0;
+    QList<const Scene *> pics;
+    static const QStringList picSlots = { QStringLiteral("col:"), QStringLiteral("colx:"), QStringLiteral("mot:") };
+    foreach (const QString &p, picSlots)
+    {
+        const quint32 fid = m_active.value(p + key, Function::invalidId());
+        if (fid == Function::invalidId())
+            continue;
+        const Scene *scene = qobject_cast<const Scene *>(m_doc->function(fid));
+        if (scene == nullptr)
+            return 0;                    // a chaser, an EFX of his: his movement, not moved
+        pics.append(scene);
+    }
+    if (pics.isEmpty())
+        return 0;
+    static const QStringList geo = { QStringLiteral("graphic"), QStringLiteral("pattern"), QStringLiteral("fx"),
+                                     QStringLiteral("size"), QStringLiteral("scale"), QStringLiteral("spin"),
+                                     QStringLiteral("rotx"), QStringLiteral("roty"), QStringLiteral("hpos"),
+                                     QStringLiteral("vpos"), QStringLiteral("wave"), QStringLiteral("draw") };
+    QString first;
+    foreach (quint32 fx, g.fixtures)
+    {
+        const QHash<QString, quint32> roles = m_labChan.value(fx);
+        if (roles.contains(QStringLiteral("size")) == false || roles.contains(QStringLiteral("spin")) == false)
+            return 0;
+        QHash<QString, int> v;
+        foreach (const QString &role, geo)
+        {
+            if (roles.contains(role) == false)
+                continue;
+            const quint32 ch = roles.value(role);
+            foreach (const Scene *scene, pics)
+            {
+                if (scene->checkValue(SceneValue(fx, ch, 0)) == false)
+                    continue;
+                const int val = int(scene->value(fx, ch));
+                if (v.contains(role) && v.value(role) != val)
+                    return 0;            // two of its functions disagree: not one picture
+                v.insert(role, val);
+            }
+            if (v.contains(role) == false)
+                return 0;                // left to a value held from before: not known
+        }
+        QString k;
+        if (v.value(QStringLiteral("fx")) != 0)
+        {
+            if (v.value(QStringLiteral("graphic")) != 0 || v.value(QStringLiteral("pattern")) != 0)
+                return 0;
+            k = QStringLiteral("F%1").arg(v.value(QStringLiteral("fx")));
+        }
+        else if (v.value(QStringLiteral("pattern")) > 0)
+            k = QStringLiteral("G%1P%2").arg(v.value(QStringLiteral("graphic"))).arg(v.value(QStringLiteral("pattern")));
+        else
+            k = QStringLiteral("G%1").arg(v.value(QStringLiteral("graphic")));
+        // exactly the lab's look: every geometry channel as LASER LAB wrote it when he watched it
+        const QHash<QString, int> lab = labValues(k, 0);
+        foreach (const QString &role, geo)
+        {
+            if (roles.contains(role) && lab.value(role, -1) != v.value(role))
+                return 0;
+        }
+        if (first.isEmpty() == false && k != first)
+            return 0;                    // the two lasers draw different looks
+        first = k;
+        own.insert(fx, QPoint(v.value(QStringLiteral("size")), v.value(QStringLiteral("spin"))));
+    }
+    auto kept = [this](const QString &k) {
+        const QJsonObject o = m_labStore.value(k).toObject();
+        return o.value(QStringLiteral("v")).toInt(0) == 1 && o.value(QStringLiteral("ban")).toBool() == false;
+    };
+    if (first.isEmpty() || kept(first) == false)
+        return 0;
+    look = first;
+    int ok = 0;
+    if (kept(first + QStringLiteral("/spin")))
+        ok |= 1;
+    if (kept(first + QStringLiteral("/pump")))
+    {
+        // the pump's range must hold the picture's own size (0 in every look the lab writes)
+        bool inside = true;
+        foreach (const QPoint &o, own)
+            inside = inside && o.x() >= 0 && o.x() <= R514_ANI_PUMP_TOP;
+        if (inside)
+            ok |= 2;
+    }
+    return ok;
+}
+
+Scene *TrackEngine::r514AniScene(const QString &key)
+{
+    // the hidden motion scene: CH8 and CH10 of each laser of the group, Replace - nothing else
+    if (m_doc == nullptr || key.isEmpty())
+        return nullptr;
+    const QString name = QStringLiteral("TRACK R514: ani motion ") + key;
+    Scene *scene = qobject_cast<Scene *>(m_doc->function(m_r514AniScene));
+    if (scene == nullptr || scene->name() != name)
+    {
+        scene = nullptr;
+        foreach (Function *func, m_doc->functions())
+        {
+            if (func != nullptr && func->name() == name)
+                scene = qobject_cast<Scene *>(func);
+        }
+    }
+    if (scene == nullptr)
+    {
+        scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setVisible(false);
+        if (m_doc->addFunction(scene) == false)
+        {
+            delete scene;
+            return nullptr;
+        }
+        crumb(QStringLiteral("r514 ani motion scene ") + key);
+    }
+    scene->setBlendMode(Universe::ReplaceBlend);
+    m_r514AniScene = scene->id();
+    return scene;
+}
+
+void TrackEngine::r514AniWrite(const QString &key, const QHash<quint32, QPoint> &want)
+{
+    // CH8 (x) and CH10 (y) per laser onto the running scene: first every channel going back to the
+    // picture's own value, then the rest - no frame shows a size and a turn together. Without the HTP
+    // check (checkHTP false: GenericFader::replace): Scene::setValue's default add() keeps the higher of
+    // the two values, so on a running scene a value could only ever go UP - harness r514 lab_night: the
+    // build's CH8 116 stayed on the DMX after the let-go's 0, and a turn could not slow down
+    Scene *scene = r514AniScene(key);
+    if (scene == nullptr)
+        return;
+    const bool running = scene->isRunning() && scene->stopped() == false;
+    for (int pass = 0; pass < 2; pass++)
+    {
+        for (QHash<quint32, QPoint>::const_iterator it = want.constBegin(); it != want.constEnd(); ++it)
+        {
+            const QHash<QString, quint32> roles = m_labChan.value(it.key());
+            if (roles.contains(QStringLiteral("size")) == false || roles.contains(QStringLiteral("spin")) == false)
+                continue;
+            const QPoint own = m_r514AniOwn.value(it.key(), QPoint(0, 0));
+            const QPoint now = m_r514AniVals.value(it.key(), QPoint(-1, -1));
+            const bool sizeHome = it.value().x() == own.x();
+            const bool spinHome = it.value().y() == own.y();
+            if (now.x() != it.value().x() && (pass == 0) == sizeHome)
+                scene->setValue(SceneValue(it.key(), roles.value(QStringLiteral("size")), uchar(qBound(0, it.value().x(), 255))),
+                                false, false);
+            if (now.y() != it.value().y() && (pass == 0) == spinHome)
+                scene->setValue(SceneValue(it.key(), roles.value(QStringLiteral("spin")), uchar(qBound(0, it.value().y(), 255))),
+                                false, false);
+        }
+    }
+    m_r514AniVals = want;
+    m_r514AniDirty = true;
+    if (running == false)
+    {
+        if (scene->isRunning() && scene->stopped())
+            scene->stop(FunctionParent::master(), true);
+        scene->start(m_doc->masterTimer(), FunctionParent::track());
+    }
+}
+
+void TrackEngine::r514AniRelease(const QString &why)
+{
+    // R514_ANI_RELEASE: CH8/CH10 back to the picture's own values, then the scene stops
+    // R514_ANI_LETGO_MS later (a write and a stop in one breath lose the write)
+    const bool was = m_r514AniOn;
+    m_r514AniOn = false;
+    m_r514AniLook.clear();
+    m_r514AniMode = 0;
+    if (was && why.isEmpty() == false)
+    {
+        if (m_testTrack == false)
+            logSignal(QStringLiteral("sig:ani-motion:end:") + why);
+        crumb(QStringLiteral("r514 ani motion end ") + why);
+    }
+    if (m_r514AniDirty == false || m_doc == nullptr)
+        return;
+    Scene *scene = qobject_cast<Scene *>(m_doc->function(m_r514AniScene));
+    if (scene == nullptr)
+    {
+        m_r514AniDirty = false;          // the project went: its universes went with it
+        m_r514AniVals.clear();
+        return;
+    }
+    QHash<quint32, QPoint> home;
+    for (QHash<quint32, QPoint>::const_iterator it = m_r514AniVals.constBegin(); it != m_r514AniVals.constEnd(); ++it)
+        home.insert(it.key(), m_r514AniOwn.value(it.key(), QPoint(0, 0)));
+    if (home != m_r514AniVals || scene->isRunning() == false || scene->stopped())
+        r514AniWrite(m_r514AniKey, home);
+    const int gen = ++m_r514AniGen;
+    QTimer::singleShot(R514_ANI_LETGO_MS, this, [this, gen]() { r514AniFinish(gen); });
+}
+
+void TrackEngine::r514AniFinish(int gen)
+{
+    // the own values have been on the DMX for R514_ANI_LETGO_MS: the scene goes, LTP keeps them
+    if (gen != m_r514AniGen || m_r514AniOn || m_doc == nullptr)
+        return;
+    Function *func = m_doc->function(m_r514AniScene);
+    if (func != nullptr && func->isRunning())
+        func->stop(FunctionParent::master());
+    m_r514AniDirty = false;
+    m_r514AniVals.clear();
+}
+
+void TrackEngine::r514AniOut(const QString &slot)
+{
+    // R514_ANI_OUT (run() and stopSlot(): a col:/colx:/mot: function of the group starts or goes - a
+    // new picture, dark first under R507_SAFE): the motion lets go at once; the next beat starts it
+    // again from rest when the new picture may move
+    if (m_r514AniDirty == false || m_r514AniKey.isEmpty())
+        return;
+    if ((slot.startsWith(QStringLiteral("col:")) || slot.startsWith(QStringLiteral("colx:"))
+         || slot.startsWith(QStringLiteral("mot:"))) == false || slotGroup(slot) != m_r514AniKey)
+        return;
+    r514AniRelease(QStringLiteral("picture"));
+}
+
+void TrackEngine::r514AniBeatStart(int beat)
+{
+    // R514_ANI_BEAT_CALL (tick(), every beat before the cast): the group left the cast (the bars' turn) or
+    // the track changed - let go; a scene someone else stopped under a turn: rest written again
+    if (m_r514AniOn && (m_r514AniTitle != m_trackTitle || beat > m_r514AniSeen + 1 || beat < m_r514AniSeen))
+        r514AniRelease(m_r514AniTitle != m_trackTitle ? QStringLiteral("track") : QStringLiteral("out"));
+    else if (m_r514AniOn == false && m_r514AniDirty && m_doc != nullptr)
+    {
+        const Function *func = m_doc->function(m_r514AniScene);
+        if (func == nullptr || func->isRunning() == false)
+            r514AniRelease(QString());
+    }
+}
+
+void TrackEngine::r514AniBeat(const QString &key, const QString &state, int beat, int secStart, int beatsToNext,
+                              const QString &nextState, bool isDrop, int dropBar, qreal bpm, bool hold,
+                              bool isCalm, bool still)
+{
+    // R514_ANI_BEAT (tick(), the cast loop, after this beat's picture pick): turn and size for this beat
+    if (key.isEmpty() || key != m_labGroup)
+        return;
+    m_r514AniSeen = beat;
+    QString why;
+    if (m_faderReal < ENGINE_ANI_ON - 1e-9)
+        why = QStringLiteral("energy");      // only from 70 % when the engine picks
+    else if (r507DuelHis())
+        why = QStringLiteral("his");
+    else if (m_flash || m_blackout || m_padFlash.contains(key) || m_flashHeld.contains(key)
+             || m_groupOff.contains(key))
+        why = QStringLiteral("dark");
+    QString look;
+    QHash<quint32, QPoint> own;
+    const int ok = why.isEmpty() ? r514AniApproval(key, look, own) : 0;
+    if (why.isEmpty() && ok == 0)
+        why = QStringLiteral("picture");
+    if (why.isEmpty() == false)
+    {
+        if (m_r514AniOn || m_r514AniDirty)
+            r514AniRelease(m_r514AniOn ? why : QString());
+        return;
+    }
+    if (m_r514AniOn && (look != m_r514AniLook || own != m_r514AniOwn))
+        r514AniRelease(QStringLiteral("picture"));
+    if (m_r514AniOn && (hold || isCalm || still))
+        return;                              // HOLD / CALM / the still slider: nothing changes
+    if (m_r514AniOn == false && (hold || isCalm || still))
+        return;                              // ... and nothing starts
+
+    const bool isBreak = state == QStringLiteral("break") || state == QStringLiteral("intro")
+                      || state == QStringLiteral("outro");
+    const bool building = state == QStringLiteral("build") && nextState == QStringLiteral("drop") && beatsToNext > 0;
+    int mode = ok;
+    if (ok == 3)
+        mode = (building || (isDrop && dropBar == 0)) ? 2 : 1;   // never both at once
+    const int sectionBar = qMax(0, beat - secStart) / 4;
+    QHash<quint32, QPoint> want;
+    for (QHash<quint32, QPoint>::const_iterator it = own.constBegin(); it != own.constEnd(); ++it)
+        want.insert(it.key(), it.value());
+    if (mode == 1)
+    {
+        int bars = 2;
+        if (isBreak)
+            bars = 4;
+        else if ((isDrop && m_faderReal >= R514_ANI_FAST - 1e-9) || (building && beatsToNext <= 16))
+            bars = 1;
+        const qreal tempo = bpm > 1.0 ? bpm : (m_beatMs > 1.0 ? 60000.0 / m_beatMs : 120.0);
+        const qreal rps = tempo / 60.0 / (4.0 * bars);
+        const int step = qBound(1, int(qRound(rps / R514_ANI_CAL_RPS * R514_ANI_CAL_STEP)), R514_ANI_SPEED_MAX);
+        // the direction turns on every 8-bar phrase (a drop's counted from its landing), from a side of
+        // the track and the section; the duel's two lasers turn opposite ways
+        const int phrase = ((isDrop && dropBar >= 0) ? dropBar : sectionBar) / 8;
+        const int side = int((r514AniDice(m_trackTitle, secStart) + quint32(phrase)) & 1u);
+        const bool duel = m_r507DuelOn && m_r507DuelKey == key;
+        const TrackGroup &g = m_groups.value(key);
+        for (int i = 0; i < g.fixtures.count(); i++)
+        {
+            if (want.contains(g.fixtures.at(i)) == false)
+                continue;
+            const int dir = side ^ ((duel && i == 1) ? 1 : 0);
+            want[g.fixtures.at(i)].setY((dir == 0 ? R514_ANI_CW : R514_ANI_CCW) + step);
+        }
+    }
+    else if (mode == 2)
+    {
+        for (QHash<quint32, QPoint>::iterator it = want.begin(); it != want.end(); ++it)
+        {
+            const int lo = qMin(it.value().x(), R514_ANI_PUMP_TOP);
+            const int hi = qMax(it.value().x(), R514_ANI_PUMP_TOP);
+            int size = it.value().x();
+            if (building)
+            {
+                // a riser: small to large over the last 8 bars, in on the last beat, the drop snaps it
+                const int beats = qMax(1, qMin(R514_ANI_GROW_BEATS, qMax(0, beat - secStart) + beatsToNext));
+                if (beatsToNext <= 1)
+                    size = lo;
+                else if (beatsToNext <= beats)
+                    size = lo + int(qRound(qreal(hi - lo) * qreal(beats - beatsToNext + 1) / qreal(beats)));
+            }
+            else if (isDrop)
+                size = dropBar >= 0 ? hi : lo;      // the landing's kick wait: still drawn in
+            else if (isBreak)
+            {
+                // a slow breath, up to half the range and back, over 8 bars
+                const qreal ph = qreal(qMax(0, beat - secStart) % R514_ANI_BREATH) / qreal(R514_ANI_BREATH);
+                size = lo + int(qRound(qreal(hi - lo) * 0.5 * 0.5 * (1.0 - std::cos(2.0 * M_PI * ph))));
+            }
+            it.value().setX(qBound(lo, size, hi));
+        }
+    }
+    if (m_r514AniOn == false || m_r514AniMode != mode)
+    {
+        if (m_testTrack == false && (m_r514AniLogSec != secStart || m_r514AniLogTitle != m_trackTitle
+                                     || m_r514AniLogMode != mode))
+            logSignal(QStringLiteral("sig:ani-motion:%1:%2")
+                      .arg(ok == 3 ? QStringLiteral("both") : (mode == 1 ? QStringLiteral("spin") : QStringLiteral("size")))
+                      .arg(look));
+        m_r514AniLogSec = secStart;
+        m_r514AniLogTitle = m_trackTitle;
+        m_r514AniLogMode = mode;
+        crumb(QStringLiteral("r514 ani motion %1 %2 %3").arg(beat).arg(mode == 1 ? QStringLiteral("turn") : QStringLiteral("size")).arg(look));
+    }
+    m_r514AniOn = true;
+    m_r514AniKey = key;
+    m_r514AniLook = look;
+    m_r514AniMode = mode;
+    m_r514AniTitle = m_trackTitle;
+    m_r514AniOwn = own;
+    ++m_r514AniGen;                          // a release still waiting to stop the scene: not any more
+    r514AniWrite(key, want);
+}
+/* =====================================================================
+ *  A COLOUR GRADIENT RUNS ALONG THE LASER BARS (runde 514, agent GRAD) -
+ *  appended to trackengine.cpp by feature_trackview_engine.py from
+ *  track_runtime/r514_grad.inc.cpp (R514_INF_FILES, R514_GRAD_FILE).
+ *
+ *  Tobias, 2026-10-29 ("Lav 4, 6 fra den nye liste"), idea 6: "Barerne kan
+ *  allerede vise to farver pr. lampe. Udvidelsen er en glidende gradient over
+ *  de 8 oejne, fra rummets farve til accentfarven, som 'loeber' langs baren
+ *  paa slaget."
+ *
+ *  WHAT IT DRAWS. One hidden colour scene per step, worn in the bars' own col:
+ *  slot in place of their colour scene (the laser roof's path, r493RoofColour):
+ *  the colour wheel at 0 (per-eye mode) and every eye of every bar a colour
+ *  CODE, the code each colour's own scene puts on that bar's wheel (r509's
+ *  arpeggio read the codes the same way). Never the dimmer, the tilt, the
+ *  speed or the effect channels - so it cannot light, dim or move a bar.
+ *   - The 8 eyes go room -> accent -> room, the nearest steps the wheel has:
+ *     the hue between the two where there is exactly one (red..blue: magenta,
+ *     magenta..cyan: blue, blue..green: cyan) - A A C B B B C A, four bands -
+ *     else the two colours alone, A A A B B B A A (ties to the room). No
+ *     yellow ever, white never the room's end (only an accent's 3 eyes of 8).
+ *   - It slides one eye a beat (in a drop, or from 75 % ENERGY), one eye a
+ *     half bar under 75 %, on the section's own beat grid, looping. The two
+ *     bars on the wine shelf hang turned (DMX 357/395, gen_programs
+ *     BAR_MIRROR_CH): their eyes count backwards, so it runs the same way in
+ *     the room on every bar.
+ *   - "Accent": the drop's accent where there is one, else the look's partner
+ *     colour (m_partnerPick - the pairs the rules allow, the accent included),
+ *     as side-mod-side (dropFormSideColour). No partner: no gradient. His
+ *     tiles: never under ONE tile (a tile is one colour); with several tiles
+ *     the gradient runs between the bars' tile and the look's partner tile.
+ *
+ *  WHEN. A drawn option, not every time: once per section, on its first beat,
+ *  a dice of the track and the section (the global random generator is never
+ *  drawn, so every other draw stays as it was): R514_GRAD_SHARE of the
+ *  sections from 60 % ENERGY, R514_GRAD_DROP_SHARE of the drops. It ends 5 %
+ *  under 60 %. A ticket won shows on every beat of the section where the bars
+ *  are the engine's own whole picture (below); the next section draws again.
+ *
+ *  THE EYE RULES (barcoverage.h) ARE UNTOUCHED: only the colour of an eye
+ *  changes, never which eyes are lit. It shows only where the colour scene is
+ *  what lights the eyes - NO programme on the bars (mf invalid: the engine's
+ *  own whole-bar figures on the dimmer parts, R384's whole path), the bars'
+ *  plain colour scene or the accent's two-colour split under it - where every
+ *  bar the dimmer lights shows all 8 eyes, wheel or per-eye alike. An eye
+ *  programme, a whole-bar programme, kick-chase, the drop forms' programmes:
+ *  their own colours, no gradient. Every code put on an eye is checked to be
+ *  non-zero (a colour the scene cannot code: no gradient, never a dark eye).
+ *  It starts only once a programme that left the bars has faded out (QLC+
+ *  crossfades an LTP channel out of a fading function: our codes climbed
+ *  through other colour codes for a second - harness gx beat 33). When it
+ *  ends the bars' eye channels are reset to 0 (as R494_S1_EYE_CLEAR does),
+ *  the colour scene comes back with its eyes at 0 (AUTO Bars Colour ...) and
+ *  a programme after it never fades an eye from one of our codes.
+ *
+ *  LASER SAFETY: colour only, no tilt, no dimmer. The r503/R507 SAFE dark gaps
+ *  are for aim changes and the animation laser's pictures; a colour step on
+ *  the bars is neither, and the engine's own darkness (R507_SAFE, a re-aim's
+ *  dark, the music's dark, a black beat) is on the dimmer and wins as before.
+ *  The cast is the engine's: never with an animation laser lit (R507_SAFE's
+ *  handover is unchanged), never in LAST TRACK / SHOW OFF / BLACKOUT.
+ *
+ *  NEVER under his hand: RIG/PLAN picks, BLACKOUT/FLASH, a pad or a held
+ *  flash on a laser, LAST TRACK, the labs, a mix, his DROP HIT, positions,
+ *  CALM/STILL, his group off / trim 0, ONE colour tile. HOLD: no colour
+ *  changes - a running gradient stands still (no slide, no new draw), none
+ *  starts. Saved looks: the look records whether the gradient ran ("grad",
+ *  only when it did, so every other look keeps its identity); replayed, it
+ *  runs again exactly when the look had it. Not with the bar countdown / the
+ *  arpeggio (r509 - their own masks and eye pairs), the laser roof, the
+ *  side-mod-side colours, a curtain or a split mix (they paint the bars'
+ *  colour themselves).
+ *  Log: sig:bars-grad:on@<beat>:<room>><accent>:<bands>, sig:bars-grad:end:<why>;
+ *  crumbs: "r514 grad <section>: ticket won|lost (dice %)", "... waits at <beat> (<why>)".
+ * ===================================================================== */
+
+#define R514_GRAD_MIN_FADER   0.60      // from 60 % ENERGY (ends 5 % under)
+#define R514_GRAD_SHARE       0.30      // the sections whose bars wear the gradient
+#define R514_GRAD_DROP_SHARE  0.55      // ... more in drops
+#define R514_GRAD_BEAT_FADER  0.75      // from here one eye a beat; under it one eye a half bar
+
+static quint32 r514GradDice(const QString &title, int beat, quint32 salt)
+{
+    // R514_GRAD_FILE: a dice of the track and the section (murmur3's finaliser) - the global
+    // random generator is never drawn, so every other draw of the engine stays as it was
+    quint32 st = quint32(qHash(title)) ^ (quint32(beat) * 2654435761u) ^ salt;
+    st ^= st >> 16; st *= 0x85ebca6bu; st ^= st >> 13; st *= 0xc2b2ae35u; st ^= st >> 16;
+    return st;
+}
+
+QStringList TrackEngine::r514GradBands(const QString &room, const QString &accent) const
+{
+    // the eight eyes, room -> accent -> room: the wheel's hues in order (no yellow: never a
+    // colour of this rig's palette - it sits between green and red, so those two are no line)
+    static const QStringList line = { QStringLiteral("red"), QStringLiteral("magenta"), QStringLiteral("blue"),
+                                      QStringLiteral("cyan"), QStringLiteral("green") };
+    const int a = int(line.indexOf(room)), b = int(line.indexOf(accent));
+    QString mid;
+    if (a >= 0 && b >= 0 && qAbs(a - b) == 2)
+        mid = line.at((a + b) / 2);     // exactly one hue between: the gradient's middle step
+    const QString &A = room, &B = accent;
+    if (mid.isEmpty())
+        return QStringList() << A << A << A << B << B << B << A << A;
+    return QStringList() << A << A << mid << B << B << B << mid << A;
+}
+
+QString TrackEngine::r514GradBusy(const QString &key, quint32 splitScene, quint32 mf, bool calm) const
+{
+    // who else has the bars' colour or the room - his hand, another owner of the bars' colour, or "prog"
+    // (a programme draws the bars: its own colours) - as a reason for the crumbs; "" none: it may show
+    if (m_fullAuto == false || m_startScene || m_testTimer.isActive())
+        return QStringLiteral("auto-off");
+    if (m_forceOn)
+        return QStringLiteral("his-pick");           // RIG/PLAN: his groups for the section
+    if (m_lastStage != 0)
+        return QStringLiteral("last-track");
+    if (m_labActive || m_slabActive || m_clabActive)
+        return QStringLiteral("lab");
+    if (m_mixing)
+        return QStringLiteral("mix");
+    if (m_blackout || m_flash)
+        return QStringLiteral("blackout-flash");     // his buttons
+    // a held flash on the bars (his FLASH, a pad, the drop's landing flash on them): the flash's colour
+    // is theirs. The landing's flash on the STROBES (also m_flashHeld) is no business of the bars'
+    if (m_flashHeld.contains(key))
+        return QStringLiteral("flash-held");
+    if (m_hitAmokFrom >= 0 || m_hitKind != 0 || m_hitAmokOwed)
+        return QStringLiteral("drop-hit");
+    if (m_positionMode.isEmpty() == false)
+        return QStringLiteral("positions");
+    if (calm)
+        return QStringLiteral("calm");
+    if (m_groupOff.contains(key) || m_groupTrim.value(key, 1.0) <= 0.01)
+        return QStringLiteral("group-off");
+    // ONE colour tile: a tile is one colour (several tiles: the gradient runs between them)
+    if (m_override.isEmpty() == false && m_overrideSet.count() < 2)
+        return QStringLiteral("tile");
+    for (const QString &k : m_padFlash)
+        if (m_groups.value(k).lasers || m_groups.value(k).patternDevice)
+            return QStringLiteral("pad");             // his laser pad (it takes the other laser type)
+    if (r509BarsLive())
+        return QStringLiteral("bars-count-arp");     // r509: their own masks and eye pairs
+    if (m_r493RoofOn)
+        return QStringLiteral("roof");
+    if (layerGroup(key) || autoFadeGroup(key) || (m_mixGlide && key == m_mixGlideKey))
+        return QStringLiteral("colour-layer");
+    // starting: not while a programme leaves the bars (this beat) or still fades out on them. QLC+
+    // crossfades an LTP channel out of a fading function's value, so our codes climbed through every
+    // colour code under it for the second of its fade (harness gx beat 33, e60 113: eyes 9 -> 137)
+    if (m_r514GradShowing == false)
+    {
+        if (m_active.contains(QStringLiteral("mot:") + key))
+            return QStringLiteral("prog-leaving");
+        const Function *was = m_doc != nullptr ? m_doc->function(m_r514GradMot) : nullptr;
+        if (was != nullptr && was->isRunning())
+            return QStringLiteral("prog-fading");
+    }
+    // a drop form shapes the bars (kick-chase restarts its programme on every kick, strob-storm, the rises):
+    // its own picture, even on a beat between its programmes
+    if (dropFormOwns(key))
+        return QStringLiteral("form");
+    // the colour scene must be what lights the eyes: no programme on the bars ...
+    if (mf != Function::invalidId())
+        return QStringLiteral("prog");
+    // ... and no other painter in the col: slot - only the plain colour scene or the accent's split
+    if (splitScene != Function::invalidId())
+    {
+        bool accentSplit = false;
+        for (auto it = m_splitScenes.constBegin(); it != m_splitScenes.constEnd(); ++it)
+            if (it.value() == splitScene && it.key().startsWith(key + QLatin1Char('|')))
+                accentSplit = true;
+        if (accentSplit == false)
+            return QStringLiteral("painter");         // side-mod-side, a curtain, a split mix: their colours
+    }
+    return QString();
+}
+
+void TrackEngine::r514GradEnd(const QString &why)
+{
+    // the bars' own colour scene again (tick() runs it in the col: slot this very beat)
+    if (m_r514GradShowing && m_doc != nullptr && m_groups.contains(m_r514GradKey))
+    {
+        // the eyes back at 0 before anything new starts on them, as R494_S1_EYE_CLEAR does for a
+        // programme: QLC+ fades a new step from the universe's value, and an eye programme's first
+        // step would fade an eye it holds dark from our colour code - lit while it faded. Only the
+        // eight eye channels, only where non-zero; our scene leaves the col: slot this beat, so it
+        // writes them no more, and whatever comes next writes its own (the colour scene: 0)
+        int cleared = 0;
+        static const QRegularExpression eyeName(QStringLiteral("(colou?r|eye)\\s*\\d+"), QRegularExpression::CaseInsensitiveOption);
+        QList<Universe *> ua = m_doc->inputOutputMap()->claimUniverses();
+        foreach (quint32 fid, m_groups.value(m_r514GradKey).fixtures)
+        {
+            Fixture *fxi = m_doc->fixture(fid);
+            if (fxi == nullptr || fxi->universe() >= quint32(ua.count()))
+                continue;
+            Universe *universe = ua.at(int(fxi->universe()));
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qc = fxi->channel(ch);
+                if (qc == nullptr || qc->name().contains(eyeName) == false)
+                    continue;
+                const int address = int(fxi->address() + ch);
+                if (universe->preGMValue(address) != 0)
+                {
+                    universe->reset(address, 1);
+                    cleared++;
+                }
+            }
+        }
+        m_doc->inputOutputMap()->releaseUniverses();
+        if (cleared > 0)
+            crumb(QStringLiteral("r514 grad eyes clear %1").arg(cleared));
+    }
+    if (m_r514GradShowing && why.isEmpty() == false)
+    {
+        crumb(QStringLiteral("r514 grad end: ") + why);
+        if (m_testTrack == false && why != QStringLiteral("track"))
+            logSignal(QStringLiteral("sig:bars-grad:end:") + why);
+    }
+    m_r514GradShowing = false;
+    m_r514GradPair.clear();
+}
+
+quint32 TrackEngine::r514GradScene(const QString &key, const QStringList &bands, int off,
+                                   const QString &room, const QString &accent)
+{
+    // the col: scene for this step: the wheel at 0 and each eye its band's code, read off that
+    // colour's own scene for this very bar; every other channel the room's colour scene writes
+    // (never the dimmer, the tilt, the speed). Invalid: a code it cannot read - no gradient
+    if (m_doc == nullptr || bands.count() != 8)
+        return Function::invalidId();
+    const QString name = QStringLiteral("TRACK R514: grad %1 %2>%3 %4").arg(key, room, accent).arg(off);
+    const TrackGroup &g = m_groups.value(key);
+    QHash<QString, quint32>::const_iterator have = m_r514GradScenes.constFind(name);
+    if (have != m_r514GradScenes.constEnd())
+    {
+        // made before this night: still ours, still filled (a show saved by QLC+ writes a hidden
+        // scene's values as ZERO - a scene found again after a load is refilled below)
+        Scene *s = qobject_cast<Scene *>(m_doc->function(have.value()));
+        if (s != nullptr && s->name() == name && g.fixtures.isEmpty() == false
+            && s->values().count() == m_r514GradCount.value(name, -1)
+            && s->value(m_r514GradProbe.value(name).first, m_r514GradProbe.value(name).second) > 0)
+            return s->id();
+    }
+    static const QRegularExpression eyeName(QStringLiteral("(colou?r|eye)\\s*\\d+"), QRegularExpression::CaseInsensitiveOption);
+    QHash<QString, Scene *> sources;
+    for (const QString &c : bands)
+    {
+        if (sources.contains(c))
+            continue;
+        Scene *src = qobject_cast<Scene *>(m_doc->function(colourFunction(key, c)));
+        if (src == nullptr)
+            return Function::invalidId();
+        sources.insert(c, src);
+    }
+    Scene *roomScene = sources.value(room);
+    QList<SceneValue> values;
+    QPair<quint32, quint32> probe(Function::invalidId(), QLCChannel::invalid());
+    foreach (quint32 fid, g.fixtures)
+    {
+        Fixture *fxi = m_doc->fixture(fid);
+        if (fxi == nullptr)
+            return Function::invalidId();
+        quint32 wheel = QLCChannel::invalid();
+        QList<quint32> eyes;
+        for (quint32 ch = 0; ch < fxi->channels(); ch++)
+        {
+            const QLCChannel *qc = fxi->channel(ch);
+            if (qc != nullptr && qc->preset() == QLCChannel::ColorRGBMixer)
+                wheel = ch;
+            else if (qc != nullptr && qc->name().contains(eyeName))
+                eyes << ch;
+        }
+        if (wheel == QLCChannel::invalid() || eyes.count() != 8)
+            return Function::invalidId();
+        std::sort(eyes.begin(), eyes.end());
+        // the two bars on the wine shelf hang turned: their eye 1 is at the far end (BAR_MIRROR_CH)
+        if (int(fxi->address()) + 1 == 357 || int(fxi->address()) + 1 == 395)
+            std::reverse(eyes.begin(), eyes.end());
+        // each colour's code on this bar: what its scene puts on the wheel, else on an eye
+        QHash<QString, uchar> code;
+        for (QHash<QString, Scene *>::const_iterator it = sources.constBegin(); it != sources.constEnd(); ++it)
+        {
+            uchar v = 0;
+            foreach (const SceneValue &sv, it.value()->values())
+            {
+                if (sv.fxi != fid)
+                    continue;
+                if (sv.channel == wheel && sv.value > 0)
+                    v = sv.value;
+                else if (v == 0 && eyes.contains(sv.channel) && sv.value > 0)
+                    v = sv.value;
+            }
+            if (v == 0)
+                return Function::invalidId();   // never a dark eye where the bar was lit
+            code.insert(it.key(), v);
+        }
+        // the rest of what the room's colour scene writes on this bar (a shutter, an effect at 0)
+        const quint32 dimCh = dimmerChannel(fxi);
+        foreach (const SceneValue &sv, roomScene->values())
+        {
+            if (sv.fxi != fid || sv.channel == dimCh || sv.channel == wheel || eyes.contains(sv.channel))
+                continue;
+            const QLCChannel *qc = fxi->channel(sv.channel);
+            if (qc == nullptr || qc->group() == QLCChannel::Pan || qc->group() == QLCChannel::Tilt
+                || qc->group() == QLCChannel::Speed || qc->group() == QLCChannel::Intensity)
+                continue;
+            values.append(sv);
+        }
+        values.append(SceneValue(fid, wheel, 0));
+        for (int e = 0; e < 8; e++)
+            values.append(SceneValue(fid, eyes.at(e), code.value(bands.at(((e - off) % 8 + 8) % 8))));
+        if (probe.first == Function::invalidId())
+            probe = qMakePair(fid, eyes.at(0));
+    }
+    if (values.isEmpty() || probe.first == Function::invalidId())
+        return Function::invalidId();
+    // ONE pass over the show's functions for the scenes a former run left (the first making only):
+    // a search per scene cost the harness a 690 ms stall on PSMAIN's 40 000 functions (r509 pause)
+    if (m_r514GradNamed.isEmpty())
+    {
+        m_r514GradNamed.insert(QString(), Function::invalidId());   // scanned
+        foreach (Function *func, m_doc->functions())
+        {
+            if (func != nullptr && func->type() == Function::SceneType
+                && func->name().startsWith(QStringLiteral("TRACK R514: grad ")))
+                m_r514GradNamed.insert(func->name(), func->id());
+        }
+    }
+    Scene *scene = qobject_cast<Scene *>(m_doc->function(m_r514GradNamed.value(name, Function::invalidId())));
+    if (scene != nullptr && scene->name() != name)
+    {
+        // the ids of another show (a project loaded since): one new pass
+        m_r514GradNamed.clear();
+        m_r514GradNamed.insert(QString(), Function::invalidId());
+        foreach (Function *func, m_doc->functions())
+        {
+            if (func != nullptr && func->type() == Function::SceneType
+                && func->name().startsWith(QStringLiteral("TRACK R514: grad ")))
+                m_r514GradNamed.insert(func->name(), func->id());
+        }
+        scene = qobject_cast<Scene *>(m_doc->function(m_r514GradNamed.value(name, Function::invalidId())));
+    }
+    if (scene != nullptr && scene->name() == name)
+    {
+        foreach (SceneValue old, scene->values())
+            scene->unsetValue(old.fxi, old.channel);
+    }
+    else
+    {
+        scene = new Scene(m_doc);
+        scene->setName(name);
+        scene->setVisible(false);
+        if (m_doc->addFunction(scene) == false)
+        {
+            delete scene;
+            return Function::invalidId();
+        }
+        m_r514GradNamed.insert(name, scene->id());
+    }
+    foreach (const SceneValue &sv, values)
+        scene->setValue(sv);
+    m_r514GradScenes.insert(name, scene->id());
+    m_r514GradCount.insert(name, int(scene->values().count()));
+    m_r514GradProbe.insert(name, probe);
+    return scene->id();
+}
+
+quint32 TrackEngine::r514GradColour(const QString &key, const QString &colour, quint32 splitScene, quint32 mf,
+                                    int beat, int secStart, bool isDrop, qreal fader, bool hold, bool calm)
+{
+    // R514_GRAD_HOOK (tick(), the bars' col: scene): the gradient's scene for this beat, or splitScene
+    // as it was - the bars' colour exactly as before
+    const TrackGroup &g = m_groups.value(key);
+    if (m_doc == nullptr || g.lasers == false || g.patternDevice || g.fixtures.count() < 1
+        || key == m_compositionBase)
+        return splitScene;
+    if (m_r514GradKey.isEmpty() == false && key != m_r514GradKey)
+        return splitScene;              // one bar group carries it (the first that asked)
+    m_r514GradKey = key;
+    // the bars' programme of the beat before (tick() changes the mot: slot after this): its fade-out is waited for
+    if (m_active.contains(QStringLiteral("mot:") + key))
+        m_r514GradMot = m_active.value(QStringLiteral("mot:") + key);
+    if (m_r514GradTitle != m_trackTitle)
+    {
+        r514GradEnd(QStringLiteral("track"));
+        m_r514GradTitle = m_trackTitle;
+        m_r514GradSec = -1;
+        m_r514GradWon = false;
+        m_r514GradBeat = -1;
+    }
+    if (m_r514GradBeat >= 0 && beat < m_r514GradBeat)
+        m_r514GradSec = -1;             // a jump back: its section is drawn again
+    const bool newBeat = beat != m_r514GradBeat;
+    m_r514GradBeat = beat;
+    if (newBeat && m_r514GradShowing && m_r514GradShownBeat < beat - 1)
+        r514GradEnd(QStringLiteral("cast"));   // the bars were out of the cast: shown again from here
+    const bool saved = savedActive();
+    // the ticket: once per section, on its first beat seen. HOLD draws nothing - the section it holds
+    // keeps what it had (a running gradient stands still, none starts)
+    if (secStart != m_r514GradSec)
+    {
+        m_r514GradSec = secStart;
+        m_r514GradWhy.clear();
+        if (hold == false)
+        {
+            const quint32 roll = r514GradDice(m_trackTitle, secStart, 0x47524144u) & 0xffffu;
+            const qreal share = isDrop ? R514_GRAD_DROP_SHARE : R514_GRAD_SHARE;
+            m_r514GradWon = roll / 65535.0 < share;
+            m_r514GradDir = ((roll >> 3) & 1u) ? -1 : 1;
+            m_r514GradOff = 0;
+            crumb(QStringLiteral("r514 grad %1: ticket %2 (dice %3 %, %4)").arg(secStart)
+                  .arg(m_r514GradWon ? QStringLiteral("won") : QStringLiteral("lost")).arg(int(roll * 100 / 65536))
+                  .arg(isDrop ? QStringLiteral("drop") : QStringLiteral("section")));
+        }
+    }
+    // a saved look replays exactly what it had: the gradient when it ran, none when it did not
+    const bool want = saved ? m_savedPlaying.value(QStringLiteral("grad")).toBool() : m_r514GradWon;
+    QString why;
+    if (want == false)
+        why = QStringLiteral("-");
+    else if (fader + (m_r514GradShowing ? 0.05 : 0.0) < R514_GRAD_MIN_FADER - 1e-9)
+        why = QStringLiteral("energy");
+    else if (hold && m_r514GradShowing == false)
+        why = QStringLiteral("hold");
+    else
+        why = r514GradBusy(key, splitScene, mf, calm);
+    // the two colours: the room's and the accent (the look's partner) as the bars can show them
+    QString room, accent;
+    if (why.isEmpty())
+    {
+        QString partner = m_partnerPick;
+        if (m_overrideSet.count() >= 2)
+        {
+            // his tiles: the bars' tile and the look's partner tile, else the lead (never a fourth colour)
+            partner.clear();
+            const QString setPartner = setPartnerOf(m_overrideIdx);
+            for (const QString &c : { setPartner, m_colour })
+                if (partner.isEmpty() && c.isEmpty() == false && colourForGroup(key, c) != colourForGroup(key, colour))
+                    partner = c;
+        }
+        accent = partner.isEmpty() ? QString() : colourForGroup(key, partner);
+        // the bars wearing the accent: the room's colour is the gradient's other end
+        room = colourForGroup(key, (accent.isEmpty() == false && colourForGroup(key, colour) == accent) ? m_colour : colour);
+        if (accent.isEmpty() || room.isEmpty() || room == accent)
+            why = QStringLiteral("no-accent");
+        else if (room == QStringLiteral("white") || engineBannedColour(room) || engineBannedColour(accent))
+            why = QStringLiteral("colour");
+    }
+    if (why.isEmpty() == false)
+    {
+        if (why != QStringLiteral("-") && m_r514GradShowing == false && why != m_r514GradWhy)
+        {
+            m_r514GradWhy = why;        // the crumb once a reason: a ticket that waits says why
+            crumb(QStringLiteral("r514 grad %1: waits at %2 (%3)").arg(m_r514GradSec).arg(beat).arg(why));
+        }
+        r514GradEnd(why);
+        return splitScene;
+    }
+    // the slide: one eye a beat in a drop or from 75 %, one a half bar under it, on the section's
+    // grid; HOLD stands it still
+    const int stepBeats = (isDrop || fader >= R514_GRAD_BEAT_FADER) ? 1 : 2;
+    if (newBeat && hold == false && m_r514GradShowing && beat > secStart && ((beat - secStart) % stepBeats) == 0)
+        m_r514GradOff = ((m_r514GradOff + m_r514GradDir) % 8 + 8) % 8;
+    const QStringList bands = r514GradBands(room, accent);
+    const quint32 id = r514GradScene(key, bands, m_r514GradOff, room, accent);
+    if (id == Function::invalidId())
+    {
+        if (m_r514GradWhy != QStringLiteral("codes"))
+        {
+            m_r514GradWhy = QStringLiteral("codes");
+            crumb(QStringLiteral("r514 grad %1: no codes for %2>%3 on %4").arg(m_r514GradSec).arg(room, accent, key));
+        }
+        r514GradEnd(QStringLiteral("codes"));
+        return splitScene;
+    }
+    const QString pair = room + QLatin1Char('>') + accent;
+    if (m_r514GradShowing == false || pair != m_r514GradPair)
+    {
+        QStringList kindsSeen;
+        for (const QString &c : bands)
+            if (kindsSeen.contains(c) == false)
+                kindsSeen << c;
+        const int kinds = int(kindsSeen.count());
+        crumb(QStringLiteral("r514 grad on %1: %2 (%3 colours, %4, a step every %5 beat(s))").arg(beat).arg(pair)
+              .arg(kinds).arg(m_r514GradDir > 0 ? QStringLiteral("forward") : QStringLiteral("back")).arg(stepBeats));
+        if (m_testTrack == false)
+            logSignal(QStringLiteral("sig:bars-grad:on@%1:%2:%3").arg(beat).arg(pair).arg(kinds));
+    }
+    m_r514GradShowing = true;
+    m_r514GradShownBeat = beat;
+    m_r514GradPair = pair;
+    m_r514GradWhy.clear();
+    return id;
+}
+
+bool TrackEngine::r514GradRan() const
+{
+    // R514_GRAD_SAVED (savedCapture): the bars wore the gradient on this beat (or the one before)
+    return m_r514GradShowing && m_curBeat >= 0 && m_r514GradShownBeat >= m_curBeat - 1;
 }
