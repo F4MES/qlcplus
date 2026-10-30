@@ -3191,6 +3191,7 @@ private:
     void labScan();
     bool labReady() const;
     QHash<QString, int> labValues(const QString &key, int step) const;
+    bool r516AniStepped(const QString &slot, quint32 fid) const;   // R516_LAB_DECL: a chaser on an animation laser
     QList<SceneValue> labSceneValues(const QString &key, const QString &colour, int step, int lamps) const;
     QStringList labList(int pass) const;
     QString labCurrentKey() const;

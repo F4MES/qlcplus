@@ -10,7 +10,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-function Get-GuardedBltConfig([string]$Text, [string]$JarName) {
+# R516_LEAD_MAINJAR (runde 516, Tobias 10-30: "BLT guard NOT installed: Unsupported BLT launcher"): BLT's
+# Windows build is jpackage --main-jar, so its cfg says app.mainjar= (with app.mainclass= taken from the jar's
+# manifest, or - older jpackage - without it). That launcher is turned into the classpath one the guard
+# already handles: app.mainjar=X becomes app.classpath=X and the guard is the main class. $JarMain is the
+# main class from the jar's manifest, for a cfg without app.mainclass= (the caller reads it). app.mainmodule
+# (a modular launcher) is still refused, and nothing is written then.
+function Get-GuardedBltConfig([string]$Text, [string]$JarName, [string]$JarMain = '') {
     if ($JarName -notmatch '^qlc-blt-guard-[a-f0-9]{16}\.jar$') { throw 'Invalid guard jar name.' }
     $newline = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
     $lines = [regex]::Split($Text, '\r?\n')
@@ -20,10 +26,14 @@ function Get-GuardedBltConfig([string]$Text, [string]$JarName) {
         }
     }
     $main = @($lines | Where-Object { $_ -match '^app\.mainclass=' })
-    if ($main.Count -ne 1 -or @($lines | Where-Object { $_ -match '^app\.(mainmodule|mainjar)=' }).Count) {
+    $mainJar = @($lines | Where-Object { $_ -match '^app\.mainjar=' })
+    if ($main.Count -gt 1 -or $mainJar.Count -gt 1 -or ($main.Count + $mainJar.Count) -eq 0 -or
+        @($lines | Where-Object { $_ -match '^app\.mainmodule=' }).Count) {
         throw 'Unsupported BLT launcher. No files were changed.'
     }
-    $original = $main[0].Substring('app.mainclass='.Length)
+    if ($main.Count -eq 1) { $original = $main[0].Substring('app.mainclass='.Length) }
+    elseif ($JarMain) { $original = $JarMain }
+    else { throw 'Unsupported BLT launcher (no main class in the cfg or the jar). No files were changed.' }
     if ($original -eq 'org.qlcplus.rig.BltGuardMain') {
         $saved = @($lines | Where-Object { $_ -match '^java-options=-Dqlc\.blt\.main=' })
         if ($saved.Count -ne 1) { throw 'Missing original BLT main class.' }
@@ -39,11 +49,40 @@ function Get-GuardedBltConfig([string]$Text, [string]$JarName) {
         if ($section -eq 'JavaOptions' -and $line -match '^java-options=-Dqlc\.blt\.main=') { continue }
         if ($section -eq 'Application' -and $line -match '^app\.mainclass=') {
             $result.Add('app.mainclass=org.qlcplus.rig.BltGuardMain')
+        } elseif ($section -eq 'Application' -and $line -match '^app\.mainjar=(.+)$') {
+            $jar = $Matches[1]                              # R516_LEAD_MAINJAR: BLT's jar onto the classpath
+            if ($jar -notmatch '^\$APPDIR[\\/]') { $jar = '$APPDIR\' + $jar }
+            $result.Add('app.classpath=' + $jar)
         } else { $result.Add($line) }
-        if ($line -eq '[Application]') { $result.Add('app.classpath=$APPDIR\' + $JarName) }
+        if ($line -eq '[Application]') {
+            $result.Add('app.classpath=$APPDIR\' + $JarName)
+            if ($main.Count -eq 0) { $result.Add('app.mainclass=org.qlcplus.rig.BltGuardMain') }
+        }
         if ($line -eq '[JavaOptions]') { $result.Add('java-options=-Dqlc.blt.main=' + $original) }
     }
     return [string]::Join($newline, $result)
+}
+
+# R516_LEAD_JARMAIN: the Main-Class of the cfg's app.mainjar (only read when the cfg has no app.mainclass=);
+# "" when there is none or it cannot be read - Get-GuardedBltConfig then refuses, nothing is written
+function Get-JarMainClass([string]$Text, [string]$CfgPath) {
+    if ($Text -match '(?m)^app\.mainclass=') { return '' }
+    if ($Text -notmatch '(?m)^app\.mainjar=(.+?)\r?$') { return '' }
+    $jar = $Matches[1] -replace '^\$APPDIR[\\/]', ''
+    $path = Join-Path (Split-Path $CfgPath) $jar
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return '' }
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($path)
+        try {
+            $entry = $zip.GetEntry('META-INF/MANIFEST.MF')
+            if (-not $entry) { return '' }
+            $reader = New-Object IO.StreamReader($entry.Open())
+            try { $manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        } finally { $zip.Dispose() }
+        if ($manifest -match '(?m)^Main-Class:\s*(\S+)') { return $Matches[1] }
+    } catch { }
+    return ''
 }
 
 if ($LibraryOnly) { return }
@@ -91,7 +130,7 @@ if (-not $configs) { throw 'No supported BLT installation found. Use -AppPath fo
 $plans = @(
     foreach ($cfg in $configs) {
         $old = [IO.File]::ReadAllText($cfg)
-        [pscustomobject]@{ Path = $cfg; Old = $old; New = (Get-GuardedBltConfig $old $jarName) }
+        [pscustomobject]@{ Path = $cfg; Old = $old; New = (Get-GuardedBltConfig $old $jarName (Get-JarMainClass $old $cfg)) }   # R516_LEAD_JARMAIN
     }
 )
 
