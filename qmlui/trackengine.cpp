@@ -825,6 +825,8 @@ void TrackEngine::slotPulseTimer()
                 if (r507SafeDark(key))
                     out = 0.0;           // R507_SAFE_TIMER_MOT: a laser held dark, as run()
                 int attr = m_activeAttr.value(slot, -1);
+                if (r516AniStepped(slot, fid))
+                    out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R516_LAB_PULSE: as run() - on or off
                 if (attr >= 0)
                     func->adjustAttribute(out, attr);
                 m_activeOut.insert(slot, out);
@@ -17584,6 +17586,8 @@ void TrackEngine::reapplyLevels()
         out = lightsOutFor(group) ? 0.0 : qBound(0.0, out, 1.0);   // R513_LIVE_PAD_REAPPLY
         if (slot.startsWith(QStringLiteral("pos:")) == false && r507SafeDark(group))
             out = 0.0;                   // R507_SAFE_REAPPLY: a laser held dark, as setPart() (not the aim)
+        if (r516AniStepped(slot, fid))
+            out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R516_LAB_REAPPLY: as run() - on or off
         m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
         m_activeOut.insert(slot, out);
     }
@@ -21662,6 +21666,8 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
     }
     if (slot.startsWith(QStringLiteral("pos:")) == false && r507SafeDark(slotGroup(slot)))
         out = 0.0;                       // R507_SAFE_RUN_LEVEL: a laser held dark, as setPart() (not the aim)
+    if (r516AniStepped(slot, fid))
+        out = (out > 0.10 && aniMasterOn()) ? 1.0 : 0.0;   // R516_LAB_RUN: an animation laser's chaser - on or off, never scaled
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
@@ -21880,6 +21886,8 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
     if (slot.startsWith(QStringLiteral("efx:")))
         r503SafeAim(slotGroup(slot), Function::invalidId());
     int attr = m_activeAttr.value(slot, -1);
+    if (r516AniStepped(slot, fid))
+        hard = true;                     // R516_LAB_STOP: an animation laser's chaser goes off, it does not fade (scaled)
     m_active.remove(slot);
     crumb(QStringLiteral("stop ") + slot + QLatin1Char(' ') + QString::number(fid) + (hard ? QStringLiteral(" hard") : QString()));   // R435_CRUMBS
     m_activeAttr.remove(slot);
@@ -23983,6 +23991,25 @@ void TrackEngine::labApplyTags()
         engineLabWindow(o.value(QStringLiteral("en")).toArray(), info.labMin, info.labMax);
         info.labCalm = o.value(QStringLiteral("ch")).toArray().contains(QJsonValue(QStringLiteral("calm")));
     }
+}
+
+/* R516_LAB_STEPPED (runde 516, LAB - laser safety; r514 ANI.md P1). A chaser or sequence on an animation laser
+ * (a kept K Pump / K Turn / K Swap, or one of his own) must never run at a fraction: QLC+'s chaser crossfade
+ * (ChaserRunner: each step blends from the step before, Scene::processValue -> FadeChannel::CrossFade,
+ * GenericFader::write: value x parentIntensity) scales EVERY channel of its steps by the chaser's intensity -
+ * CH14 (tilt), CH13, the picture, the size - while CH1 is still lit (harness r514 lab_night_base: CH1 183,
+ * CH4 36, CH14 85 for 50 / 118 at 0.72). The laser's dimmer is a switch anyway (R442_ANI_MASTER), so such a
+ * function gets the switch its dimmer parts get: on (1.0, every channel at its own value) or off (CH1 0), and
+ * it stops hard instead of fading. Scenes, the bars, the heads and every pos: slot are left as they were. */
+bool TrackEngine::r516AniStepped(const QString &slot, quint32 fid) const
+{
+    if (m_doc == nullptr || slot.startsWith(QStringLiteral("pos:")))
+        return false;
+    const QString group = slotGroup(slot);
+    if (group.isEmpty() || m_groups.contains(group) == false || m_groups.value(group).patternDevice == false)
+        return false;
+    const Function *func = m_doc->function(fid);
+    return func != nullptr && (func->type() == Function::ChaserType || func->type() == Function::SequenceType);
 }
 /* =====================================================================
  *  STROBE LAB (runde 436) - appended to trackengine.cpp by
@@ -30662,6 +30689,13 @@ void TrackEngine::tilesSectionBeat(int beat, int start, const QString &state, bo
     m_tilesRedraw = m_tilesRedraw == 2 ? 1 : 0;
     if (moved && newSection)
         tilesBackToAuto(beat, start, state);
+    // R516_REV513_REDRAW_OWED (r516 review of r512 1b, "a lit AUTO tile over his colour would look like it didn't
+    // revert"): a flag edit or a resend that changes the section at the playhead runs tick() again on the beat
+    // already drawn (applyLook -> runEngine(true)); it reverts here, then R233 returns before the colour
+    // decision and owes the landing to the next beat - whose first line above cleared the redraw: the tiles
+    // went AUTO and the room stayed in his colour. The redraw goes with the owed landing (the same test as R233)
+    if (m_tilesRedraw == 1 && beat == m_lastBeat && m_lastState.isEmpty() == false)
+        m_tilesRedraw = 2;
 }
 
 bool TrackEngine::tilesBackToAuto(int beat, int start, const QString &state)
@@ -43859,7 +43893,9 @@ void TrackEngine::r515MelbarsBeat(const QSet<QString> &castSet, const QString &s
     {
         const int n = int(m_groups.value(key).parts.count());
         QString why;
-        if (m_r515MbNext == secStart)
+        if (forceNext)                                // R516_REV515_NEXT_WAIT (runde 516, REV515): NEXT is his while a
+            m_r515MbNext = secStart;                  // won ticket waits too (HOLD, BLACKOUT, the dark, busy) - not again
+        if (m_r515MbNext == secStart)                 // in this break, as when it runs (it started after his NEXT)
             why = QStringLiteral("next");
         else if (busy.isEmpty() == false)
             why = busy;

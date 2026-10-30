@@ -199,6 +199,24 @@ public class BeatLinkTrigger {
         self.assertEqual(data, cfg.read_bytes())
         self.assertEqual(1, len(list(cfg.parent.glob('*.before-guard-*'))))
 
+    def test_install_jpackage_mainjar_launcher(self):
+        # R516_LEAD_MAINJAR_TEST: BLT's Windows build (jpackage --main-jar) - the lys-PC 10-30 said
+        # "Unsupported BLT launcher"; the jar goes onto the classpath and the guard is the main class
+        app, cfg, original = self.fixture_app()
+        text = original.replace('app.classpath=$APPDIR\\beat-link-trigger.jar', 'app.mainjar=$APPDIR\\beat-link-trigger.jar')
+        cfg.write_bytes(text.encode())
+        result = self.install(app)
+        self.assertEqual(0, result.returncode, result.stderr)
+        data = cfg.read_bytes()
+        guarded = data.decode()
+        self.assertIn('app.mainclass=org.qlcplus.rig.BltGuardMain', guarded)
+        self.assertIn('app.classpath=$APPDIR\\beat-link-trigger.jar', guarded)
+        self.assertIn('java-options=-Dqlc.blt.main=beat_link_trigger.BeatLinkTrigger', guarded)
+        self.assertNotIn('app.mainjar=', guarded)
+        result = self.install(app)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(data, cfg.read_bytes())
+
     def test_unknown_launcher_is_not_modified(self):
         app, cfg, original = self.fixture_app('\n', 'different.Application')
         result = self.install(app)

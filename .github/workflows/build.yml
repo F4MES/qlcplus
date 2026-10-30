@@ -194,6 +194,9 @@ jobs:
         run: |
           cmake --build build --target install
           cp -v resources/icons/svg/qlcplus.svg ${INSTALL_ROOT}
+          # R516_CI_APPIMAGE_ICON: appimagetool continuous (10-29) wants a png/xpm icon and .DirIcon at the root
+          cp -v resources/icons/png/qlcplus.png ${INSTALL_ROOT}
+          ln -sfv qlcplus.png ${INSTALL_ROOT}/.DirIcon
           cp -v platforms/linux/qlcplus.desktop ${INSTALL_ROOT}
 
       - name: Set APPVERSION
