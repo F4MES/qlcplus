@@ -304,14 +304,22 @@ if ($revA) {
     if ($rev -is [byte[]]) { $rev = [Text.Encoding]::UTF8.GetString($rev) }
     $rev = "$rev".Trim()
 }
+# R516B_UPDATER_GONE (Tobias 10-30: the shortcut said QLC+ was gone again, hours after an install that
+# checked out - UPDATE then said "already installed"): every run looks for qlcplus-qml.exe, not only the
+# run that installs. Gone = the build is installed again (and Defender's history shown), whatever the state
+$qlcGone = -not (Test-Path -LiteralPath (Get-QlcExe))
 if (-not $exe) {
     Say "No QLC-rig-setup.exe in the release yet (the build may still be running)." "Yellow"
-} elseif ($rev -and $rev -eq $s.exeRev -and -not $Force) {
+} elseif ($rev -and $rev -eq $s.exeRev -and -not $Force -and -not $qlcGone) {
     Say "QLC+ $rev is already installed." "Green"
-} elseif ($rev -and $s.rolledBack -contains $rev -and -not $Force) {
+} elseif ($rev -and $s.rolledBack -contains $rev -and -not $Force -and -not $qlcGone) {
     # runde 467: rollback-qlc.cmd took this build away - not again by itself
     Say "QLC+ $rev was rolled back with rollback-qlc.cmd - not installed again (a newer build will be; -Force installs this one)." "Yellow"
 } else {
+    if ($qlcGone) {                                  # R516B_UPDATER_GONE: say why it installs again
+        Say ("QLC+ is NOT there any more: {0} is gone - installing QLC+ {1} again." -f (Get-QlcExe), $rev) "Red"
+        Show-Defender
+    }
     $exeFile = Join-Path $work ("QLC-rig-setup-{0}.exe" -f ($(if ($rev) { $rev } else { "new" })))
     Fetch $exe $exeFile
 }
