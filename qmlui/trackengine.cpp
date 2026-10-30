@@ -12239,6 +12239,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // (r509_bars.inc.cpp). Never under his saved look, his DROP HIT or a laser pad (r509BarsBusy).
         r509BarsBeat(castSet, eligible, state, beat, secStart, secEnd, isDrop, isBuild, nextState, beatsToNext,
                      fader, kick, hold, isCalm, still, silent, forceNext);
+        // R515_MELBARS_HOOK_BEAT (runde 515, MELBARS): in a kickless melodic break where the engine has the bars on
+        // stage, a drawn share walks a window of two whole bars with the melody (r515_melbars.inc.cpp) - never
+        // puts the bars in the cast, never with an animation laser, never under his hand
+        r515MelbarsBeat(castSet, state, beat, secStart, fader, hold, isCalm, still, forceNext);
         // the plan for the next section
         const int boundary = (nextState.isEmpty() || beatsToNext <= 0) ? -1 : beat + beatsToNext;
         if (boundary < 0)
@@ -14710,6 +14714,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // and our mask says which are lit (the arpeggio steps between the beats on its notes)
         if (g.lasers && g.patternDevice == false)
             r509BarsMove(key, mv);
+        // R515_MELBARS_HOOK_MOVE (runde 515, MELBARS): ... and under the melody's window, whole bars, our mask
+        if (g.lasers && g.patternDevice == false)
+            r515MelbarsMove(key, mv);
         // R507_WAVE_MOVE (runde 507, WAVE): the kick-wave drop's wash - every head lit, a pulse on every kick
         if (isDrop && dropBar >= 0)
             r507WaveMove(key, mv);
@@ -15236,6 +15243,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // arpeggio holds them - whole bars on the colour scene under our mask (R384's path); the bars pick
         // again when it lets go (r509_bars.inc.cpp)
         if (mf != Function::invalidId() && r509BarsWhole(key))
+            mf = Function::invalidId();
+        // R515_MELBARS_HOOK_WHOLE (runde 515, MELBARS): ... nor while the melody's window holds them (GRAD may
+        // still colour them: colour only)
+        if (mf != Function::invalidId() && r515MelbarsWhole(key))
             mf = Function::invalidId();
         const quint32 formMf = (isDrop && dropBar >= 0) ? dropFormProgramme(key, colour, isDrop) : Function::invalidId();
         if (formMf != Function::invalidId())
@@ -17294,6 +17305,8 @@ QVector<qreal> TrackEngine::patternMask(const QString &group, const TrackMove &m
     QVector<qreal> mask(n, 1.0);
     if (n == 0)
         return mask;
+    if (move.formMask == r515MelbarsMaskId)
+        return r515MelbarsMask(group);            // R515_MELBARS_HOOK_MASK (runde 515, MELBARS): the melody's window
     if (move.formMask >= r509BarsMaskCount)
         return r509BarsMask(group);               // R509_BARS_MASK (runde 509, BARS): the countdown / the arpeggio
     if (move.formMask > 0)
@@ -35655,6 +35668,8 @@ void TrackEngine::r493RoofReset()
     // stopAll / release / idle: the engine lets go of everything - so does the roof
     r493RoofEnd(QStringLiteral("stop"));
     r509BarsStop(QStringLiteral("stop"));   // R509_BARS_STOP (runde 509, BARS): ... and the bar countdown / the arpeggio
+    r515MelbarsStop(QStringLiteral("stop"));   // R515_MELBARS_STOP (runde 515, MELBARS): ... and the melody's
+                                            // window on the bars (stopAll / SHOW OFF / idle)
 }
 
 qreal TrackEngine::r493RoomLevel(const QString &key, qreal groupLevel, bool still) const
@@ -43561,4 +43576,393 @@ bool TrackEngine::r514GradRan() const
 {
     // R514_GRAD_SAVED (savedCapture): the bars wore the gradient on this beat (or the one before)
     return m_r514GradShowing && m_curBeat >= 0 && m_r514GradShownBeat >= m_curBeat - 1;
+}
+/* =====================================================================
+ *  THE LASER BARS FOLLOW THE MELODY IN BREAKS (runde 515, agent MELBARS) -
+ *  appended to trackengine.cpp by feature_trackview_engine.py from
+ *  track_runtime/r515_melbars.inc.cpp (R515_INF_FILES, R515_MELBARS_FILE).
+ *
+ *  Tobias, 2026-10-30 ("Lav ... 5"): "Melodien vandrer hen over barene.
+ *  Melodibuen, som hovederne allerede foelger i breaks, styrer ogsaa hvilken
+ *  laserbar der lyser: hoej tone ude mod den ene side, lav tone mod den anden.
+ *  Kun i break-figurer. Hele barer under 75 %, saa oejenreglerne holder.
+ *  Barene skifter, men tilten flytter sig ikke."
+ *
+ *  WHAT IT DRAWS. In a kickless melodic break where the engine itself has the
+ *  laser bars on stage, the lit bars are a WINDOW of two adjacent WHOLE bars
+ *  (all 8 eyes) that walks along the bars' hanging order with the melody's
+ *  arc - the arc A2's wave and A4's heads already follow (r493MelodyArc: 0.65 x
+ *  mids + 0.35 x highs, smoothed twice over nine beats, read ahead over the
+ *  whole break; its own gate: no kick, mids that move, four bars or more).
+ *   - The axis: the bars hang from the DJ to the back wall (rig_room.json
+ *     unplaced.laserBars, y .133 .236 .421 .511 .641 .745 - the room's longest
+ *     spread of them; x is .43-.98). The order is r509BarsOrder's (the same
+ *     table; address order without it - the same order on this rig), read
+ *     from the DJ. The melody's TOP is the back wall, its lowest point the DJ
+ *     (R515_MELBARS_TOP_BACK) - the arc's own band (its low .. its top in this
+ *     break) laid on the window's positions, so every melodic break walks
+ *     the room.
+ *   - Width 2 at every level: 16 eyes, whole bars - legal everywhere in
+ *     barcoverage.h (whole; >= 13 eyes under 75 %; >= 2 eyes a lit bar and
+ *     >= 10 in all from 75 %), and checked with TrackBarCoverage itself before
+ *     it shows. (3 bars would leave only four places on six bars; the arc's
+ *     own band already makes a small melody walk the whole row.)
+ *   - The step: at most ONE bar, only on the step grid of the break (every
+ *     beat from 75 % ENERGY, every half bar under it) - a chase step, never a
+ *     blink: the middle bar of a step stays lit, nothing pulses (pulse 0, as
+ *     r509's still picture). Hysteresis: the window moves only when the arc
+ *     asks for a place 0.75 bar away (so it never sits between two places),
+ *     and it never turns back within two steps of its last move - a bar that
+ *     went dark does not light again a step later (r501: no blink without a
+ *     hit; a chase's own steps are not blinks, an on-off-on would read as one).
+ *  HOW: the engine's own whole-bar path (r509's): no AUTO programme on the bars
+ *  (mf invalid while it holds them - the engine picks again when it lets go),
+ *  the bars STATIC on their aim under the colour scene (all 8 eyes, wheel or
+ *  per-eye - the room's colour, GRAD's gradient, his tiles: colours are not
+ *  ours), and our mask on the dimmer parts (TrackMove::formMask ->
+ *  patternMask). Never the tilt, pan, position or effect channels; never the
+ *  colour. The engine's own darkness wins on top (a re-aim's dark beat,
+ *  R507_SAFE, the music's dark, a black beat, BLACKOUT, MASTER).
+ *
+ *  WHEN. Only where the engine runs its own bar figure in a break: BLT's break
+ *  flag, the bars already in the engine's cast (MELBARS never puts them on
+ *  stage), the melody's arc there (r493MelodyArc, this break), 8+ beats of it
+ *  ahead. A drawn option (Tobias: "kun nogle gange"): once per break, the
+ *  first beat it qualifies, a dice of the track and the break (the global
+ *  random generator is never drawn, so every other draw stays as it was):
+ *  R515_MELBARS_SHARE of such breaks.
+ *  NEVER: with an animation laser in the cast (never both laser types); under
+ *  the bar countdown / arpeggio (r509), the laser roof, the
+ *  bars alone, the plan's rise, a DJ loop; under his hand - RIG/PLAN, a saved
+ *  look, LAST TRACK, the labs, a mix (two decks, the split), DROP HIT,
+ *  positions, a pad on a laser, his group off / trim 0, AUTO off, the START
+ *  picture, the self test; CALM/STILL, NEXT (not again in this break), ENERGY
+ *  0. Then it lets go and the engine's own figure is back on that beat; it may
+ *  come back in the same break when the room is free again (8+ beats left).
+ *  FREEZE (the window stays where it is, no step): HOLD ("no new moves"), a
+ *  held BLACKOUT/FLASH or a flash on a group, the music's own dark (R356) and a
+ *  pause stop (r509) - their darkness is on top, the walk waits.
+ *  The disco ball (two wash heads at the ball, the rest a little dimmer) leaves
+ *  the bars to the engine: the window may walk under it.
+ *  RELEASE: the break's end / a section change, the arc's end, the track, a jump
+ *  back, SHOW OFF, idle, stopAll (r493RoofReset, as r509's): the mask goes, the bars are the engine's
+ *  figure again on the next beat drawn (nothing of ours stays on the DMX: we
+ *  own no scene, no flash, no channel).
+ *  Log: sig:melody-bars once per break where it runs; crumbs "r515 melbars
+ *  <beat>: ticket won|lost (break <b>, dice <n> %)", "... waits (<why>)", every
+ *  beat while it runs "r515 melbars <beat>: arc <a> t <t> bars <i-j>", and
+ *  "r515 melbars <beat> end: <why>".
+ * ===================================================================== */
+
+#define R515_MELBARS_SHARE      0.50    // "drawn, not every time": about half of the qualifying breaks
+#define R515_MELBARS_WIDTH      2       // whole bars lit together (16 eyes)
+#define R515_MELBARS_BEAT_FADER 0.75    // from here a step may come every beat; under it every half bar
+#define R515_MELBARS_HYST       0.75    // the arc must ask for a place this far away before the window steps
+#define R515_MELBARS_TURN       2       // steps the window waits before it turns back (never on-off-on)
+#define R515_MELBARS_LEFT       8       // beats of the arc the break must still have to start (or come back)
+#define R515_MELBARS_TOP_BACK   1       // 1: the melody's top at the back wall, its low at the DJ (0: the other way)
+
+static quint32 r515MelbarsDice(const QString &title, int beat, quint32 salt)
+{
+    // R515_MELBARS_FILE: a dice of the track and the break (murmur3's finaliser, r509's) - the global
+    // random generator is never drawn, so every other draw of the engine stays as it was
+    quint32 st = quint32(qHash(title)) ^ (quint32(beat) * 2654435761u) ^ salt;
+    st ^= st >> 16; st *= 0x85ebca6bu; st ^= st >> 13; st *= 0xc2b2ae35u; st ^= st >> 16;
+    return st;
+}
+
+QString TrackEngine::r515MelbarsBusy(const QString &key, const QSet<QString> &castSet) const
+{
+    // who else has the bars or the room: a reason (it lets go / does not start), "" none - ours may.
+    // (HOLD, BLACKOUT/FLASH, the music's dark and a pause only freeze it: r515MelbarsFrozen)
+    if (key.isEmpty())
+        return QStringLiteral("no-bars");
+    if (castSet.contains(key) == false)
+        return QStringLiteral("not-cast");            // the engine's figure in this break has no bars
+    for (const QString &k : castSet)
+        if (m_groups.value(k).patternDevice)
+            return QStringLiteral("ani");             // never both laser types
+    if (m_fullAuto == false || m_startScene || m_testTimer.isActive())
+        return QStringLiteral("auto-off");
+    if (m_forceOn)
+        return QStringLiteral("his-pick");            // RIG/PLAN: his set for the section
+    if (savedActive())
+        return QStringLiteral("saved-look");
+    if (m_lastStage != 0)
+        return QStringLiteral("last-track");
+    if (m_labActive || m_slabActive || m_clabActive)
+        return QStringLiteral("lab");
+    if (m_mixing || r509SplitActive())
+        return QStringLiteral("mix");
+    if (m_hitAmokFrom >= 0 || m_hitKind != 0 || m_hitAmokOwed)
+        return QStringLiteral("drop-hit");
+    if (m_positionMode.isEmpty() == false)
+        return QStringLiteral("positions");
+    if (m_groupOff.contains(key) || m_groupTrim.value(key, 1.0) <= 0.01)
+        return QStringLiteral("group-off");
+    for (const QString &k : m_padFlash)
+        if (m_groups.value(k).lasers || m_groups.value(k).patternDevice)
+            return QStringLiteral("pad");             // his laser pad
+    if (r509BarsLive())
+        return QStringLiteral("bars-count-arp");      // r509 holds the bars with its own mask
+    // (the disco ball is two wash heads and a little dim on the rest: the bars it leaves on stage stay the
+    // engine's figure, and the window may walk under it - the ball's own heads are never touched here)
+    if (m_r493RoofOn || m_barsAloneNow || m_riseStage != 0 || djLoopOn())
+        return QStringLiteral("room");
+    const TrackGroup &g = m_groups.value(key);
+    if (g.lasers == false || g.patternDevice || g.parts.count() < R515_MELBARS_WIDTH + 1
+        || g.parts.count() != g.fixtures.count())
+        return QStringLiteral("bars");
+    return QString();
+}
+
+bool TrackEngine::r515MelbarsFrozen(int beat, bool hold) const
+{
+    // the window stays where it is: HOLD (no new moves), a held BLACKOUT/FLASH or a held flash, the music's
+    // own dark (R356) and a pause stop (r509) - their darkness is on top of us
+    return hold || m_blackout || m_flash || m_flashHeld.isEmpty() == false || silentish(beat) || r509PauseOn();
+}
+
+bool TrackEngine::r515MelbarsWhole(const QString &key) const
+{
+    // R515_MELBARS_HOOK_WHOLE (tick()): no AUTO programme on the bars while the window holds them
+    return m_r515MbOn && key == m_r515MbKey;
+}
+
+void TrackEngine::r515MelbarsMove(const QString &key, TrackMove &mv) const
+{
+    // R515_MELBARS_HOOK_MOVE (tick(), every beat): the bars' still picture under our mask - no pulse, no
+    // breath, no colour trade, no flash: what is lit changes only on the window's steps
+    if (r515MelbarsWhole(key) == false)
+        return;
+    mv.ownChaser = false;
+    mv.pattern = ENGINE_PAT_STATIC;
+    mv.formMask = r515MelbarsMaskId;
+    mv.stepBeats = 1;
+    mv.subSteps = 1;
+    mv.width = 1;
+    mv.phase = 0;
+    mv.pulse = 0.0;
+    mv.pulseOn = 0;
+    mv.bare = true;
+    mv.colourBars = 0;
+    mv.flashBar = false;
+    mv.breatheBars = 0;
+    mv.texture = 0.0;
+    mv.rhythm = 0;
+}
+
+QVector<qreal> TrackEngine::r515MelbarsMask(const QString &group) const
+{
+    // R515_MELBARS_HOOK_MASK (patternMask): the window's whole bars; anything stale (it let go between two
+    // beats drawn) is dark until the next beat draws the engine's own figure - darkness only takes light away
+    const int n = int(m_groups.value(group).parts.count());
+    QVector<qreal> mask(n, 0.0);
+    if (r515MelbarsWhole(group) == false || m_r515MbOrder.count() != n)
+        return mask;
+    for (int j = 0; j < R515_MELBARS_WIDTH; j++)
+    {
+        const int at = m_r515MbPos + j;
+        if (at >= 0 && at < n)
+            mask[m_r515MbOrder.at(at)] = 1.0;
+    }
+    return mask;
+}
+
+bool TrackEngine::r515MelbarsLegal(int n, qreal fader) const
+{
+    // the eye rules, by the engine's own check (barcoverage.h): the window's lit bars x 8 eyes
+    std::vector<int> lit(size_t(qMax(0, n)), 0);
+    for (int j = 0; j < R515_MELBARS_WIDTH && j < n; j++)
+        lit[size_t(j)] = 8;
+    TrackBarCoverage cov;
+    cov.add(lit);
+    return cov.allows(double(fader), false) && cov.whole && cov.peakEyes >= 13;
+}
+
+void TrackEngine::r515MelbarsStop(const QString &why)
+{
+    // the mask lets go: the bars are the engine's own figure from the next beat drawn (nothing of ours on
+    // the DMX - no scene, no flash, no channel). Called from tick() and from release / idle / stopAll
+    if (m_r515MbOn && why.isEmpty() == false)
+        crumb(QStringLiteral("r515 melbars %1 end: %2").arg(m_r515MbBeat).arg(why));
+    m_r515MbOn = false;
+}
+
+void TrackEngine::r515MelbarsBeat(const QSet<QString> &castSet, const QString &state, int beat, int secStart,
+                                  qreal fader, bool hold, bool isCalm, bool still, bool forceNext)
+{
+    // R515_MELBARS_HOOK_BEAT (tick(), right after r509's cast - the engine's cast is settled there): a
+    // running window carries on, freezes or lets go; else one may be drawn for this break
+    if (m_r515MbTitle != m_trackTitle)
+    {
+        r515MelbarsStop(QStringLiteral("track"));
+        m_r515MbTitle = m_trackTitle;
+        m_r515MbSec = -1;
+        m_r515MbWon = false;
+        m_r515MbNext = -1;
+        m_r515MbBeat = -1;
+        m_r515MbWhy.clear();
+    }
+    if (m_r515MbOn && m_r515MbBeat >= 0 && beat < m_r515MbBeat)
+        r515MelbarsStop(QStringLiteral("jump-back"));
+    const bool newBeat = beat != m_r515MbBeat;
+    m_r515MbBeat = beat;
+    const bool isBreak = state == QStringLiteral("break");
+    // the melody's arc of THIS break (r493MelodyBeat read it ahead on its first beat, this tick)
+    const int len = int(m_r493MelArc.count());
+    const int i = beat - secStart;
+    const bool arcHere = isBreak && len > 0 && m_r493MelFrom == secStart && m_r493MelTitle == m_trackTitle
+                      && i >= 0 && i < len;
+    const QString key = r509BarsKey();
+    const QString busy = r515MelbarsBusy(key, castSet);
+    const bool frozen = r515MelbarsFrozen(beat, hold);
+
+    if (m_r515MbOn)
+    {
+        QString why;
+        if (isBreak == false || secStart != m_r515MbSec)
+            why = QStringLiteral("section");
+        else if (arcHere == false)
+            why = QStringLiteral("arc-end");
+        else if (isCalm || still)
+            why = QStringLiteral("calm");
+        else if (forceNext)
+        {
+            why = QStringLiteral("next");
+            m_r515MbNext = secStart;                  // NEXT is his: not again in this break
+        }
+        else if (fader <= 0.005)
+            why = QStringLiteral("energy");
+        else if (busy.isEmpty() == false)
+            why = busy;
+        else if (key != m_r515MbKey)
+            why = QStringLiteral("bars");
+        if (why.isEmpty() == false)
+            r515MelbarsStop(why);
+    }
+
+    // the draw: once per break, the first beat it qualifies (the arc here, the engine's own bars on stage)
+    if (m_r515MbOn == false && arcHere && busy.isEmpty() && m_r515MbSec != secStart)
+    {
+        m_r515MbSec = secStart;
+        const quint32 roll = r515MelbarsDice(m_trackTitle, secStart, 0x4d454c42u) & 0xffffu;
+        m_r515MbWon = roll / 65535.0 < R515_MELBARS_SHARE;
+        m_r515MbLogged = false;
+        m_r515MbWhy.clear();
+        crumb(QStringLiteral("r515 melbars %1: ticket %2 (break %3, dice %4 %)").arg(beat)
+              .arg(m_r515MbWon ? QStringLiteral("won") : QStringLiteral("lost")).arg(secStart)
+              .arg(int(roll * 100 / 65536)));
+    }
+    // a ticket won starts (or comes back) on the first beat it may, with 8+ beats of the arc ahead
+    if (m_r515MbOn == false && m_r515MbWon && m_r515MbSec == secStart && arcHere)
+    {
+        const int n = int(m_groups.value(key).parts.count());
+        QString why;
+        if (m_r515MbNext == secStart)
+            why = QStringLiteral("next");
+        else if (busy.isEmpty() == false)
+            why = busy;
+        else if (isCalm || still)
+            why = QStringLiteral("calm");
+        else if (forceNext)
+            why = QStringLiteral("next");
+        else if (frozen)
+            why = QStringLiteral("frozen");           // no new moves under HOLD / the dark: it waits
+        else if (fader <= 0.005)
+            why = QStringLiteral("energy");
+        else if (len - i < R515_MELBARS_LEFT)
+            why = QStringLiteral("short");
+        else if (r515MelbarsLegal(n, fader) == false)
+            why = QStringLiteral("eyes");
+        if (why.isEmpty())
+        {
+            // the arc's own band in this break: its low .. its top on the window's places
+            qreal lo = m_r493MelArc.at(0), hi = m_r493MelArc.at(0);
+            for (int k = 1; k < len; k++)
+            {
+                lo = qMin(lo, m_r493MelArc.at(k));
+                hi = qMax(hi, m_r493MelArc.at(k));
+            }
+            QList<int> order = r509BarsOrder(key);     // from the back wall to the DJ
+            if (R515_MELBARS_TOP_BACK != 0)
+                std::reverse(order.begin(), order.end());   // ... read from the DJ: the top at the back
+            m_r515MbOrder = order;
+            m_r515MbKey = key;
+            m_r515MbLo = lo;
+            m_r515MbHi = hi;
+            m_r515MbOn = true;
+            m_r515MbDir = 0;
+            m_r515MbSince = R515_MELBARS_TURN;
+            const qreal t = r515MelbarsPlace(i, n);
+            m_r515MbPos = qBound(0, int(qRound(t)), n - R515_MELBARS_WIDTH);
+            QStringList addr;
+            for (int k : std::as_const(m_r515MbOrder))
+            {
+                Fixture *fxi = m_doc != nullptr ? m_doc->fixture(m_groups.value(key).fixtures.value(k)) : nullptr;
+                addr << QString::number(fxi != nullptr ? int(fxi->address()) + 1 : -1);
+            }
+            crumb(QStringLiteral("r515 melbars %1: on (break %2, arc %3..%4, %5 beats, step %6, order %7) t %8 bars %9")
+                  .arg(beat).arg(secStart).arg(lo, 0, 'f', 2).arg(hi, 0, 'f', 2).arg(len)
+                  .arg(fader >= R515_MELBARS_BEAT_FADER ? 1 : 2).arg(addr.join(QLatin1Char(' '))).arg(t, 0, 'f', 2)
+                  .arg(QStringLiteral("%1-%2").arg(m_r515MbPos + 1).arg(m_r515MbPos + R515_MELBARS_WIDTH)));
+            if (m_r515MbLogged == false)
+            {
+                m_r515MbLogged = true;
+                if (m_testTrack == false)
+                    logSignal(QStringLiteral("sig:melody-bars"));
+            }
+        }
+        else if (why != m_r515MbWhy)
+        {
+            m_r515MbWhy = why;                        // the crumb once a reason: a ticket that waits says why
+            crumb(QStringLiteral("r515 melbars %1: waits (%2)").arg(beat).arg(why));
+        }
+        if (m_r515MbOn)
+            return;                                   // its first beat: the place above, no step
+    }
+    if (m_r515MbOn == false || newBeat == false)
+        return;
+    // the step: on the break's step grid, at most one bar, with hysteresis and no quick turn back
+    const int n = int(m_r515MbOrder.count());
+    const qreal t = r515MelbarsPlace(i, n);
+    const int period = fader >= R515_MELBARS_BEAT_FADER ? 1 : 2;
+    QString note;
+    if (frozen)
+        note = QStringLiteral(" (frozen)");
+    else if (((beat - secStart) % period) == 0)
+    {
+        m_r515MbSince++;
+        int dir = 0;
+        if (t > m_r515MbPos + R515_MELBARS_HYST && m_r515MbPos < n - R515_MELBARS_WIDTH)
+            dir = 1;
+        else if (t < m_r515MbPos - R515_MELBARS_HYST && m_r515MbPos > 0)
+            dir = -1;
+        if (dir != 0 && dir == -m_r515MbDir && m_r515MbSince < R515_MELBARS_TURN)
+        {
+            dir = 0;
+            note = QStringLiteral(" (turn waits)");
+        }
+        if (dir != 0)
+        {
+            m_r515MbPos += dir;
+            m_r515MbDir = dir;
+            m_r515MbSince = 0;
+        }
+    }
+    crumb(QStringLiteral("r515 melbars %1: arc %2 t %3 bars %4-%5%6").arg(beat)
+          .arg(m_r493MelArc.at(qBound(0, i, len - 1)), 0, 'f', 3).arg(t, 0, 'f', 2)
+          .arg(m_r515MbPos + 1).arg(m_r515MbPos + R515_MELBARS_WIDTH).arg(note));
+}
+
+qreal TrackEngine::r515MelbarsPlace(int i, int n) const
+{
+    // where the arc asks the window to be on beat i of the break: 0 (the low) .. n - width (the top)
+    const int len = int(m_r493MelArc.count());
+    if (len == 0 || n <= R515_MELBARS_WIDTH)
+        return 0.0;
+    const qreal range = m_r515MbHi - m_r515MbLo;
+    const qreal a = m_r493MelArc.at(qBound(0, i, len - 1));
+    const qreal u = range > 1e-6 ? qBound(0.0, (a - m_r515MbLo) / range, 1.0) : 0.5;
+    return u * qreal(n - R515_MELBARS_WIDTH);
 }
