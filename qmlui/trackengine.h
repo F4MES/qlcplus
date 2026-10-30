@@ -1699,6 +1699,37 @@ protected:
     int m_r514AniLogSec = -1;                   // sig:ani-motion once a section and mode
     QString m_r514AniLogTitle;
     int m_r514AniLogMode = 0;
+    // R515_INF_DECL (runde 515)
+    // R515_DECL_MELBARS
+    // R515_MELBARS_DECL (runde 515, MELBARS - Tobias 10-30: "Melodien vandrer hen over barene"): in a kickless
+    // melodic break the lit laser bars are a window of two whole bars walking with the melody's arc
+    // (r515_melbars.inc.cpp)
+    QString r515MelbarsBusy(const QString &key, const QSet<QString> &castSet) const;  // who has the bars ("" ours may)
+    bool r515MelbarsFrozen(int beat, bool hold) const;     // HOLD / BLACKOUT / FLASH / the dark: no step
+    bool r515MelbarsWhole(const QString &key) const;       // tick(): no AUTO programme on them
+    void r515MelbarsMove(const QString &key, TrackMove &mv) const;   // tick(): their still picture, our mask
+    QVector<qreal> r515MelbarsMask(const QString &group) const;      // patternMask: the window's whole bars
+    bool r515MelbarsLegal(int n, qreal fader) const;       // barcoverage.h on the window
+    qreal r515MelbarsPlace(int i, int n) const;            // where the arc asks the window to be
+    void r515MelbarsStop(const QString &why);
+    void r515MelbarsBeat(const QSet<QString> &castSet, const QString &state, int beat, int secStart, qreal fader,
+                         bool hold, bool isCalm, bool still, bool forceNext);
+    static constexpr int r515MelbarsMaskId = 1515;         // TrackMove::formMask: the window (its own value)
+    bool m_r515MbOn = false;                     // the window holds the bars now
+    QString m_r515MbKey;                         // ... these bars
+    QString m_r515MbTitle;                       // the track the draws are for
+    int m_r515MbBeat = -1;                       // the beat it was last asked on
+    int m_r515MbSec = -1;                        // the break drawn for (once a break)
+    bool m_r515MbWon = false;                    // ... its ticket
+    bool m_r515MbLogged = false;                 // sig:melody-bars logged for that break
+    int m_r515MbNext = -1;                       // the break NEXT ended it in (not again there)
+    QString m_r515MbWhy;                         // the last reason a won ticket waited (the crumb once)
+    QList<int> m_r515MbOrder;                    // the bars' parts from the DJ to the back wall
+    int m_r515MbPos = 0;                         // the window's first place in that order
+    int m_r515MbDir = 0;                         // its last step: +1 back, -1 towards the DJ
+    int m_r515MbSince = 0;                       // steps since that step
+    qreal m_r515MbLo = 0.0;                      // the arc's low in this break
+    qreal m_r515MbHi = 1.0;                      // ... and its top
     // R514_DECL_GRAD
     // R514_GRAD_DECL (runde 514, GRAD - Tobias 10-29: "en glidende gradient over de 8 oejne, fra rummets
     // farve til accentfarven, som 'loeber' langs baren paa slaget"): r514_grad.inc.cpp
