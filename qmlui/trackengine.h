@@ -1300,6 +1300,9 @@ public:
     /** R479_PRESS_KEEP_DECL: an analysis change right after a SECTION press kept it
      *  (the section he pressed for) - a sig: line, not a press. Log only. */
     void noteSectionKeep(const QString &held, const QString &now);
+    /** R521_LOUDBREAK_DECL: one of BLT's breaks played as a drop or a groove (TrackManager::runEngine
+     *  decides, from the curves) - "sig:loudbreak:<drop|normal|off>:<why>". Log only. */
+    void noteLoudBreak(const QString &to, const QString &why);
     void noteUpdate(const QString &script);   // R474_UPDATE: "sig:update:..." in the tracklog
     // R482_LOG_HAND_DECL (night review r478: "Telefon-, SHOW ON/OFF- og ENERGY-handlinger
     // logges ikke"): sig: lines in the tracklog - log only, nothing on stage changes
@@ -2445,6 +2448,10 @@ private:
     int m_landBurstFrom = -1;            // R363_LOOP_LAND: the beat the landing burst began
 public:
     void setNextDropBeat(int beat) { m_nextDropBeat = beat; }
+    // R521_EARLYDROP_DECL (runde 521, EARLYDROP): where a drop flagged at `flag` really lands - BLT's raw kick
+    // back steady 1-4 bars before it (`flag` when not), and the landing's line on the tracklog
+    int r521EarlyLand(int from, int flag) const;
+    void r521EarlyNote(int land, int flag);
     // R431_DROP_PICK
     QStringList dropSet() const;
     int dropMode() const { return m_dropMode; }
@@ -2790,6 +2797,14 @@ public:
     int r497RollChop(int chop) const;           // the stabs
     void r497RollMove(TrackMove &mv, const TrackGroup &g) const;   // the walks
     int r497RollStrobe(int want, int rates) const;                 // the strobe riser
+    // R521_ROLL32_DECL (runde 521, ROLL32): BLT's off-32nds (onset32) - the build's roll follows 32nds
+    // where the music plays them (track_runtime/r497_roll.inc.cpp), and no engine chop under 70 %
+    void setTrackOn32(const QVariantList &onset32);   // TrackManager: the track event's onset32
+    int on32(int beat, int k) const;                  // 0-15: the off-32nd after sixteenth k, -1 without data
+    bool r521Roll32(int barStart) const;              // the bar's sixteenth roll plays the off-32nds too
+    int r521Roll32Chop(int chop, qreal fader, int toDrop, bool loop) const;   // the stabs: 4 = 32nds
+    QVector<quint16> m_r521On32;                      // the off-32nds per beat (four nibbles)
+    static constexpr qreal R521_CHOP_MIN = 0.70;      // Tobias 10-31: engine chops only from 70 % ENERGY
     int m_r497RollTier = -1;                    // this bar's roll, -1 none: today's ramp
     int m_r497RollBar = -1;                     // the bar it was read for
     int m_r497RollLogged = -1;                  // the roll last logged in this build

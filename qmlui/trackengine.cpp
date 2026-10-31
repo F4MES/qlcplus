@@ -2123,6 +2123,13 @@ void TrackEngine::noteSectionKeep(const QString &held, const QString &now)
               + (now.isEmpty() ? QStringLiteral("-") : now));
 }
 
+void TrackEngine::noteLoudBreak(const QString &to, const QString &why)
+{
+    // R521_LOUDBREAK_LOGDEF: "sig:loudbreak:drop:k62:e88" (the kick and the energy against the track's
+    // loudest drop, in %), "sig:loudbreak:off:gone|flags|back" - beside his SECTION presses
+    logSignal(QStringLiteral("sig:loudbreak:") + to + QStringLiteral(":") + why);
+}
+
 void TrackEngine::rememberDropPunch(qreal kick, qreal low)
 {
     if (m_testTrack)
@@ -3928,6 +3935,81 @@ static int r505DropLandAt(const QVector<quint8> &kick, int beats, int at)
         land += 4;
     }
     return land;
+}
+
+/* ---- runde 521 ---- */
+// R521_EARLYDROP_FN (runde 521, EARLYDROP - Tobias 10-31: "Droppet lander, naar kicket kommer, ikke naar flaget
+// siger det"): the beat a drop flagged at `flag`, after a build from `from`, really lands on - read ahead on BLT's
+// raw kick and waveform (the whole track is known), the mirror of runde 505's late landing above. On the night of
+// 30-31 Drake - Whisper My Name's kick came back three bars before its flag (585) and he pressed DROP on 575; about
+// 20 of 149 builds had the kick back a bar or more before the flag. It lands 1-4 bars early, on the flag's own bar
+// grid - the earliest bar where all of this holds:
+//  - the kick is on the landing beat and the bar before it has at most one kick: the kick RETURNS there;
+//  - from the landing through the drop's first bar every bar has 3 or 4 kicks - at least two bars of steady kick,
+//    and no gap again before the flag (a teaser that stops is not the drop);
+//  - the waveform steps up: its two bars from the landing at least 0.08 over the two bars before, and no more
+//    than 0.08 under the drop's own first two bars (the early bars ARE the drop, not a louder build);
+//  - no bar of it is a roll: beats with the bass's onsets on 3-4 sixteenths, more of them than in the drop's
+//    own first bar (a kick roll reads as a kick on every beat). One bar early only where BLT sent those onsets:
+//    a one-bar fill into the drop is the case to fear.
+// `flag` without the raw kick, or where the build leaves less than a bar before the landing.
+int TrackEngine::r521EarlyLand(int from, int flag) const
+{
+    const int n = int(m_audLevel.count());
+    if (n == 0 || m_audKick.count() != n || from < 1 || flag <= from || flag < 17 || flag + 7 > n)
+        return flag;
+    auto kickOn = [&](int b) { return b >= 1 && b <= n && m_audKick.at(b - 1) >= 115; };   // 0.45, as R323's turn
+    auto level = [&](int a, int b) {
+        qreal sum = 0.0;
+        for (int i = a; i <= b; i++)
+            sum += m_audLevel.at(i - 1) / 255.0;
+        return sum / qreal(b - a + 1);
+    };
+    auto rolls = [&](int b0) {
+        // the beats of the bar from b0 with the bass's onsets on three or four sixteenths, -1 not known
+        if (m_onsetLow.count() != n)
+            return -1;
+        int r = 0;
+        for (int b = b0; b < b0 + 4; b++)
+        {
+            int q = 0;
+            for (int i = 0; i < 4; i++)
+                q += onsetLow(b, i) >= 5 ? 1 : 0;
+            r += q >= 3 ? 1 : 0;
+        }
+        return r;
+    };
+    const int dropRolls = rolls(flag);
+    const qreal dropLevel = level(flag, flag + 7);
+    for (int bars = 4; bars >= 1; bars--)
+    {
+        const int land = flag - 4 * bars;
+        if (land < from + 4 || land < 9 || (bars == 1 && dropRolls < 0) || kickOn(land) == false)
+            continue;
+        int before = 0;
+        for (int b = land - 4; b < land; b++)
+            before += kickOn(b) ? 1 : 0;
+        if (before > 1)
+            continue;
+        bool steady = true;
+        for (int b0 = land; b0 < flag + 4 && steady; b0 += 4)
+        {
+            int k = 0;
+            for (int b = b0; b < b0 + 4; b++)
+                k += kickOn(b) ? 1 : 0;
+            steady = k >= 3 && (b0 >= flag || dropRolls < 0 || rolls(b0) <= dropRolls);
+        }
+        const qreal after = level(land, land + 7);
+        if (steady && after - level(land - 8, land - 1) >= 0.08 && after >= dropLevel - 0.08)
+            return land;
+    }
+    return flag;
+}
+
+void TrackEngine::r521EarlyNote(int land, int flag)
+{
+    // R521_EARLYDROP_LOG: the drop landed early (trackmanager, on its first beat) - bars early, landing, flag
+    logSignal(QStringLiteral("sig:early-drop:%1:%2:%3").arg((flag - land) / 4).arg(land).arg(flag));
 }
 
 /* ---- runde 360 ---- */
@@ -16359,6 +16441,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // R497_A1_ROLL_CHOP (runde 497, forslag 7): never faster than the bar's measured roll
         // (r497_roll.inc.cpp) - the DJ's loop below keeps its own
         chop = r497RollChop(chop);
+        // R521_ROLL32_CALL (runde 521): ... and where the bar plays 32nds, the last two bars into the drop
+        // stab them - only where a stab is planned already, from 70 %, never under the DJ's loop
+        chop = r521Roll32Chop(chop, fader, toDrop, loopNow);
         // R358_LOOP_CHOP: the DJ's loop sets the stab. Eight beats and more:
         // one stab on the loop's last beat, where it jumps back. Four: every
         // beat. Two: eighths. One: sixteenths - so a loop he halves on its way
@@ -16380,14 +16465,29 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 loopChop = true;
             }
         }
+        // R521_ROLL32_CHOP70 (Tobias 10-31: "Chops skal altid kun vaere over 70% energi"): no engine
+        // stab under 70 % ENERGY - the build's (from 60 %), rekordbox' fill-ins' (64 %) and the DJ loop's
+        // (68 %) included; the break's (90 %) and the ghost holes (r497 taps, 80 %) sit above it already.
+        // His STUTTER is his own pick (m_stutterPlan); the music's own dark (a silence, a stop) is no chop.
+        if (fader < R521_CHOP_MIN - 1e-9)
+        {
+            chop = 0;
+            loopChop = false;
+        }
         if (chop > 0)
         {
             const qint64 t0 = m_beatStartMs;
             const qreal bm = m_beatMs;
-            const qint64 stab = qint64(chop == 3 ? qBound(35.0, 0.10 * bm, 55.0)
+            const qint64 stab = qint64(chop == 4 ? qBound(25.0, 0.06 * bm, 35.0)   // R521_ROLL32_STAB: a 32nd's dark
+                                     : chop == 3 ? qBound(35.0, 0.10 * bm, 55.0)
                                      : chop == 2 ? qBound(50.0, 0.18 * bm, 90.0)
                                                  : qBound(70.0, 0.25 * bm, 130.0));
             const qint64 end = t0 + qint64(bm);
+            if (chop == 4)               // R521_ROLL32_PLAN: the seven 32nds inside the beat (its end below)
+            {
+                for (int q = 1; q <= 7; q++)
+                    m_chopPlan.append(qMakePair(t0 + qint64(bm * q / 8.0) - stab, t0 + qint64(bm * q / 8.0)));
+            }
             if (chop == 3)
             {
                 for (int q = 1; q <= 3; q++)
@@ -16398,7 +16498,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_chopPlan.append(qMakePair(end - stab, end));
             if (m_musicDarkEvent.isEmpty())
                 m_musicDarkEvent = (loopChop ? QStringLiteral("loop%1-").arg(m_loopLen) : QString())
-                                 + (chop == 3 ? QStringLiteral("chop/16")
+                                 + (chop == 4 ? QStringLiteral("chop/32")   // R521_ROLL32_EVENT
+                                 : chop == 3 ? QStringLiteral("chop/16")
                                  : chop == 2 ? QStringLiteral("chop/8") : QStringLiteral("chop/4"));
         }
         // R497_A3_TAPS_BEAT: his BLACKOUT taps - from 80 % in AUTO, when he has not tapped for 16
@@ -36725,7 +36826,8 @@ void TrackEngine::r497BloomStop()
  *  they are. The DJ's loops keep their own stabs (R358: the loop IS the
  *  music's rate), and his SPEED tiles still double.
  *
- *  Thirty-seconds: NOT built. BLT's onsets are one nibble per sixteenth -
+ *  Thirty-seconds: built in runde 521 (R521_ROLL32_NOTE, at the end of this file). Until then:
+ *  NOT built. BLT's onsets are one nibble per sixteenth -
  *  the rise in the FIRST HALF of each sixteenth (qlc-measure-beat, window n/8)
  *  - so a thirty-second roll and a hard sixteenth roll give the same numbers.
  *  A 32nd ceiling from this data would sometimes be faster than the music.
@@ -36768,7 +36870,7 @@ int TrackEngine::r497RollMeasure(int barStart) const
         return -1;
     const qreal r16 = offs / (2.0 * sounding), r8 = qreal(ands) / sounding, r4 = qreal(ones) / sounding;
     if (r16 >= R497_ROLL_SHARE && r8 >= R497_ROLL_SHARE)
-        return 16;
+        return r521Roll32(barStart) ? 32 : 16;   // R521_ROLL32_TIER: the off-32nds too (BLT r521)
     if (r8 >= R497_ROLL_SHARE)
         return 8;
     if (r4 >= 0.75 && r8 < 0.35 && r16 < 0.35)
@@ -36834,6 +36936,83 @@ int TrackEngine::r497RollStrobe(int want, int rates) const
         return want;
     const int ceiling = m_r497RollTier >= 8 ? (rates - 1) / 2 : (rates - 1) / 3;
     return qMin(want, ceiling);
+}
+
+/* =====================================================================
+ *  THE ROLL IN 32NDS (runde 521, agent ROLL32) - R521_ROLL32_FILE.
+ *
+ *  Tobias, 2026-10-31: "Lav: 1, 2, 3. (Chops skal altid kun vaere over 70%
+ *  energi)" - this is 3, "lyset ruller med de hurtigste trommehvirvler".
+ *
+ *  BLT (qlc_shared_functions.clj, R521_ROLL32_*) now sends onset32: per beat
+ *  four nibbles, the rise at the OFF thirty-second of each sixteenth, measured
+ *  on the detailed waveform as the sixteenths' onsets (12 = the sixteenths'
+ *  own p90), and 0 where it is not played: under 40 % of p90 or under half
+ *  the sixteenth just before it (a tail, an open hat ringing out, a shuffle).
+ *  An older BLT sends none - no 32nd roll, everything as before.
+ *
+ *  r497RollMeasure reads 32 where the bar is a sixteenth roll (r497's own
+ *  test) AND 60 % of the off-32nds hit (5+) on the beats that sound. Then:
+ *    - the stabs (tick()): in the last two bars into a drop (2..8 beats out;
+ *      the last beat is the black beat before the drop) a planned stab - the
+ *      build's window at today's ENERGY lines, rekordbox' fill-in - becomes
+ *      seven 32nds' darks and the beat's end (25-35 ms each). Not into a small
+ *      drop (size under 0.40: no eighths there either, R362). Only from 70 %
+ *      ENERGY, never under the DJ's loop (it keeps its own), never in a drop,
+ *      a mix, HOLD/CALM/STILL, BLACKOUT, FLASH (chopOk). Never faster than the
+ *      music: the bar must have measured the 32nds.
+ *    - the walks and the strobe riser: 32 is no ceiling (as 16) - their rates
+ *      stay today's; the strobes' white cap and his BLACKOUT are untouched.
+ *  Log: sig:roll:32 (r497RollBeat), the beat's music event chop/32.
+ * ===================================================================== */
+
+void TrackEngine::setTrackOn32(const QVariantList &onset32)
+{
+    // R521_ROLL32_SET: beat for beat with the waveform, or not at all
+    m_r521On32.clear();
+    if (m_audLevel.isEmpty() == false && onset32.count() == m_audLevel.count())
+    {
+        for (const QVariant &v : onset32)
+            m_r521On32.append(quint16(qBound(0, v.toInt(), 65535)));
+    }
+}
+
+int TrackEngine::on32(int beat, int k) const
+{
+    if (beat < 1 || beat > m_r521On32.count() || k < 0 || k > 3)
+        return -1;
+    return (m_r521On32.at(beat - 1) >> (4 * k)) & 0xf;
+}
+
+bool TrackEngine::r521Roll32(int barStart) const
+{
+    // R521_ROLL32_COUNT: of the bar's sounding beats (as r497RollMeasure), the share of off-32nds that hit
+    const int n = int(m_r521On32.count());
+    if (n == 0 || n != int(m_onsetHigh.count()) || barStart < 1 || barStart + 3 > n)
+        return false;
+    const bool mids = m_onsetMid.count() == m_onsetHigh.count();
+    int sounding = 0, hits = 0;
+    for (int b = barStart; b < barStart + 4; b++)
+    {
+        bool any = false;
+        for (int q = 0; q < 4; q++)
+            any = any || qMax(onsetHigh(b, q), mids ? onsetMid(b, q) : 0) >= R497_ROLL_HIT;
+        if (any == false)
+            continue;
+        sounding++;
+        for (int k = 0; k < 4; k++)
+            hits += on32(b, k) >= R497_ROLL_HIT ? 1 : 0;
+    }
+    return sounding >= 2 && hits >= R497_ROLL_SHARE * 4.0 * sounding;
+}
+
+int TrackEngine::r521Roll32Chop(int chop, qreal fader, int toDrop, bool loop) const
+{
+    // R521_ROLL32_CHOP: a planned stab in the last two bars into the drop, on a bar that rolls in 32nds
+    if (m_r497RollTier < 32 || chop <= 0 || loop || fader < R521_CHOP_MIN - 1e-9 || toDrop < 2 || toDrop > 8
+        || m_nextDropSize < 0.40)        // R362_BUILD_SIZE: a small drop ahead gets no eighths - nor 32nds
+        return chop;
+    return 4;
 }
 /* ---- runde 497: A2 the mix as a curtain across the room (R497_A2_CURTAIN_FILE) ----
  *

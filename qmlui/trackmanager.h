@@ -426,6 +426,14 @@ private:
     bool m_markersManual;     // the flags are the operator's, or a cached correction
     qreal m_dropKick;         // learned: the kick a drop needs
     qreal m_breakKick;        // learned: the kick a break stays under
+    // R521_LOUDBREAK_MEM: one of BLT's breaks played as a drop or a groove (runEngine)
+    QString m_lbState;                   // "drop" / "normal" while it plays so; empty = BLT's flag
+    QString m_lbTitle;                   // the track and ...
+    int m_lbSec = -1;                    // ... the flag section it was decided in
+    int m_lbFrom = -1;                   // the beat of the last switch (on or back off) there
+    int m_lbBar = -1000;                 // the bar line last decided
+    bool m_lbStop = false;               // his SECTION or his flags: BLT's flags until the next flag
+    int m_lbQuiet = -1;                  // R192's kick look-ahead waits until this bar line (the switch's)
     QList<QVariantMap> m_undo;   // snapshots: flags + thresholds
     int m_lastMoveIndex;         // a drag is one undo step
     qint64 m_lastMoveMs;
