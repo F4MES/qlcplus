@@ -134,6 +134,16 @@ $plans = @(
     }
 )
 
+# R522_GUARD_SKIP (Tobias 10-31: a UAC box for Windows PowerShell on every UPDATE): a guard already in place -
+# every cfg as the guard writes it, this guard's jar beside it, the PC's lock file there - changes nothing, so it
+# asks for nothing. The lock's ACL write below is what needed the administrator on every run.
+$lockReady = ($env:OS -ne 'Windows_NT') -or ($env:ProgramData -and (Test-Path -LiteralPath (Join-Path $env:ProgramData 'qlc-rig\blt-instance.lock')))
+$pending = @($plans | Where-Object { $_.Old -cne $_.New -or -not (Test-Path -LiteralPath (Join-Path (Split-Path $_.Path) $jarName)) })
+if ($lockReady -and $pending.Count -eq 0) {
+    foreach ($plan in $plans) { Write-Host "BLT guard already installed: $($plan.Path)" }
+    return
+}
+
 # One lock for the PC, also across Windows users/sessions. Grant only the
 # access needed to open/lock it; the bootstrap never deletes the lock file.
 if ($env:OS -eq 'Windows_NT') {

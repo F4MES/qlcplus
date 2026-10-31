@@ -215,6 +215,7 @@ public class BeatLinkTrigger {
         self.assertNotIn('app.mainjar=', guarded)
         result = self.install(app)
         self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('BLT guard already installed', result.stdout)   # R522_SKIP_ASSERT: nothing to do, nothing asked
         self.assertEqual(data, cfg.read_bytes())
 
     def test_unknown_launcher_is_not_modified(self):

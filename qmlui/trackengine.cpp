@@ -16469,11 +16469,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // stab under 70 % ENERGY - the build's (from 60 %), rekordbox' fill-ins' (64 %) and the DJ loop's
         // (68 %) included; the break's (90 %) and the ghost holes (r497 taps, 80 %) sit above it already.
         // His STUTTER is his own pick (m_stutterPlan); the music's own dark (a silence, a stop) is no chop.
-        if (fader < R521_CHOP_MIN - 1e-9)
-        {
-            chop = 0;
-            loopChop = false;
-        }
+        // R522_CHOP_SPREAD (Tobias 10-31, the same day: "Du maa gerne sprede chops ud igen som de var foer, det er
+        // bedre fordelt" - "Fjern 70 %-graensen"): the engine's 16th/8th chops start where they did before r521
+        // (the build's from 60 %, the fill-ins' 64 %, the DJ loop's 68 %); only the 32nds keep 70 % (r521Roll32Chop)
         if (chop > 0)
         {
             const qint64 t0 = m_beatStartMs;
