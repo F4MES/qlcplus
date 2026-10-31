@@ -2047,8 +2047,13 @@ Rectangle
                 id: emptyBox
                 objectName: "emptyTrack"
                 anchors.centerIn: wfCanvas
-                visible: trackViewRoot.beatCount === 0
+                visible: trackViewRoot.beatCount === 0 || emptyBox.gone   // R518_BLT_GONE_SHOW
                 readonly property bool linked: !!trackManager && trackManager.connected === true
+                // R518_BLT_GONE (Tobias 10-31, approved: "den skal bare tage over hvis den ser at BLT
+                // forsvinder"): BLT gone mid-track - QLC+ looked to the end, no BLT and nothing connected.
+                // The same box over the waveform, on a panel, with START BLT; gone when BLT runs again
+                readonly property bool gone: trackViewRoot.beatCount > 0 && known && !running
+                z: gone ? 20 : 0                 // over the waveform, the cursor and the corner hold
                 // R465_BLT_PAGE (Tobias 10-15): BLT connects only when it has something to send -
                 // running and quiet is the usual state before the first track (QLC+ looks for
                 // the program every 5 s, and BLT says hello every 4 s)
@@ -2060,6 +2065,17 @@ Rectangle
                 readonly property int bltStart: trackManager && trackManager.bltStartState !== undefined ? trackManager.bltStartState : 0
                 width: emptyRow.implicitWidth
                 height: emptyRow.implicitHeight
+                // R518_BLT_GONE_PANEL: the box reads over a playing track
+                Rectangle
+                {
+                    objectName: "bltGonePanel"
+                    visible: emptyBox.gone
+                    anchors.fill: parent
+                    anchors.margins: -Math.round(22 * trackViewRoot.ks)
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: trackViewRoot.cCard
+                    opacity: 0.95                // R518_BLT_GONE_FLAT: no line around it (R403: no lines)
+                }
                 Row
                 {
                     id: emptyRow
@@ -2080,7 +2096,8 @@ Rectangle
                             {
                                 objectName: "emptyTitle"
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: emptyBox.running ? qsTr("Waiting for track data")
+                                text: emptyBox.gone ? qsTr("Beat Link Trigger stopped")   // R518_BLT_GONE_TITLE
+                                    : emptyBox.running ? qsTr("Waiting for track data")
                                     : emptyBox.known ? qsTr("Beat Link Trigger is not running") : qsTr("Beat Link Trigger is not connected")
                                 color: trackViewRoot.cText
                                 font.bold: true
@@ -2122,6 +2139,7 @@ Rectangle
                                     : emptyBox.running ? qsTr("Beat Link Trigger is running - play a track on a CDJ")
                                     : emptyBox.bltStart === 1 ? qsTr("Starting Beat Link Trigger - it takes about half a minute")
                                     : emptyBox.bltStart === 2 ? qsTr("It did not start - use its logo on the taskbar, then play a track on a CDJ")
+                                    : emptyBox.gone ? qsTr("It stopped during the track - start it again here")   // R518_BLT_GONE_SUB
                                     : emptyBox.known ? qsTr("Start it here or from its logo on the taskbar - then play a track on a CDJ")
                                                        : qsTr("Start it from its logo on the taskbar - then play a track on a CDJ")   // R472_BLT_SUB
                                 color: trackViewRoot.cMute

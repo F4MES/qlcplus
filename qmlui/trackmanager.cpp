@@ -1474,12 +1474,37 @@ void TrackManager::moveMarker(int index, int beat)
 bool TrackManager::bltRunning() const { return m_bltRunning; }
 bool TrackManager::bltKnown() const { return m_bltKnown; }   // R468_BLT_LOOK_KNOWN
 
+#if defined(Q_OS_WIN)
+static bool r517BltSeenNative();        // R517_BLT_NATIVE_DECL: at the end of this file
+#endif
+
 void TrackManager::probeBlt()
 {
     // R465_BLT_LIVE (Tobias 10-15): the program's list, read in a process of its own -
     // the GUI and the engine never wait for it. Never two at once; one that hangs is
     // stopped after 4 s (its finished() tidies up).
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+#if defined(Q_OS_WIN)
+    {
+        // R517_BLT_NATIVE_PROBE: no tasklist on Windows - the whole look at once, in this process
+        const bool seen = r517BltSeenNative();
+        m_bltLook = 0;
+        m_bltChainMs = now;              // R472_BLT_FRESH_CHAIN: this look began now
+        if (m_bltKnown == false)
+        {
+            m_bltKnown = true;
+            if (seen == m_bltRunning)
+                emit bltRunningChanged();   // known now, the same answer
+        }
+        if (seen != m_bltRunning)
+        {
+            m_bltRunning = seen;
+            emit bltRunningChanged();
+        }
+        bltProbed(seen);                 // R468_START_BLT_HOOK
+        return;
+    }
+#endif
     if (m_bltProbe != nullptr)
     {
         if (now - m_bltProbeMs > (m_bltLook >= 1 ? 25000 : 8000))   // R468_BLT_LOOK_WAIT (R472_BLT_WAIT: every /V look)
@@ -3338,8 +3363,8 @@ void TrackManager::updateCheck()
             QString rev = line.trimmed();
             if (rev.startsWith(QLatin1String("REV=")))
                 rev = rev.mid(4).trimmed();
-            static const QRegularExpression buildRe(QStringLiteral("^[0-9a-f]{7,40}$"));
-            if (buildRe.match(rev).hasMatch() == false)
+            // R518_PROBE_RE: no named local in the lambda (verify_cxx's capture check)
+            if (QRegularExpression(QStringLiteral("^[0-9a-f]{7,40}$")).match(rev).hasMatch() == false)
                 continue;
             if (rev == m_updateLatest)
                 break;
@@ -5267,3 +5292,56 @@ void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
         emit cacheChanged();
     }
 }
+
+#if defined(Q_OS_WIN)
+/* R517_BLT_NATIVE_IMPL (runde 517): is Beat Link Trigger running - asked of Windows itself, not of
+ * tasklist. The programs (Beat Link Trigger.exe), then the visible top-level windows' titles (a java
+ * launch, or BLT waiting for the desk: "No DJ Link Devices Found Yet..."). At the file's end on purpose:
+ * <windows.h> defines macros (near, far, small, interface ...) that nothing after it may meet. */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <tlhelp32.h>
+
+static bool r517BltName(const QString &text)
+{
+    const QString t = text.toLower();
+    return t.contains(QLatin1String("beat link trigger")) || t.contains(QLatin1String("beat-link-trigger"))
+        || t.contains(QLatin1String("beatlinktrigger")) || t.contains(QLatin1String("no dj link devices found"));
+}
+
+static BOOL CALLBACK r517BltWindow(HWND window, LPARAM found)
+{
+    if (IsWindowVisible(window) == FALSE)
+        return TRUE;
+    wchar_t title[256] = { 0 };
+    if (GetWindowTextW(window, title, 256) <= 0)
+        return TRUE;
+    if (r517BltName(QString::fromWCharArray(title)) == false)
+        return TRUE;
+    *reinterpret_cast<bool *>(found) = true;
+    return FALSE;                        // found: no more windows
+}
+
+static bool r517BltSeenNative()
+{
+    bool seen = false;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE)
+    {
+        PROCESSENTRY32W entry;
+        ZeroMemory(&entry, sizeof(entry));
+        entry.dwSize = sizeof(entry);
+        for (BOOL more = Process32FirstW(snap, &entry); more != FALSE && seen == false; more = Process32NextW(snap, &entry))
+            seen = r517BltName(QString::fromWCharArray(entry.szExeFile));
+        CloseHandle(snap);
+    }
+    if (seen == false)
+        EnumWindows(r517BltWindow, reinterpret_cast<LPARAM>(&seen));
+    return seen;
+}
+#endif
