@@ -297,6 +297,16 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
     // MASTER is deliberately not restored: a night that starts at 40 %
     // because someone dimmed last time is worse than one that starts bright
     m_master = 1.0;
+    // R519_FIXB_MASTER_BACK (night 10-30: both restarts, 23:28 and 23:47, came up at 100 % and his finger
+    // pulled MASTER to 0.09 on the Track page before SHOW ON): a restart the same night (noon to noon,
+    // as the RIG faders, runde 184) comes back at the MASTER it had. Another night starts at 100 %
+    {
+        const QStringList kept = settings.value(SETTINGS_ENGINE_MASTER_NIGHT, QString()).toString().split(QLatin1Char(';'));
+        bool ok = false;
+        const qreal level = kept.count() == 2 ? kept.at(1).toDouble(&ok) : 1.0;
+        if (ok && kept.at(0) == nightKey())
+            m_master = qBound(0.0, level, 1.0);
+    }
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = qBound(4, settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt(), 128);   // as setHoldBars (runde 220)
     m_holdAuto = settings.value(SETTINGS_ENGINE_HOLDAUTO, true).toBool();
@@ -392,10 +402,39 @@ void TrackEngine::crumbsOpen()
         connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this]() { crumbsEnd(); });
 }
 
+bool TrackEngine::r519CrumbQuiet(const QString &what)
+{
+    // R519_FIXB_CRUMB_ONE (night 10-30: a BLACKOUT tap wrote 12 lines - its press and release and five
+    // "run/stop black:" masks each - 2252 taps rotated the trail twice and 23:47-01:17 was lost): one line
+    // a tap. The masks are BLACKOUT's own (the closing's at nought are kept); a release within 1 s is a
+    // tap and its press line stands for it; a held BLACKOUT keeps both lines. The tracklog keeps every
+    // sig:blackout / sig:blackout-off row and the quality counts are taken before this (logSignal)
+    if (what.startsWith(QLatin1String("run black:")) || what.startsWith(QLatin1String("stop black:")))
+        return m_closingDim > 0.0;
+    if (what == QLatin1String("sig:blackout"))
+        m_r519BlackoutMs = m_clock.elapsed();
+    else if (what == QLatin1String("sig:blackout-off"))
+        return m_r519BlackoutMs >= 0 && m_clock.elapsed() - m_r519BlackoutMs < 1000;
+    return false;
+}
+
+void TrackEngine::r519MasterKeep()
+{
+    // R519_FIXB_MASTER_KEEP: tonight's MASTER for a restart the same night - written when it changes by
+    // a step (a drag writes as the RIG faders do, saveNight); left out of the tracklog's snapshot trigger
+    const QString kept = nightKey() + QLatin1Char(';') + QString::number(m_master, 'f', 3);
+    if (kept == m_r519MasterKept)
+        return;
+    m_r519MasterKept = kept;
+    QSettings().setValue(SETTINGS_ENGINE_MASTER_NIGHT, kept);
+}
+
 void TrackEngine::crumb(const QString &what)
 {
     if (m_crumbs.isOpen() == false)
         return;
+    if (r519CrumbQuiet(what))
+        return;                          // R519_FIXB_CRUMB_ONE: one line a BLACKOUT tap
     m_crumbs.write((QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")) + QLatin1Char(' ')
                     + what + QLatin1Char('\n')).toUtf8());
     m_crumbs.flush();                    // in the OS the moment it is written: a crash cannot lose it
@@ -403,7 +442,11 @@ void TrackEngine::crumb(const QString &what)
     {
         const QString path = m_crumbs.fileName();
         const QString prev = QFileInfo(path).absolutePath() + QDir::separator() + "crumbs-prev.txt";
+        // R519_FIXB_CRUMB_ROT: one more rotation (night 10-30: two files held 1 h 45 of a peak night)
+        const QString prev2 = QFileInfo(path).absolutePath() + QDir::separator() + "crumbs-prev2.txt";
         m_crumbs.close();
+        QFile::remove(prev2);
+        QFile::rename(prev, prev2);
         QFile::remove(prev);
         QFile::rename(path, prev);
         m_crumbs.setFileName(path);
@@ -7693,6 +7736,7 @@ void TrackEngine::setMaster(qreal level)
     if (qFuzzyCompare(level + 1.0, m_master + 1.0))
         return;
     m_master = level;
+    r519MasterKeep();                    // R519_FIXB_MASTER_SET: for a restart the same night
     qualitySignal(QStringLiteral("sig:master"));
 
     // everything that is lit, not just the hidden dimmer scenes: a group whose
@@ -7711,6 +7755,7 @@ void TrackEngine::setBlackout(bool on)
     m_blackout = on;
     logSignal(on ? QStringLiteral("sig:blackout") : QStringLiteral("sig:blackout-off"));
     r497TapEdge(on);                    // R497_A3_TAPS_LEARN: his tap learned; the ghost holes stop at once
+    m_r519BoMs = on ? m_clock.elapsed() : -1;   // R519_FIXA_TAP_EDGE: a tap pauses the room features, held ends them
     if (on)
         stopEcho();
     if (on && m_testTimer.isActive())   // a test under BLACKOUT tests nothing (runde 202)
@@ -8859,6 +8904,25 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             ok = nearby;
     }
 
+    // R519_TASTE_BREAK_ROTATE (runde 519, TASTE; report 30-31 Oct: "Fladviftebølge" played 885 of the animation
+    // laser's 1038 break beats - 264 of its 278 break picks, in every room colour - while the calm pool he approved
+    // for breaks (runde 252b/339: flat fans, small and static waves, Fingre, Flower - his own scenes) stood beside it
+    // unplayed; Tobias 10-03 "jeg synes bare det er ensformigt"): in a break an animation laser does not start from
+    // the scene (or its exact output) it showed in its last break, where another of the break's pool is left. Soft,
+    // like the family rule below: the pool is never emptied, and its colours, stars and cooldown are the pool's
+    if (tier == 0 && patternGroup && m_r519BreakLast.contains(group))
+    {
+        const quint32 lastId = m_r519BreakLast.value(group);
+        const QByteArray lastOut = m_funcs.value(lastId).outputKey;
+        QList<TrackFuncInfo *> other;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (info->id != lastId && (lastOut.isEmpty() || info->outputKey != lastOut))
+                other.append(info);
+        }
+        if (other.isEmpty() == false)
+            ok = other;
+    }
     // C20261020: compare with the ACTUAL previous drop, not just the last
     // break/build's family. Soft preference: never empty the legal menu.
     if (tier == 2 && m_previousFlowTrack == m_trackTitle && m_dropLastFamilies.contains(group))
@@ -11365,6 +11429,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 const TrackFuncInfo &fi = m_funcs.value(it.value());
                 if (fi.family.isEmpty() == false)
                     m_lastFamily.insert(it.key().mid(4), fi.family);
+                // R519_TASTE_BREAK_LAST (runde 519): ... and the scene an animation laser showed in the break that
+                // just ended (its next break starts from another one, see motionFor)
+                if ((m_lastState == QStringLiteral("break") || m_lookState == QStringLiteral("break"))
+                    && m_groups.value(it.key().mid(4)).patternDevice)
+                    m_r519BreakLast.insert(it.key().mid(4), it.value());
             }
         }
         // R358_REPEAT: the first one's programmes, where they still exist
@@ -11386,6 +11455,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         pLead = r493GenreLaser(pLead);   // R493_A2_G_BARS: melodic a little more often, minimal less
         if (partChanged)
             m_barsLead = rng->bounded(1000) < int(pLead * 1000.0);
+        // R519_TASTE_ANI_DRAW (runde 519, TASTE): a drop his learned taste gives to the animation laser
+        // (r519AniLeadDraw: drop/<it> >= 2.0, his slider >= 70 %) has it lead in the bars' place - drawn on a dice
+        // of the track and the drop, so the engine's random generator (and every other draw) is as before
+        if (partChanged)
+        {
+            m_r519AniLead = isDrop && r519AniLeadDraw(secStart);
+            if (m_r519AniLead)
+                m_barsLead = false;
+        }
     }
 
     QString base = baseGroup();
@@ -11818,6 +11896,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (base.isEmpty())
         effects = qMax(effects, 1);                 // no base: something must show
 
+    r519AniLine(m_faderReal, beatInBar == 0 || sectionChanged);   // R519_FIXB_ANI_TICK: every beat, before the cast
     // the strobes' place in the pool is decided on the bar line and held to
     // the next one (fejljagt 2, 09-27): read per beat, the pool was one
     // shorter on beats 2-4 whenever they had lost the budget on beat 1, and
@@ -11938,6 +12017,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 break;
             }
         }
+    }
+    // R519_TASTE_ANI_CAST (runde 519, TASTE): ... or the animation laser, where the drop drew it (m_r519AniLead): the
+    // bars' slot behind the drop's strobe lead, inside the same budget. The one-laser rule below then takes the bars
+    // out (never both laser types when the engine picks), R507 SAFE's handover darkens the outgoing type before the
+    // other lights, its 70 % line is the pool's (m_aniPooled), and the drop variety and NEXT below still apply
+    if (isDrop && m_r519AniLead && m_aniPooled && hold == false && isCalm == false)
+    {
+        int slot = 0;
+        if (strobeLead && priority.isEmpty() == false && m_groups.value(priority.first()).strobes)
+            slot = 1;
+        const int at = int(priority.indexOf(r519AniKey()));
+        if (at > slot)
+            priority.insert(slot, priority.takeAt(at));
     }
     // R446_DROP_VARIETY (Tobias 10-13, "A+B"): not the last drop again, and in
     // the same track not opened by the same group - inside the budget above
@@ -14048,6 +14140,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_sweep.remove(key);
             continue;
         }
+        // R519_FIXA_FIGURE_END_STALE (runde 519, the merged r519 harness run: tilt_jump_lit 6 frames, track 3
+        // beat 257): his BLACKOUT tap over ONE beat line made the bars' figure unwanted for that beat - the
+        // first beat of R401_FIGURE_END_DARK (dark, the EFX still running) - and on the next beat it was
+        // wanted again with m_figureEndDark still set. Its real end at the break line then skipped the dark
+        // beat and stopped the EFX with the bars lit: the mirrors 131 -> 126 lit. Wanted again: the next end
+        // is two beats again, dark first
+        m_figureEndDark.remove(key);
         // the build tightens its figure ONCE, on the first downbeat past the
         // middle: "beats > 4" as the test redrew it every bar from there on
         // (a halved build figure is 5-14 beats), so the heads jumped to a new
@@ -15249,6 +15348,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // R515_MELBARS_HOOK_WHOLE (runde 515, MELBARS): ... nor while the melody's window holds them (GRAD may
         // still colour them: colour only)
         if (mf != Function::invalidId() && r515MelbarsWhole(key))
+            mf = Function::invalidId();
+        // R519_FIXA_GRAD_CARRY (runde 519, FIXA - the night of 30-31 Oct: 28 of GRAD's runs ended because the
+        // bars' programme changed, median run 3.3 s): a gradient on show keeps the bars for the rest of its
+        // section when the engine's next programme for them is a WHOLE-bar one (every lit bar all 8 eyes,
+        // barcoverage.h) - the same picture class on the engine's own whole-bar path, the gradient on top. An eye
+        // programme, a drop form, his picks and a saved look still take the bars (the pick stays held: it comes
+        // when the gradient lets go)
+        if (mf != Function::invalidId() && r519GradCarry(key, mf, beat, secStart))
             mf = Function::invalidId();
         const quint32 formMf = (isDrop && dropBar >= 0) ? dropFormProgramme(key, colour, isDrop) : Function::invalidId();
         if (formMf != Function::invalidId())
@@ -19656,6 +19763,7 @@ void TrackEngine::laserFaderCheck(qreal slider)
     const qreal fader = qMin(closingCap(), qBound(0.0, slider, 1.0));
     const int downNow = laserDownAllowed(qMin(fader, m_faderReal));
     dropFormRiseFader(fader);            // R488_DX_RISE_FADER: rising bars the slider no longer allows go dark
+    r519AniLine(fader, false);           // R519_FIXB_ANI_HAND: his hand under 70 % - the animation laser dark now
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
@@ -20517,12 +20625,14 @@ void TrackEngine::setLogEnabled(bool on)
     emit tableChanged();
 }
 
-QByteArray TrackEngine::logSettings() const
+QByteArray TrackEngine::logSettings(QByteArray *steady) const
 {
     QJsonObject stored;
     QSettings settings;
     foreach (const QString &key, settings.allKeys())
     {
+        if (key == SETTINGS_ENGINE_MASTER_NIGHT)
+            continue;                    // R519_FIXB_SNAP_STORED: MASTER has its own column on every row
         if (key.startsWith("trackengine/") || key.startsWith("trackmanager/"))
             stored.insert(key, QJsonValue::fromVariant(settings.value(key)));
     }
@@ -20552,6 +20662,19 @@ QByteArray TrackEngine::logSettings() const
     context.insert("schema", 2);
     context.insert("stored", stored);
     context.insert("live", live);
+    // R519_FIXB_SNAP_STEADY (night 10-30: 958 MB tracklog, 897 MB of it snapshots - 402 written only
+    // because BLACKOUT was on or off at the sample, 154 only for MASTER): the snapshot's trigger leaves
+    // out the momentary states (BLACKOUT, STUTTER - their sig: rows say when) and MASTER (its column)
+    if (steady != nullptr)
+    {
+        QJsonObject still = live;
+        still.remove("blackout");
+        still.remove("stutter");
+        still.remove("master");
+        QJsonObject quiet = context;
+        quiet.insert("live", still);
+        *steady = QJsonDocument(quiet).toJson(QJsonDocument::Compact);
+    }
     return QJsonDocument(context).toJson(QJsonDocument::Compact);
 }
 
@@ -20612,11 +20735,14 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     // setting now reaches the log up to 16 beats late; the first row of a
     // file still carries its snapshot (m_logSettingsLast is empty there).
     const bool sample = m_logSettingsLast.isEmpty() || (beat % 16) == 0;
-    const QByteArray currentSettings = sample ? logSettings() : m_logSettingsLast;
+    QByteArray steadySettings;           // R519_FIXB_SNAP_TRIGGER: a change of the momentary states alone writes none
+    const QByteArray currentSettings = sample ? logSettings(&steadySettings) : m_logSettingsLast;
     QString snapshot;
-    if (currentSettings != m_logSettingsLast)
+    if (currentSettings != m_logSettingsLast
+        && (m_logSettingsLast.isEmpty() || steadySettings != m_logSettingsSteady))
     {
         m_logSettingsLast = currentSettings;
+        m_logSettingsSteady = steadySettings;
         m_logSettingsId = QString::fromLatin1(QCryptographicHash::hash(currentSettings, QCryptographicHash::Sha256).toHex());
         snapshot = QString::fromUtf8(currentSettings);
     }
@@ -22029,8 +22155,60 @@ bool TrackEngine::r507SafeClosed(const QString &group)
     return closed;
 }
 
+/* R519_FIXB_ANI_FNS (night 10-30, 00:46:18: the duel's animation laser was lit at ENERGY 0.82, his hand
+ * took the fader to 0.54 and it stayed lit to the bar line - the 70 % line was read only where the pool
+ * is drawn, on the bar). While the ENGINE has an animation laser lit, every beat and every move of his
+ * ENERGY fader checks the line: under 70 % it goes dark at once - through R507_SAFE's level hooks, so
+ * its picture, CH13/CH14 and the aim are never touched (dark, never moved) - and stays dark to the bar
+ * line, where the pool keeps it (back at 70 %: it lights again, unmoved) or takes it out of the cast.
+ * His own picks light it below 70 % as before: AUTO off, his section set with it, a pad or held flash on
+ * it, the labs, a saved look, the start scene, LAST TRACK, the self-test. Log: sig:ani-line:<ENERGY %> */
+bool TrackEngine::r519AniHis(const QString &key) const
+{
+    return m_fullAuto == false || (m_forceOn && m_forceSet.contains(key)) || m_padFlash.contains(key)
+        || m_flashHeld.contains(key) || m_labActive || m_slabActive || m_clabActive || savedActive()
+        || m_startScene || m_lastStage != 0 || m_testTimer.isActive();
+}
+
+bool TrackEngine::r519AniLowDark(const QString &group) const
+{
+    return m_r519AniLow.contains(group) && m_cast.contains(group) && r519AniHis(group) == false;
+}
+
+void TrackEngine::r519AniLine(qreal fader, bool barLine)
+{
+    bool dark = false;
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_groups.value(key).patternDevice == false)
+            continue;
+        if (m_cast.contains(key) == false)
+        {
+            m_r519AniLow.remove(key);    // out of the cast: the pool's own line
+            continue;
+        }
+        if (m_r519AniLow.contains(key))
+        {
+            if (barLine && fader >= ENGINE_ANI_ON - 1e-9)
+                m_r519AniLow.remove(key);   // the bar line at 70 %: the pool keeps it, lit as it stands
+            continue;
+        }
+        if (fader < ENGINE_ANI_ON - 1e-9 && r519AniHis(key) == false)
+        {
+            m_r519AniLow.insert(key);
+            dark = true;
+        }
+    }
+    if (dark == false)
+        return;
+    logSignal(QStringLiteral("sig:ani-line:%1").arg(qRound(fader * 100.0)));
+    reapplyLevels();                     // dark now, not on the next beat
+}
+
 bool TrackEngine::r507SafeDark(const QString &group)
 {
+    if (r519AniLowDark(group))
+        return true;                     // R519_FIXB_ANI_FNS: the engine's animation laser under its 70 % line
     if (m_r507Safe.isEmpty() || group.isEmpty() || r507SafeClosed(group) == false)
         return false;
     m_r507Safe[group].hit = true;
@@ -25220,6 +25398,7 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
     else if (id == QStringLiteral("crumbs"))
     {
         foreach (const QFileInfo &fi, docs.entryInfoList(QStringList() << "crumbs-current.txt" << "crumbs-prev.txt"
+                                                          << "crumbs-prev2.txt"   // R519_FIXB_SEND_PREV2
                                                           << "crash-crumbs-*.txt", QDir::Files, QDir::Time))
             out << fi.absoluteFilePath();
         // R495_SEND_STARTUP (Tobias 10-24: "Qlc starter stadig ikke naar jeg taender pcen"): every
@@ -26562,6 +26741,10 @@ enum TrackDropFormId
 #define ENGINE_KICK_PREFIX    QStringLiteral("AUTO Bars Drop Kick ")
 #define ENGINE_KICK_FILL      0.80       // kick-chase: whole bars from here, the packet under it
 #define ENGINE_KICK_ALL       0.90       // R489_EX_KICK_ALL: the whole row a kick from here, one bar a kick under it
+// R519_TASTE_KICK_DEFINE (runde 519, TASTE; Tobias 10-22 "elsker kick-chase", 10-25 "de maa gerne komme oftere",
+// his only two +1 ratings on 30-31 Oct were kick-chase bar looks): kick-chase's share of the drops it fits (steady
+// >= 85 %, kick >= 50 %, from 60 %, not the first or the last drop) - the draw's own odds when they are higher
+#define R519_KICK_SHARE       0.40
 // R490_FX_RISE_REACH (Tobias 10-22: "halv nedefra ... helt ned", chosen "halvvejs ~57
 // enheder" and "kun rejsen-op"): rejsen-op's own depth - halfway between the home aim
 // and his LaserDOWN (115 under). ONLY rejsen-op: every other programme, figure and
@@ -26630,6 +26813,8 @@ struct TrackDropFeatures
     bool waveRoom = false;    // R507_WAVE_DF_FEAT: the map knows the wash whole, a part a head (r507WaveReady)
     double drama = 1.0;       // R509_DRAMA_FEAT (runde 509): the big forms' ticket weight - the night's budget x the
                               // drops still ahead (r509_drama.inc.cpp); 1 = the draw exactly as before
+    bool mixNear = false;     // R519_TASTE_KICK_FEAT (runde 519): the track's last flagged drop - the DJ mixes out in it
+    double kickFloor = 0.0;   // ... kick-chase's share where it fits (R519_KICK_SHARE); 0 = the draw exactly as before
 };
 
 static double trackClamp01(double v)
@@ -26652,6 +26837,11 @@ static double trackDropFormFit(int form, const TrackDropFeatures &f)
     if (f.hitArmed && form != DF_STORM)
         return 0.0;
     if (f.firstDrop && form != DF_STORM && form != DF_SIDE)
+        return 0.0;
+    // R519_TASTE_KICK_MIX (runde 519, TASTE): kick-chase runs 16 bars on the bars' home aim - not on the track's
+    // last flagged drop, where the DJ begins his mix (30-31 Oct: inside 9 of 17 such drops, 18 % elsewhere; 3 of the
+    // 6 kick-chases were cut by a mix after 4-25 s)
+    if (form == DF_KICK && f.mixNear)
         return 0.0;
     const bool kickKnown = f.kick >= 0.0 && f.steady >= 0.0;
     switch (form)
@@ -26827,6 +27017,25 @@ static int trackDropFormChoose(const TrackDropFeatures &f, unsigned seed, double
     double gate = trackClamp01((best - 0.55) / 0.35) * ((f.last != DF_CLASSIC || f.firstDrop) ? 0.55 : 0.85);
     if (plain > 0.0 && total != plain)
         gate = std::min(0.90, gate * total / plain);
+    // R519_TASTE_KICK_FLOOR (runde 519, TASTE): where kick-chase fits, its share is at least f.kickFloor (a big
+    // kick-chase's - from 80 % - x the drama, never above the floor). The draw's own odds of it, q, are the gate x its
+    // ticket's share; a dice of its OWN (the seed salted: the draw's dice, tickets and gate are untouched) takes it
+    // first with (floor - q) / (1 - q), so the two give the floor. q at the floor or over it, or a floor of 0: the
+    // draw exactly as before
+    if (f.kickFloor > 0.0 && fits[DF_KICK] > 0.0 && best > 0.0)
+    {
+        const double share = f.kickFloor * (trackDropFormBig(DF_KICK, f.energy) ? std::min(1.0, f.drama) : 1.0);
+        const double q = total > 0.0 ? gate * tickets[DF_KICK] / total : 0.0;
+        if (share > q && q < 1.0)
+        {
+            unsigned own = seed ^ 0x6a09e667u;
+            own ^= own >> 16; own *= 0x85ebca6bu; own ^= own >> 13; own *= 0xc2b2ae35u; own ^= own >> 16;
+            if (own == 0)
+                own = 0x2545f491u;
+            if (trackDropFormDice(own) < (share - q) / (1.0 - q))
+                return DF_KICK;
+        }
+    }
     if (best <= 0.0 || trackDropFormDice(st) >= gate)
         return DF_CLASSIC;
     double roll = trackDropFormDice(st) * total;
@@ -26917,6 +27126,10 @@ int TrackEngine::dropFormDecide(int at, qreal fader, qreal bpm, int beat)
     // R509_DRAMA_DECIDE (runde 509, DRAMA): the big forms' tickets - the night's budget and the drops still
     // ahead of the play position ("husk at en DJ kan starte nummeret efter foerste drop f.eks")
     f.drama = r509DramaForm(at, f.hitArmed, &f.firstDrop);
+    // R519_TASTE_KICK_DECIDE (runde 519, TASTE): the drops ahead from the track's flags (r509DramaAhead, the outro's
+    // last 64 beats are not a drop ahead); none ahead = the last drop. No flags (-1): as before
+    f.mixNear = r509DramaAhead(at) == 0;
+    f.kickFloor = R519_KICK_SHARE;
     const int n = m_audLevel.count();
     auto mean = [](const QVector<quint8> &v, int a, int b) {
         qreal sum = 0.0;
@@ -28276,6 +28489,56 @@ bool TrackEngine::dropFormHomeOnly(const QString &key) const
         return false;
     const TrackGroup &g = m_groups.value(key);
     return g.lasers && g.patternDevice == false;
+}
+
+/* R519_TASTE_ANI_FNS (runde 519, TASTE; report 30-31 Oct, improvement 5). His section taste has learned the
+ * animation laser in drops (drop/Animation Laser 2.5, the cap, against drop/LaserBars 0.4 - he added it by hand
+ * in 12 drops, often taking the bars out), but the drop's cast barely followed: the bars' lead (m_barsLead, ~95 %
+ * of the drops at the top of the slider) put the bars first, and the one-laser rule then took the animation
+ * laser out. Where his taste for it in drops is >= 2.0 and his slider >= 70 % (ENGINE_ANI_ON), a drop draws the
+ * animation laser's lead instead (R519_ANI_P_LOW at 2.0 .. R519_ANI_P_HIGH at 2.5) - never under his picks
+ * (r507DuelHis: AUTO off, RIG/PLAN, his drop set, a mix, LAST TRACK, the labs, a saved look, DROP HIT ...),
+ * never with MASTER under the animation laser's line, and never on a drop whose form is about the bars
+ * (dropFormCast: their drop keeps its bars - kick-chase above all). */
+#define R519_ANI_TASTE        2.0       // his learned drop taste for it from here
+#define R519_ANI_P_LOW        0.55      // the drops it may lead that it draws, at a taste of 2.0 ...
+#define R519_ANI_P_HIGH       0.70      // ... and at the cap (2.5)
+
+static bool r519FormBars(int form)
+{
+    // the drop forms whose first groups are the laser bars (dropFormCast)
+    return form == DF_STORM || form == DF_INVERTED || form == DF_INVRISE || form == DF_LASER || form == DF_RISE
+        || form == DF_KICK || form == DF_SIDE || form == DF_WAVE;
+}
+
+QString TrackEngine::r519AniKey() const
+{
+    // the animation laser: the first pattern-device group with fixtures, switched on tonight
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.patternDevice && g.fixtures.isEmpty() == false && m_groupOff.contains(key) == false)
+            return key;
+    }
+    return QString();
+}
+
+bool TrackEngine::r519AniLeadDraw(int secStart) const
+{
+    const QString key = r519AniKey();
+    if (key.isEmpty() || r507DuelHis() || m_faderReal < ENGINE_ANI_ON || aniMasterOn() == false)
+        return false;
+    const qreal taste = sectionTaste(QStringLiteral("drop"), key);
+    if (taste < R519_ANI_TASTE)
+        return false;
+    const bool planHere = m_formPlanTitle == m_trackTitle && m_formPlanFor > 0 && qAbs(m_formPlanFor - secStart) <= 8;
+    if (r519FormBars(m_formNow) || (planHere && r519FormBars(m_formPlan)))
+        return false;
+    const qreal p = R519_ANI_P_LOW + (R519_ANI_P_HIGH - R519_ANI_P_LOW) * qBound(0.0, (taste - R519_ANI_TASTE) / 0.5, 1.0);
+    // a dice of the track and the drop (murmur3's finaliser, as the duel's): the engine's generator is not drawn
+    quint32 st = quint32(qHash(m_trackTitle)) ^ (quint32(secStart) * 2654435761u) ^ 0x519a11u;
+    st ^= st >> 16; st *= 0x85ebca6bu; st ^= st >> 13; st *= 0xc2b2ae35u; st ^= st >> 16;
+    return (st & 0xffffu) / 65535.0 < p;
 }
 /* =====================================================================
  *  LAST TRACK (runde 458) - appended to trackengine.cpp by
@@ -38815,7 +39078,9 @@ bool TrackEngine::r507SuckFree() const
     const QString wash = r498RushWash();
     if (wash.isEmpty() || (m_r507SuckFor >= 0 && wash != m_r507SuckWash))
         return false;
-    if (r497BloomFree(wash) == false || savedActive() || m_blackout || m_dropTouched || m_r497CurtainOn
+    // R519_FIXA_SUCK_TAP (runde 519): his short BLACKOUT tap pauses a running suck (its masks only darken)
+    if (r497BloomFree(wash) == false || savedActive()
+        || (m_blackout && (m_r507SuckFor < 0 || r519BlackoutTap() == false)) || m_dropTouched || m_r497CurtainOn
         || m_r497BloomMode != 0 || m_r498RushState != 0 || djLoopOn())
         return false;
     const QString strobes = m_r507SuckStrobeKey;
@@ -40384,6 +40649,7 @@ void TrackEngine::r509PauseReset()
 #define R509_BARS_ARP_MIN_NOTES    26        // of the window's 32 sixteenths
 #define R509_BARS_ARP_BEAT_NOTES   3         // ... and on every beat of it
 #define R509_BARS_ARP_STEP_MS      110.0     // never two steps closer (runde 244's sub-step ceiling)
+#define R519_FIXA_ARP_WAIT         16        // R519_FIXA_ARP_WAIT: a won ticket waits 4 bars at most, the new draw 4 later
 
 // R509_BARS_TABLE_BEGIN (written by feature_trackview_engine.py from rig_room.json unplaced.laserBars: 6 bars)
 static const int r509BarsDmx[] = { 300, 319, 338, 357, 376, 395 };
@@ -40445,7 +40711,9 @@ QString TrackEngine::r509BarsBusy(const QString &key) const
 {
     // who else has the bars: "his" (his hand), "room" (another room feature or the plan's rise),
     // "" none - then they may be ours
-    if (key.isEmpty() || m_fullAuto == false || r493HisPicks() || m_hold || m_positionMode.isEmpty() == false
+    // R519_FIXA_BARS_TAP (runde 519): his short BLACKOUT tap pauses a running countdown / arpeggio
+    if (key.isEmpty() || m_fullAuto == false || (m_r509BarsMode != 0 ? r519HisPicksTap() : r493HisPicks())
+        || m_hold || m_positionMode.isEmpty() == false
         || m_hitKind != 0 || m_hitAmokOwed || m_groupOff.contains(key) || m_groupTrim.value(key, 1.0) <= 0.01)
         return QStringLiteral("his");
     // a pad or a held flash on any laser (his pad takes the other laser type: padLaserCast)
@@ -40907,11 +41175,16 @@ void TrackEngine::r509BarsBeat(QSet<QString> &castSet, const QStringList &eligib
     if (m_r509BarsMode == 0 && state == QStringLiteral("break") && isDrop == false && isBuild == false
         && secEnd - beat >= R509_BARS_ARP_WINDOW && r509BarsArpLine(beat))
     {
-        if (m_r509BarsArpSec != secStart)
+        // R519_FIXA_ARP_REDRAW (runde 519): a ticket that gave up (below) draws ONCE more in the same break, a
+        // dice of that beat; the break's first draw is the dice it always was
+        const bool redraw = m_r509BarsArpSec == secStart && m_r519ArpRedraw >= 0 && beat >= m_r519ArpRedraw;
+        if (m_r509BarsArpSec != secStart || redraw)
         {
             m_r509BarsArpSec = secStart;
-            const quint32 roll = r509BarsDice(m_trackTitle, secStart, 0x41525047u) & 0xffffu;
+            m_r519ArpRedraw = redraw ? -2 : -1;
+            const quint32 roll = r509BarsDice(m_trackTitle, redraw ? beat : secStart, 0x41525047u) & 0xffffu;
             m_r509BarsArpWon = roll / 65535.0 < R509_BARS_ARP_SHARE;
+            m_r519ArpWonAt = m_r509BarsArpWon ? beat : -1;
             crumb(QStringLiteral("r509 bars arp %1: ticket %2 (break %3, dice %4 %)").arg(beat)
                   .arg(m_r509BarsArpWon ? QStringLiteral("won") : QStringLiteral("lost")).arg(secStart)
                   .arg(int(roll * 100 / 65536)));
@@ -40930,6 +41203,20 @@ void TrackEngine::r509BarsBeat(QSet<QString> &castSet, const QStringList &eligib
             why = QStringLiteral("kick");
         else if (int(m_groups.value(key).parts.count()) < 2)
             why = QStringLiteral("bars");
+        // R519_FIXA_ARP_GIVEUP (runde 519, FIXA - the night of 30-31 Oct: 8 tickets won, 1 played; the rest
+        // waited out their break for the energy, the room, his hand or a kick): a won ticket that cannot start
+        // within R519_FIXA_ARP_WAIT beats (asked on every beat the line is ahead) gives up; one new draw comes
+        // R519_FIXA_ARP_WAIT beats later in the same break, where a line shows again
+        if (why.isEmpty() == false && m_r509BarsArpWon && m_r519ArpWonAt >= 0 && beat - m_r519ArpWonAt >= R519_FIXA_ARP_WAIT)
+        {
+            m_r509BarsArpWon = false;
+            m_r519ArpWonAt = -1;
+            if (m_r519ArpRedraw == -1)
+                m_r519ArpRedraw = beat + R519_FIXA_ARP_WAIT;
+            crumb(QStringLiteral("r509 bars arp %1: gives up (%2)%3").arg(beat).arg(why)
+                  .arg(m_r519ArpRedraw >= 0 ? QStringLiteral(", a new draw from %1").arg(m_r519ArpRedraw) : QString()));
+            why = QStringLiteral("-");
+        }
         if (why.isEmpty())
         {
             m_r509BarsArpWon = false;
@@ -41814,7 +42101,8 @@ bool TrackEngine::r509ColourKickFree(const QString &key) const
         && m_labActive == false && m_slabActive == false && m_clabActive == false
         && m_testTimer.isActive() == false && savedActive() == false
         && m_override.isEmpty() && m_overrideSet.isEmpty() && m_colourMode == 0
-        && m_flash == false && m_blackout == false
+        && m_flash == false
+        && (m_blackout == false || (r519BlackoutTap() && m_r509KickKey.isEmpty() == false))   // R519_FIXA_KICK_TAP
         && m_hitKind == 0 && m_hitAmokFrom < 0 && m_hitAmokOwed == false
         && m_mixing == false && m_mixGlide == false && m_r497CurtainOn == false
         && m_r497BloomMode == 0 && m_r498RushState == 0 && m_r493DiscoPhase == 0 && m_r493RoofOn == false
@@ -41917,6 +42205,9 @@ void TrackEngine::r509ColourKickBeat(int beat, bool isDrop, int dropBar, int bea
     const QString slot = QStringLiteral("wkick:") + key;
     if (m_active.contains(slot) && m_activeLevel.value(slot, 0.0) > 0.0)
         run(slot, m_active.value(slot), 0.0, 0, true);
+    // R519_FIXA_KICK_SKIP (runde 519): under his BLACKOUT tap no tint on this beat - the drop's run goes on
+    if (m_blackout)
+        return;
     // the raw curves, beat for beat with the waveform - not known: no tint (never blind)
     const int n = int(m_audLevel.count());
     if (m_audKick.count() != n || beat < 2 || beat > n || dropBar < 1
@@ -42317,7 +42608,8 @@ bool TrackEngine::r509WanderFree(const QString &key) const
     // only dims the wash, it never touches a colour; one tile (or the start scene's red) stops it
     return key.isEmpty() == false && m_fullAuto && m_forceOn == false && savedActive() == false
         && m_lastStage == 0 && m_labActive == false && m_slabActive == false && m_clabActive == false
-        && m_startScene == false && m_flash == false && m_blackout == false && m_hitAmokFrom < 0
+        && m_startScene == false && m_flash == false && m_hitAmokFrom < 0
+        && (m_blackout == false || (m_r509WanderOn && r519BlackoutTap()))   // R519_FIXA_WANDER_TAP: his tap pauses it
         && m_testTimer.isActive() == false && m_hold == false && m_positionMode.isEmpty()
         && m_hitKind == 0 && m_hitAmokOwed == false && m_r493DiscoPhase == 0 && m_r493RoofOn == false
         && (m_overrideSet.count() >= 2 || (m_override.isEmpty() && m_overrideSet.isEmpty()))   // R510_MASKS_WANDER_SET
@@ -43230,7 +43522,10 @@ QString TrackEngine::r514GradBusy(const QString &key, quint32 splitScene, quint3
         return QStringLiteral("lab");
     if (m_mixing)
         return QStringLiteral("mix");
-    if (m_blackout || m_flash)
+    // R519_FIXA_GRAD_TAP (runde 519): his short BLACKOUT tap PAUSES a gradient on show - its codes stay in the
+    // col: slot under his black mask (colour only: nothing lit) and the slide keeps the section's grid; held
+    // longer it ends as before, and none starts under BLACKOUT
+    if (m_flash || (m_blackout && (m_r514GradShowing == false || r519BlackoutTap() == false)))
         return QStringLiteral("blackout-flash");     // his buttons
     // a held flash on the bars (his FLASH, a pad, the drop's landing flash on them): the flash's colour
     // is theirs. The landing's flash on the STROBES (also m_flashHeld) is no business of the bars'
@@ -43610,6 +43905,48 @@ bool TrackEngine::r514GradRan() const
 {
     // R514_GRAD_SAVED (savedCapture): the bars wore the gradient on this beat (or the one before)
     return m_r514GradShowing && m_curBeat >= 0 && m_r514GradShownBeat >= m_curBeat - 1;
+}
+
+/* ---- runde 519, FIXA (R519_FIXA_HELPERS) ----
+ *  Tobias 2026-10-31: "Gaa den igennem og forbedre showet." The night of 30-31 Oct: 2,252 BLACKOUT presses,
+ *  dark a median 0.15 s (91 % under 0.6 s) - his stabs. Each one ENDED what ran: GRAD 32 times, the white
+ *  kick 37 (25 within 3 s of one), the build suck 5, the bar countdown 3 - the suck and the countdown never
+ *  came back for that drop. A TAP (BLACKOUT on for less than R519_FIXA_TAP_MS) now PAUSES a feature that is
+ *  RUNNING: it stays and goes on after the tap as after a stab. Under the tap his black masks keep the room
+ *  dark over it (GRAD's colour codes, the suck's dark masks, the countdown's mask, the arpeggio's eye pairs,
+ *  the wander's filter: none of them lights anything; the white kick tints no beat). The wander too: in the
+ *  harness every tap ended it and its restart threw the spot back to its start. Held longer, the next check ends it as
+ *  before (the frame timers within a frame, GRAD and the countdown on the next beat). Nothing starts under
+ *  BLACKOUT. FLASH, the other features and every laser gate are unchanged.
+ */
+#define R519_FIXA_TAP_MS 600
+
+bool TrackEngine::r519BlackoutTap() const
+{
+    return m_blackout && m_r519BoMs >= 0 && m_clock.elapsed() - m_r519BoMs < R519_FIXA_TAP_MS;
+}
+
+bool TrackEngine::r519HisPicksTap() const
+{
+    // r493HisPicks() (r493_discoball.inc.cpp, verify_r519 keeps the two alike) with his tap left out
+    return m_forceOn || savedActive() || m_lastStage != 0 || m_labActive || m_slabActive || m_clabActive
+        || m_mixing || (m_blackout && r519BlackoutTap() == false) || m_fullAuto == false || m_startScene || m_flash
+        || m_flashHeld.isEmpty() == false || m_hitAmokFrom >= 0 || m_testTimer.isActive();
+}
+
+bool TrackEngine::r519GradCarry(const QString &key, quint32 mf, int beat, int secStart) const
+{
+    // R519_FIXA_GRAD_CARRY (tick()): the gradient on show on these bars in this section, his hand off, and
+    // the programme a WHOLE-bar one as measured (barcoverage.h: every lit bar all 8 eyes, no shutter) - the
+    // bars stay on the engine's whole-bar path with the gradient. An eye programme takes them (it ends GRAD)
+    if (m_r514GradShowing == false || key != m_r514GradKey || secStart != m_r514GradSec
+        || m_r514GradShownBeat < beat - 1 || savedActive() || m_forceOn)
+        return false;
+    QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constFind(mf);
+    if (it == m_funcs.constEnd())
+        return false;
+    const TrackBarCoverage &cov = it.value().barCoverage;
+    return cov.known && cov.whole && cov.shutter == false && cov.peakEyes > 0;
 }
 /* =====================================================================
  *  THE LASER BARS FOLLOW THE MELODY IN BREAKS (runde 515, agent MELBARS) -

@@ -91,6 +91,9 @@ class QRandomGenerator;
 #define SETTINGS_ENGINE_ROLES     QStringLiteral("trackengine/roles")
 #define SETTINGS_ENGINE_GROUPOFF  QStringLiteral("trackengine/groupoff")
 #define SETTINGS_ENGINE_MASTER    QStringLiteral("trackengine/master")
+// R519_FIXB_MASTER_KEY (night 10-30): tonight's MASTER, "<night>;<level>" - back after a restart the same
+// night (noon to noon, as the RIG faders); another night starts at 100 % as before
+#define SETTINGS_ENGINE_MASTER_NIGHT QStringLiteral("trackengine/master-night")
 #define SETTINGS_ENGINE_ACCENT    QStringLiteral("trackengine/accent")
 #define SETTINGS_ENGINE_PUNCH     QStringLiteral("trackengine/punchdrops")   // runde 322: kick/bass of the last 60 DROPS (317/318: "trackengine/punch", per track - not read)
 #define SETTINGS_ENGINE_HOLDBARS  QStringLiteral("trackengine/holdbars")
@@ -1741,6 +1744,15 @@ protected:
     quint32 r514GradColour(const QString &key, const QString &colour, quint32 splitScene, quint32 mf,
                            int beat, int secStart, bool isDrop, qreal fader, bool hold, bool calm);
     bool r514GradRan() const;                   // R514_GRAD_SAVED: the bars wear it now (a saved look records it)
+    // R519_FIXA_DECL (runde 519, FIXA - Tobias 10-31 "Gaa den igennem og forbedre showet"): his short BLACKOUT
+    // tap pauses GRAD / the white kick / the build suck / the bar countdown, GRAD keeps the bars through a
+    // whole-bar programme change, the arpeggio gives up and draws once more (r514_grad.inc.cpp, at its end)
+    bool r519BlackoutTap() const;               // BLACKOUT on for less than R519_FIXA_TAP_MS: his tap
+    bool r519HisPicksTap() const;               // r493HisPicks() with such a tap left out (a running feature)
+    bool r519GradCarry(const QString &key, quint32 mf, int beat, int secStart) const;   // GRAD keeps the bars whole
+    qint64 m_r519BoMs = -1;                     // when BLACKOUT went on (-1: off)
+    int m_r519ArpWonAt = -1;                    // the beat the arpeggio's ticket was won (-1: none waits)
+    int m_r519ArpRedraw = -1;                   // a ticket gave up: the beat of its one new draw (-2 spent)
     QString m_r514GradKey;                      // the bar group that carries it
     quint32 m_r514GradMot = 0xFFFFFFFFu;        // the bars' last programme (its fade-out is waited for)
     QString m_r514GradTitle;                    // the track its tickets belong to
@@ -1920,7 +1932,7 @@ protected:
     qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;
     void checkConflicts(const QSet<QString> &cast);
     void logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy);
-    QByteArray logSettings() const;
+    QByteArray logSettings(QByteArray *steady = nullptr) const;   // R519_FIXB_SNAP_DECL: steady = without the momentary states
     TrackMove composeMove(const QString &group, TrackMove move, int tier) const;
     /** A marker line in the tracklog at the numbers of the last beat: the
      *  operator did something. Same columns as a beat, so one parser reads
@@ -2036,6 +2048,10 @@ private:
     bool m_curveGroove = false;  // runde 192: a break flag with a solid kick in the next two bars plays as a groove
     int m_curveTurnBeat = -100;  // runde 193: the beat of the last such turn - four bars between turns
     bool m_barsLead;          // this section: the laser bars take the first effect place
+    bool m_r519AniLead = false;   // R519_TASTE_ANI_DECL: this drop the animation laser leads in the bars' place
+    QString r519AniKey() const;   // ... the animation laser group (dropforms.inc.cpp)
+    QHash<QString, quint32> m_r519BreakLast;   // R519_TASTE_BREAK_DECL: the scene an animation laser showed in the last break
+    bool r519AniLeadDraw(int secStart) const;   // ... drawn by his learned drop taste for it
     int m_castCursor;
     int m_motionCursor;
     QSet<QString> m_cast;
@@ -2070,6 +2086,11 @@ private:
     void r507SafeHold(const QString &group, quint32 gone);       // a reason: dark from NOW
     bool r507SafeClosed(const QString &group);                    // still held?
     bool r507SafeDark(const QString &group);                      // the level hooks: true = write 0
+    // R519_FIXB_ANI_DECL: the engine's lit animation laser under the 70 % line goes dark at once
+    QSet<QString> m_r519AniLow;          // the pattern-device groups held dark until the bar line
+    bool r519AniHis(const QString &key) const;
+    bool r519AniLowDark(const QString &group) const;
+    void r519AniLine(qreal fader, bool barLine);
     bool r507SafeFrame();                                         // the pulse timer: open, relight
     void r507SafeOut(const QString &slot, quint32 fid);           // stopSlot(): a laser function goes
     void r507SafeHandover(const QSet<QString> &castSet);          // tick(): the outgoing laser type first
@@ -2235,6 +2256,7 @@ private:
     bool m_logEnabled;
     QFile m_log;
     QByteArray m_logSettingsLast;
+    QByteArray m_logSettingsSteady;      // R519_FIXB_SNAP_MEMBER: the last snapshot without BLACKOUT, STUTTER, MASTER
     QString m_logSettingsId;
     // The context of the last line written, so a rating can be logged with the
     // same numbers the beat had. Inline-initialised on purpose: added to the
@@ -3015,6 +3037,11 @@ private:
     QString m_crashNote;                 // the last run's crash file, for the tracklog
     void crumbsOpen();
     void crumb(const QString &what);
+    // R519_FIXB_CRUMB_DECL: one line per BLACKOUT tap; MASTER kept for the night
+    qint64 m_r519BlackoutMs = -1;        // the last "sig:blackout" crumb (m_clock)
+    bool r519CrumbQuiet(const QString &what);
+    QString m_r519MasterKept;            // the last "<night>;<level>" written
+    void r519MasterKeep();
     void crumbsEnd();
     // R436_SHOW_CHECK
     QVariantList m_showMissing;
