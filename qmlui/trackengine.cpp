@@ -31082,6 +31082,16 @@ bool TrackEngine::tilesBackToAuto(int beat, int start, const QString &state)
         m_tilesHandBeat = -1;
         return false;                    // AUTO already
     }
+    // R523_TILES_STAY (Tobias 11-01: "Aendre saa den ikke laengere skifter tilbage til auto farve naar man har
+    // overrided farve paa naeste sektionskift"): his colour tile stays - over section changes and new tracks -
+    // until he picks AUTO or another tile himself, as before r512
+    static constexpr bool tilesStay = true;
+    if (tilesStay)
+    {
+        m_tilesHandBeat = -1;
+        logSignal(QStringLiteral("sig:tiles-kept:hand:") + (state.isEmpty() ? QStringLiteral("track") : state));
+        return false;
+    }
     if (m_startScene || m_startColour)
         return false;                    // the opening picture's colours go with it, as before
     const QString why = state.isEmpty() ? QStringLiteral("track") : state;
