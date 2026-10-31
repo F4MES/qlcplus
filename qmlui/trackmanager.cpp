@@ -448,6 +448,8 @@ void TrackManager::handleTrack(const QJsonObject &obj)
                                  obj.value(QStringLiteral("swing16")).toDouble(-1.0),
                                  obj.value(QStringLiteral("swing8")).toDouble(-1.0),
                                  obj.value(QStringLiteral("stabMid")).toArray().toVariantList());
+    if (m_engine != nullptr)            // R521_ROLL32_PARSE: the off-32nds (r521 BLT)
+        m_engine->setTrackOn32(obj.value(QStringLiteral("onset32")).toArray().toVariantList());
     if (m_engine != nullptr)            // R317_PUNCH: how hard, not how full
         m_engine->setTrackPunch(m_title,                // R318_PUNCH_TITLE: one entry per track
                                 obj.value(QStringLiteral("kickRef")).toDouble(-1.0),
@@ -4178,6 +4180,63 @@ void TrackManager::runEngine(bool sectionChanged)
             secEnd = ((secEnd - 1 - m_downbeat + m_quantize - 1) / m_quantize) * m_quantize + 1 + m_downbeat;
     }
 
+    // R521_EARLYDROP_RUN (runde 521, EARLYDROP - Tobias 10-31, "Droppet lander, naar kicket kommer, ikke naar
+    // flaget siger det"): where BLT's raw kick comes back steady 1-4 bars before a drop flag
+    // (TrackEngine::r521EarlyLand), the drop lands there. The engine is told the build ends on the landing (its
+    // climb, the countdown, the black beat before it) and the drop starts on it, so everything that keys on the
+    // landing follows - the bang, the drop's form, DROP HIT, the drama; past its flag the drop keeps that start
+    // (no second landing). His SECTION press, his own flags, HOLD, a mix and SETUP's quantise leave the drop on
+    // its flag as before; a drop that has landed early goes on. The analysis and the flags are not touched.
+    int r521Flag = -1, r521Land = -1;
+    bool r521Pre = false;
+    if (m_overrideState.isEmpty() && m_markersManual == false && m_quantize <= 1 && m_engine != nullptr
+        && m_beatCount > 0)
+    {
+        int from = -1, flag = -1;
+        if (state == QStringLiteral("build") && secEnd <= m_beatCount
+            && stateAtBeat(secEnd) == QStringLiteral("drop"))
+        {
+            from = secStart;
+            flag = secEnd;
+        }
+        else if (state == QStringLiteral("drop") && secStart > 1
+                 && stateAtBeat(secStart - 1) == QStringLiteral("build"))
+        {
+            int s0 = 1, e0 = 1;
+            sectionBounds(secStart - 1, s0, e0);
+            from = s0;
+            flag = secStart;
+        }
+        const int land = flag > 0 ? m_engine->r521EarlyLand(from, flag) : -1;
+        if (land > 0 && land < flag)
+        {
+            const bool landed = m_lastSecStart == land;
+            const bool r521Free = m_engine->hold() == false && m_mixing == false;
+            if ((landed && (beat >= land || m_loopTop > 0))
+                || (r521Free && beat >= land && beat - land < 4 && beat < flag))
+            {
+                if (landed == false)
+                    m_engine->r521EarlyNote(land, flag);
+                else if (beat >= flag && beat - flag < 4)
+                    sectionChanged = false;          // its flag: the drop landed already
+                int s1 = 1, dropEnd = 1;
+                sectionBounds(flag, s1, dropEnd);
+                state = QStringLiteral("drop");
+                stateBeat = qMax(stateBeat, flag);   // the drop's own energy and what follows it
+                secStart = land;
+                secEnd = dropEnd;
+                r521Flag = flag;
+                r521Land = land;
+            }
+            else if (r521Free && beat < land && m_loopTop <= 0)
+            {
+                secEnd = land;                       // the build climbs to the landing
+                r521Pre = true;
+                r521Flag = flag;
+                r521Land = land;
+            }
+        }
+    }
     // a jump to a cue, or two flags of the same type in a row: the state
     // string does not change but the section does
     // R198_SECTION_START: a section is where it STARTS - a moved end (the
@@ -4225,6 +4284,11 @@ void TrackManager::runEngine(bool sectionChanged)
     else if (beatsToNext > 0)
         beatsToNext = qMax(0, beatsToNext - (beat - stateBeat));
 
+    if (r521Pre)                         // R521_EARLYDROP_COUNT: the build counts down to the early landing
+    {
+        nextState = QStringLiteral("drop");
+        beatsToNext = qMax(0, r521Land - beat);
+    }
     // Energy = BPM dial x how loud this section is. The section's LEVEL slider
     // goes in separately as a brightness trim, so it cannot change how many
     // effects join.
@@ -4357,6 +4421,137 @@ void TrackManager::runEngine(bool sectionChanged)
         if (r0 >= 0.0 && h0 >= 0.0)
             rawQuietNow = (r0 < 0.20 && h0 < 0.20) ? 1 : 0;
     }
+    // R521_LOUDBREAK_RUN (Tobias 10-31, "Et break med fuldt kick behandles som drop"). Inside one of
+    // BLT's breaks, four bars of a steady kick AHEAD (the raw kick >= 0.45 on 3 of every 4 beats - the
+    // analysis' kick bar, :kick-on-beats 3) play as a DROP when the energy is drop-level (70 % of the
+    // track's loudest drop flag - BLT's :kick-drop-rel - and his learned drop kick) or as a NORMAL when
+    // it is groove-level (50 %): as if he pressed SECTION, on the bar line where the kick comes (that
+    // bar is the section's first: a drop lands there). Two kickless bars ahead let it go (one bar is a
+    // drop-out), so do the next flag and a jump back; none starts in the eight bars before a drop
+    // flag (the flags' run-up). Never on his own flags (R210), after a SECTION press in this section
+    // (also after AUTO), under HOLD, in a mix, in a DJ loop, under LAST TRACK, in the track's first or
+    // last section, or without the raw curves. DROP HIT armed: a groove at most - his hit waits for
+    // the drop he armed it for. A hat/perc loop has no kick bars: it stays a break.
+    int lbFrom = -1;                      // the beat the engine's section starts on (the switch)
+    {
+        const qreal lbDropRel = 0.70, lbGrooveRel = 0.50;
+        if (m_lbTitle != m_title || m_lbSec != secStart)
+        {
+            m_lbTitle = m_title;          // a new flag (or track): BLT's flags again
+            m_lbSec = secStart;
+            m_lbState.clear();
+            m_lbFrom = -1;
+            m_lbBar = -1000;
+            m_lbStop = false;
+            m_lbQuiet = -1;
+        }
+        QString lbWhy;
+        const bool lbWas = m_lbState.isEmpty() == false;
+        if (m_overrideState.isEmpty() == false || m_markersManual)
+        {
+            if (lbWas && m_overrideState.isEmpty())
+                lbWhy = QStringLiteral("flags");   // he moved a flag: his flags from here
+            m_lbStop = true;
+            m_lbState.clear();
+            m_lbFrom = -1;
+        }
+        else if (m_lbFrom > 0 && beat < m_lbFrom)
+        {
+            if (lbWas)
+                lbWhy = QStringLiteral("back");    // a jump back before the switch: decided again
+            m_lbState.clear();
+            m_lbFrom = -1;
+            m_lbBar = -1000;
+        }
+        const bool lbRaw = m_kickRaw.isEmpty() == false && m_kickRaw.count() == m_kick.count();
+        int flagAt = -1, lbBefore = 0, lbAfter = 0;
+        for (int i = 0; i < m_markers.count(); i++)
+        {
+            const int mb = m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt();
+            if (mb <= stateBeat && mb > flagAt)
+                flagAt = mb;
+            if (mb > stateBeat)
+                lbAfter++;
+        }
+        for (int i = 0; i < m_markers.count() && flagAt > 0; i++)
+            if (m_markers.at(i).toMap().value(QStringLiteral("beat")).toInt() < flagAt)
+                lbBefore++;
+        const bool lbFrozen = m_engine->hold() || m_mixing || m_loopTop > 0 || m_engine->lastTrack() != 0;
+        const int bl = beat - (((beat - 1 - m_downbeat) % 4) + 4) % 4;   // this bar's line
+        if (m_lbStop == false && lbRaw && lbFrozen == false && loopHeld == false
+            && state == QStringLiteral("break") && flagAt > 0 && lbBefore > 0 && lbAfter > 0
+            && bl != m_lbBar && beat - bl <= 1)
+        {
+            m_lbBar = bl;
+            auto kickBar = [&curveAt, this](int from) {
+                int n = 0;
+                for (int b = from; b < from + 4; b++)
+                    if (curveAt(m_kickRaw, b) >= 0.45)
+                        n++;
+                return n >= 3;
+            };
+            // the four bars from `from`: "drop", "normal" or nothing (k and er for the log). The last
+            // eight bars before a drop flag are the flags' run-up (the countdown, the dark beat, the
+            // landing): no switch starts there; one that runs keeps on into the flag.
+            qreal k = -1.0, er = -1.0;
+            auto decide = [&](int from) -> QString {
+                bool on = from >= secStart && from + 16 <= secEnd
+                       && (nextState != QStringLiteral("drop") || secEnd - from > 32);
+                for (int i = 0; i < 4 && on; i++)
+                    on = kickBar(from + 4 * i);
+                if (on == false)
+                    return QString();
+                qreal top = 0.0, topAll = 0.0;
+                for (int i = 0; i < m_markers.count(); i++)
+                {
+                    const QVariantMap mk = m_markers.at(i).toMap();
+                    const qreal me = mk.value(QStringLiteral("energy"), -1.0).toDouble();
+                    topAll = qMax(topAll, me);
+                    if (mk.value(QStringLiteral("type")).toString() == QStringLiteral("drop"))
+                        top = qMax(top, me);
+                }
+                if (top <= 0.0)
+                    top = topAll;
+                const qreal e = curveEnergy(from, from + 16);
+                k = kickMean(from, 16);
+                er = (top > 0.0 && e >= 0.0) ? e / top : -1.0;
+                if (er >= lbDropRel && k >= m_dropKick && m_engine->hitKind() == 0)
+                    return QStringLiteral("drop");
+                if (er >= lbGrooveRel)
+                    return QStringLiteral("normal");
+                return QString();
+            };
+            if (lbWas == false)
+            {
+                m_lbState = decide(bl);
+                if (m_lbState.isEmpty() == false)
+                    lbWhy = QStringLiteral("k%1:e%2").arg(qRound(k * 100.0)).arg(qRound(er * 100.0));
+                // the kick comes on the NEXT bar line: R192's look-ahead (the smoothed kick) would turn
+                // the break into a groove one bar early and the drop land a bar later - two changes
+                // one bar apart. It waits for this bar; the switch comes on the line where the kick is.
+                else if (decide(bl + 4).isEmpty() == false)
+                    m_lbQuiet = bl + 4;
+            }
+            else if (kickBar(bl) == false && kickBar(bl + 4) == false)
+            {
+                lbWhy = QStringLiteral("gone");
+                m_lbState.clear();
+            }
+        }
+        if (lbWhy.isEmpty() == false)
+        {
+            if (m_lbStop == false && lbWhy != QStringLiteral("back"))
+                m_lbFrom = beat;          // the engine's section starts here: the switch, or BLT's break again
+            sectionChanged = true;
+            m_engine->noteLoudBreak(m_lbState.isEmpty() ? QStringLiteral("off") : m_lbState, lbWhy);
+        }
+        if (m_lbState.isEmpty() == false)
+            state = m_lbState;
+        if (m_lbFrom > secStart && m_lbFrom <= beat)
+            lbFrom = m_lbFrom;
+        if (m_lbQuiet > beat && m_lbQuiet - beat <= 4 && m_lbState.isEmpty() && m_lbStop == false)
+            kickAhead = -1.0;             // R192 waits for the switch's bar line (above)
+    }
     if (m_markersManual)                        // R210_MANUAL_WINS
         kickAhead = -1.0;
     if (m_overrideState.isEmpty() == false)     // R199_OVERRIDE_WINS
@@ -4379,6 +4574,18 @@ void TrackManager::runEngine(bool sectionChanged)
                 && (nextDrop < 0 || mb < nextDrop))
                 nextDrop = mb;
         }
+        if (r521Flag > 0 && nextDrop == r521Flag)   // R521_EARLYDROP_AHEAD: the drop that lands early
+        {
+            nextDrop = r521Pre ? r521Land : -1;
+            for (int i = 0; i < m_markers.count() && r521Pre == false; i++)
+            {
+                const QVariantMap mk = m_markers.at(i).toMap();
+                const int mb = mk.value(QStringLiteral("beat")).toInt();
+                if (mb > r521Flag && mk.value(QStringLiteral("type")).toString() == QStringLiteral("drop")
+                    && (nextDrop < 0 || mb < nextDrop))
+                    nextDrop = mb;
+            }
+        }
         m_engine->setNextDropBeat(nextDrop);
         // R509_DRAMA_FLAGS: the track's drop starts, sorted - a drop flagged in parts is one drop
         QVector<QPair<int, bool> > flags;
@@ -4393,6 +4600,9 @@ void TrackManager::runEngine(bool sectionChanged)
         for (int i = 0; i < flags.count(); i++)
             if (flags.at(i).second && (i == 0 || flags.at(i - 1).second == false))
                 drops.append(flags.at(i).first);
+        for (int i = 0; i < drops.count() && r521Land > 0; i++)   // R521_EARLYDROP_DRAMA: it lands early
+            if (drops.at(i) == r521Flag)
+                drops[i] = r521Land;
         m_engine->r509DramaFlags(drops);
     }
     int tickStart = secStart;                 // R236_LOOP_TICK_START
@@ -4402,6 +4612,8 @@ void TrackManager::runEngine(bool sectionChanged)
     // bar on 1 + m_downbeat - the engine counts every bar line from what it gets
     if (tickStart == 1 && m_downbeat > 0 && beat > m_downbeat)
         tickStart = 1 + m_downbeat;
+    if (lbFrom > tickStart)                // R521_LOUDBREAK_TICK: the switch is the engine's section start
+        tickStart = lbFrom;
     m_engine->setSectionStart(secStart);   // R475_COLMEM_REAL: the section's own start, before R236
     m_engine->tick(state, beat, tickStart, secEnd, en, se,
                    stateDivision(state), sectionChanged, nextState, beatsToNext,
