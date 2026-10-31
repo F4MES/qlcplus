@@ -3241,8 +3241,8 @@ QString TrackManager::remoteCommand(const QString &line)
  *  mobilsiden, der kalder update scriptet, saa jeg kan opdatere qlc paa
  *  distancen" - C:\Users\User\Desktop\update-qlc.cmd.
  *
- *  - the check: every 30 min (the first 20 s after the start), PowerShell in
- *    a process of its own reads rig-build.txt of the release rig-latest - the
+ *  - the check: every 30 min (the first 20 s after the start), Windows' curl.exe in
+ *    a process of its own (R517_PROBE_DOC: no other shell since runde 517) reads rig-build.txt of the release rig-latest - the
  *    file update-qlc.cmd itself reads; the build installed is update-qlc's
  *    own state.json (%LOCALAPPDATA%\qlc-rig-update). Nothing waits for it.
  *  - UPDATE: only with SHOW OFF (approved: never the light out mid-track by
@@ -3334,10 +3334,14 @@ void TrackManager::updateCheck()
         p->deleteLater();
         for (const QString &line : lines)
         {
-            if (line.trimmed().startsWith(QLatin1String("REV=")) == false)
+            // R517_PROBE_REV: curl prints rig-build.txt itself (the build's short hash); the old "REV=" still reads
+            QString rev = line.trimmed();
+            if (rev.startsWith(QLatin1String("REV=")))
+                rev = rev.mid(4).trimmed();
+            static const QRegularExpression buildRe(QStringLiteral("^[0-9a-f]{7,40}$"));
+            if (buildRe.match(rev).hasMatch() == false)
                 continue;
-            const QString rev = line.trimmed().mid(4).trimmed();
-            if (rev.isEmpty() || rev == m_updateLatest)
+            if (rev == m_updateLatest)
                 break;
             m_updateLatest = rev;
             qDebug() << "[TrackManager] update: rig build" << rev << "- installed" << m_updateInstalled;
@@ -3352,19 +3356,26 @@ void TrackManager::updateCheck()
             m_updateProbe = nullptr;
         p->deleteLater();
     });
-    // the release's rig-build.txt, as update-qlc.cmd reads it (no login, TLS 1.2)
-    const QString script = QStringLiteral(
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
-        "$r = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/F4MES/qlcplus/releases/tags/rig-latest' "
-        "-Headers @{ 'User-Agent' = 'qlc-rig-update' }; "
-        "$a = $r.assets | Where-Object { $_.name -eq 'rig-build.txt' } | Select-Object -First 1; "
-        "if ($a) { $c = (Invoke-WebRequest -UseBasicParsing -Uri $a.browser_download_url).Content; "
-        "if ($c -is [byte[]]) { $c = [Text.Encoding]::UTF8.GetString($c) }; Write-Output ('REV=' + ([string]$c).Trim()) }");
-    // R475_UPDATE_STDIN: no stdin - with one (QProcess always gives a pipe) "-Command" waited
-    // for its end before it ran: killed at 60 s, never a build, the chip never came
+    // R517_PROBE_NO_POWERSHELL (Tobias 10-31: Windows Defender took qlcplus-qml.exe away five times on
+    // 10-29/30 - killed it mid-show, removed the program and its shortcuts, LIGHTCONTROL.lnk in Startup
+    // too): QLC+ no longer starts PowerShell. An unsigned program that runs "powershell -ExecutionPolicy
+    // Bypass -Command Invoke-RestMethod ..." hidden, 20 s after its start and every 30 min, is what
+    // Defender hunts for. Windows' own curl.exe reads the release's rig-build.txt (the file update-qlc.cmd
+    // reads) straight from GitHub; no curl.exe (Windows before 10 1803) = no check - UPDATE still works.
+    const QString curl = QDir(qEnvironmentVariable("SystemRoot", QStringLiteral("C:\\Windows")))
+                             .filePath(QStringLiteral("System32/curl.exe"));
+    if (QFileInfo::exists(curl) == false)
+    {
+        if (m_updateProbe == p)
+            m_updateProbe = nullptr;
+        p->deleteLater();
+        return;
+    }
+    // R475_UPDATE_STDIN: no stdin (QProcess always gives a pipe) - kept for curl
     p->setStandardInputFile(QProcess::nullDevice());
-    p->start(QStringLiteral("powershell"), QStringList() << QStringLiteral("-NoProfile") << QStringLiteral("-NonInteractive")
-             << QStringLiteral("-ExecutionPolicy") << QStringLiteral("Bypass") << QStringLiteral("-Command") << script);
+    p->start(curl, QStringList() << QStringLiteral("-sSfL") << QStringLiteral("--max-time") << QStringLiteral("45")
+             << QStringLiteral("-A") << QStringLiteral("qlc-rig-update")
+             << QStringLiteral("https://github.com/F4MES/qlcplus/releases/download/rig-latest/rig-build.txt"));
     // a check that hangs (no network) is stopped after a minute; finished() tidies up
     QTimer::singleShot(60000, p, [p]() { if (p->state() != QProcess::NotRunning) p->kill(); });
 #endif
