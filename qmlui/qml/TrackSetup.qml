@@ -1289,6 +1289,65 @@ Rectangle
             }
         }
 
+        // ------------------------------------------------- R526_ANALYSIS_ROW
+        // Tobias 11-01 ("slaa punkt 3 til og fra inde i selve programmet ... saa vi kan teste det naeste gang
+        // paa riggen"; mockup approved the same day): AI SECTIONS / CLASSIC picks whose sections the track
+        // gets, AI DETAILS switches the fine events (pre-drop, the dips in a drop, the outro). A switch reads
+        // the playing track again at once; flags set by hand always win.
+        RowLayout
+        {
+            objectName: "analysisRow"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: 40
+            visible: setupRoot.advancedOpen
+            spacing: 10
+            Text { text: qsTr("TRACK ANALYSIS"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+            TrackTile
+            {
+                objectName: "analysisAi"
+                Layout.preferredWidth: 130
+                Layout.preferredHeight: 34
+                label: qsTr("AI SECTIONS")
+                active: trackManager ? trackManager.aiSections === true : false
+                activeColor: "#4FA3E3"
+                onTapped: if (trackManager) trackManager.aiSections = true
+            }
+            TrackTile
+            {
+                objectName: "analysisClassic"
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 34
+                label: qsTr("CLASSIC")
+                active: trackManager ? trackManager.aiSections === false : false
+                activeColor: "#4FA3E3"
+                onTapped: if (trackManager) trackManager.aiSections = false
+            }
+            Item { Layout.preferredWidth: 14 }
+            TrackTile
+            {
+                objectName: "analysisDetails"
+                Layout.preferredWidth: 130
+                Layout.preferredHeight: 34
+                label: qsTr("AI DETAILS")
+                active: trackManager ? trackManager.aiDetails === true : false
+                activeColor: "#7ED07E"
+                onTapped: if (trackManager) trackManager.aiDetails = !trackManager.aiDetails
+            }
+            Text
+            {
+                objectName: "analysisSub"
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+                text: (trackManager && trackManager.aiSections === false ? qsTr("our own analysis") : qsTr("sections learnt from Time-line Live"))
+                      + "  ·  " + (trackManager && trackManager.aiDetails === true ? qsTr("details on: dark beat before the drop, drop dips, outro")
+                                                                                    : qsTr("details off"))
+                      + "  ·  " + qsTr("your own flags always win")
+                color: setupRoot.cDim
+                font.pixelSize: 12
+            }
+        }
+
         // ------------------------------------------------- R484_EH_ROW_LEGEND
         // Tobias 10-20: "energi skal saette by hand i advanced saadan at den saetter tidspunkterne,
         // men vi kan 'override' ved manuelt at aendre i tidspunkt. Men laeringen skal skrives i

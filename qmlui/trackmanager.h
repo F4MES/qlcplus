@@ -87,6 +87,9 @@ class TrackManager : public QObject
 
     Q_PROPERTY(int listenPort READ listenPort WRITE setListenPort NOTIFY listenPortChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
+    // R526_AI_PROP: SETUP > ADVANCED - the learnt sections (or CLASSIC) and the fine events
+    Q_PROPERTY(bool aiSections READ aiSections WRITE setAiSections NOTIFY aiChanged)
+    Q_PROPERTY(bool aiDetails READ aiDetails WRITE setAiDetails NOTIFY aiChanged)
     Q_PROPERTY(bool bltRunning READ bltRunning NOTIFY bltRunningChanged)   // R465_BLT_LIVE_PROP
     Q_PROPERTY(bool bltKnown READ bltKnown NOTIFY bltRunningChanged)       // R468_BLT_LOOK_PROP
     Q_PROPERTY(int bltStartState READ bltStartState NOTIFY bltStartChanged)   // R468_START_BLT_PROP: 0, 1 starting, 2 it did not
@@ -160,6 +163,10 @@ public:
     int listenPort() const;
     void setListenPort(int port);
     bool connected() const;
+    bool aiSections() const;             // R526_AI_API: trackengine/ai-sections (default on)
+    void setAiSections(bool on);
+    bool aiDetails() const;              // trackengine/ai-details (default off)
+    void setAiDetails(bool on);
     bool bltRunning() const;             // R465_BLT_LIVE_GET
     bool bltKnown() const;               // R468_BLT_LOOK_GET
     int bltStartState() const;           // R468_START_BLT_GET
@@ -326,6 +333,7 @@ signals:
     void midiChanged();                  // R486_MI_SIG
     void listenPortChanged();
     void connectedChanged();
+    void aiChanged();                    // R526_AI_SIG
     void bltRunningChanged();            // R465_BLT_LIVE_SIG
     void bltStartChanged();              // R468_START_BLT_SIG
     void updateChanged();                // R474_UPDATE_SIG
@@ -483,6 +491,8 @@ private:
     QString tempoSource() const; // LINK / DECK / TRACK / CLOCK (runde 308)
 
     QTimer m_energyTimer;
+    QJsonObject m_aiTrackObj;            // R526_AI_KEEP: the track as BLT sent it - a switch re-reads it
+    void aiReapply();
     qint64 m_stopSinceMs = 0;    // STOP_GRACE_R105: when a playing track said stop
     void forgetLinkState();      // LINK_FORGET_FJ3_DECL: NEXT and the mix, as BLT forgets them
 

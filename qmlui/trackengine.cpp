@@ -4340,6 +4340,40 @@ void TrackEngine::setTrackFills(const QVariantList &fills)
     }
 }
 
+// R526_ENGINE_FUNCS (runde 526): the fine events from BLT's model (AI DETAILS in SETUP > ADVANCED)
+void TrackEngine::setTrackEvents(const QVariantList &events)
+{
+    m_aiEvSpan.clear();
+    m_aiEvKind.clear();
+    for (const QVariant &v : events)
+    {
+        const QVariantList p = v.toList();
+        if (p.count() < 3 || p.at(0).toInt() <= 0 || p.at(1).toInt() <= 0)
+            continue;
+        const QString kind = p.at(2).toString();
+        const int k = kind == QStringLiteral("pre") ? 1 : kind == QStringLiteral("dip") ? 2
+                    : kind == QStringLiteral("out") ? 3 : 0;
+        if (k == 0)
+            continue;
+        // a pre-drop or a dip is a few beats - never more than two bars; an outro runs to its end
+        const int len = k == 3 ? p.at(1).toInt() : qMin(p.at(1).toInt(), 8);
+        m_aiEvSpan.append(qMakePair(p.at(0).toInt(), p.at(0).toInt() + len));
+        m_aiEvKind.append(k);
+    }
+    if (m_aiEvKind.isEmpty() == false)
+        qDebug() << "[TrackEngine] AI details:" << m_aiEvKind.count() << "events";
+}
+
+int TrackEngine::aiEventAt(int beat) const
+{
+    for (int i = 0; i < m_aiEvSpan.count(); i++)
+    {
+        if (beat >= m_aiEvSpan.at(i).first && beat < m_aiEvSpan.at(i).second)
+            return m_aiEvKind.at(i);
+    }
+    return 0;
+}
+
 bool TrackEngine::inFill(int beat) const
 {
     for (const QPair<int, int> &f : m_fills)
@@ -13683,6 +13717,30 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             if (lastTrackDark(m_groups.value(key)))
                 darkGroups.insert(key);
+        }
+    }
+    // R526_AI_DARK (Tobias 11-01, punkt 3: "slaa punkt 3 til og fra inde i selve programmet"): AI DETAILS
+    // (SETUP > ADVANCED, off until he turns it on) - the events BLT's model hears as Time-line does: its
+    // pre-drop (only in the last bar before a drop) and the dips inside a drop go dark like the blink -
+    // every group but the base - from 62 % ENERGY; its outro puts the lasers and the strobes out, as the
+    // last track's outro does. Never under CALM, HOLD, FLASH, at the slider's bottom, in a mix, in the
+    // DJ's loop. Nothing moves lit: a dark beat only takes light away.
+    {
+        const int aiEv = aiEventAt(beat);
+        if (aiEv > 0 && isCalm == false && hold == false && still == false && m_mixing == false
+            && m_flash == false && djLoopOn() == false)
+        {
+            const bool aiDark = (aiEv == 1 && preDrop && beatsToNext > 0 && beatsToNext <= 4 && fader >= 0.62)
+                             || (aiEv == 2 && isDrop && fader >= 0.62);
+            foreach (const QString &key, castSet)
+            {
+                if ((aiDark && key != base) || (aiEv == 3 && lastTrackDark(m_groups.value(key))))
+                    darkGroups.insert(key);
+            }
+            if ((aiDark || aiEv == 3) && aiEventAt(beat - 1) != aiEv)
+                logSignal(QStringLiteral("sig:ai-detail:%1:%2")
+                          .arg(aiEv == 1 ? QStringLiteral("pre") : aiEv == 2 ? QStringLiteral("dip") : QStringLiteral("out"))
+                          .arg(beat));
         }
     }
     m_silenceDark = (silenceNow && silenceLong == false && silenceGlow == false) || dropBlack;

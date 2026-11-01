@@ -387,6 +387,10 @@ void TrackManager::handleLine(const QByteArray &line)
 
 void TrackManager::handleTrack(const QJsonObject &obj)
 {
+    // R526_AI_STORE: the track as BLT sent it (not the call below with the learnt set in place), so a
+    // switch in SETUP > ADVANCED can read it again
+    if (obj.contains(QStringLiteral("markersAi")) || obj.contains(QStringLiteral("analysisAi")) == false)
+        m_aiTrackObj = obj;
     // R525_AI_PICK (Tobias 11-01, "Synes vi skal lave alle punkter"): BLT sends the sections learnt
     // from Time-line Live (markersAi - 84 % the same as Time-line on 61 tracks it never saw, ours 73 %)
     // beside its own. They are the track's flags unless trackengine/ai-sections says CLASSIC; hand-made
@@ -454,6 +458,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
                                  obj.value(QStringLiteral("onsetHigh")).toArray().toVariantList());
     if (m_engine != nullptr)            // R359_PUMP: the fall between the kicks
         m_engine->setTrackPump(obj.value(QStringLiteral("pumpRaw")).toArray().toVariantList());
+    if (m_engine != nullptr)            // R526_AI_EVENTS: the fine events - only with AI DETAILS on
+        m_engine->setTrackEvents(aiDetails() ? obj.value(QStringLiteral("events")).toArray().toVariantList()
+                                             : QVariantList());
     if (m_engine != nullptr)            // R461_ONSETS: the bass's and the mids' quarter-beat onsets
         m_engine->setTrackOnsets(obj.value(QStringLiteral("onsetLow")).toArray().toVariantList(),
                                  obj.value(QStringLiteral("onsetMid")).toArray().toVariantList());
@@ -5367,6 +5374,47 @@ void TrackManager::pushUndo()
     m_undo.append(snap);
     while (m_undo.count() > 30)
         m_undo.removeFirst();
+}
+
+// R526_AI_FUNCS (runde 526): SETUP > ADVANCED's TRACK ANALYSIS row (mockup approved 11-01)
+bool TrackManager::aiSections() const
+{
+    return QSettings().value(QStringLiteral("trackengine/ai-sections"), true).toBool();
+}
+
+void TrackManager::setAiSections(bool on)
+{
+    if (on == aiSections())
+        return;
+    QSettings().setValue(QStringLiteral("trackengine/ai-sections"), on);
+    emit aiChanged();
+    aiReapply();
+}
+
+bool TrackManager::aiDetails() const
+{
+    return QSettings().value(QStringLiteral("trackengine/ai-details"), false).toBool();
+}
+
+void TrackManager::setAiDetails(bool on)
+{
+    if (on == aiDetails())
+        return;
+    QSettings().setValue(QStringLiteral("trackengine/ai-details"), on);
+    emit aiChanged();
+    aiReapply();
+}
+
+// the track that plays now, read again as BLT sent it - the flags (and the events) follow the switch at
+// once; the same title is a resend, so the song's place and the engine are kept (R187), and flags set
+// by hand stay (R213)
+void TrackManager::aiReapply()
+{
+    if (m_aiTrackObj.isEmpty() || m_title.isEmpty()
+        || m_aiTrackObj.value(QStringLiteral("title")).toString() != m_title)
+        return;
+    const QJsonObject again = m_aiTrackObj;
+    handleTrack(again);
 }
 
 bool TrackManager::canUndoMarkers() const { return m_undo.isEmpty() == false; }
