@@ -1266,6 +1266,9 @@ public:
     /** Runde 357 (R357_FILLS): rekordbox' fill-ins, [first beat, end beat)
      *  per phrase that has one - the drum fill into the next phrase. */
     void setTrackFills(const QVariantList &fills);
+    /** R526_ENGINE_DECL: the fine events BLT's model hears (AI DETAILS) - [beat, length, "pre"|"dip"|"out"]
+     *  per event, 1-based beats; an empty list when AI DETAILS is off. */
+    void setTrackEvents(const QVariantList &events);
     /** Runde 358 (R358_RHYTHM): per beat the mid band unsmoothed (0-255,
      *  the track's own 90th percentile = 255) and the highs' onset in each
      *  quarter of the beat, four nibbles (quarter q in bits 4q..4q+3, 0-15). */
@@ -2433,6 +2436,9 @@ private:
     // ---- runde 357 ----
     QVector<QPair<int, int> > m_fills;   // R357_FILLS
     bool inFill(int beat) const;
+    QVector<QPair<int, int> > m_aiEvSpan;   // R526_ENGINE_MEMBERS: [first beat, end beat) per AI event
+    QVector<int> m_aiEvKind;                // 1 pre-drop, 2 a dip in a drop, 3 outro
+    int aiEventAt(int beat) const;          // the event's kind at the beat, 0 none
     int m_curBeat = -1;                  // this tick's beat, set before anything is drawn
     int m_landBurstUntil = -1;           // R357_STROBE_LAND: the landing burst, the only hardware strobe on the strobe lamps
     bool landBurstNow() const { return m_landBurstUntil >= 0 && m_curBeat >= 0 && m_curBeat <= m_landBurstUntil; }
