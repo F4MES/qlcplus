@@ -387,6 +387,21 @@ void TrackManager::handleLine(const QByteArray &line)
 
 void TrackManager::handleTrack(const QJsonObject &obj)
 {
+    // R525_AI_PICK (Tobias 11-01, "Synes vi skal lave alle punkter"): BLT sends the sections learnt
+    // from Time-line Live (markersAi - 84 % the same as Time-line on 61 tracks it never saw, ours 73 %)
+    // beside its own. They are the track's flags unless trackengine/ai-sections says CLASSIC; hand-made
+    // flags always win. The learnt set is final (no second pass): the call runs again with it in place.
+    if (obj.value(QStringLiteral("manual")).toBool(false) == false
+        && obj.value(QStringLiteral("markersAi")).toArray().count() >= 2
+        && QSettings().value(QStringLiteral("trackengine/ai-sections"), true).toBool())
+    {
+        QJsonObject ai = obj;
+        ai.insert(QStringLiteral("markers"), obj.value(QStringLiteral("markersAi")));
+        ai.insert(QStringLiteral("analysis"), qMax(10, obj.value(QStringLiteral("analysisAi")).toInt(15)));
+        ai.remove(QStringLiteral("markersAi"));
+        handleTrack(ai);
+        return;
+    }
     // R187_SAME_TRACK: the track that is playing, sent again - BLT resends
     // after every reconnect and when its shared functions are saved, and
     // (the same song from the OTHER deck is a new play, R188_TRACK_PLAYER -
@@ -5465,7 +5480,10 @@ void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
         if (m_engine != nullptr)
             m_engine->setNextKey(obj.value(QStringLiteral("key")).toString());
         m_nextMarkers.clear();
-        QJsonArray mk = obj.value(QStringLiteral("markers")).toArray();
+        // R525_AI_NEXT: the learnt sections for the preview too, as handleTrack picks them
+        const bool nextAi = obj.value(QStringLiteral("markersAi")).toArray().count() >= 2
+            && QSettings().value(QStringLiteral("trackengine/ai-sections"), true).toBool();
+        QJsonArray mk = obj.value(nextAi ? QStringLiteral("markersAi") : QStringLiteral("markers")).toArray();
         for (int i = 0; i < mk.count(); i++)
         {
             QJsonObject mo = mk.at(i).toObject();
