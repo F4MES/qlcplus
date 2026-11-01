@@ -18935,6 +18935,10 @@ void TrackEngine::advanceLook()
         return;
     m_forceNext = true;
     nextRemember();                      // R483_NEXT_MEM: what was on stage is not offered again
+    // R524_BALL_NEXT (Tobias 11-01: "det er umuligt at trykke next look naar de lyser paa diskokuglen"): NEXT
+    // ends the ball at once - its heads go home dark and join the new look; no new ball in this break
+    if (m_r493DiscoPhase == 1 || m_r493DiscoPhase == 2)
+        r493DiscoHome(m_lastBeat, QStringLiteral("next"));
     emit liveChanged();
 }
 
@@ -33800,8 +33804,8 @@ static const R493RoomRow r493RoomRows[] = {
     { 499, "Mini 4 Eyes", 0.6650, 0.0410 },
 };
 static const int r493RoomRowCount = 24;
-static const int r493RoomDisco[] = { 132, 96 };
-static const int r493RoomDiscoCount = 2;
+static const int r493RoomDisco[] = { 132, 96, 59, 1 };
+static const int r493RoomDiscoCount = 4;
 static const qreal r493RoomBallX = 0.5040;
 static const qreal r493RoomBallY = 0.0600;
 static const char r493RoomStatus[] = "map";
@@ -35688,6 +35692,15 @@ bool TrackEngine::r493DiscoBuild(const QString &group, const QList<quint32> &hea
     if (colourScene == nullptr)
         return false;
     QList<Scene *> starts;
+    // R524_BALL_AIM (Tobias 11-01: "den mangler hoejre side"): his own disco scene first - "START DISCO FADE"
+    // aims the two right heads (Light Rider 07 and 08) at the ball, the START scene only the two left ones
+    // (the same aim there); then the START scene as before
+    foreach (Function *func, m_doc->functions())
+    {
+        Scene *sc = qobject_cast<Scene *>(func);
+        if (sc != nullptr && sc->name().startsWith(QStringLiteral("START DISCO"), Qt::CaseInsensitive))
+            starts << sc;
+    }
     foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_IDLE, QString()))
     {
         Scene *sc = qobject_cast<Scene *>(m_doc->function(info->id));
