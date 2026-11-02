@@ -483,6 +483,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
                                 obj.value(QStringLiteral("lowRef")).toDouble(-1.0));
 
     const bool keepLocal = resent && m_markersManual;       // R213_KEEP_HAND_FLAGS
+    // R529_AI_SET: the page's stripes - the learnt set's certainty, none when his flags stay (a resend)
+    m_aiConf = (obj.value(QStringLiteral("aiPicked")).toBool(false) && keepLocal == false)
+             ? obj.value(QStringLiteral("aiConf")).toArray().toVariantList() : QVariantList();
     if (keepLocal == false)
         m_markers.clear();
     QJsonArray mk = keepLocal ? QJsonArray() : obj.value(QStringLiteral("markers")).toArray();

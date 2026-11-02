@@ -1047,6 +1047,41 @@ Rectangle
                         ctx.fillRect(i * px, base - bh, Math.max(1, px), bh)
                     }
 
+                    // R529_AI_UNSURE (Tobias 11-02, forslag 3, mockup approved): where the learnt sections are unsure
+                    // (under 0.60 - BLT's aiConf, only on the learnt set and never over his own flags) faint diagonal
+                    // stripes over those bars, so a glance shows where a flag is worth checking
+                    var conf = (trackManager.aiConf && !(typeof trackManager.markersManual === "function" && trackManager.markersManual()))
+                               ? trackManager.aiConf : []
+                    if (conf.length > 0)
+                    {
+                        ctx.save()
+                        ctx.strokeStyle = "rgba(255,255,255,0.20)"
+                        ctx.lineWidth = 1
+                        var ui = 0
+                        while (ui < conf.length)
+                        {
+                            if (conf[ui][1] >= 0.60) { ui++; continue }
+                            var uj = ui
+                            while (uj + 1 < conf.length && conf[uj + 1][1] < 0.60) uj++
+                            var ub0 = conf[ui][0], ub1 = uj + 1 < conf.length ? conf[uj + 1][0] : n + 1
+                            ui = uj + 1
+                            if (ub1 < vf || ub0 > vf + vc) continue
+                            var ux0 = Math.max(0, xOf(ub0)), ux1 = Math.min(w, xOf(ub1))
+                            var utop = lane
+                            ctx.save()
+                            ctx.beginPath(); ctx.rect(ux0, utop, ux1 - ux0, base - utop); ctx.clip()
+                            ctx.beginPath()
+                            var uh = base - utop
+                            for (var ux = ux0 - uh - (ux0 % 9); ux < ux1; ux += 9)
+                            {
+                                ctx.moveTo(ux, base); ctx.lineTo(ux + uh, utop)
+                            }
+                            ctx.stroke()
+                            ctx.restore()
+                        }
+                        ctx.restore()
+                    }
+
                     var gridStep = trackViewRoot.zoomActive ? 4 : 32
                     ctx.strokeStyle = "rgba(255,255,255,0.12)"
                     ctx.lineWidth = 1
