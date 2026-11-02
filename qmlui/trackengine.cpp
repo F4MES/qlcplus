@@ -806,10 +806,12 @@ void TrackEngine::slotPulseTimer()
             any = true;
             qreal within = qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999);
             within = r493SwingWithin(key, mv, within);   // R493_A1_WARP: swing - the odd step late, never an extra one
+            if (m_r534Frozen)
+                within = 0.0;                    // R534_SUB_FREEZE: an empty beat - no steps between the beats either
             int sub = int(within * mv.subSteps);
             if (rhythmChase) {
-                const auto nowFrame = trackChaseFrame(m_beatIndex + within, mv.stepBeats, mv.subSteps, mv.phase, mv.rhythm);
-                const auto beatFrame = trackChaseFrame(m_beatIndex, mv.stepBeats, mv.subSteps, mv.phase, mv.rhythm);
+                const auto nowFrame = trackChaseFrame(r534ChaseAt(m_beatIndex) + within, mv.stepBeats, mv.subSteps, mv.phase, mv.rhythm);   // R534_SUB_FRAME
+                const auto beatFrame = trackChaseFrame(r534ChaseAt(m_beatIndex), mv.stepBeats, mv.subSteps, mv.phase, mv.rhythm);
                 sub = nowFrame.step - beatFrame.step; // a pulse only at a real new chase event
             }
             // every sub-step is a hit of its own: without this the pulse
@@ -825,7 +827,7 @@ void TrackEngine::slotPulseTimer()
                 m_subStepSeen.insert(key, sub);
                 m_pulseStart.insert(key, now);
             }
-            QVector<qreal> mask = livePatternMask(key, mv, m_beatIndex + within, 1.0);
+            QVector<qreal> mask = livePatternMask(key, mv, r534ChaseAt(m_beatIndex) + within, 1.0);   // R534_SUB_MASK
             qreal level = m_moveLevel.value(key, 0.0);
             for (int i = 0; i < mask.count(); i++)
             {
@@ -4168,6 +4170,65 @@ int TrackEngine::r501OnsetAt(int beat, int quarter) const
     return (lo >= 5 || mi >= 4 || hi >= 4) ? 1 : 0;
 }
 
+// R534_FN (Tobias 11-02: "det er som om at chases, og pumpen fortsaetter selvom der ikke er et kick/bas"
+// -> 1 "ja", 3 "lad os proeve (men maa ogsaa gerne choppe i builds)"). r501 made the blinks follow the
+// kick; the chases' own steps were left running on the beat. Now a beat with neither a kick nor the bass
+// holds them (and, in a build, neither a snare nor a clap): r534MusicBeat 1 = music, 0 = empty, -1 = not known
+// (no raw curves: as before, the chases run).
+int TrackEngine::r534BuildHit(int beat) const
+{
+    // a build's hit: a kick, the mids (snare) or a clap in the highs - not a hat: highs on three or four
+    // of the beat's quarters are a hat line, not a clap
+    const int kick = r501KickAt(beat, false);
+    const int mid = onsetMid(beat, 0);
+    const int hi = onsetHigh(beat, 0);
+    if (kick < 0 && mid < 0 && hi < 0)
+        return -1;
+    int hats = 0;
+    for (int q = 0; q < 4; q++)
+        if (onsetHigh(beat, q) >= 4)
+            hats++;
+    return (kick == 1 || mid >= 4 || (hi >= 4 && hats < 3)) ? 1 : 0;
+}
+
+int TrackEngine::r534MusicBeat(int beat, bool build) const
+{
+    const int kick = r501KickAt(beat, false);
+    const int bass = onsetLow(beat, 0);
+    if (kick < 0 && bass < 0)
+        return -1;
+    if (kick == 1 || bass >= 5)
+        return 1;
+    if (build)
+        return r534BuildHit(beat) == 1 ? 1 : 0;
+    return 0;
+}
+
+void TrackEngine::r534ChaseHold(const QString &key, quint32 mf, bool freeze)
+{
+    // a programme (QLC+ chaser / sequence) the engine runs on the group stands on its step while the beat
+    // is empty: paused, and let go on the next beat with music (Link puts it back on the grid)
+    const quint32 held = m_r534Held.value(key, Function::invalidId());
+    if (held != Function::invalidId() && (held != mf || freeze == false))
+    {
+        Function *hf = m_doc != nullptr ? m_doc->function(held) : nullptr;
+        if (hf != nullptr && hf->isPaused())
+            hf->setPause(false);
+        m_r534Held.remove(key);
+    }
+    if (freeze == false || mf == Function::invalidId() || m_doc == nullptr)
+        return;
+    const int type = m_funcs.value(mf).type;
+    if (type != int(Function::ChaserType) && type != int(Function::SequenceType))
+        return;
+    Function *f = m_doc->function(mf);
+    if (f == nullptr || f->isRunning() == false)
+        return;
+    if (f->isPaused() == false)
+        f->setPause(true);
+    m_r534Held.insert(key, mf);
+}
+
 bool TrackEngine::r501PulseHit(int beat, int pulseOn, bool grid, bool ani) const
 {
     const int kick = r501KickAt(beat, false);
@@ -5302,7 +5363,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
             else
             {
                 const TrackMove mv = m_liveMove.value(key);
-                const QVector<qreal> mask = livePatternMask(key, mv, m_beatIndex, 1.0);
+                const QVector<qreal> mask = livePatternMask(key, mv, r534ChaseAt(m_beatIndex), 1.0);   // R534_JOIN_MASK
                 joins = joins && mv.pattern == ENGINE_PAT_STATIC && !mask.isEmpty()
                      && std::all_of(mask.begin(), mask.end(), [](qreal v) { return v >= 0.99; });
             }
@@ -14768,6 +14829,26 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_beatMs = 60000.0 / bpm;
     m_beatStartMs = m_clock.elapsed();
     m_beatIndex = beat - secStart;
+    // R534_CLOCK: the chase clock - an empty beat holds the chases on their step; after four empty beats
+    // in a row they take one step on each bar line (slowed, not dead). Back with the next kick / bass,
+    // from where they stood. Not under HOLD or CALM, not in the bar before a drop (it pulls the room in).
+    if (sectionChanged)
+    {
+        m_r534Lag = 0;
+        m_r534Empty = 0;
+    }
+    m_r534Frozen = false;
+    if (hold == false && isCalm == false && preDrop == false && r534MusicBeat(beat, isBuild) == 0)
+    {
+        m_r534Empty++;
+        if (m_r534Empty <= 4 || beatInBar != 0)
+        {
+            m_r534Lag++;
+            m_r534Frozen = true;
+        }
+    }
+    else
+        m_r534Empty = 0;
     // R493_A1_TICK (runde 493, A1): this beat's swing and chord stabs (r493_groove.inc.cpp) - ends
     // a running stab blink before the beat's colour is drawn
     r493GrooveBeat(beat, secStart, fader, isDrop, isBuild, isBreak, isCalm, hold, still, preDrop, landing);
@@ -14874,6 +14955,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // On the log so the trial can be measured instead of remembered.
     bool strobeChase = false;
 
+    // R534_RELEASE: a programme held on its step is let go when its group leaves the cast (or HOLD/CALM)
+    foreach (const QString &key, m_r534Held.keys())
+        if (castSet.contains(key) == false || hold || isCalm)
+            r534ChaseHold(key, Function::invalidId(), false);
     foreach (const QString &key, m_groupOrder)
     {
         const TrackGroup &g = m_groups.value(key);
@@ -15995,7 +16080,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // stille(ere)". Only a pulse on every beat (pulseOn 0), never the strobes, the laser
                 // bars or the animation laser (which keeps its own gate rule below).
                 const bool grid = isBuild || (isBreak && key == base && fader >= 0.75 && isCalm == false);
-                if (r501PulseHit(beat, mv.pulseOn, grid, g.patternDevice) == false)
+                // R534_BUILD_HIT (Tobias 11-02, 3): a build's grid hits on a kick, the snare or a clap - not on the
+                // hats alone (r534BuildHit; not known: as r501). The engine's chops in a build are untouched.
+                if (r501PulseHit(beat, mv.pulseOn, grid, g.patternDevice) == false
+                    || (isBuild && g.patternDevice == false && r534BuildHit(beat) == 0))
                 {
                     pulseBeat = false;
                     r506Hold = mv.pulseOn == 0 && g.strobes == false && g.lasers == false
@@ -16040,6 +16128,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           && (cf == Function::invalidId() || m_funcs.value(cf).dimmer == false)
                           && (mf == Function::invalidId() || m_funcs.value(mf).dimmer == false);
             m_patterned.insert(key, patterned);
+            // R534_HOLD_PROG: the group's programme stands on its step on an empty beat (not the lasers - a bar
+            // programme let go again is put back on the Link grid, and a lit beam never jumps; not his flash)
+            r534ChaseHold(key, mf, m_r534Frozen && g.lasers == false && g.patternDevice == false && m_flashHeld.contains(key) == false);
 
             // WHO OWNS THE DIMMERS. The engine's own dimmer parts are written
             // with Universe::ReplaceBlend - "own this channel while AUTO runs"
@@ -17675,7 +17766,7 @@ void TrackEngine::applyMove(const QString &group, qreal level, int beat, int sec
         eff.pattern = ENGINE_PAT_STATIC;
         eff.formMask = 0;                // R488_DX_MASK_PROG: a programme's picture is its own
     }
-    QVector<qreal> mask = livePatternMask(group, eff, beat - secStart, prog);
+    QVector<qreal> mask = livePatternMask(group, eff, r534ChaseAt(beat - secStart), prog);   // R534_MOVE_MASK: the chase clock
     for (int i = 0; i < n; i++)
         setPart(group, i, level * mask.at(i));
 }

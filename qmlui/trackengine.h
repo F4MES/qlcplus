@@ -1026,6 +1026,11 @@ public:
     bool r533Draw(int s, quint32 salt) const;
     bool r533DropBaseOut(int s, qreal fader) const;
     bool r533BreakBaseOut(int s, int len, qreal fader) const;
+    /** R534_DECL: the chases follow the music (r534MusicBeat: kick or bass, in a build also the snare/claps) */
+    int r534MusicBeat(int beat, bool build) const;
+    int r534BuildHit(int beat) const;
+    int r534ChaseAt(int idx) const { return qMax(0, idx - m_r534Lag); }
+    void r534ChaseHold(const QString &key, quint32 mf, bool freeze);
     int r533PlanAt() const { return m_r533PlanAt >= 0 ? m_r533PlanAt : m_dropPlanFor; }
 
     QVariantList palette();
@@ -2214,6 +2219,12 @@ private:
     int m_r533OutFor = -1;
     bool m_r533LastBreakOut = false;
     int m_r533PlanAt = -1;
+    // R534_MEMBERS: the chase clock held back by the empty beats of this section, the empty beats in a
+    // row, whether this beat holds the chases, and the programmes held (paused) per group
+    int m_r534Lag = 0;
+    int m_r534Empty = 0;
+    bool m_r534Frozen = false;
+    QHash<QString, quint32> m_r534Held;
     /* R384_ALONE_LATCH: the section started at 90 % on the slider */
     bool m_aloneArmed = false;
     /* R385_BARS_FULL: this alone break is the full-light one (every second) */
