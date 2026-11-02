@@ -23722,6 +23722,25 @@ QList<SceneValue> TrackEngine::labSceneValues(const QString &key, const QString 
             lit = false;                     // RIGHT: the last
         if (k.kind == QStringLiteral("swap") && n >= 2)
             lit = lit && (i % 2) == (qMax(0, step) % 2);
+        // R538_LAB_ONE (Tobias 11-02: "Lav laserlab til kun at vise laseren paa kanal 203, selvfoelgelig kun i
+        // labbet, naar den koerer show skal den anden spejle. 203 er den der peger mod dj'en, laengst vaek modsat
+        // dj'en i rummet"): in the LAB only the animation laser at DMX 203 lights - every picture, LEFT/RIGHT/swap
+        // included; the other is held dark (dimmer 0). The show is untouched (the second one mirrors there).
+        // A rig without a laser at 203: as before.
+        {
+            bool has203 = false;
+            foreach (quint32 f203, m_labFixtures)
+            {
+                Fixture *x203 = m_doc != nullptr ? m_doc->fixture(f203) : nullptr;
+                if (x203 != nullptr && x203->address() + 1 == 203)
+                    has203 = true;
+            }
+            if (has203)
+            {
+                Fixture *xi = m_doc->fixture(fx);
+                lit = xi != nullptr && xi->address() + 1 == 203;
+            }
+        }
         const QHash<QString, quint32> roles = m_labChan.value(fx);
         for (QHash<QString, quint32>::const_iterator it = roles.constBegin(); it != roles.constEnd(); ++it)
         {
