@@ -1016,6 +1016,8 @@ public:
     /** R430: a small LED wash - not the base, no movement, strobe, laser or
      *  pattern (the Mini 4 Eyes). Never the lead, never a budget place. */
     bool smallWash(const QString &key) const;
+    /** R531_MINI_DECL: a small wash that uses no budget place - only from 70 % on the slider */
+    bool r531MiniFree(const QString &key, qreal fader) const;
 
     QVariantList palette();
     bool showAll() const;
