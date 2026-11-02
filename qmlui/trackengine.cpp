@@ -24161,8 +24161,24 @@ bool TrackEngine::labOpen()
         refuse = tr("laser lab: no height of yours to hold - make one scene with the laser where it belongs");
     else if (m_blackout)
         refuse = tr("laser lab: BLACKOUT is on");
-    else if (m_groupOff.contains(m_labGroup))
-        refuse = tr("laser lab: %1 is switched OFF").arg(m_labGroup);
+    // R537_LAB_GROUP (Tobias 11-02: "Laser lab siger at animationslaser er switched off, men de er taendt"):
+    // the lab named the animation lasers by the largest FIXTURE group holding the first one - not
+    // necessarily the engine's group, whose switch RIG shows. A name that is not the engine's group
+    // (another fixture group, a switch left from an older show) refused the lab with the lasers on.
+    // Now the engine's group holding the lab's lasers decides, and only its own RIG switch refuses.
+    if (m_labFixtures.isEmpty() == false && m_groups.contains(m_labGroup) == false)
+    {
+        foreach (const QString &key, m_groupOrder)
+        {
+            if (m_groups.value(key).fixtures.contains(m_labFixtures.first()))
+            {
+                m_labGroup = key;
+                break;
+            }
+        }
+    }
+    if (refuse.isEmpty() && m_groups.contains(m_labGroup) && m_groupOff.contains(m_labGroup))
+        refuse = tr("laser lab: %1 is switched OFF in RIG - tap it on there first").arg(m_labGroup);
     if (refuse.isEmpty() == false)
     {
         m_report = refuse;
