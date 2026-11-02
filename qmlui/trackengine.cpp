@@ -37183,6 +37183,11 @@ QString TrackEngine::r497CurtainMayRun(const QString &key, QList<quint32> *order
     if (m_override.isEmpty() == false || m_overrideSet.isEmpty() == false || savedActive() || m_startScene
         || m_lastStage != 0 || m_labActive || m_slabActive || m_clabActive)
         return QStringLiteral("his");
+    // R530_CURTAIN_70 (Tobias 11-02: "Gardin/split foerst fra 70 %"): under 70 % on the slider a mix
+    // glides the whole room's colour as before r497 - no curtain, so no split either (r509 rides on it).
+    // A curtain already running when the slider comes down goes on to its end (no jump mid-mix).
+    if (m_r497CurtainOn == false && m_faderReal < 0.70 - 1e-9)
+        return QStringLiteral("low");
     if (order != nullptr)
         *order = hang;
     return QString();
