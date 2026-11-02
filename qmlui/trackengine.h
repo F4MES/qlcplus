@@ -1029,6 +1029,10 @@ public:
     /** R534_DECL: the chases follow the music (r534MusicBeat: kick or bass, in a build also the snare/claps) */
     int r534MusicBeat(int beat, bool build) const;
     int r534BuildHit(int beat) const;
+    /** R535_DECL: the music profile, only logged (r535BeatClass / r535Profile / r535DropType) */
+    QChar r535BeatClass(int beat) const;
+    QString r535Profile(int from, int n) const;
+    QString r535DropType(int from, int to) const;
     int r534ChaseAt(int idx) const { return qMax(0, idx - m_r534Lag); }
     void r534ChaseHold(const QString &key, quint32 mf, bool freeze);
     int r533PlanAt() const { return m_r533PlanAt >= 0 ? m_r533PlanAt : m_dropPlanFor; }
@@ -2225,6 +2229,9 @@ private:
     int m_r534Empty = 0;
     bool m_r534Frozen = false;
     QHash<QString, quint32> m_r534Held;
+    // R535_MEMBERS: the profile of the bar now and the drop type of this section (log only)
+    QString m_r535Prof;
+    QString m_r535Type;
     /* R384_ALONE_LATCH: the section started at 90 % on the slider */
     bool m_aloneArmed = false;
     /* R385_BARS_FULL: this alone break is the full-light one (every second) */

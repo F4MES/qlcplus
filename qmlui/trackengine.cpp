@@ -4191,6 +4191,91 @@ int TrackEngine::r534BuildHit(int beat) const
     return (kick == 1 || mid >= 4 || (hi >= 4 && hats < 3)) ? 1 : 0;
 }
 
+// R535_FN (Tobias 11-02: "Ja, lad os starte med at lave loggen saa vi kan se om det giver mening"): the
+// music profile of the proposal "Musikprofil: lampetyper efter musikken" - ONLY logged, nothing on stage
+// changes. A beat is: A kick and bass, B kick without bass, C bass without kick, D melody/mids, E highs only,
+// F low/almost quiet. Lines as measured on the library (576 tracks): the raw kick at 20 %, the bass as a bass
+// onset on any quarter (the library used the low curve too: 87-92 % the same outside drops), mids and highs
+// at 40 %, quiet under 20 % of the track's level. '?' = no raw curves.
+QChar TrackEngine::r535BeatClass(int beat) const
+{
+    if (beat < 1 || beat > m_audLevel.count() || m_audKick.count() != m_audLevel.count())
+        return QLatin1Char('?');
+    if (m_audLevel.at(beat - 1) < 51)
+        return QLatin1Char('F');
+    const bool kick = m_audKick.at(beat - 1) >= 51;
+    bool bass = false;
+    for (int q = 0; q < 4; q++)
+        if (onsetLow(beat, q) >= 5)
+            bass = true;
+    if (onsetLow(beat, 0) < 0)
+        bass = kick;                     // no onsets from BLT: a kick is taken to carry its bass
+    if (kick)
+        return QLatin1Char(bass ? 'A' : 'B');
+    if (bass)
+        return QLatin1Char('C');
+    if (audMid(beat) >= 0.40)
+        return QLatin1Char('D');
+    bool hats = audHighN(beat) >= 0.40;
+    if (onsetHigh(beat, 0) >= 4)
+        hats = true;
+    return QLatin1Char(hats ? 'E' : 'F');
+}
+
+QString TrackEngine::r535Profile(int from, int n) const
+{
+    int count[7] = { 0, 0, 0, 0, 0, 0, 0 };
+    for (int b = from; b < from + n; b++)
+    {
+        const QChar c = r535BeatClass(b);
+        const int i = c == QLatin1Char('?') ? 6 : c.toLatin1() - 'A';
+        if (i >= 0 && i < 7)
+            count[i]++;
+    }
+    int best = 6;
+    for (int i = 0; i < 7; i++)
+        if (count[i] > count[best])
+            best = i;
+    static const char *names[] = { "kick-bas", "kick-uden-bas", "bas-uden-kick", "melodi", "hats", "stille", "ukendt" };
+    return QString::fromLatin1(names[best]);
+}
+
+QString TrackEngine::r535DropType(int from, int to) const
+{
+    // the five drop types, over the section: kick on under 70 % of the beats = half time / broken, the bass on
+    // the "and" on half the beats = rolling bass, mids at 70 % = melodic/vocal, hats on 3 quarters a beat on
+    // average = dense percussion, else classic 4/4
+    if (m_audKick.count() != m_audLevel.count() || m_audKick.isEmpty())
+        return QString();
+    from = qMax(1, from);
+    to = qMin(int(m_audKick.count()), to);
+    if (to - from < 8)
+        return QString();
+    int kicks = 0, off = 0, hats = 0;
+    qreal mid = 0.0;
+    for (int b = from; b < to; b++)
+    {
+        if (m_audKick.at(b - 1) >= 51)
+            kicks++;
+        if (onsetLow(b, 2) >= 5)
+            off++;
+        for (int q = 0; q < 4; q++)
+            if (onsetHigh(b, q) >= 4)
+                hats++;
+        mid += audMid(b);
+    }
+    const qreal n = qreal(to - from);
+    if (kicks / n < 0.70)
+        return QStringLiteral("halvtid");
+    if (off / n >= 0.50)
+        return QStringLiteral("rullende");
+    if (mid / n >= 0.70)
+        return QStringLiteral("melodisk");
+    if (hats / n >= 3.0)
+        return QStringLiteral("taet");
+    return QStringLiteral("klassisk");
+}
+
 int TrackEngine::r534MusicBeat(int beat, bool build) const
 {
     const int kick = r501KickAt(beat, false);
@@ -14849,6 +14934,19 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     else
         m_r534Empty = 0;
+    // R535_TICK: the bar's profile (this beat and the 7 after it), on every bar line and section change; the
+    // section's drop type in a drop or a groove. Logged when it changes - nothing else reads it (yet).
+    if (beatInBar == 0 || sectionChanged)
+    {
+        const QString prof = r535Profile(beat, 8);
+        const QString type = (isDrop || state == QStringLiteral("normal") || state == QStringLiteral("drive"))
+                           ? r535DropType(secStart, secEnd > secStart ? qMin(secEnd, secStart + 64) : secStart + 32) : QString();
+        if ((prof != m_r535Prof || type != m_r535Type || sectionChanged) && m_testTrack == false)
+            logSignal(QStringLiteral("sig:profile:%1:%2%3@%4").arg(state, prof,
+                      type.isEmpty() ? QString() : QStringLiteral(":") + type).arg(beat));
+        m_r535Prof = prof;
+        m_r535Type = type;
+    }
     // R493_A1_TICK (runde 493, A1): this beat's swing and chord stabs (r493_groove.inc.cpp) - ends
     // a running stab blink before the beat's colour is drawn
     r493GrooveBeat(beat, secStart, fader, isDrop, isBuild, isBreak, isCalm, hold, still, preDrop, landing);
@@ -16694,8 +16792,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             else if (toDrop < 0 && isBuild && fader >= 0.72 && prog >= 0.75)   // R374_SPREAD
                 chop = 1;
         }
-        else if (chopOk && isBreak && fader >= 0.90)
-            chop = 1;
+        else if (chopOk && isBreak && fader >= 0.90 && r534MusicBeat(beat, false) != 0)   // R535_BREAK_CHOP
+            chop = 1;                    // (Tobias 11-02: "det er kun i builds den skal choppe" - a break beat with
+                                         // neither a kick nor the bass is not stabbed; curves not known: as before)
         // Runde 357 (Tobias: "se om det er muligt og goer det hvis det er"):
         // the stabs follow the drum roll where rekordbox has marked one. The
         // waveform cannot hear a snare roll - its own onset count stood at
@@ -16815,6 +16914,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_hatsOut) ev << "hats-out";
         if (closing < 1.0) ev << "closing";
         if (m_kickGone >= 4 && isBreak == false) ev << "kick-gone";
+        if (m_r535Prof.isEmpty() == false)       // R535_EV: the bar's music profile (log only)
+            ev << QStringLiteral("prof-") + m_r535Prof + (m_r535Type.isEmpty() ? QString() : QStringLiteral("-") + m_r535Type);
         if (m_curveBreak) ev << "curve-break";          // runde 192
         if (m_curveGroove) ev << "curve-groove";
         if (dropHidden) ev << "drop-hidden";
