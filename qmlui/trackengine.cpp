@@ -6761,6 +6761,16 @@ bool TrackEngine::smallWash(const QString &key) const
     return g.heads == false && g.strobes == false && g.lasers == false && g.patternDevice == false;
 }
 
+bool TrackEngine::r531MiniFree(const QString &key, qreal fader) const
+{
+    // R531_MINI_FN (Tobias 11-02, A: "Lav dit forslag til A"): runde 430 let the Minis come along
+    // without using a budget place. Under 70 % on the slider that put one more real group in every
+    // drop and build, and in breaks the freed place mostly went to the strobes (the 3-70 % bisect,
+    // analysis_eval/r529). Under 70 % a Mini uses a place again; from 70 % it is free as before.
+    // It is never the lead either way (R430_MINI_NO_LEAD).
+    return smallWash(key) && fader >= 0.70 - 1e-9;
+}
+
 void TrackEngine::toggleDropGroup(QString key)
 {
     // R431_DROP_PICK: a tap on a group's name in RIG - out of the drop, or in.
@@ -6900,7 +6910,7 @@ QStringList TrackEngine::planCast(const QString &section, qreal fader) const
         set.insert(key);
         bars = bars || isBars;
         ani = ani || g.patternDevice;
-        if (smallWash(key) == false)
+        if (r531MiniFree(key, fader) == false)   // R531_MINI_PLAN
             used++;
     }
     return inRoomOrder(set);
@@ -6976,7 +6986,7 @@ QStringList TrackEngine::planDropCast(qreal fader) const
         set.insert(key);
         bars = bars || isBars;
         ani = ani || g.patternDevice;
-        if (smallWash(key) == false)
+        if (r531MiniFree(key, fader) == false)   // R531_MINI_DROPPLAN
             used++;
     }
     QStringList out;
@@ -12285,7 +12295,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         for (int i = 0; i < priority.count() && used < effects; i++)
         {
             castSet.insert(priority.at(i));
-            if (smallWash(priority.at(i)) == false)
+            if (r531MiniFree(priority.at(i), fader) == false)   // R531_MINI_CAST: a place under 70 %
                 used++;
         }
         // Runde 235: the other WASH groups stand in every break beside the
@@ -19142,11 +19152,12 @@ bool TrackEngine::nextVariety(QStringList &priority, int effects, const QString 
     int bestSeen = seenNow;
     for (int i = int(priority.count()) - 1; i >= first && bestSeen > 0; i--)
     {
-        if (picks.contains(priority.at(i)) == false || smallWash(priority.at(i)))
+        // R531_MINI_VARIETY: a Mini that uses a place (under 70 %) swaps like any real group
+        if (picks.contains(priority.at(i)) == false || r531MiniFree(priority.at(i), m_faderReal))
             continue;
         for (int j = i + 1; j < priority.count() && bestSeen > 0; j++)
         {
-            if (smallWash(priority.at(j)) || picks.contains(priority.at(j)))
+            if (r531MiniFree(priority.at(j), m_faderReal) || picks.contains(priority.at(j)))
                 continue;
             QStringList trial = priority;
             trial.move(j, i);
@@ -19165,7 +19176,7 @@ bool TrackEngine::nextVariety(QStringList &priority, int effects, const QString 
     {
         for (int j = 0; j < priority.count(); j++)
         {
-            if (smallWash(priority.at(j)) == false || picks.contains(priority.at(j)) == false)
+            if (r531MiniFree(priority.at(j), m_faderReal) == false || picks.contains(priority.at(j)) == false)   // R531_MINI_OUTOF
                 continue;
             QStringList trial = priority;
             trial.move(j, trial.count() - 1);        // out of reach of the budget, never in front
@@ -26742,7 +26753,7 @@ QStringList TrackEngine::dropPicks(const QStringList &priority, int effects) con
         bars = bars || isBars;
         ani = ani || g.patternDevice;
         out << key;
-        if (smallWash(key) == false)
+        if (r531MiniFree(key, m_faderReal) == false)   // R531_MINI_PICKS
             used++;
     }
     return out;
@@ -26785,11 +26796,11 @@ void TrackEngine::dropVariety(QStringList &priority, int effects, const QString 
     // that would make it another drop
     int counted = 0;
     foreach (const QString &key, picks)
-        if (smallWash(key) == false)
+        if (r531MiniFree(key, m_faderReal) == false)   // R531_MINI_DV_COUNT: a Mini under 70 % counts
             counted++;
     int last = -1;
     for (int i = priority.count() - 1; i >= 0; i--)
-        if (picks.contains(priority.at(i)) && smallWash(priority.at(i)) == false
+        if (picks.contains(priority.at(i)) && r531MiniFree(priority.at(i), m_faderReal) == false
             && (i != 0 || first == 0 || counted == 1))   // the strobes' lead keeps its place - unless it is the whole drop
         {
             last = i;
@@ -26801,7 +26812,7 @@ void TrackEngine::dropVariety(QStringList &priority, int effects, const QString 
     // and make the drop bigger than the slider asks for
     for (int j = last + 1; j < priority.count(); j++)
     {
-        if (smallWash(priority.at(j)))
+        if (r531MiniFree(priority.at(j), m_faderReal))   // R531_MINI_DV_REAL: under 70 % a Mini is a real place
             continue;
         QStringList trial = priority;
         trial.move(j, last);
@@ -26817,7 +26828,7 @@ void TrackEngine::dropVariety(QStringList &priority, int effects, const QString 
     // use no place, come along this time or sit this one out
     for (int j = 0; j < priority.count(); j++)
     {
-        if (smallWash(priority.at(j)) == false)
+        if (r531MiniFree(priority.at(j), m_faderReal) == false)   // R531_MINI_DV_FREE: only a free Mini
             continue;
         QStringList trial = priority;
         if (picks.contains(priority.at(j)))
@@ -28029,7 +28040,7 @@ void TrackEngine::dropFormPlan()
         for (int i = set.count() - 1; i >= 0 && noStrobes == false; i--)
         {
             const QString &k = set.at(i);
-            if (k != base && smallWash(k) == false && need.contains(k) == false)
+            if (k != base && r531MiniFree(k, m_faderReal) == false && need.contains(k) == false)   // R531_MINI_FORMS
             {
                 set.removeAt(i);
                 break;
