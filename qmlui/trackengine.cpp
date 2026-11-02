@@ -725,6 +725,8 @@ void TrackEngine::slotPulseTimer()
     qint64 now = m_clock.elapsed();
     foreach (const QString &key, m_cast)
     {
+        if (r536Owns(key))
+            continue;                    // R536_TIMER_SKIP: the stabs' frame (below) writes the strobes
         // a held flash is full: nothing steps or pulses under it
         if (m_flashHeld.contains(key))
         {
@@ -923,6 +925,8 @@ void TrackEngine::slotPulseTimer()
     if (r507SafeFrame())                 // R507_SAFE_TIMER_FRAME: a laser held dark opens when it is safe
         any = true;
     if (r509WanderFrame(now))            // R509_WANDER_HOOK_TIMER: the wandering spot - each wash head's level now
+        any = true;
+    if (r536StabFrame(now))              // R536_TIMER_FRAME: a quiet break's stab on one strobe head
         any = true;
     if (any == false)
         m_pulseTimer.stop();
@@ -4274,6 +4278,161 @@ QString TrackEngine::r535DropType(int from, int to) const
     if (hats / n >= 3.0)
         return QStringLiteral("taet");
     return QStringLiteral("klassisk");
+}
+
+// R536_FN (Tobias 11-02, Jamback - Positive (Soltauw 'Latch' Edit): "stille breaks, hvor der er noget lyd
+// dudududuu ... i gamle dage da vi buskede den sang, brugte vi strob slow der ramte de lyde perfekt" ->
+// "Blinket skal vaere i rummets farve, byg den direkte, men tilfoej en knap i advanced (default off)").
+// BREAK STABS: in a QUIET break (its median level under 30 % of the track's) from 80 % on the slider, a
+// quarter beat where the mids AND the highs hit hard (10+ and 9+ of 15: a synth stab, not a vocal or a pad)
+// on a beat with no kick, after a near-silent beat (under 10 %) within the last four and with the last 8
+// beats under 30 %, blinks ONE strobe head - drawn from the track and the quarter, never the same head twice
+// running - in the strobes' colour scene (the room's colour) for 60 % of the quarter, at MASTER x the
+// strobes' fader. Between the stabs the strobes are dark. Measured: Jamback 10/13/24 stabs in its three
+// breaks, the library one quiet break in five (208 of 576 tracks). Never under HOLD/CALM/STILL, a mix,
+// BLACKOUT, his own set, a group off for the night; no AUTO programme on the strobes while it runs.
+// Log: sig:break-stabs:<n>@<section>, stab<bits> in the event column.
+#define R536_FADER      0.80
+#define R536_QUIET      77               // 30 % of the track's level (BLT's 0-255)
+#define R536_GAP        26               // a near-silent beat: under 10 %
+#define R536_MID        10
+#define R536_HIGH       9
+
+bool TrackEngine::breakStabs() const
+{
+    if (m_r536Loaded == false)
+    {
+        m_r536Loaded = true;
+        m_r536On = QSettings().value(QStringLiteral("trackengine/break-stabs"), false).toBool();
+    }
+    return m_r536On;
+}
+
+void TrackEngine::setBreakStabs(bool on)
+{
+    if (on == breakStabs())
+        return;
+    m_r536On = on;
+    QSettings().setValue(QStringLiteral("trackengine/break-stabs"), on);
+    m_r536For = -1;                      // the break that plays is measured again on the next beat
+    logSignal(QStringLiteral("sig:break-stabs:") + (on ? QStringLiteral("on") : QStringLiteral("off")));
+    emit liveChanged();
+}
+
+QString TrackEngine::r536StrobeKey() const
+{
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.strobes && g.parts.count() >= 2 && g.fixtures.isEmpty() == false)
+            return key;
+    }
+    return QString();
+}
+
+void TrackEngine::r536Section(int secStart, int secEnd)
+{
+    m_r536Map.clear();
+    m_r536Active = false;
+    m_r536Head = -1;
+    m_r536Start = -1;
+    const int n = int(m_audLevel.count());
+    if (n == 0 || m_audKick.count() != n || m_onsetMid.count() != n || m_onsetHigh.count() != n)
+        return;
+    const int a = qBound(1, secStart, n);
+    const int e = qBound(a + 1, secEnd > secStart ? secEnd : a + 64, n + 1);
+    QVector<int> lv;
+    for (int b = a; b < e; b++)
+        lv << m_audLevel.at(b - 1);
+    std::sort(lv.begin(), lv.end());
+    if (lv.isEmpty() || lv.at(lv.count() / 2) > R536_QUIET)
+        return;                          // not a quiet break
+    int stabs = 0;
+    for (int b = a; b < e; b++)
+    {
+        if (m_audKick.at(b - 1) >= 51)
+            continue;
+        int sum = 0, cnt = 0;
+        for (int p = qMax(a, b - 8); p < b; p++)
+        {
+            sum += m_audLevel.at(p - 1);
+            cnt++;
+        }
+        const int mean = cnt > 0 ? sum / cnt : m_audLevel.at(b - 1);
+        bool gap = false;
+        for (int p = qMax(a, b - 4); p < b; p++)
+            if (m_audLevel.at(p - 1) < R536_GAP)
+                gap = true;
+        if (mean > R536_QUIET || gap == false)
+            continue;
+        int bits = 0;
+        for (int q = 0; q < 4; q++)
+            if (onsetMid(b, q) >= R536_MID && onsetHigh(b, q) >= R536_HIGH)
+                bits |= 1 << q;
+        if (bits != 0)
+        {
+            m_r536Map.insert(b, bits);
+            stabs += qPopulationCount(quint32(bits));
+        }
+    }
+    m_r536Active = stabs >= 2;
+    if (m_r536Active && m_testTrack == false)
+        logSignal(QStringLiteral("sig:break-stabs:%1@%2").arg(stabs).arg(secStart));
+}
+
+qreal TrackEngine::r536PartOut(const QString &group, int index) const
+{
+    if (lightsOutFor(group) || index != m_r536Head || m_r536Start < 0 || m_beatMs <= 0.0)
+        return 0.0;
+    const qreal dur = qMax(45.0, m_beatMs * 0.25 * 0.60);
+    if (qreal(m_clock.elapsed() - m_r536Start) >= dur)
+        return 0.0;
+    return qBound(0.0, (0.55 + 0.45 * m_r536Strength) * trimOf(group) * masterOut(), 1.0);
+}
+
+bool TrackEngine::r536StabFrame(qint64 now)
+{
+    if (m_r536Live == false || m_beatMs <= 0.0 || m_doc == nullptr)
+        return false;
+    const TrackGroup &g = m_groups.value(m_r536Key);
+    const int n = int(g.parts.count());
+    if (n == 0)
+        return false;
+    if (m_r536FiredBeat != m_lastBeat)
+    {
+        m_r536FiredBeat = m_lastBeat;
+        m_r536Fired = 0;
+    }
+    const int mask = m_r536Map.value(m_lastBeat, 0);
+    const int q = int(qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999) * 4.0);
+    for (int k = 0; k <= q; k++)
+    {
+        if ((mask & (1 << k)) == 0 || (m_r536Fired & (1 << k)) != 0)
+            continue;
+        m_r536Fired |= 1 << k;
+        if (k < q)
+            continue;                    // a quarter already gone by: no blink late
+        const quint32 h = (qHash(m_trackTitle) ^ (quint32(m_lastBeat * 4 + k) * 2654435761u)) * 2246822519u;
+        int head = int((h >> 8) % quint32(n));
+        if (head == m_r536Head && n > 1)
+            head = (head + 1) % n;
+        m_r536Head = head;
+        m_r536Start = now;
+        m_r536Strength = qBound(0.0, (qMax(0, onsetMid(m_lastBeat, k)) + qMax(0, onsetHigh(m_lastBeat, k))) / 30.0, 1.0);
+    }
+    for (int i = 0; i < n; i++)
+    {
+        const QString slot = partSlot(m_r536Key, i);
+        if (m_active.contains(slot) == false)
+            continue;
+        Function *func = m_doc->function(m_active.value(slot));
+        if (func == nullptr)
+            continue;
+        const qreal out = r536PartOut(m_r536Key, i);
+        m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
+        m_activeOut.insert(slot, out);
+    }
+    return true;
 }
 
 int TrackEngine::r534MusicBeat(int beat, bool build) const
@@ -12490,6 +12649,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (out && m_testTrack == false)
             logSignal(QStringLiteral("sig:base-out:%1@%2").arg(state).arg(secStart));
     }
+    // R536_DECIDE: a quiet break's stabs, measured on its first beat (and again when the switch moves); the
+    // strobes join the break outside the budget only where it has them, from 80 % on the slider
+    if (sectionChanged || secStart != m_r536For)
+    {
+        m_r536For = secStart;
+        if (isBreak && breakStabs())
+            r536Section(secStart, secEnd);
+        else
+        {
+            m_r536Map.clear();
+            m_r536Active = false;
+        }
+    }
+    m_r536Key = r536StrobeKey();
+    const bool r536Want = m_r536Active && isBreak && breakStabs() && m_faderReal >= R536_FADER - 1e-9
+                       && m_r536Key.isEmpty() == false && eligible.contains(m_r536Key) && m_groupOff.contains(m_r536Key) == false
+                       && hold == false && isCalm == false && still == false && m_mixing == false && m_blackout == false;
     QSet<QString> castSet;
     if (m_barsAloneNow)
         castSet.insert(aloneBars);
@@ -12525,6 +12701,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
+    if (r536Want)
+        castSet.insert(m_r536Key);       // R536_CAST: dark between the stabs (r536PartOut)
     // R533_LIGHT: without the base something else must light the room - the Minis in a break, the bars /
     // the animation laser / the strobes in a drop; none of them in the cast (a group off for the night,
     // the slider's pool): the base stays after all
@@ -15053,6 +15231,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // On the log so the trial can be measured instead of remembered.
     bool strobeChase = false;
 
+    // R536_LIVE: the strobes are the stabs' while they stand in this beat's cast (his set, a pad, the roof ...
+    // may have taken them)
+    m_r536Live = r536Want && castSet.contains(m_r536Key);
     // R534_RELEASE: a programme held on its step is let go when its group leaves the cast (or HOLD/CALM)
     foreach (const QString &key, m_r534Held.keys())
         if (castSet.contains(key) == false || hold || isCalm)
@@ -15793,6 +15974,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             mf = Function::invalidId();
         // R515_MELBARS_HOOK_WHOLE (runde 515, MELBARS): ... nor while the melody's window holds them (GRAD may
         // still colour them: colour only)
+        if (mf != Function::invalidId() && r536Owns(key))
+            mf = Function::invalidId();      // R536_NO_PROG: no AUTO programme on the strobes under the stabs
         if (mf != Function::invalidId() && r515MelbarsWhole(key))
             mf = Function::invalidId();
         // R519_FIXA_GRAD_CARRY (runde 519, FIXA - the night of 30-31 Oct: 28 of GRAD's runs ended because the
@@ -16320,11 +16503,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
-    if ((anyPulse || (m_landSixteenths && blink16Now()) || m_pluckSlots != 0) && m_pulseTimer.isActive() == false)   // runde 359 (R362: or the mini landing), R461_BREAK_PLUCK
+    if ((anyPulse || (m_landSixteenths && blink16Now()) || m_pluckSlots != 0 || m_r536Live) && m_pulseTimer.isActive() == false)   // R536_TIMER_START   // runde 359 (R362: or the mini landing), R461_BREAK_PLUCK
     {
         m_pulseTimer.start();
     }
-    else if (anyPulse == false && m_pulseTimer.isActive() && !(m_landSixteenths && blink16Now()) && m_pluckSlots == 0)   // R363: not under the sixteenths (R461: nor the plucks)
+    else if (anyPulse == false && m_pulseTimer.isActive() && !(m_landSixteenths && blink16Now()) && m_pluckSlots == 0 && m_r536Live == false)   // R536_TIMER_KEEP   // R363: not under the sixteenths (R461: nor the plucks)
     {
         // the last factor the timer wrote may have been the shut half of a
         // gate: level everything again or that zero stays until the next beat
@@ -16914,6 +17097,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_hatsOut) ev << "hats-out";
         if (closing < 1.0) ev << "closing";
         if (m_kickGone >= 4 && isBreak == false) ev << "kick-gone";
+        if (m_r536Live && m_r536Map.contains(beat))   // R536_EV: this beat's break stabs (bits 0-3)
+            ev << QString("stab%1").arg(m_r536Map.value(beat));
         if (m_r535Prof.isEmpty() == false)       // R535_EV: the bar's music profile (log only)
             ev << QStringLiteral("prof-") + m_r535Prof + (m_r535Type.isEmpty() ? QString() : QStringLiteral("-") + m_r535Type);
         if (m_curveBreak) ev << "curve-break";          // runde 192
@@ -18150,6 +18335,8 @@ void TrackEngine::reapplyLevels()
             if (m_groups.value(group).patternDevice && r507DuelDark(group, r507DuelPartOf(slot)))
                 out = 0.0;           // R507_DUEL_REAPPLY: the duel, as setPart()
             out = qMax(out, lastWhiteDim(group));   // R479_LAST_WHITE_FLOORLEVELS: as setPart()
+            if (r536Owns(group))
+                out = r536PartOut(group, slot.section(QLatin1Char('#'), -1).toInt());   // R536_REAPPLY: as setPart()
         }
         else
         {
@@ -22878,6 +23065,8 @@ void TrackEngine::setPart(const QString &group, int index, qreal level)
         applied = 0.0;                   // R507_SAFE_PART: a laser held dark (the handover, a new picture)
     if (lightsOutFor(group))             // R513_LIVE_PAD_PART: a held pad's group is not in the music's dark
         applied = 0.0;
+    if (r536Owns(group))
+        applied = r536PartOut(group, index);   // R536_SETPART: under the stabs a head is lit only by its stab
 
     if (m_active.value(slot, Function::invalidId()) == fid)
     {
