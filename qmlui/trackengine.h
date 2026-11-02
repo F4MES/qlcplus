@@ -1018,6 +1018,10 @@ public:
     bool smallWash(const QString &key) const;
     /** R531_MINI_DECL: a small wash that uses no budget place - only from 70 % on the slider */
     bool r531MiniFree(const QString &key, qreal fader) const;
+    /** R532_CAP_DECL: the drop budget's ceiling by the drop's size (r509_drama.inc.cpp) */
+    int r532BigDropAt() const;
+    bool r532LeanDraw(int s) const;
+    int r532DropCap(int s, qreal fader) const;
 
     QVariantList palette();
     bool showAll() const;
