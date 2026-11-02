@@ -4351,8 +4351,8 @@ void TrackEngine::setTrackEvents(const QVariantList &events)
         if (p.count() < 3 || p.at(0).toInt() <= 0 || p.at(1).toInt() <= 0)
             continue;
         const QString kind = p.at(2).toString();
-        const int k = kind == QStringLiteral("pre") ? 1 : kind == QStringLiteral("dip") ? 2
-                    : kind == QStringLiteral("out") ? 3 : 0;
+        // R527_AI_NO_OUT (Tobias 11-02): the outro is not used - the last track's outro is the only one
+        const int k = kind == QStringLiteral("pre") ? 1 : kind == QStringLiteral("dip") ? 2 : 0;
         if (k == 0)
             continue;
         // a pre-drop or a dip is a few beats - never more than two bars; an outro runs to its end
@@ -4362,6 +4362,17 @@ void TrackEngine::setTrackEvents(const QVariantList &events)
     }
     if (m_aiEvKind.isEmpty() == false)
         qDebug() << "[TrackEngine] AI details:" << m_aiEvKind.count() << "events";
+}
+
+// R527_AI_LENFN: a dip the model hears inside a drop that starts on this beat - its length (r509's stops)
+int TrackEngine::aiDipLen(int beat) const
+{
+    for (int i = 0; i < m_aiEvSpan.count(); i++)
+    {
+        if (m_aiEvKind.at(i) == 2 && m_aiEvSpan.at(i).first == beat)
+            return m_aiEvSpan.at(i).second - m_aiEvSpan.at(i).first;
+    }
+    return 0;
 }
 
 int TrackEngine::aiEventAt(int beat) const
@@ -13719,29 +13730,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 darkGroups.insert(key);
         }
     }
-    // R526_AI_DARK (Tobias 11-01, punkt 3: "slaa punkt 3 til og fra inde i selve programmet"): AI DETAILS
-    // (SETUP > ADVANCED, off until he turns it on) - the events BLT's model hears as Time-line does: its
-    // pre-drop (only in the last bar before a drop) and the dips inside a drop go dark like the blink -
-    // every group but the base - from 62 % ENERGY; its outro puts the lasers and the strobes out, as the
-    // last track's outro does. Never under CALM, HOLD, FLASH, at the slider's bottom, in a mix, in the
-    // DJ's loop. Nothing moves lit: a dark beat only takes light away.
+    // R527_AI_BLINK (Tobias 11-02, "Ja goer det": AI DETAILS is better ears for what the engine has, not
+    // a dark of its own - r526's own dark is gone): where BLT's model hears Time-line's pre-drop in the last
+    // bar before a drop, the blink starts there - every group but the base dark from the pre-drop's first
+    // beat; the blink's own last beat and R356's black beat stay as they are. Its dips inside a drop go to
+    // r509's pause hit (R527_AI_DIP); its outro is not used. Only with AI DETAILS on (no events otherwise),
+    // under the blink's own guards, never in a mix, a FLASH, at the slider's bottom or in the DJ's loop.
+    if (preDrop && beatsToNext > 1 && beatsToNext <= 4 && energy > 0.5 && isCalm == false && hold == false
+        && still == false && m_mixing == false && m_flash == false && aiEventAt(beat) == 1 && djLoopOn() == false)
     {
-        const int aiEv = aiEventAt(beat);
-        if (aiEv > 0 && isCalm == false && hold == false && still == false && m_mixing == false
-            && m_flash == false && djLoopOn() == false)
+        foreach (const QString &key, castSet)
         {
-            const bool aiDark = (aiEv == 1 && preDrop && beatsToNext > 0 && beatsToNext <= 4 && fader >= 0.62)
-                             || (aiEv == 2 && isDrop && fader >= 0.62);
-            foreach (const QString &key, castSet)
-            {
-                if ((aiDark && key != base) || (aiEv == 3 && lastTrackDark(m_groups.value(key))))
-                    darkGroups.insert(key);
-            }
-            if ((aiDark || aiEv == 3) && aiEventAt(beat - 1) != aiEv)
-                logSignal(QStringLiteral("sig:ai-detail:%1:%2")
-                          .arg(aiEv == 1 ? QStringLiteral("pre") : aiEv == 2 ? QStringLiteral("dip") : QStringLiteral("out"))
-                          .arg(beat));
+            if (key != base)
+                darkGroups.insert(key);
         }
+        if (aiEventAt(beat - 1) != 1)
+            logSignal(QStringLiteral("sig:ai-detail:pre:%1").arg(beat));
     }
     m_silenceDark = (silenceNow && silenceLong == false && silenceGlow == false) || dropBlack;
     m_musicDarkEvent = silenceLong ? QStringLiteral("silence-dim")
@@ -40128,6 +40132,17 @@ bool TrackEngine::r509PauseStopAt(int s, int *back, int *before) const
     int e = s;
     while (e <= n && e - s <= R509_PAUSE_MAX && m_audLevel.at(e - 1) < line && m_audKick.at(e - 1) < 51)
         e++;
+    // R527_AI_DIP (Tobias 11-02, "Ja goer det" - AI DETAILS as better ears for the pause hit): with AI
+    // DETAILS on, a dip BLT's model hears inside a drop (Time-line's drop-break) is a stop too where the
+    // sound does not fall - the kick out with the bass or a synth still on, which R506's numbers kept out.
+    // The 8 beats before are music with a kick, as for any stop; the dip's beats (1-4) are the stop and
+    // the beat after it the comeback, which must be music again. The level's own stop wins where both are.
+    if (e == s)
+    {
+        const int aiLen = aiDipLen(s);
+        if (aiLen > 0)
+            e = s + qMin(aiLen, R509_PAUSE_MAX);
+    }
     if (e == s || e - s > R509_PAUSE_MAX || e > n || m_audLevel.at(e - 1) < line)
         return false;
     if (back != nullptr)
@@ -40255,7 +40270,8 @@ bool TrackEngine::r509PauseBeat(int beat, const QString &state, const QString &n
             m_r509PauseBefore = before;
             m_r509PauseInDrop = state == QStringLiteral("drop");
             if (m_testTrack == false)
-                logSignal(QStringLiteral("sig:pause-dark:%1").arg(back - from));
+                logSignal(QStringLiteral("sig:pause-dark:%1").arg(back - from)       // R527_AI_PAUSELOG: ":ai" - the model's dip
+                          + (aiDipLen(from) > 0 ? QStringLiteral(":ai") : QString()));
             crumb(QStringLiteral("r509 pause %1-%2 back %3: level %4 of %5 before, fader %6")
                   .arg(from).arg(back - 1).arg(back).arg(int(m_audLevel.at(from - 1))).arg(before)
                   .arg(int(qRound(100.0 * fader))));

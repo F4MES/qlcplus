@@ -1292,7 +1292,8 @@ Rectangle
         // ------------------------------------------------- R526_ANALYSIS_ROW
         // Tobias 11-01 ("slaa punkt 3 til og fra inde i selve programmet ... saa vi kan teste det naeste gang
         // paa riggen"; mockup approved the same day): AI SECTIONS / CLASSIC picks whose sections the track
-        // gets, AI DETAILS switches the fine events (pre-drop, the dips in a drop, the outro). A switch reads
+        // gets, AI DETAILS switches the fine events (R527_AI_ROWDOC: the pre-drop starts the blink early, the
+        // dips in a drop reach the pause hit; the outro is not used). A switch reads
         // the playing track again at once; flags set by hand always win.
         RowLayout
         {
@@ -1340,7 +1341,7 @@ Rectangle
                 Layout.fillWidth: true
                 elide: Text.ElideRight
                 text: (trackManager && trackManager.aiSections === false ? qsTr("our own analysis") : qsTr("sections learnt from Time-line Live"))
-                      + "  ·  " + (trackManager && trackManager.aiDetails === true ? qsTr("details on: dark beat before the drop, drop dips, outro")
+                      + "  ·  " + (trackManager && trackManager.aiDetails === true ? qsTr("details on: the blink starts earlier, the pause hit takes the drop's dips too") /* R527_AI_SUB */
                                                                                     : qsTr("details off"))
                       + "  ·  " + qsTr("your own flags always win")
                 color: setupRoot.cDim

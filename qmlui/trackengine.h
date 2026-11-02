@@ -2439,6 +2439,7 @@ private:
     QVector<QPair<int, int> > m_aiEvSpan;   // R526_ENGINE_MEMBERS: [first beat, end beat) per AI event
     QVector<int> m_aiEvKind;                // 1 pre-drop, 2 a dip in a drop, 3 outro
     int aiEventAt(int beat) const;          // the event's kind at the beat, 0 none
+    int aiDipLen(int beat) const;           // R527_AI_LENDECL: a dip starting on the beat: its length, 0 none
     int m_curBeat = -1;                  // this tick's beat, set before anything is drawn
     int m_landBurstUntil = -1;           // R357_STROBE_LAND: the landing burst, the only hardware strobe on the strobe lamps
     bool landBurstNow() const { return m_landBurstUntil >= 0 && m_curBeat >= 0 && m_curBeat <= m_landBurstUntil; }
