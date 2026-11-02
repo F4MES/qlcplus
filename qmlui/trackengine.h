@@ -1269,6 +1269,11 @@ public:
     /** R526_ENGINE_DECL: the fine events BLT's model hears (AI DETAILS) - [beat, length, "pre"|"dip"|"out"]
      *  per event, 1-based beats; an empty list when AI DETAILS is off. */
     void setTrackEvents(const QVariantList &events);
+    /** R528_SURE_DECL: how sure the learnt sections are per bar, [first beat, 0..1] (only on the learnt set) */
+    void setTrackConfidence(const QVariantList &bars);
+    bool r528AiSure(int beat) const;        // the bar's certainty 0.60+ (or not known)
+    QVector<QPair<int, qreal> > m_aiConf;
+    qreal r528DropSize(int s) const;        // R528_BIG_SIZE (r509_drama.inc.cpp)
     /** Runde 358 (R358_RHYTHM): per beat the mid band unsmoothed (0-255,
      *  the track's own 90th percentile = 255) and the highs' onset in each
      *  quarter of the beat, four nibbles (quarter q in bits 4q..4q+3, 0-15). */
