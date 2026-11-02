@@ -403,6 +403,7 @@ void TrackManager::handleTrack(const QJsonObject &obj)
         ai.insert(QStringLiteral("markers"), obj.value(QStringLiteral("markersAi")));
         ai.insert(QStringLiteral("analysis"), qMax(10, obj.value(QStringLiteral("analysisAi")).toInt(15)));
         ai.remove(QStringLiteral("markersAi"));
+        ai.insert(QStringLiteral("aiPicked"), true);   // R528_AI_PICKED: the learnt set is the flags
         handleTrack(ai);
         return;
     }
@@ -461,6 +462,10 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     if (m_engine != nullptr)            // R526_AI_EVENTS: the fine events - only with AI DETAILS on
         m_engine->setTrackEvents(aiDetails() ? obj.value(QStringLiteral("events")).toArray().toVariantList()
                                              : QVariantList());
+    if (m_engine != nullptr)            // R528_AI_CONF: the learnt sections' certainty - only on the learnt set
+        m_engine->setTrackConfidence(obj.value(QStringLiteral("aiPicked")).toBool(false)
+                                     ? obj.value(QStringLiteral("aiConf")).toArray().toVariantList()
+                                     : QVariantList());
     if (m_engine != nullptr)            // R461_ONSETS: the bass's and the mids' quarter-beat onsets
         m_engine->setTrackOnsets(obj.value(QStringLiteral("onsetLow")).toArray().toVariantList(),
                                  obj.value(QStringLiteral("onsetMid")).toArray().toVariantList());

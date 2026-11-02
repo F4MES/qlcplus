@@ -4364,6 +4364,28 @@ void TrackEngine::setTrackEvents(const QVariantList &events)
         qDebug() << "[TrackEngine] AI details:" << m_aiEvKind.count() << "events";
 }
 
+// R528_SURE_FN (Tobias 11-02, forslag 3): the learnt sections' certainty per bar - a drop the model is
+// unsure of (under 0.60) lands in the room's colour, never white
+#define R528_AI_SURE 0.60
+void TrackEngine::setTrackConfidence(const QVariantList &bars)
+{
+    m_aiConf.clear();
+    for (const QVariant &v : bars)
+    {
+        const QVariantList p = v.toList();
+        if (p.count() >= 2 && p.at(0).toInt() > 0)
+            m_aiConf.append(qMakePair(p.at(0).toInt(), qBound(0.0, p.at(1).toDouble(), 1.0)));
+    }
+}
+
+bool TrackEngine::r528AiSure(int beat) const
+{
+    qreal c = -1.0;
+    for (int i = 0; i < m_aiConf.count() && m_aiConf.at(i).first <= beat; i++)
+        c = m_aiConf.at(i).second;
+    return c < 0.0 || c >= R528_AI_SURE;
+}
+
 // R527_AI_LENFN: a dip the model hears inside a drop that starts on this beat - its length (r509's stops)
 int TrackEngine::aiDipLen(int beat) const
 {
@@ -16141,6 +16163,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // runde 360 (R360_DROP_SIZE): white is for a big drop - the
                 // music's own jump, as well as the slider's line below
                 && m_dropSize >= 0.50
+                // R528_SURE_WHITE (forslag 3): ... and not on a drop the learnt sections are unsure of
+                && r528AiSure(beat)
                 // the SLIDER, as every hard line in this engine: `energy` is
                 // scaled by the section and could not reach 0.85 before the
                 // clock's 02:00 (review)
@@ -25628,6 +25652,10 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
         const QString cache = QDir::homePath() + "/.qlc-track-cache.edn";
         if (QFileInfo::exists(cache))
             out << cache;
+        // R528_SEND_HAND: his corrections as training rows (BLT writes it, forslag 8)
+        const QString hand = QDir::homePath() + "/.qlc-ml-hand.edn";
+        if (QFileInfo::exists(hand))
+            out << hand;
     }
     return out;
 }
@@ -25646,7 +25674,7 @@ QVariantList TrackEngine::sendItems()
         { "dumps",     QT_TR_NOOP("Crash dumps"), true },
         { "settings",  QT_TR_NOOP("Settings + what was learned"), true },
         { "lastnight", QT_TR_NOOP("Last night too"), false },
-        { "blt",       QT_TR_NOOP("BLT cache"), false },
+        { "blt",       QT_TR_NOOP("BLT cache"), true },     // R528_SEND_ON: on - his corrections teach the model
     };
     QVariantList out;
     for (const Item &it : items)
@@ -41889,6 +41917,7 @@ quint32 TrackEngine::r509SplitColour(const QString &key, const QString &colour)
 
 #define R509_DRAMA_LAST        1.60      // the last drop's big tickets
 #define R509_DRAMA_EARLY       0.55      // ... a drop with drops still ahead
+#define R528_BIG_TIE           0.02      // R528_BIG_CONST: two drops this close in size: the later one is the biggest
 #define R509_DRAMA_TAIL        64        // a drop starting in the last 64 beats is the outro, not a drop ahead
 #define R509_DRAMA_LOW_FULL    0.40      // the warm-up's weight with a token in hand
 #define R509_DRAMA_LOW_EMPTY   0.15      // ... with none
@@ -42007,6 +42036,25 @@ static qint64 r510ClockDramaLoad(const QString &night, qreal *tokens, int *track
     *tracks = n;
     *early = e;
     return qMax<qint64>(0, QDateTime::currentSecsSinceEpoch() - at);
+}
+
+qreal TrackEngine::r528DropSize(int s) const
+{
+    // R528_BIG_SIZE: how big a drop is - its first 16 beats (level, and the kick where BLT sends it) and
+    // how far the music jumps into it (R360's dropSizeAt); -1 where the curves cannot say
+    const int n = int(m_audLevel.count());
+    if (n < 24 || s < 12 || s + 15 > n)
+        return -1.0;
+    qreal level = 0.0, kick = 0.0;
+    const bool kicks = m_audKick.count() == m_audLevel.count();
+    for (int b = s; b < s + 16; ++b)
+    {
+        level += m_audLevel.at(b - 1) / 255.0;
+        if (kicks)
+            kick += m_audKick.at(b - 1) / 255.0;
+    }
+    const qreal body = kicks ? 0.5 * level / 16.0 + 0.5 * kick / 16.0 : level / 16.0;
+    return 0.6 * body + 0.4 * dropSizeAt(s);
 }
 
 void TrackEngine::r509DramaFlags(const QVector<int> &drops)
@@ -42260,14 +42308,49 @@ qreal TrackEngine::r509DramaForm(int at, bool his, bool *firstDrop)
             behind++;
     if (ahead == 0 && behind > 0 && noneLanded)
         *firstDrop = false;
-    const qreal track = r509DramaTrackW(ahead, r509DramaEarly(m_r509Early, m_r509Tracks));
+    qreal track = r509DramaTrackW(ahead, r509DramaEarly(m_r509Early, m_r509Tracks));
+    // R528_BIG_DROP (Tobias 11-02, forslag 4 "nummerets stoerste drop"): the big tickets go to the track's
+    // BIGGEST drop, measured on the music (r528DropSize: its first 16 beats' level and kick, and its jump),
+    // not to the last one by position. The one biggest gets the last drop's x1.6 wherever it is;
+    // a last drop after a bigger one that was heard is plain (x1.0). A track the DJ started after its first
+    // drop, a test track, no flags or no curves: as before (the last drop).
+    QString bigTag;
+    if (ahead >= 0)
+    {
+        // the ONE biggest drop of the track (a tie within 0.02: the later one, as "the last is the biggest")
+        const int n = int(m_audLevel.count());
+        int bigAt = -1;
+        qreal best = -1.0;
+        foreach (int s, m_r509Drops)
+        {
+            if (n > 0 && s + R509_DRAMA_TAIL > n)
+                continue;                    // the outro, where the DJ mixes
+            const qreal z = r528DropSize(s);
+            if (z >= 0.0 && z >= best - R528_BIG_TIE)
+            {
+                bigAt = s;
+                best = qMax(best, z);
+            }
+        }
+        if (bigAt > 0 && qAbs(bigAt - at) <= 8)
+        {
+            track = R509_DRAMA_LAST;
+            bigTag = QStringLiteral(":big");
+        }
+        else if (bigAt > 0 && bigAt < at && ahead == 0 && noneLanded == false)
+        {
+            track = 1.0;                     // the last drop, after a bigger one that was heard
+            bigTag = QStringLiteral(":after-big");
+        }
+    }
     const qreal w = r509DramaBoth(m_r509NightW, track);
     if (m_testTrack == false)
         logSignal(QStringLiteral("sig:drama:w%1@%2:night%3:ahead%4:peak%5:tok%6%7")
                   .arg(int(qRound(100.0 * w))).arg(at).arg(int(qRound(100.0 * m_r509NightW)))
                   .arg(ahead).arg(int(qRound(100.0 * m_r509Peak))).arg(int(qRound(10.0 * m_r509Tokens)))
                   .arg((ahead == 0 ? QStringLiteral(":last") : QString())
-                       + (behind > 0 && noneLanded ? QStringLiteral(":late%1").arg(behind) : QString())));
+                       + (behind > 0 && noneLanded ? QStringLiteral(":late%1").arg(behind) : QString())
+                       + bigTag));   // R528_BIG_LOG
     return w;
 }
 /* =====================================================================
