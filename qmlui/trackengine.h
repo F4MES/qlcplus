@@ -513,6 +513,8 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool blackout READ blackout WRITE setBlackout NOTIFY liveChanged)
     // R420_STUTTER: held = dark on every 1/4 (1), 1/8 (2) or 1/16 (3) of the beat
     Q_PROPERTY(bool stutter READ stutter WRITE setStutter NOTIFY liveChanged)
+    /** R536_PROP: SETUP > ADVANCED > BREAK STABS (default off) */
+    Q_PROPERTY(bool breakStabs READ breakStabs WRITE setBreakStabs NOTIFY liveChanged)
     Q_PROPERTY(int stutterRate READ stutterRate WRITE setStutterRate NOTIFY liveChanged)
     /** Two decks on air (from BLT): a transition. The colour holds and the
      *  engine stays at groove level until the outgoing track is gone. */
@@ -1033,6 +1035,14 @@ public:
     QChar r535BeatClass(int beat) const;
     QString r535Profile(int from, int n) const;
     QString r535DropType(int from, int to) const;
+    /** R536_DECL: break stabs - the strobes on the sharp sounds of a quiet break (r536 functions below) */
+    bool breakStabs() const;
+    void setBreakStabs(bool on);
+    QString r536StrobeKey() const;
+    void r536Section(int secStart, int secEnd);
+    bool r536Owns(const QString &key) const { return m_r536Live && key == m_r536Key; }
+    qreal r536PartOut(const QString &group, int index) const;
+    bool r536StabFrame(qint64 now);
     int r534ChaseAt(int idx) const { return qMax(0, idx - m_r534Lag); }
     void r534ChaseHold(const QString &key, quint32 mf, bool freeze);
     int r533PlanAt() const { return m_r533PlanAt >= 0 ? m_r533PlanAt : m_dropPlanFor; }
@@ -2231,6 +2241,20 @@ private:
     QHash<QString, quint32> m_r534Held;
     // R535_MEMBERS: the profile of the bar now and the drop type of this section (log only)
     QString m_r535Prof;
+    // R536_MEMBERS: break stabs - the switch, this break's stab quarters (beat -> bits 0-3), whether the
+    // break has them, whether the strobes are ours now, the lit head and its blink
+    mutable bool m_r536Loaded = false;
+    mutable bool m_r536On = false;
+    QString m_r536Key;
+    QHash<int, int> m_r536Map;
+    int m_r536For = -1;
+    bool m_r536Active = false;
+    bool m_r536Live = false;
+    int m_r536Head = -1;
+    qint64 m_r536Start = -1;
+    int m_r536FiredBeat = -1;
+    int m_r536Fired = 0;
+    qreal m_r536Strength = 0.0;
     QString m_r535Type;
     /* R384_ALONE_LATCH: the section started at 90 % on the slider */
     bool m_aloneArmed = false;

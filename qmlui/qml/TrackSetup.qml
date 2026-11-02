@@ -1349,6 +1349,41 @@ Rectangle
             }
         }
 
+        // ------------------------------------------------- R536_UI_ROW
+        // Tobias 11-02 ("tilfoej en knap i advanced (default off), jeg kan slaa det til og fra paa"; mockup approved
+        // the same day): BREAK STABS - quiet breaks from 80 %: a random strobe head blinks on each sharp sound,
+        // in the room colour. One tap on, one tap off; kept for the next time.
+        RowLayout
+        {
+            objectName: "breakStabsRow"
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: 40
+            visible: setupRoot.advancedOpen
+            spacing: 10
+            Text { text: qsTr("BREAK STABS"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+            TrackTile
+            {
+                objectName: "breakStabsTile"
+                Layout.preferredWidth: 130
+                Layout.preferredHeight: 34
+                label: trackEngine && trackEngine.breakStabs === true ? qsTr("ON") : qsTr("OFF")
+                active: trackEngine ? trackEngine.breakStabs === true : false
+                activeColor: "#7ED07E"
+                onTapped: if (trackEngine) trackEngine.breakStabs = !trackEngine.breakStabs
+            }
+            Text
+            {
+                objectName: "breakStabsSub"
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+                text: qsTr("quiet breaks from 80 %: a random strobe head blinks on each sharp sound, in the room colour")
+                      + "  ·  " + (trackEngine && trackEngine.breakStabs === true ? qsTr("on") : qsTr("off"))
+                color: setupRoot.cDim
+                font.pixelSize: 12
+            }
+        }
+
         // ------------------------------------------------- R484_EH_ROW_LEGEND
         // Tobias 10-20: "energi skal saette by hand i advanced saadan at den saetter tidspunkterne,
         // men vi kan 'override' ved manuelt at aendre i tidspunkt. Men laeringen skal skrives i
