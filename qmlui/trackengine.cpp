@@ -6768,7 +6768,11 @@ bool TrackEngine::r531MiniFree(const QString &key, qreal fader) const
     // drop and build, and in breaks the freed place mostly went to the strobes (the 3-70 % bisect,
     // analysis_eval/r529). Under 70 % a Mini uses a place again; from 70 % it is free as before.
     // It is never the lead either way (R430_MINI_NO_LEAD).
-    return smallWash(key) && fader >= 0.70 - 1e-9;
+    // R532_MINI_COUNT (Tobias 11-02, "Lav det du forslaar"): the Minis use a place at EVERY energy now -
+    // the room was "rodet" with every lamp type on at once. Kept as a function so the call sites read the same.
+    Q_UNUSED(key);
+    Q_UNUSED(fader);
+    return false;
 }
 
 void TrackEngine::toggleDropGroup(QString key)
@@ -6896,7 +6900,7 @@ QStringList TrackEngine::planCast(const QString &section, qreal fader) const
     if (build)
         want += 1.0;                            // the extra group past the build's middle
     const int whole = int(want);
-    const int budget = qBound(0, whole + (dice.bounded(1000) < int((want - whole) * 1000.0) ? 1 : 0), 3);
+    const int budget = qMin(2, qBound(0, whole + (dice.bounded(1000) < int((want - whole) * 1000.0) ? 1 : 0), 3));   // R532_CAP_PLAN
     bool bars = false, ani = false;
     int used = 0;
     foreach (const QString &key, order)
@@ -6969,7 +6973,8 @@ QStringList TrackEngine::planDropCast(qreal fader) const
     }
     const qreal want = 3.0 * qBound(0.0, (fader - 0.05) / 0.80, 1.0) + qBound(0.0, (fader - 0.90) / 0.10, 1.0);
     const int whole = int(want);
-    const int budget = qBound(0, whole + (dice.bounded(1000) < int((want - whole) * 1000.0) ? 1 : 0), 4);
+    const int budget = qMin(r532DropCap(m_dropPlanFor, fader),
+                            qBound(0, whole + (dice.bounded(1000) < int((want - whole) * 1000.0) ? 1 : 0), 4));   // R532_CAP_DROPPLAN
     QSet<QString> set;
     if (base.isEmpty() == false)
         set.insert(base);
@@ -12056,6 +12061,20 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (m_lookActive.isEmpty() == false && (isDrop || isBuild) && effects < energyTop)
         effects++;                       // R358_REPEAT: the repeat is one step up - one group more
     effects = qBound(0, effects, isBreak ? 1 : (isDrop || preDrop ? 4 : 3));
+    // R532_CAP_TICK (Tobias 11-02): "for mange typer lys der koerer samtidigt og hele tiden". Outside the
+    // drops at most two groups beside the base - with the Minis counting, one lamp type always rests, and
+    // the drawn order (rest first) changes which. A drop (and its pre-drop bar) by its size (r532DropCap).
+    // Not omvendt's wild build (R488, all the slider gives); his own set / HOLD / CALM run as before.
+    if ((isDrop || preDrop) && hold == false && isCalm == false)
+    {
+        const int dropAt = isDrop ? secStart : (nextState == QStringLiteral("drop") && beatsToNext > 0 ? beat + beatsToNext : -1);
+        const int cap = r532DropCap(dropAt, fader);
+        effects = qMin(effects, cap);
+        if (isDrop && sectionChanged && m_testTrack == false)
+            logSignal(QStringLiteral("sig:drop-cap:%1@%2").arg(cap >= 4 ? QStringLiteral("big") : (cap == 1 ? QStringLiteral("lean") : QStringLiteral("two"))).arg(secStart));
+    }
+    else if (isDrop == false && preDrop == false && (m_formWild && isBuild) == false)
+        effects = qMin(effects, 2);
     if (hold == false && isCalm == false)          // R493_A2_G_CAST: minimal house - one group fewer outside drops
         effects = r493GenreEffects(effects, isDrop || preDrop);
     if (base.isEmpty())
@@ -42368,6 +42387,60 @@ qreal TrackEngine::r509DramaForm(int at, bool his, bool *firstDrop)
                        + (behind > 0 && noneLanded ? QStringLiteral(":late%1").arg(behind) : QString())
                        + bigTag));   // R528_BIG_LOG
     return w;
+}
+
+// R532_CAP_FN (Tobias 11-02: "drops maa ikke faa alt, paa de HELT store drops ja ... skal de maaske ogsaa
+// slankes lidt en gang imellem"): the drop budget's ceiling. The track's ONE biggest drop (r528's measure:
+// the first 16 beats' level and kick and the jump; without curves the last drop) gets all the slider gives;
+// any other drop at most two groups beside the base; one drop in four of those (drawn from the track and
+// the drop, so the PLAN shows the same) only one - never two lean drops in a row, not under 45 %.
+int TrackEngine::r532BigDropAt() const
+{
+    const int n = int(m_audLevel.count());
+    int bigAt = -1, last = -1;
+    qreal best = -1.0;
+    foreach (int s, m_r509Drops)
+    {
+        if (n > 0 && s + R509_DRAMA_TAIL > n)
+            continue;                        // the outro, where the DJ mixes
+        last = qMax(last, s);
+        const qreal z = r528DropSize(s);
+        if (z >= 0.0 && z >= best - R528_BIG_TIE)
+        {
+            bigAt = s;
+            best = qMax(best, z);
+        }
+    }
+    return bigAt > 0 ? bigAt : last;
+}
+
+bool TrackEngine::r532LeanDraw(int s) const
+{
+    const quint32 h = qHash(m_trackTitle) ^ (quint32(s) * 2654435761u);
+    return (h % 100u) < 25u;
+}
+
+int TrackEngine::r532DropCap(int s, qreal fader) const
+{
+    if (s < 0 || m_r509Drops.isEmpty())
+        return 4;                            // no drop flags: as before
+    int at = -1, prev = -1;
+    foreach (int d, m_r509Drops)
+    {
+        if (qAbs(d - s) <= 8)
+            at = d;
+        else if (d < s && d > prev)
+            prev = d;
+    }
+    const int big = r532BigDropAt();
+    if (at < 0)
+        at = s;                              // a drop the music found without a flag: an ordinary drop
+    if (big >= 0 && qAbs(at - big) <= 8)
+        return 4;                            // the big one: all the slider gives
+    if (fader >= 0.45 && r532LeanDraw(at)
+        && (prev < 0 || (big >= 0 && qAbs(prev - big) <= 8) || r532LeanDraw(prev) == false))
+        return 1;                            // the lean drop
+    return 2;
 }
 /* =====================================================================
  *  COLOUR (runde 509, agent COLOUR) - appended to trackengine.cpp by
