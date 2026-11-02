@@ -1022,6 +1022,11 @@ public:
     int r532BigDropAt() const;
     bool r532LeanDraw(int s) const;
     int r532DropCap(int s, qreal fader) const;
+    /** R533_DECL: the base out of a break / a drop now and then (r509_drama.inc.cpp) */
+    bool r533Draw(int s, quint32 salt) const;
+    bool r533DropBaseOut(int s, qreal fader) const;
+    bool r533BreakBaseOut(int s, int len, qreal fader) const;
+    int r533PlanAt() const { return m_r533PlanAt >= 0 ? m_r533PlanAt : m_dropPlanFor; }
 
     QVariantList palette();
     bool showAll() const;
@@ -2203,6 +2208,12 @@ private:
     QString m_dialogueCall, m_dialogueAnswer;
     qreal dialogueGain(const QString &group) const;
     bool m_barsAloneNow = false;
+    // R533_MEMBERS: the base out of this section (drawn on its first beat), the section it was drawn
+    // for, whether the last break had it out, and the boundary a plan is being drawn for
+    bool m_r533BaseOutNow = false;
+    int m_r533OutFor = -1;
+    bool m_r533LastBreakOut = false;
+    int m_r533PlanAt = -1;
     /* R384_ALONE_LATCH: the section started at 90 % on the slider */
     bool m_aloneArmed = false;
     /* R385_BARS_FULL: this alone break is the full-light one (every second) */

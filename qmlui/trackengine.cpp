@@ -6877,6 +6877,16 @@ QStringList TrackEngine::planCast(const QString &section, qreal fader) const
                 }
             }
         }
+        // R533_PLAN_BREAK: the base out of this break, when it draws it and the Minis are in
+        if (base.isEmpty() == false && r533BreakBaseOut(r533PlanAt(), -1, fader))
+        {
+            bool minis = false;
+            foreach (const QString &key, set)
+                if (smallWash(key))
+                    minis = true;
+            if (minis)
+                set.remove(base);
+        }
         return inRoomOrder(set);
     }
     const bool build = section == QStringLiteral("build");
@@ -6973,7 +6983,7 @@ QStringList TrackEngine::planDropCast(qreal fader) const
     }
     const qreal want = 3.0 * qBound(0.0, (fader - 0.05) / 0.80, 1.0) + qBound(0.0, (fader - 0.90) / 0.10, 1.0);
     const int whole = int(want);
-    const int budget = qMin(r532DropCap(m_dropPlanFor, fader),
+    const int budget = qMin(r532DropCap(r533PlanAt(), fader),   // R533_PLAN_DROPCAP: the boundary being planned
                             qBound(0, whole + (dice.bounded(1000) < int((want - whole) * 1000.0) ? 1 : 0), 4));   // R532_CAP_DROPPLAN
     QSet<QString> set;
     if (base.isEmpty() == false)
@@ -6993,6 +7003,19 @@ QStringList TrackEngine::planDropCast(qreal fader) const
         ani = ani || g.patternDevice;
         if (r531MiniFree(key, fader) == false)   // R531_MINI_DROPPLAN
             used++;
+    }
+    // R533_PLAN_NOBASE: the base out of this drop, when it draws it and the bars / laser / strobes are in
+    if (base.isEmpty() == false && r533DropBaseOut(r533PlanAt(), fader))
+    {
+        bool light = false;
+        foreach (const QString &key, set)
+        {
+            const TrackGroup &lg = m_groups.value(key);
+            if (lg.lasers || lg.patternDevice || lg.strobes)
+                light = true;
+        }
+        if (light)
+            set.remove(base);
     }
     QStringList out;
     foreach (const QString &key, m_groupOrder)
@@ -12300,10 +12323,31 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     m_barsAloneNow = aloneBars.isEmpty() == false;
     m_aloneFull = m_barsAloneNow && m_aloneFullLast;
+    // R533_DECIDE: the base out of this break / drop - drawn on the section's first beat and held to its end
+    if (sectionChanged || secStart != m_r533OutFor)
+    {
+        m_r533OutFor = secStart;
+        bool out = false;
+        const bool free = base.isEmpty() == false && hold == false && isCalm == false && still == false && silent == false;
+        if (isBreak)
+        {
+            bool washes = false;             // the Minis (another wash) must be there to carry it
+            foreach (const QString &key, eligible)
+                if (key != base && smallWash(key) && tasteOut(state, key) == false)
+                    washes = true;
+            out = free && washes && r533BreakBaseOut(secStart, secEnd - secStart, fader);
+            m_r533LastBreakOut = out;
+        }
+        else if (isDrop)
+            out = free && r533DropBaseOut(secStart, fader);
+        m_r533BaseOutNow = out;
+        if (out && m_testTrack == false)
+            logSignal(QStringLiteral("sig:base-out:%1@%2").arg(state).arg(secStart));
+    }
     QSet<QString> castSet;
     if (m_barsAloneNow)
         castSet.insert(aloneBars);
-    else if (base.isEmpty() == false)
+    else if (base.isEmpty() == false && m_r533BaseOutNow == false)   // R533_CAST
         castSet.insert(base);
     if (silent == false && m_barsAloneNow == false)
     {
@@ -12335,6 +12379,21 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
+    // R533_LIGHT: without the base something else must light the room - the Minis in a break, the bars /
+    // the animation laser / the strobes in a drop; none of them in the cast (a group off for the night,
+    // the slider's pool): the base stays after all
+    if (m_r533BaseOutNow && m_barsAloneNow == false && base.isEmpty() == false && castSet.contains(base) == false)
+    {
+        bool light = false;
+        foreach (const QString &key, castSet)
+        {
+            const TrackGroup &lg = m_groups.value(key);
+            if (isBreak ? smallWash(key) : (lg.lasers || lg.patternDevice || lg.strobes))
+                light = true;
+        }
+        if (light == false)
+            castSet.insert(base);
+    }
     if (hold && still == false && isCalm == false && m_cast.isEmpty() == false)
     {
         castSet.clear();
@@ -12348,7 +12407,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 && (m_groups.value(key).strobes == false || fader >= ENGINE_STROBE_ON))
                 castSet.insert(key);
         }
-        if (base.isEmpty() == false && m_barsAloneNow == false)   // R384_ALONE_HOLD
+        if (base.isEmpty() == false && m_barsAloneNow == false
+            && (m_r533BaseOutNow == false || m_cast.contains(base)))   // R384_ALONE_HOLD, R533_HOLD: HOLD keeps it out
             castSet.insert(base);
         // ... nor the one-laser line (runde 287): held with both laser types
         // on above 85 % and the fader brought under it, the first type in
@@ -12556,6 +12616,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_planOriginal.clear();
                 m_dropPlanFor = -1;
             }
+            m_r533PlanAt = boundary;         // R533_PLAN_AT: the plans below are for this boundary
             const bool another = m_dropPlanFor < 0 || qAbs(boundary - m_dropPlanFor) > 8
                               || m_planSection != nextState;
             // R439_TRACK_MEMORY: this track's boundary has a set he ran last time -
@@ -12611,6 +12672,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 m_dropMode = 1;
             }
             m_dropPlanFor = boundary;
+            m_r533PlanAt = -1;               // R533_PLAN_DONE
         }
         m_dropPlanBeat = beat;
         m_planFaderNow = fader;              // R443_PLAN_LANE: the guesses are sized at the slider now
@@ -25989,7 +26051,9 @@ QStringList TrackEngine::planGuess(const QString &section, int boundary)
     // its own for that boundary (the night's plan dice are put back)
     const quint32 keep = m_dropPlanSeed;
     m_dropPlanSeed = 443u + 2654435761u * quint32(qMax(0, boundary));
+    m_r533PlanAt = boundary;             // R533_GUESS_AT: the drop's size / the base out are this boundary's
     const QStringList out = planCast(section, m_planFaderNow);
+    m_r533PlanAt = -1;
     m_dropPlanSeed = keep;
     return out;
 }
@@ -42441,6 +42505,50 @@ int TrackEngine::r532DropCap(int s, qreal fader) const
         && (prev < 0 || (big >= 0 && qAbs(prev - big) <= 8) || r532LeanDraw(prev) == false))
         return 1;                            // the lean drop
     return 2;
+}
+
+// R533_FN (Tobias 11-02: "Lav 1 og 2, og jeg synes det er fint der bliver moerkt en gang i mellem. Baade
+// laser-bars og strobe-hovederne lyser rummet virkeligt meget op"): the base (the wash) sits a section out
+// now and then. Drawn from the track and the section's first beat, so PLAN shows what lands.
+//   break: one in three from 40 % on the slider, 16 beats or longer, never two breaks in a row - the
+//          Minis carry the room (with the break's one extra, if it has one); the wash fades out over a bar.
+//   drop:  one in three of the drops that are not the track's big one, from 60 % - the bars / the animation
+//          laser / the strobes carry it; never two such drops in a row. A drop with none of them keeps the base.
+bool TrackEngine::r533Draw(int s, quint32 salt) const
+{
+    const quint32 h = (qHash(m_trackTitle) ^ (quint32(s) * 2246822519u) ^ salt) * 2654435761u;
+    return ((h >> 7) % 3u) == 0u;
+}
+
+bool TrackEngine::r533DropBaseOut(int s, qreal fader) const
+{
+    if (s < 0 || m_r509Drops.isEmpty() || fader < 0.60 - 1e-9)
+        return false;
+    if (r532DropCap(s, fader) >= 4)
+        return false;                        // the big drop keeps everything
+    int at = -1, prev = -1;
+    foreach (int d, m_r509Drops)
+    {
+        if (qAbs(d - s) <= 8)
+            at = d;
+        else if (d < s && d > prev)
+            prev = d;
+    }
+    if (at < 0)
+        at = s;
+    if (r533Draw(at, 0x533d) == false)
+        return false;
+    // never two in a row: the drop before, if it was not the big one, drew it too
+    if (prev >= 0 && r532DropCap(prev, fader) < 4 && r533Draw(prev, 0x533d))
+        return false;
+    return true;
+}
+
+bool TrackEngine::r533BreakBaseOut(int s, int len, qreal fader) const
+{
+    if (s < 0 || fader < 0.40 - 1e-9 || (len >= 0 && len < 16) || m_r533LastBreakOut)
+        return false;
+    return r533Draw(s, 0x533b);
 }
 /* =====================================================================
  *  COLOUR (runde 509, agent COLOUR) - appended to trackengine.cpp by
