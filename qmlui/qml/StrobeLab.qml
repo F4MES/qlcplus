@@ -242,7 +242,8 @@ Rectangle
                 LabTile
                 {
                     objectName: "slabGood"
-                    width: 480; height: 150; text: "✓  " + qsTr("GOOD"); sub: qsTr("kept - drawn more often")
+                    width: 480; height: 150; text: "✓  " + qsTr("GOOD")
+                    sub: slabRoot.bars ? qsTr("kept - drawn more often") : qsTr("a favourite - half the draws")   // R542_GOOD_SUB
                     tone: slabRoot.cGreen; bar: true; fontPx: 40
                     on: eng ? eng.slabVerdict === 1 : false
                     onTapped: if (eng) eng.slabDecide(1)
@@ -252,7 +253,10 @@ Rectangle
             {
                 x: 44; y: 466; width: 1150
                 wrapMode: Text.WordWrap
-                text: qsTr("BAN takes it out of the show - the engine never draws it. GOOD has it drawn more often (with RATINGS on). The same tile again takes it back. Nothing is deleted from the show file.")
+                // R542_GOOD_HELP: the strobes' GOOD are favourites (R541_FAV); the bars' GOOD are up-votes as before
+                text: slabRoot.bars
+                      ? qsTr("BAN takes it out of the show - the engine never draws it. GOOD has it drawn more often (with RATINGS on). The same tile again takes it back. Nothing is deleted from the show file.")
+                      : qsTr("BAN takes it out of the show - the engine never draws it. GOOD makes it a favourite: half the strobes' programmes in its kind of section come from your GOOD ones. The same tile again takes it back. Nothing is deleted from the show file.")
                 color: slabRoot.cDim; font.pixelSize: 16
             }
             Text

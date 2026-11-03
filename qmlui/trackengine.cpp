@@ -24633,6 +24633,14 @@ void TrackEngine::labRemove(const QString &key)
         if (m_labPass == 2)
             labShowCandidate();
     }
+    else if (m_labShowDirty)
+    {
+        // R542_REMOVE_CLOSED: the lab is closed, so no labShutdown() will see the flag - the next table
+        // build takes the look out of the show (as labShutdown(false))
+        m_labShowDirty = false;
+        saveRoles();
+        m_dirty = true;
+    }
     emit labChanged();
 }
 

@@ -739,8 +739,8 @@ Rectangle
                     can: trackEngine ? trackEngine.clabColours.length > 0 : false
                     line1: qsTr("how bright each group is IN each colour")
                     line2: trackEngine && trackEngine.clabMessage !== "" ? trackEngine.clabMessage
-                           : trackEngine && trackEngine.clabChanges > 0 ? qsTr("%1 levels changed from the show file").arg(trackEngine.clabChanges)
-                                                                     : qsTr("every level as the show file made it")
+                           : trackEngine && trackEngine.clabChanges > 0 ? qsTr("%1 levels set by you").arg(trackEngine.clabChanges)   // R542_CLAB_CARD
+                                                                     : qsTr("every colour as it has always been")
                     openName: "labOpen:colour"
                     onOpen: if (trackEngine) trackEngine.clabOpen()
                 }
