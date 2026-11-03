@@ -1272,6 +1272,7 @@ void TrackEngine::ensureTable()
     m_dirty = false;
     m_savedProgramCache.clear(); m_savedProgramIndex.clear(); // SAVED_LOOKS_IDENTITY
     m_savedAutoCache.clear();        // R503_SAVED_TABLE_CACHE: groups/bans re-read - the figure cache with them (same count, other table)
+    m_r543SlabList.clear();          // R543_SLAB_CACHE_CLEAR: the labs' lists are the table's
     invalidateCandidates();          // m_funcs is about to be cleared and refilled
     m_eyeCache.clear();              // runde 338: the fixtures may have changed
     m_dimmerCache.clear();
@@ -20331,6 +20332,10 @@ void TrackEngine::setRoomAuto(bool on)
     {
         m_roomSent = -1;             // hand the clock's value over right away
         announceRoom();
+        // R543_ROOM_HANDOVER: the hand-over can drop the slider 40 points at once - the bars and the
+        // animation laser measured against it now, as a hand on the slider is (R336_LASER_HAND)
+        if (m_showOnNow && m_roomSent >= 0)
+            laserFaderCheck(m_roomSent / 100.0);
     }
     emit liveChanged();
 }
@@ -20445,6 +20450,8 @@ void TrackEngine::cycleClockPoint(int index)
     QSettings().setValue(SETTINGS_ENGINE_CLOCKCURVE, parts.join(','));
     m_roomSent = -1;                       // announceRoom() re-sends on the next beat
     announceRoom();                        // ... or now: the deck may be stopped (r199)
+    if (m_roomAuto && m_showOnNow && m_roomSent >= 0)
+        laserFaderCheck(m_roomSent / 100.0);   // R543_CLOCK_TAP_LASER: a tap past 100 is 0 - a hand
     emit tableChanged();
 }
 
@@ -25067,6 +25074,10 @@ int TrackEngine::slabTabOf(const TrackFuncInfo &info) const
 
 QList<quint32> TrackEngine::slabListOf(const QString &group, int tab, int order) const
 {
+    // R543_SLAB_CACHE_GET: ALL (A-Z) depends on the table only - kept until the next build (ensureTable)
+    const QString cacheKey = group + QLatin1Char('|') + QString::number(tab);
+    if (order == 0 && m_r543SlabList.contains(cacheKey))
+        return m_r543SlabList.value(cacheKey);
     QList<QPair<QString, quint32> > rows;
     const bool bars = m_groups.value(group).lasers && m_groups.value(group).patternDevice == false;
     if (group.isEmpty())
@@ -25109,6 +25120,8 @@ QList<quint32> TrackEngine::slabListOf(const QString &group, int tab, int order)
     QList<quint32> out;
     for (const QPair<QString, quint32> &r : rows)
         out.append(r.second);
+    if (order == 0 && group.isEmpty() == false)
+        m_r543SlabList.insert(cacheKey, out);   // R543_SLAB_CACHE_PUT
     return out;
 }
 
@@ -32523,6 +32536,8 @@ void TrackEngine::clockHandIntoRow(int only)
         logSignal(QStringLiteral("sig:clock-learn:") + (only < 0 ? QStringLiteral("row") : QString::number(only)));
         m_roomSent = -1;
         announceRoom();                    // nothing unless ENERGY by clock runs (LEARN's own tap)
+        if (m_roomAuto && m_showOnNow && m_roomSent >= 0)
+            laserFaderCheck(m_roomSent / 100.0);   // R543_CLOCK_LEARN_LASER: his tap moved the slider
     }
     if (changed || marks)
         emit tableChanged();
