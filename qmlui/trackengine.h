@@ -151,6 +151,7 @@ class QRandomGenerator;
 // applies whether the white comes from a real white channel or is made from
 // red, green and blue on the two models here that have no white channel.
 #define ENGINE_STROBE_WHITE       178
+#define R541_FAV_PCT              50     // R541_FAV_DEFINE: the strobes' draws from his GOOD programmes, in %
 #define SETTINGS_ENGINE_BASE      QStringLiteral("trackengine/base")
 #define SETTINGS_ENGINE_LOG       QStringLiteral("trackengine/log")
 #define SETTINGS_ENGINE_STARS     QStringLiteral("trackengine/stars")
@@ -992,7 +993,7 @@ public:
     bool clabDark() const { return m_clabDark; }
     qreal clabTest() const { return m_clabTest; }
     QString clabMessage() const { return m_clabMessage; }
-    int clabChanges() const { clabLoad(); return int(m_colourLevel.count()); }
+    int clabChanges() const { clabLoad(); return int(m_colourLevel.count() + m_r541Old.count()); }   // R541_CHANGES
     int sendState() const { return m_sendState; }              // R440_SEND
     QString sendResult() const { return m_sendResult; }
     /** kill a pending or running bar echo - AUTO off, blackout, a new track */
@@ -3188,11 +3189,31 @@ private:
     QString m_clabMessage;
     mutable QHash<QString, qreal> m_colourLevel;   // "group/colour" -> level, 1.0 not stored
     mutable bool m_colourLevelLoaded = false;
+    // R541_MEMBERS (COLOUR FULL): the levels of runde 440 (old store, "of what the show file made") until the
+    // first change in the lab writes the new one; the engine's colour scenes at full and their colour channels;
+    // the scene of each group/colour, the scenes carrying their level themselves, the as-before level of each
+    // colour (its old peak / 255) and the painters' peaks
+    mutable QHash<QString, qreal> m_r541Old;
+    QHash<QString, QList<SceneValue> > m_r541Full;
+    QHash<QString, QSet<quint64> > m_r541Col;
+    QHash<QString, quint32> m_r541Scene;
+    QSet<quint32> m_r541BakedIds;
+    QHash<QString, qreal> m_r541Def;
+    mutable QHash<QString, qreal> m_r541PeakCache;
     void clabLoad() const;
     void clabSave() const;
     bool clabGroupCan(const QString &key) const;
     QString colourShown(const QString &group) const;
     qreal colourLevel(const QString &group) const;
+    // R541_DECL (COLOUR FULL): 100 % = the lamp's full output in a colour (Tobias 11-03)
+    qreal r541Default(const QString &group, const QString &colour) const;
+    bool r541Saved(const QString &group, const QString &colour, qreal *level) const;
+    qreal r541Level(const QString &group, const QString &colour) const;
+    void r541Materialize();
+    QList<SceneValue> r541Baked(const QString &lk, qreal level) const;
+    void r541Bake(const QString &group, const QString &colour);
+    qreal r541Peak(quint32 fid, const QString &group) const;
+    int r541WhiteCap(quint32 fxid) const;
     /** the night's group fader x the group's level in the colour it shows */
     qreal trimOf(const QString &group) const;
     /** R442_ANI_MASTER: the animation laser is lit only while MASTER x the

@@ -239,7 +239,7 @@ Rectangle
                             Rectangle
                             {
                                 width: Math.max(10, fader.width * row.level); height: parent.height; radius: 6
-                                color: row.level >= 0.995 ? Qt.darker(clabRoot.swatch(clabRoot.colour), 1.35) : clabRoot.cGold
+                                color: modelData.mine === true ? clabRoot.cGold : Qt.darker(clabRoot.swatch(clabRoot.colour), 1.35)   // R541_QML_FADER: gold = his own level
                             }
                             Repeater
                             {
@@ -273,7 +273,7 @@ Rectangle
                             x: 1090; width: 170; height: parent.height
                             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                             text: clabRoot.pct(row.level)
-                            color: row.level >= 0.995 ? clabRoot.cText : clabRoot.cGold
+                            color: modelData.mine === true ? clabRoot.cGold : clabRoot.cText   // R541_QML_PCT
                             font.bold: true; font.pixelSize: 28
                         }
                     }
@@ -283,7 +283,7 @@ Rectangle
             {
                 x: 24; y: groupCard.height - 34; width: groupCard.width - 48
                 elide: Text.ElideRight
-                text: qsTr("100 % = as the show file made it. The engine multiplies this group's light by the level whenever it shows that colour - in the show and the startscene.")
+                text: qsTr("100 % = the lamp's full output in this colour. Gold = your level, white = as it has always been - in the show, the flashes and the startscene.")   // R541_QML_NOTE
                 color: clabRoot.cMute; font.pixelSize: 14
             }
         }
@@ -419,6 +419,7 @@ Rectangle
                         width: matrixCard.width; height: clabRoot.cellH
                         readonly property string gkey: modelData.key
                         readonly property var levels: modelData.levels
+                        readonly property var mineList: modelData.mine ? modelData.mine : []   // R541_QML_MINE
                         Text { x: 28; anchors.verticalCenter: parent.verticalCenter; width: 290; elide: Text.ElideRight; text: parent.gkey; color: clabRoot.cText; font.bold: true; font.pixelSize: 18 }
                         Repeater
                         {
@@ -429,15 +430,17 @@ Rectangle
                                 x: matrixCard.cx0 + index * matrixCard.cw; width: matrixCard.cw - 12; height: clabRoot.cellH; radius: 6
                                 readonly property real v: modelData
                                 readonly property bool here: clabRoot.colours[index] === clabRoot.colour
-                                color: v < 0 ? "#18181C" : (v < 0.995 ? clabRoot.cGoldDark : "#22222A")
+                                // R541_QML_CELL: gold = his own level (the matrix's "mine")
+                                readonly property bool mine: v >= 0 && parent.mineList.length > index && parent.mineList[index] === true
+                                color: v < 0 ? "#18181C" : (mine ? clabRoot.cGoldDark : "#22222A")
                                 border.width: here ? 2 : 0; border.color: "#F0F0F4"
-                                Rectangle { visible: v >= 0 && v < 0.995; anchors.bottom: parent.bottom; width: parent.width; height: 4; color: clabRoot.cGold }
+                                Rectangle { visible: parent.mine; anchors.bottom: parent.bottom; width: parent.width; height: 4; color: clabRoot.cGold }
                                 Text
                                 {
                                     anchors.centerIn: parent
-                                    text: v < 0 ? "—" : clabRoot.pct(v)
-                                    color: v < 0 ? clabRoot.cDim : (v < 0.995 ? clabRoot.cGold : clabRoot.cDim)
-                                    font.bold: v >= 0 && v < 0.995; font.pixelSize: 17
+                                    text: parent.v < 0 ? "—" : clabRoot.pct(parent.v)
+                                    color: parent.v < 0 ? clabRoot.cDim : (parent.mine ? clabRoot.cGold : clabRoot.cDim)
+                                    font.bold: parent.mine; font.pixelSize: 17
                                 }
                                 MouseArea { anchors.fill: parent; enabled: v >= 0; onClicked: if (eng) eng.clabSetColour(clabRoot.colours[index]) }
                             }
@@ -448,7 +451,7 @@ Rectangle
             Text
             {
                 x: 28; y: matrixCard.height - 30; width: matrixCard.width - 56; elide: Text.ElideRight
-                text: qsTr("Gold = changed from the show file.  — = the group has no scene in that colour.  Strobes never fire their hardware strobe here.  Haze is never touched.")
+                text: qsTr("Gold = your level.  — = the group has no scene in that colour.  Strobes never fire their hardware strobe here.  Haze is never touched.")   // R541_QML_FOOT
                 color: clabRoot.cDim; font.pixelSize: 14
             }
         }
