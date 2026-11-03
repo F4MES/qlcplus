@@ -3153,6 +3153,7 @@ private:
     QList<quint32> m_slabList;
     QHash<int, quint32> m_slabResume;    // where he was, per tab
     mutable QHash<quint32, int> m_slabVerdict;
+    mutable QHash<QString, QList<quint32> > m_r543SlabList;   // R543_SLAB_CACHE_MEMBER: slabListOf(order 0) per group/tab
     QTimer m_slabAutoTimer;
     QString slabPickGroup() const;
     void slabLoad() const;
