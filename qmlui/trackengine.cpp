@@ -7288,7 +7288,9 @@ QStringList TrackEngine::planDropCast(qreal fader) const
     }
     const qreal want = 3.0 * qBound(0.0, (fader - 0.05) / 0.80, 1.0) + qBound(0.0, (fader - 0.90) / 0.10, 1.0);
     const int whole = int(want);
-    const int budget = qMin(r532DropCap(r533PlanAt(), fader),   // R533_PLAN_DROPCAP: the boundary being planned
+    const bool r540Armed = (m_hitKind > 0 || m_hitAmokOwed)   // R540_HIT_PLAN: PLAN shows what his armed hit lands on the next drop
+                         && m_nextDropBeat > 0 && qAbs(r533PlanAt() - m_nextDropBeat) <= 8;
+    const int budget = qMin(r540Armed ? 4 : r532DropCap(r533PlanAt(), fader),   // R533_PLAN_DROPCAP: the boundary being planned
                             qBound(0, whole + (dice.bounded(1000) < int((want - whole) * 1000.0) ? 1 : 0), 4));   // R532_CAP_DROPPLAN
     QSet<QString> set;
     if (base.isEmpty() == false)
@@ -7310,7 +7312,7 @@ QStringList TrackEngine::planDropCast(qreal fader) const
             used++;
     }
     // R533_PLAN_NOBASE: the base out of this drop, when it draws it and the bars / laser / strobes are in
-    if (base.isEmpty() == false && r533DropBaseOut(r533PlanAt(), fader))
+    if (base.isEmpty() == false && r540Armed == false && r533DropBaseOut(r533PlanAt(), fader))   // R540_PLAN_NOBASE
     {
         bool light = false;
         foreach (const QString &key, set)
@@ -12393,7 +12395,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // drops at most two groups beside the base - with the Minis counting, one lamp type always rests, and
     // the drawn order (rest first) changes which. A drop (and its pre-drop bar) by its size (r532DropCap).
     // Not omvendt's wild build (R488, all the slider gives); his own set / HOLD / CALM run as before.
-    if ((isDrop || preDrop) && hold == false && isCalm == false)
+    // R540_HIT_CAP (fejlrunde 11-03): his DROP HIT - armed, owed or its amok running - is "completely amok"
+    // (Tobias): no drop cap. The 4-bar burst put the whole rig in, but after it a lean drop fell to one group
+    // beside the base for the rest of the amok.
+    const bool r540Hit = m_hitKind > 0 || m_hitAmokOwed || m_hitAmokFrom >= 0;
+    if ((isDrop || preDrop) && hold == false && isCalm == false && r540Hit == false)
     {
         const int dropAt = isDrop ? secStart : (nextState == QStringLiteral("drop") && beatsToNext > 0 ? beat + beatsToNext : -1);
         const int cap = r532DropCap(dropAt, fader);
@@ -12644,11 +12650,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_r533LastBreakOut = out;
         }
         else if (isDrop)
-            out = free && r533DropBaseOut(secStart, fader);
+            out = free && r540Hit == false && r533DropBaseOut(secStart, fader);   // R540_HIT_BASE: not under his hit
         m_r533BaseOutNow = out;
         if (out && m_testTrack == false)
             logSignal(QStringLiteral("sig:base-out:%1@%2").arg(state).arg(secStart));
     }
+    if (m_r533BaseOutNow && isDrop && r540Hit)
+        m_r533BaseOutNow = false;        // his hit landed later in a drop that had the base out (a DARK's owed kick)
     // R536_DECIDE: a quiet break's stabs, measured on its first beat (and again when the switch moves); the
     // strobes join the break outside the budget only where it has them, from 80 % on the slider
     if (sectionChanged || secStart != m_r536For)
