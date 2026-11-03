@@ -3117,6 +3117,12 @@ void TrackEngine::ensureColourScenes()
             existing.insert(func->name().mid(ENGINE_COLOUR_PREFIX.length()), func->id());
     }
     m_houseWarm.clear();                 // R479_LAST_WHITE_CLEAR: made again below
+    m_r541Full.clear();                  // R541_CLEAR: made again below
+    m_r541Col.clear();
+    m_r541Scene.clear();
+    m_r541BakedIds.clear();
+    m_r541Def.clear();
+    m_r541PeakCache.clear();
 
     foreach (const QString &key, m_groupOrder)
     {
@@ -3486,6 +3492,44 @@ void TrackEngine::ensureColourScenes()
             if (touched == 0)
                 continue;
 
+            // R541_BAKE (Tobias 11-03, COLOUR LAB: "100% = lampens fulde output, og derfra kan jeg saa justere
+            // hver styrke paa hver farve paa lampen (inkl hvor meget hvid skal lyse - saa kan jeg selv saette min
+            // regel)"). The scene above is the colour as it has always been (cyan and magenta at 192, a strobe's
+            // white at 178); its colour channels are lifted so the brightest is at 255 - the lamp's full output in
+            // that colour - and the group's level for the colour is baked back in. Unset, the level is that old
+            // peak / 255: the same values as before. The flashes, the startscene and every hit that runs the colour
+            // scene carry it; nothing scales it a second time (colourLevel: 1.0 on these). Not the lasers.
+            const QString r541Key = key + QLatin1Char('/') + colour;
+            if (clabGroupCan(key))
+            {
+                int peak = 0;
+                QSet<quint64> colCh;
+                foreach (const SceneValue &sv, values)
+                {
+                    Fixture *cfx = m_doc->fixture(sv.fxi);
+                    const QLCChannel *cch = cfx != nullptr ? cfx->channel(sv.channel) : nullptr;
+                    if (cch != nullptr && cch->group() == QLCChannel::Intensity && cch->colour() != QLCChannel::NoColour)
+                    {
+                        colCh.insert((quint64(sv.fxi) << 32) | sv.channel);
+                        peak = qMax(peak, int(sv.value));
+                    }
+                }
+                if (peak > 0)
+                {
+                    QList<SceneValue> full;
+                    foreach (SceneValue sv, values)
+                    {
+                        if (colCh.contains((quint64(sv.fxi) << 32) | sv.channel))
+                            sv.value = uchar(qBound(0, int(qRound(qreal(sv.value) * 255.0 / qreal(peak))), 255));
+                        full.append(sv);
+                    }
+                    m_r541Def.insert(r541Key, qreal(peak) / 255.0);
+                    m_r541Full.insert(r541Key, full);
+                    m_r541Col.insert(r541Key, colCh);
+                    values = r541Baked(r541Key, r541Level(key, colour));
+                }
+            }
+
             QString name = QString("%1 %2").arg(key).arg(colour);
             Scene *scene = nullptr;
             if (existing.contains(name))
@@ -3511,6 +3555,11 @@ void TrackEngine::ensureColourScenes()
                 }
             }
 
+            if (m_r541Full.contains(r541Key))   // R541_SCENE_ID: the scene that carries this level itself
+            {
+                m_r541Scene.insert(r541Key, scene->id());
+                m_r541BakedIds.insert(scene->id());
+            }
             // R479_LAST_WHITE_KEEPOUT: the warm white is LAST TRACK's alone - not in the table,
             // so no colour pick, neighbour, tile or fallback of the show can ever draw it
             if (colour == QStringLiteral("warmwhite"))
@@ -9473,6 +9522,17 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // Foundation/support favour broad, slow pictures; only the rhythmic lead
     // draws freely from the full menu. An empty shortlist uses the generated
     // look, rather than introducing a second fast chase to fill a slot.
+    // R541_FAV_COLLECT (Tobias 11-03, STROBE LAB: GOOD -> "Favoritter"): the strobes' GOOD programmes that
+    // passed everything so far (section, colour, stars, bans). Below they keep the slider's pace floor but not
+    // the drop's pace preference over 75 %; at the end half the draws are made from them.
+    QList<TrackFuncInfo *> r541Fav;
+    if (m_groups.value(group).strobes)
+    {
+        slabLoad();
+        foreach (TrackFuncInfo *info, ok)
+            if (m_slabVerdict.value(info->id, 0) == 1)
+                r541Fav.append(info);
+    }
     if (m_fullAuto && m_compositionTier > 0 && group != m_rhythmLead)
     {
         QList<TrackFuncInfo *> support;
@@ -9502,6 +9562,14 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // - PREFER that pace, not only allow it: a soft kick gets the eighth
         // chases, a hard one the chases that step on every beat. The slower
         // ones stay as the fallback when the pool has none at that pace.
+        if (strobeGroup && r541Fav.isEmpty() == false)   // R541_FAV_PACE: his GOOD at the slider's floor
+        {
+            QList<TrackFuncInfo *> paced;
+            foreach (TrackFuncInfo *info, r541Fav)
+                if (support.contains(info))
+                    paced.append(info);
+            r541Fav = paced;
+        }
         if (strobeGroup && tier == 2 && m_faderNow >= 0.75 && support.isEmpty() == false)
         {
             QList<TrackFuncInfo *> atPace;
@@ -9600,6 +9668,9 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         for (TrackFuncInfo *info : ok)
             if (!info->family.isEmpty() && info->family == m_motifFamilies.value(group))
                 pool << info << info;
+    // R541_FAV_DRAW: half the strobes' programme draws come from his GOOD ones (the rest as before)
+    if (r541Fav.isEmpty() == false && QRandomGenerator::global()->bounded(100) < R541_FAV_PCT)
+        return pickMotionWeighted(r541Fav, cursor);
     return pickMotionWeighted(pool, cursor);
 }
 
@@ -25652,17 +25723,34 @@ bool TrackEngine::slabCanSpeed() const
 
 #define ENGINE_CLAB_MIN       0.10    // the lowest level a group can be set to in a colour
 
+// R541_LOAD (COLOUR FULL, Tobias 11-03: "Nievau skal vel bare svare til at 100% = lampens fulde output"): the
+// levels are now of the lamp's full output in that colour, stored in trackengine/colour-full. Until the first
+// change in the lab writes it, the levels he set before (trackengine/colour-level, "of what the show file
+// made") are read as they were and converted when used (r541Saved: old x the colour's as-before level) - so the
+// room looks the same until he moves a slider. The old key is never written or removed: his choices stay.
 void TrackEngine::clabLoad() const
 {
     if (m_colourLevelLoaded)
         return;
     m_colourLevelLoaded = true;
-    const QVariantMap raw = QSettings().value(QStringLiteral("trackengine/colour-level")).toMap();
+    QSettings s;
+    if (s.contains(QStringLiteral("trackengine/colour-full")))
+    {
+        const QVariantMap raw = s.value(QStringLiteral("trackengine/colour-full")).toMap();
+        for (auto it = raw.constBegin(); it != raw.constEnd(); ++it)
+        {
+            const qreal v = it.value().toDouble();
+            if (v >= ENGINE_CLAB_MIN - 1e-9 && v <= 1.0 + 1e-9)
+                m_colourLevel.insert(it.key(), qMin(1.0, v));
+        }
+        return;
+    }
+    const QVariantMap raw = s.value(QStringLiteral("trackengine/colour-level")).toMap();
     for (auto it = raw.constBegin(); it != raw.constEnd(); ++it)
     {
         const qreal v = it.value().toDouble();
         if (v >= ENGINE_CLAB_MIN && v < 0.995)
-            m_colourLevel.insert(it.key(), v);
+            m_r541Old.insert(it.key(), v);
     }
 }
 
@@ -25670,8 +25758,148 @@ void TrackEngine::clabSave() const
 {
     QVariantMap out;
     for (auto it = m_colourLevel.constBegin(); it != m_colourLevel.constEnd(); ++it)
-        out.insert(it.key(), QString::number(it.value(), 'f', 2).toDouble());
-    QSettings().setValue(QStringLiteral("trackengine/colour-level"), out);
+        out.insert(it.key(), QString::number(it.value(), 'f', 3).toDouble());
+    QSettings().setValue(QStringLiteral("trackengine/colour-full"), out);   // R541_LOAD: the new store only
+}
+
+qreal TrackEngine::r541Default(const QString &group, const QString &colour) const
+{
+    // the colour as it has always been: its peak in the engine's scene (measured, R541_BAKE), else the
+    // swatch's - cyan and magenta at 192, a strobe's white and warm white at 178 (ENGINE_STROBE_WHITE)
+    const QString lk = group + QLatin1Char('/') + colour;
+    if (m_r541Def.contains(lk))
+        return m_r541Def.value(lk);
+    if (colour == QStringLiteral("cyan") || colour == QStringLiteral("magenta"))
+        return 192.0 / 255.0;
+    if ((colour == QStringLiteral("white") || colour == QStringLiteral("warmwhite")) && m_groups.value(group).strobes)
+        return qreal(ENGINE_STROBE_WHITE) / 255.0;
+    return 1.0;
+}
+
+bool TrackEngine::r541Saved(const QString &group, const QString &colour, qreal *level) const
+{
+    // his level (the warm white follows his white); an old one converted (R541_LOAD)
+    clabLoad();
+    const QString c = colour == QStringLiteral("warmwhite") ? QStringLiteral("white") : colour;
+    const QString lk = group + QLatin1Char('/') + c;
+    if (m_colourLevel.contains(lk))
+    {
+        *level = m_colourLevel.value(lk);
+        return true;
+    }
+    if (m_r541Old.contains(lk))
+    {
+        *level = qBound(ENGINE_CLAB_MIN, m_r541Old.value(lk) * r541Default(group, c), 1.0);
+        return true;
+    }
+    return false;
+}
+
+qreal TrackEngine::r541Level(const QString &group, const QString &colour) const
+{
+    qreal v = 1.0;
+    if (r541Saved(group, colour, &v))
+    {
+        if (colour == QStringLiteral("warmwhite"))      // his white, as warm: the same share of its own full
+            return qBound(0.0, v * r541Default(group, colour) / qMax(0.01, r541Default(group, QStringLiteral("white"))), 1.0);
+        return v;
+    }
+    return r541Default(group, colour);
+}
+
+void TrackEngine::r541Materialize()
+{
+    // the first change in the lab: every old level goes into the new store, converted
+    clabLoad();
+    for (auto it = m_r541Old.constBegin(); it != m_r541Old.constEnd(); ++it)
+    {
+        const QString group = it.key().section(QLatin1Char('/'), 0, 0);
+        const QString colour = it.key().section(QLatin1Char('/'), 1);
+        if (m_colourLevel.contains(it.key()) == false)
+            m_colourLevel.insert(it.key(), qBound(ENGINE_CLAB_MIN, it.value() * r541Default(group, colour), 1.0));
+    }
+    m_r541Old.clear();
+}
+
+QList<SceneValue> TrackEngine::r541Baked(const QString &lk, qreal level) const
+{
+    QList<SceneValue> out;
+    const QSet<quint64> col = m_r541Col.value(lk);
+    foreach (SceneValue sv, m_r541Full.value(lk))
+    {
+        if (col.contains((quint64(sv.fxi) << 32) | sv.channel))
+            sv.value = uchar(qBound(0, int(qRound(qreal(sv.value) * qBound(0.0, level, 1.0))), 255));
+        out.append(sv);
+    }
+    return out;
+}
+
+void TrackEngine::r541Bake(const QString &group, const QString &colour)
+{
+    // a level changed: the engine's own scene of that colour is written again at it (and the warm white with
+    // the white)
+    QStringList colours;
+    colours << colour;
+    if (colour == QStringLiteral("white"))
+        colours << QStringLiteral("warmwhite");
+    foreach (const QString &c, colours)
+    {
+        const QString lk = group + QLatin1Char('/') + c;
+        Scene *scene = qobject_cast<Scene *>(m_doc != nullptr ? m_doc->function(m_r541Scene.value(lk, Function::invalidId())) : nullptr);
+        if (scene == nullptr || m_r541Full.contains(lk) == false)
+            continue;
+        foreach (const SceneValue &sv, r541Baked(lk, r541Level(group, c)))
+            scene->setValue(sv);
+    }
+}
+
+qreal TrackEngine::r541Peak(quint32 fid, const QString &group) const
+{
+    // the brightest colour value a scene or a chase's steps write on this group: how far below the lamp's full
+    // output the function already is
+    const QString ck = QString::number(fid) + QLatin1Char('|') + group;
+    if (m_r541PeakCache.contains(ck))
+        return m_r541PeakCache.value(ck);
+    QList<quint32> scenes;
+    Function *f = m_doc != nullptr ? m_doc->function(fid) : nullptr;
+    if (f != nullptr && f->type() == Function::SceneType)
+        scenes << fid;
+    else if (Chaser *ch = qobject_cast<Chaser *>(f))
+    {
+        foreach (const ChaserStep &st, ch->steps())
+            scenes << st.fid;
+    }
+    const TrackGroup &g = m_groups.value(group);
+    int peak = 0;
+    foreach (quint32 sid, scenes)
+    {
+        Scene *sc = qobject_cast<Scene *>(m_doc->function(sid));
+        if (sc == nullptr)
+            continue;
+        foreach (const SceneValue &sv, sc->values())
+        {
+            if (g.fixtures.contains(sv.fxi) == false)
+                continue;
+            Fixture *fx = m_doc->fixture(sv.fxi);
+            const QLCChannel *qch = fx != nullptr ? fx->channel(sv.channel) : nullptr;
+            if (qch != nullptr && qch->group() == QLCChannel::Intensity && qch->colour() != QLCChannel::NoColour)
+                peak = qMax(peak, int(sv.value));
+        }
+    }
+    m_r541PeakCache.insert(ck, qreal(peak));
+    return qreal(peak);
+}
+
+int TrackEngine::r541WhiteCap(quint32 fxid) const
+{
+    // a strobe's white ceiling is his white level now (ENGINE_STROBE_WHITE, 70 %, until he sets one)
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.strobes && g.fixtures.contains(fxid))
+            return int(qRound(255.0 * r541Level(key, QStringLiteral("white"))));
+    }
+    return ENGINE_STROBE_WHITE;
 }
 
 bool TrackEngine::clabGroupCan(const QString &key) const
@@ -25698,13 +25926,38 @@ QString TrackEngine::colourShown(const QString &group) const
 
 qreal TrackEngine::colourLevel(const QString &group) const
 {
+    // R541_LEVEL: the engine's own colour scenes carry the level themselves (R541_BAKE): 1.0 on them. A
+    // programme or one of his scenes that paints the colour is already at its own peak: his level of the
+    // lamp's full output reaches it as far as it can (never above what it writes); with no level of his, as
+    // the show file made it.
     clabLoad();
-    if (m_colourLevel.isEmpty() || group.isEmpty())
+    if (group.isEmpty())
         return 1.0;
     const QString colour = colourShown(group);
     if (colour.isEmpty())
         return 1.0;
-    return m_colourLevel.value(group + QLatin1Char('/') + colour, 1.0);
+    quint32 fid = Function::invalidId();
+    if (m_clabActive)
+        fid = m_active.value(QStringLiteral("clab:") + group, Function::invalidId());
+    else
+    {
+        fid = m_active.value(QStringLiteral("col:") + group, Function::invalidId());
+        if (fid == Function::invalidId() || m_funcs.value(fid).colour.isEmpty())
+        {
+            const quint32 mf = m_active.value(QStringLiteral("mot:") + group, Function::invalidId());
+            if (mf != Function::invalidId() && m_funcs.value(mf).coversColour && m_funcs.value(mf).colour.isEmpty() == false)
+                fid = mf;
+        }
+    }
+    if (fid == Function::invalidId() || m_r541BakedIds.contains(fid))
+        return 1.0;
+    qreal level = 1.0;
+    if (r541Saved(group, colour, &level) == false)
+        return 1.0;
+    const qreal peak = r541Peak(fid, group);
+    if (peak <= 0.0)
+        return 1.0;
+    return qBound(0.0, level * 255.0 / peak, 1.0);
 }
 
 qreal TrackEngine::trimOf(const QString &group) const
@@ -25768,7 +26021,11 @@ QVariantList TrackEngine::clabRows() const
         }
         m.insert(QStringLiteral("can"), can);
         m.insert(QStringLiteral("note"), note);
-        m.insert(QStringLiteral("level"), m_colourLevel.value(key + QLatin1Char('/') + m_clabColour, 1.0));
+        m.insert(QStringLiteral("level"), r541Level(key, m_clabColour));   // R541_ROWS: of the lamp's full output
+        {
+            qreal mine = 0.0;
+            m.insert(QStringLiteral("mine"), r541Saved(key, m_clabColour, &mine));   // his own level (gold)
+        }
         m.insert(QStringLiteral("lit"), can && m_clabDark == false && (m_clabSolo.isEmpty() || m_clabSolo == key));
         out << m;
     }
@@ -25787,15 +26044,19 @@ QVariantList TrackEngine::clabMatrix() const
         QVariantMap m;
         m.insert(QStringLiteral("key"), key);
         QVariantList levels;
+        QVariantList mine;                   // R541_MLIST: his own levels (gold)
         foreach (const QString &c, colours)
         {
             // -1: the group has no scene in that colour
             if (colourFunction(key, c) == Function::invalidId())
                 levels << -1.0;
             else
-                levels << m_colourLevel.value(key + QLatin1Char('/') + c, 1.0);
+                levels << r541Level(key, c);   // R541_MATRIX
+            qreal mineLevel = 0.0;
+            mine << (colourFunction(key, c) != Function::invalidId() && r541Saved(key, c, &mineLevel));
         }
         m.insert(QStringLiteral("levels"), levels);
+        m.insert(QStringLiteral("mine"), mine);   // R541_MOUT
         out << m;
     }
     return out;
@@ -25931,13 +26192,14 @@ void TrackEngine::clabSetLevelIn(const QString &key, const QString &colour, qrea
 {
     if (clabGroupCan(key) == false || colour.isEmpty())
         return;
-    clabLoad();
+    r541Materialize();                   // R541_SETIN: the old levels move into the new store first
     level = qBound(ENGINE_CLAB_MIN, level, 1.0);
     const QString k = key + QLatin1Char('/') + colour;
-    if (level >= 0.995)
-        m_colourLevel.remove(k);
+    if (qAbs(level - r541Default(key, colour)) < 0.005)
+        m_colourLevel.remove(k);         // as the colour has always been
     else
         m_colourLevel.insert(k, level);
+    r541Bake(key, colour);
 }
 
 void TrackEngine::clabSetLevel(const QString &key, qreal level)
@@ -25947,21 +26209,21 @@ void TrackEngine::clabSetLevel(const QString &key, qreal level)
     clabSetLevelIn(key, m_clabColour, level);
     clabSave();
     logSignal(QStringLiteral("sig:colour-level:%1/%2=%3").arg(key, m_clabColour)
-              .arg(m_colourLevel.value(key + QLatin1Char('/') + m_clabColour, 1.0), 0, 'f', 2));
+              .arg(r541Level(key, m_clabColour), 0, 'f', 2));   // R541_SETLOG
     clabShow();
     emit clabChanged();
 }
 
 void TrackEngine::clabResetColour(const QString &key)
 {
-    clabSetLevel(key, 1.0);
+    clabSetLevel(key, r541Default(key, m_clabColour));   // R541_RESET: back to the colour as it has always been
 }
 
 void TrackEngine::clabCopyToAll(const QString &key)
 {
     if (m_clabActive == false || clabGroupCan(key) == false)
         return;
-    const qreal level = m_colourLevel.value(key + QLatin1Char('/') + m_clabColour, 1.0);
+    const qreal level = r541Level(key, m_clabColour);   // R541_COPY
     foreach (const QString &c, clabColours())
     {
         if (colourFunction(key, c) != Function::invalidId())
@@ -41061,8 +41323,8 @@ bool TrackEngine::r509PauseMasks(const QString &washHue, const QString &strobeHu
                 SceneValue v = sv;
                 const QLCChannel *qch = fxi->channel(sv.channel);
                 if (isStrobe && capWhite && qch != nullptr && qch->group() == QLCChannel::Intensity
-                    && v.value > ENGINE_STROBE_WHITE)
-                    v.value = ENGINE_STROBE_WHITE;   // the strobes' white ceiling, as every strobe white
+                    && v.value > r541WhiteCap(fxid))
+                    v.value = uchar(r541WhiteCap(fxid));   // R541_PAUSE_CAP: the strobes' white ceiling = his white level
                 lit.append(v);
                 set.insert(sv.channel);
             }
