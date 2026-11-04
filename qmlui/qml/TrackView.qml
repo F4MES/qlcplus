@@ -843,12 +843,14 @@ Rectangle
     component Card: Rectangle
     {
         property string title: ""
+        property real titleBoxW: 0        // TRACK_APP_LABELS_R555: > 0 = the title centred over a column this wide
         color: trackViewRoot.cCard
         radius: Math.round(14 * trackViewRoot.ks)
         border.width: 0                 // R403_NO_LINES
         Text
         {
             x: trackViewRoot.cardPad + 2
+               + (parent.titleBoxW > 0 ? Math.round((parent.titleBoxW - implicitWidth + font.letterSpacing) / 2) : 0)
             y: trackViewRoot.cardPad
             text: parent.title
             color: trackViewRoot.cMute
@@ -861,6 +863,10 @@ Rectangle
     component RowLabel: Text
     {
         color: trackViewRoot.cMute
+        // TRACK_APP_LABELS_R555: centred in the label column in the TRACK app (the letter spacing trails the
+        // last letter - the same on the left keeps the word in the middle)
+        horizontalAlignment: trackViewRoot.trackApp ? Text.AlignHCenter : Text.AlignLeft
+        leftPadding: trackViewRoot.trackApp ? font.letterSpacing : 0
         font.bold: true
         font.pixelSize: trackViewRoot.fs(12)
         font.letterSpacing: (trackViewRoot.fs(12)) * 0.15
@@ -3256,6 +3262,7 @@ Rectangle
             {
                 id: lookCard
                 title: "LOOK"
+                titleBoxW: trackViewRoot.trackApp ? labW : 0      // TRACK_APP_LABELS_R555: over the labels
                 x: trackViewRoot.rigW + trackViewRoot.gapB
                 y: 0
                 width: parent.width - trackViewRoot.rigW - trackViewRoot.liveW - 2 * trackViewRoot.gapB
@@ -3378,7 +3385,7 @@ Rectangle
                     {
                         objectName: "posPage"
                         visible: trackViewRoot.trackApp
-                        x: lookCard.inX - Math.round(4 * trackViewRoot.ks)
+                        x: lookCard.inX                   // TRACK_APP_LABELS_R555: the labels' column
                         y: deck.rowY(2); width: lookCard.labW; height: trackViewRoot.rowH
                         scale: posPageInput.down ? 0.965 : 1.0
                         Repeater
