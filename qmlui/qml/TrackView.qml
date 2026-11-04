@@ -30,6 +30,13 @@ Rectangle
     // and its update is its own (trackAppCtl, qmlui/trackapp.cpp). Without --track-app: as before
     readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
     readonly property int cdjCount: trackApp ? trackAppCtl.cdjCount : 0
+    // TRACK_APP_SETUP_R550 (Tobias 11-04: "FULL AUTO (skal altid vaere paa, saa unoedvendig)"): kept on
+    Timer
+    {
+        interval: 2000; repeat: true; triggeredOnStart: true
+        running: trackViewRoot.trackApp && !!trackEngine
+        onTriggered: if (trackEngine && trackEngine.fullAuto === false) trackEngine.fullAuto = true
+    }
     // SAVED_LOOKS_UI: approved 21/10, including touch scroll and outside-to-close.
     readonly property bool savedUiAvailable: true
     readonly property bool savedUndoAvailable: !!trackEngine && trackEngine.canUndoLook

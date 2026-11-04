@@ -77,6 +77,9 @@ Rectangle
 
     property string filter: ""
     property bool advancedOpen: false
+    // TRACK_APP_SETUP_R550: the TRACK app's SETUP - no RE-GUESS / FULL AUTO / SELF TEST up top, RE-GUESS ROLES
+    // in ADVANCED, and a group switches on / off with two taps
+    readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
     property bool cacheOpen: false
     property bool learnedOpen: false     // R436_LEARNED
     property bool midiOpen: false        // R486_MI_SETUP_OPEN
@@ -248,6 +251,7 @@ Rectangle
             TrackTile
             {
                 id: reguessTile
+                visible: !setupRoot.trackApp          // TRACK_APP_SETUP_R550: in ADVANCED (TRACK ANALYSIS)
                 property bool armed: false
                 Layout.preferredWidth: 100
                 Layout.preferredHeight: 34
@@ -270,6 +274,7 @@ Rectangle
                 Layout.preferredWidth: 110
                 Layout.preferredHeight: 34
                 id: fullAutoTile
+                visible: !setupRoot.trackApp          // TRACK_APP_SETUP_R550: always on in the TRACK app
                 property bool armed: false
                 label: armed ? qsTr("SURE?") : qsTr("FULL AUTO")
                 active: armed || (trackEngine ? trackEngine.fullAuto : false)
@@ -293,6 +298,7 @@ Rectangle
             {
                 Layout.preferredWidth: 100
                 Layout.preferredHeight: 34
+                visible: !setupRoot.trackApp          // TRACK_APP_SETUP_R550
                 label: (trackEngine && trackEngine.testing) ? qsTr("STOP TEST") : qsTr("SELF TEST")
                 active: trackEngine ? trackEngine.testing : false
                 activeColor: "#4FB3C8"
@@ -986,7 +992,8 @@ Rectangle
             {
                 Layout.preferredWidth: 96
                 Layout.minimumWidth: 96
-                text: qsTr("GROUPS") + "\n" + qsTr("tap: on / off · hold: base")   // runde 234 changed the tap (fixed runde 248)
+                text: qsTr("GROUPS") + "\n" + (setupRoot.trackApp ? qsTr("2 taps: on / off · hold: base")   // TRACK_APP_SETUP_R550
+                                                              : qsTr("tap: on / off · hold: base"))   // runde 234 changed the tap (fixed runde 248)
                 lineHeight: 0.9
                 color: setupRoot.cDim
                 font.bold: true
@@ -1010,9 +1017,12 @@ Rectangle
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: 3
-                    color: g.base ? "#2A3F55" : (g.enabled ? "#333333" : "#1F1F1F")
-                    border.width: g.base ? 2 : 1
-                    border.color: g.base ? "#4FA3E3" : (g.enabled ? "#666666" : "#333333")
+                    // TRACK_APP_SETUP_R550: the first tap only asks (SURE?), the second within 4 s switches
+                    property bool armed: false
+                    Timer { id: groupArm; interval: 4000; onTriggered: groupTile.armed = false }
+                    color: armed ? "#3C2E12" : (g.base ? "#2A3F55" : (g.enabled ? "#333333" : "#1F1F1F"))
+                    border.width: armed || g.base ? 2 : 1
+                    border.color: armed ? "#E3B44F" : (g.base ? "#4FA3E3" : (g.enabled ? "#666666" : "#333333"))
 
                     Column
                     {
@@ -1022,7 +1032,8 @@ Rectangle
                         Text
                         {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: groupTile.g.key
+                            text: groupTile.armed ? (groupTile.g.enabled ? qsTr("SURE? - TAP AGAIN TO SWITCH OFF") : qsTr("SURE? - TAP AGAIN TO SWITCH ON"))
+                                  : groupTile.g.key
                                   + (groupTile.g.base ? "  · BASE" : (groupTile.g.enabled ? "" : "  · OFF"))
                             color: groupTile.g.enabled ? setupRoot.cText : "#666666"
                             font.bold: true
@@ -1047,7 +1058,19 @@ Rectangle
                     MouseArea
                     {
                         anchors.fill: parent
-                        onClicked: if (trackEngine && groupTile.g.key) trackEngine.cycleGroup(groupTile.g.key)
+                        onClicked:
+                        {
+                            if (!trackEngine || !groupTile.g.key)
+                                return
+                            if (setupRoot.trackApp && groupTile.armed === false)
+                            {
+                                groupTile.armed = true
+                                groupArm.restart()
+                                return
+                            }
+                            groupTile.armed = false
+                            trackEngine.cycleGroup(groupTile.g.key)
+                        }
                         onPressAndHold: if (trackEngine && groupTile.g.key) trackEngine.toggleBase(groupTile.g.key)
                     }
                 }
@@ -1539,6 +1562,26 @@ Rectangle
                       + "  ·  " + qsTr("your own flags always win")
                 color: setupRoot.cDim
                 font.pixelSize: 12
+            }
+            // TRACK_APP_SETUP_R550: RE-GUESS, out of the top row - it re-guesses roles set by hand: two taps
+            TrackTile
+            {
+                id: appReguessTile
+                objectName: "appReguess"
+                visible: setupRoot.trackApp
+                property bool armed: false
+                Layout.preferredWidth: 150
+                Layout.preferredHeight: 34
+                label: armed ? qsTr("SURE?") : qsTr("RE-GUESS ROLES")
+                active: armed
+                activeColor: "#E3B44F"
+                onTapped:
+                {
+                    if (armed === false) { armed = true; appReguessArm.restart(); return }
+                    armed = false
+                    if (trackEngine) trackEngine.autoAssign(true)
+                }
+                Timer { id: appReguessArm; interval: 4000; onTriggered: appReguessTile.armed = false }
             }
         }
 

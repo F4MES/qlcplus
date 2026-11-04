@@ -30,6 +30,17 @@ This branch is the TRACK app as a program of its own. It lives only here: `track
     finds. It only reads; nothing in Defender is changed.
   - Both programs carry version information, and TRACK still starts no PowerShell.
 
+## r550: a tidier SETUP (TRACK app only, mockup approved)
+
+The top row of SETUP no longer has RE-GUESS, FULL AUTO or SELF TEST:
+
+- FULL AUTO is always on in the TRACK app.
+- RE-GUESS has moved into ADVANCED as RE-GUESS ROLES, under TRACK ANALYSIS. It still takes
+  two taps.
+
+A group switches on or off with two taps: the first tap asks SURE?, and the second, within
+4 s, switches it. Holding a group still makes it BASE.
+
 ## On the PC: `%LOCALAPPDATA%\TRACK`
 
 | Path | What |
