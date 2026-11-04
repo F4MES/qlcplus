@@ -912,6 +912,7 @@ Rectangle
                 Text
                 {
                     anchors.baseline: bigClockHM.baseline
+                    visible: !trackViewRoot.trackApp   // TRACK_APP_TOP_R553: no seconds - the clock (HH:MM) centres alone
                     text: ":" + trackViewRoot.clockS
                     color: trackViewRoot.cDim
                     font.bold: true
@@ -3371,26 +3372,21 @@ Rectangle
                     visible: trackManager && trackEngine && trackManager.roleMode
                     RowLabel { x: lookCard.inX; y: deck.rowY(2); width: lookCard.labW; height: trackViewRoot.rowH; text: "POSITION"
                                visible: !trackViewRoot.trackApp }   // TRACK_APP_BARS_R552: HEADS / BARS there
-                    // TRACK_APP_BARS_R552: the two pages of the row - HEADS (the moving heads) and BARS (the laser bars)
-                    Repeater
+                    // TRACK_APP_BARS_R552 / TRACK_APP_TOP_R553: the row's two pages - HEADS (the moving heads) and
+                    // BARS (the laser bars) - one tile the height of the row: a tap anywhere on it switches
+                    Btn
                     {
-                        model: trackViewRoot.trackApp ? [ { key: "heads", label: qsTr("HEADS") }, { key: "bars", label: qsTr("BARS") } ] : []
-                        Btn
-                        {
-                            objectName: "posPage:" + modelData.key
-                            readonly property real half: (trackViewRoot.rowH - Math.round(4 * trackViewRoot.ks)) / 2
-                            x: lookCard.inX - Math.round(4 * trackViewRoot.ks)
-                            y: deck.rowY(2) + index * (half + Math.round(4 * trackViewRoot.ks))
-                            width: lookCard.labW; height: half
-                            radius: Math.round(6 * trackViewRoot.ks)
-                            text: modelData.label
-                            fontPx: trackViewRoot.fs(11)
-                            tone: trackViewRoot.cGold
-                            active: trackViewRoot.posPage === modelData.key
-                            // the bars under his hand while HEADS shows: a gold foot on BARS
-                            idleTint: modelData.key === "bars" && trackViewRoot.barsHand
-                            onTapped: trackViewRoot.posPage = modelData.key
-                        }
+                        objectName: "posPage"
+                        visible: trackViewRoot.trackApp
+                        x: lookCard.inX - Math.round(4 * trackViewRoot.ks)
+                        y: deck.rowY(2); width: lookCard.labW; height: trackViewRoot.rowH
+                        text: trackViewRoot.posPage === "bars" ? qsTr("BARS") : qsTr("HEADS")
+                        fontPx: trackViewRoot.fs(13)
+                        tone: trackViewRoot.cGold
+                        active: trackViewRoot.posPage === "bars"
+                        // the bars under his hand while HEADS shows: a gold foot
+                        idleTint: trackViewRoot.posPage === "heads" && trackViewRoot.barsHand
+                        onTapped: trackViewRoot.posPage = (trackViewRoot.posPage === "bars") ? "heads" : "bars"
                     }
                     Btn
                     {
