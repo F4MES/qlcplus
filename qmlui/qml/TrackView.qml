@@ -3372,21 +3372,43 @@ Rectangle
                     visible: trackManager && trackEngine && trackManager.roleMode
                     RowLabel { x: lookCard.inX; y: deck.rowY(2); width: lookCard.labW; height: trackViewRoot.rowH; text: "POSITION"
                                visible: !trackViewRoot.trackApp }   // TRACK_APP_BARS_R552: HEADS / BARS there
-                    // TRACK_APP_BARS_R552 / TRACK_APP_TOP_R553: the row's two pages - HEADS (the moving heads) and
-                    // BARS (the laser bars) - one tile the height of the row: a tap anywhere on it switches
-                    Btn
+                    // TRACK_APP_BARS_R552 / TRACK_APP_TOP_R554: the row's two pages - HEADS (the moving heads) over
+                    // BARS (the laser bars), the lit one is the page shown; one tap anywhere on the pair switches
+                    Item
                     {
                         objectName: "posPage"
                         visible: trackViewRoot.trackApp
                         x: lookCard.inX - Math.round(4 * trackViewRoot.ks)
                         y: deck.rowY(2); width: lookCard.labW; height: trackViewRoot.rowH
-                        text: trackViewRoot.posPage === "bars" ? qsTr("BARS") : qsTr("HEADS")
-                        fontPx: trackViewRoot.fs(13)
-                        tone: trackViewRoot.cGold
-                        active: trackViewRoot.posPage === "bars"
-                        // the bars under his hand while HEADS shows: a gold foot
-                        idleTint: trackViewRoot.posPage === "heads" && trackViewRoot.barsHand
-                        onTapped: trackViewRoot.posPage = (trackViewRoot.posPage === "bars") ? "heads" : "bars"
+                        scale: posPageInput.down ? 0.965 : 1.0
+                        Repeater
+                        {
+                            model: [ { key: "heads", label: qsTr("HEADS") }, { key: "bars", label: qsTr("BARS") } ]
+                            Btn
+                            {
+                                objectName: "posPage:" + modelData.key
+                                readonly property real half: (trackViewRoot.rowH - Math.round(4 * trackViewRoot.ks)) / 2
+                                y: index * (half + Math.round(4 * trackViewRoot.ks))
+                                width: parent.width; height: half
+                                radius: Math.round(6 * trackViewRoot.ks)
+                                text: modelData.label
+                                fontPx: trackViewRoot.fs(11)
+                                tone: trackViewRoot.cGold
+                                active: trackViewRoot.posPage === modelData.key
+                                // the bars under his hand while HEADS shows: a gold foot on BARS
+                                idleTint: modelData.key === "bars" && trackViewRoot.barsHand
+                                touchInputEnabled: false          // the pair's own input below takes every tap
+                            }
+                        }
+                        TouchInput
+                        {
+                            id: posPageInput
+                            z: 2
+                            onReleasedAt: (x, y, inside) => {
+                                if (inside)
+                                    trackViewRoot.posPage = (trackViewRoot.posPage === "bars") ? "heads" : "bars"
+                            }
+                        }
                     }
                     Btn
                     {
