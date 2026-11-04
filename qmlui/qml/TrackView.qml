@@ -2681,6 +2681,8 @@ Rectangle
                             trackEngine.blackout = false
                         blackoutTile.armed = false
                     }
+                    // R544_BOGONE_MAIN: the page torn down with the finger still down (as r199's FLASH)
+                    Component.onDestruction: if (pressed && blackoutTile.armed && trackEngine) trackEngine.blackout = false
                 }
             }
 
@@ -2785,6 +2787,7 @@ RowLayout
                         function springBack() { if (atmosSlider.isHaze && trackEngine && trackEngine.haze > trackEngine.hazeLimit / 100 + 0.001) trackEngine.haze = trackEngine.hazeLimit / 100 }
                         onReleased: springBack()
                         onCanceled: springBack()
+                        Component.onDestruction: if (pressed) springBack()   // R544_HZGONE_MAIN
                     }
                 }
             }

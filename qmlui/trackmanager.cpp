@@ -414,7 +414,8 @@ void TrackManager::handleTrack(const QJsonObject &obj)
     // reset the beat to 0 and restarted the engine mid-song: colour, cast
     // and moves thrown away, a drop landed a second time. Flags and
     // curves are still taken; the song's place and the engine are kept.
-    const bool resent = m_playing && m_title.isEmpty() == false
+    const bool resent = (m_playing || obj.value(QStringLiteral("reread")).toBool(false))   // R544_AI_RESEND
+        && m_title.isEmpty() == false
         && obj.value(QStringLiteral("title")).toString() == m_title
         && obj.value(QStringLiteral("beats")).toInt() > 0
         && obj.value(QStringLiteral("beats")).toInt() == m_beatCount
@@ -1286,7 +1287,7 @@ void TrackManager::setEnergyTrim(int percent)
     // R336_LASER_HAND: ... and a hand on the slider reaches them at once,
     // beats or not; the clock does not (it sets roomPercent first)
     if (m_engine != nullptr && m_autoRun && m_roleMode
-        && (m_linkStale || m_playing == false || percent != m_engine->roomPercent()))
+        && (m_linkStale || m_playing == false || m_engine->roomAuto() == false))   // R544_HAND_NOT_CLOCK
         m_engine->laserFaderCheck(energy());
     noteShowRunning();                   // R184_START_SCENE_ENERGY
     // R379_ZERO_ENERGY: the slider at 0 with the show on - the start scene
@@ -1914,8 +1915,13 @@ void TrackManager::midiLoad()
         m.device = o.value(QStringLiteral("dev")).toString();
         m.target = o.value(QStringLiteral("t")).toString();
         m.kind = o.value(QStringLiteral("k")).toInt(-1);
+        // R544_MIDI_LOAD_DUP: a plain look - midiFind() re-homes and saves, and a save here wrote the half read
+        bool dup = false;
+        for (const MidiMap &x : m_midiMaps)
+            if (x.universe == m.universe && x.channel == m.channel)
+                dup = true;
         if (o.value(QStringLiteral("u")).toInt(-1) < 0 || o.value(QStringLiteral("ch")).toInt(-1) < 0
-            || m.target.isEmpty() || m.kind < MidiFader || m.kind > MidiHold || midiFind(m.universe, m.channel) >= 0)
+            || m.target.isEmpty() || m.kind < MidiFader || m.kind > MidiHold || dup)
             continue;
         m_midiMaps.append(m);
     }
@@ -2252,8 +2258,8 @@ void TrackManager::midiFader(int idx, int raw, qint64 now)
         m_engine->noteMidi(QStringLiteral("take:") + target);
         m_midiDirty = true;
     }
-    else if (m.appliedRaw >= 0 && qAbs(raw - m.appliedRaw) <= TRACK_MIDI_JITTER
-             && raw != 0 && raw != 255)
+    else if (m.appliedRaw >= 0 && (raw == m.appliedRaw   // R544_MIDI_ENDS: the same value again is no move, at the ends too
+                                   || (qAbs(raw - m.appliedRaw) <= TRACK_MIDI_JITTER && raw != 0 && raw != 255)))
     {
         m.lastRaw = raw;
         return;                          // R486_MI_JITTER: one MIDI step is no hand (the ends always land)
@@ -2319,8 +2325,18 @@ void TrackManager::midiButton(int idx, int raw, qint64 now)
         {
             if (target == QLatin1String("flash"))
             {
-                m.armed = true;
-                m_engine->setFlash(true);
+                // R544_MIDI_PC_FLASH: a Program Change has no release (R511) - a map learned before R511 (or
+                // imported) toggles, as BLACKOUT and STUTTER do there
+                if (pc >= 384 && pc <= 511 && m.armed)
+                {
+                    m.armed = false;
+                    m_engine->setFlash(false);
+                }
+                else
+                {
+                    m.armed = true;
+                    m_engine->setFlash(true);
+                }
             }
             else if (target == QLatin1String("blackout"))
             {
@@ -3705,9 +3721,17 @@ void TrackManager::stopTestTrack()
     if (m_testTrack == false)
         return;
     m_testSerial++;                      // the beat on its way does nothing
+    // R544_TEST_START_SCENE: clear() releases the engine and that took the ENERGY-0 start scene down - put back
+    const bool hadStart = m_engine != nullptr && m_engine->startScene();
+    const bool hadAuto = m_startAuto;
     clear();                             // the page empty again: TEST TRACK comes back
     m_stopSinceMs = 0;
     m_lastEngineBeat = -1;
+    if (hadStart && m_autoRun && m_engine != nullptr && m_engine->startScene() == false)
+    {
+        m_engine->setStartScene(true, true);
+        m_startAuto = hadAuto && m_engine->startScene();
+    }
     // nothing playing: the start scene, as after a track (still not learned from)
     if (m_engine != nullptr && m_autoRun && m_roleMode)
         m_engine->idle();
@@ -5421,7 +5445,8 @@ void TrackManager::aiReapply()
     if (m_aiTrackObj.isEmpty() || m_title.isEmpty()
         || m_aiTrackObj.value(QStringLiteral("title")).toString() != m_title)
         return;
-    const QJsonObject again = m_aiTrackObj;
+    QJsonObject again = m_aiTrackObj;
+    again.insert(QStringLiteral("reread"), true);   // R544_AI_CALL_RESEND: deck stopped or not
     handleTrack(again);
 }
 

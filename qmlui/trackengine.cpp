@@ -363,6 +363,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
 
 TrackEngine::~TrackEngine()
 {
+    r497TapSave(true);                   // R544_TAPS_FLUSH_END: the last taps of the night (2-minute writes)
     qualityFinish(QStringLiteral("shutdown"));
     stopAll();
     micShutdown();                       // R467_MIC_CHECK
@@ -4060,6 +4061,14 @@ int TrackEngine::r521EarlyLand(int from, int flag) const
             return land;
     }
     return flag;
+}
+
+bool TrackEngine::r544EarlyFlag(int land, int flag) const
+{
+    // R544_EARLY_FLAG_FN: `flag` is a drop flag whose drop lands early at `land` (R521, 1-4 bars) - what he queued
+    // or picked for the flag is for the drop that lands there
+    return land > 0 && flag > land && flag - land <= 16 && (flag - land) % 4 == 0
+        && r521EarlyLand(qMax(1, flag - 64), flag) == land;
 }
 
 void TrackEngine::r521EarlyNote(int land, int flag)
@@ -10820,7 +10829,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // all of it beat by beat. m_dropShown holds what the last bar line (or a
     // new section) saw; the build's line and the floor round's read it too.
     if (beatInBar == 0 || sectionChanged)
-        m_dropShown = fader >= ENGINE_DROP_SHOW;
+        m_dropShown = fader >= ENGINE_DROP_SHOW
+                   || m_hitKind > 0 || m_hitAmokOwed || m_hitAmokFrom >= 0;   // R544_HIT_SHOWN: his hit lands whatever the slider
     bool dropHidden = isDrop && m_dropShown == false;
     if (dropHidden)
     {
@@ -12470,8 +12480,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // R540_HIT_CAP (fejlrunde 11-03): his DROP HIT - armed, owed or its amok running - is "completely amok"
     // (Tobias): no drop cap. The 4-bar burst put the whole rig in, but after it a lean drop fell to one group
     // beside the base for the rest of the amok.
-    const bool r540Hit = m_hitKind > 0 || m_hitAmokOwed || m_hitAmokFrom >= 0;
-    if ((isDrop || preDrop) && hold == false && isCalm == false && r540Hit == false)
+    // R544_HIT_CAP_NEXT: an armed hit counts for a drop still to land (on the landing beat m_lookState is the build's)
+    const bool r540Hit = m_hitAmokOwed || m_hitAmokFrom >= 0
+                      || (m_hitKind > 0 && (isDrop == false || m_lookState != QStringLiteral("drop")));
+    // R544_WILD_PREDROP: omvendt's wild build keeps all the slider gives through its last bar too
+    if ((isDrop || (preDrop && (m_formWild && isBuild) == false)) && hold == false && isCalm == false && r540Hit == false)
     {
         const int dropAt = isDrop ? secStart : (nextState == QStringLiteral("drop") && beatsToNext > 0 ? beat + beatsToNext : -1);
         const int cap = r532DropCap(dropAt, fader);
@@ -19569,6 +19582,11 @@ void TrackEngine::advanceLook()
     // the next track's first beat and threw away the mix's colour (r199)
     if (m_lastState.isEmpty())
         return;
+    // R544_THUMB_SAVED: a thumb down under a saved look ends it, as NEXT does (savedBeforeNext) - the next beat
+    // drew the look's cast, moves and programmes back and only the colour changed
+    if (savedActive())
+        savedStop();
+    m_savedRestore.clear();
     m_forceNext = true;
     nextRemember();                      // R483_NEXT_MEM: what was on stage is not offered again
     // R524_BALL_NEXT (Tobias 11-01: "det er umuligt at trykke next look naar de lyser paa diskokuglen"): NEXT
@@ -21543,6 +21561,7 @@ void TrackEngine::release()
     autoFadeStop(); // C20261022
     savedReset(); // SAVED_LOOKS_RELEASE
     hitUndark();
+    r497TapSave(true);   // R544_TAPS_FLUSH_OFF: SHOW OFF
     m_quietSpatial = false;
     m_hitReturning = false;                         // R445_DROP_HIT: the show does not fade out from his DARK
     // This fades the show out over a bar exactly as it did before round 162.
@@ -21601,6 +21620,8 @@ void TrackEngine::release()
             m_position.remove(key);
     }
     m_darkUntil.clear();              // AUTO is off: nothing is waiting to come back
+    m_riseStage = 0;                  // R544_RISE_RELEASE: a rise's dark aim is forgotten with the aim (the
+    m_riseGroup.clear();              // first aim after SHOW ON takes the unknown-aim dark hold)
     r493DiscoReset(true);             // R493_A4_RESET_RELEASE: the ball's heads home dark, the roof down
     r493RoofReset();
     r507WaveStop(QString());          // R507_WAVE_STOP_RELEASE: the kick wave ends (SHOW OFF)
@@ -21926,6 +21947,7 @@ void TrackEngine::idle()
     clearMusicDark();
     m_quietSpatial = false;
     m_hitReturning = false;                    // runde 356: a stopped deck is not a silent beat
+    r497TapSave(true);                         // R544_TAPS_FLUSH_IDLE: the deck stopped - no beat retries the write
     r493DiscoReset(true);                      // R493_A4_RESET_IDLE: a stopped deck - the ball and the roof go
     r493RoofReset();
     r507WaveStop(QString());                   // R507_WAVE_STOP_IDLE: the kick wave ends
@@ -22947,10 +22969,11 @@ void TrackEngine::r519AniLine(qreal fader, bool barLine)
                 m_r519AniLow.remove(key);   // the bar line at 70 %: the pool keeps it, lit as it stands
             continue;
         }
-        if (fader < ENGINE_ANI_ON - 1e-9 && r519AniHis(key) == false)
+        if (fader < ENGINE_ANI_ON - 1e-9)
         {
-            m_r519AniLow.insert(key);
-            dark = true;
+            m_r519AniLow.insert(key);    // R544_ANI_LINE_HIS: marked under a pad too - its release finds it dark
+            if (r519AniHis(key) == false)
+                dark = true;
         }
     }
     if (dark == false)
@@ -23241,6 +23264,8 @@ void TrackEngine::stopAll()
     m_cast.clear();
     m_baseCover.clear();                 // runde 260: only tick() says who covers the base
     m_position.clear();
+    m_riseStage = 0;                     // R544_RISE_STOPALL: the rise's dark aim goes with the aims
+    m_riseGroup.clear();
     m_lastState.clear();
     m_autoStageKeys.clear();
     m_verdictAutoKeys.clear();
@@ -23569,11 +23594,30 @@ void TrackEngine::labLoad()
 {
     if (m_labLoaded)
         return;
-    m_labLoaded = true;
+    // R544_LAB_READ: a store that is there but cannot be read (Documents not up yet, a bad edit) is tried again
+    // later and never saved over - an empty store written on CLOSE threw away every kept look
     QFile f(engineLabPath());
-    if (f.open(QIODevice::ReadOnly) == false)
+    if (f.exists() == false)
+    {
+        m_labLoaded = true;
+        m_labLoadBad = false;
         return;
-    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+    }
+    if (f.open(QIODevice::ReadOnly) == false)
+    {
+        m_labLoadBad = true;
+        return;
+    }
+    QJsonParseError parsed;
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parsed);
+    if (parsed.error != QJsonParseError::NoError || doc.isObject() == false)
+    {
+        m_labLoadBad = true;
+        return;
+    }
+    m_labLoaded = true;
+    m_labLoadBad = false;
+    const QJsonObject root = doc.object();
     m_labStore = root.value(QStringLiteral("looks")).toObject();
     const QJsonObject resume = root.value(QStringLiteral("resume")).toObject();
     m_labPass = qBound(0, resume.value(QStringLiteral("pass")).toInt(0), 2);
@@ -23582,6 +23626,12 @@ void TrackEngine::labLoad()
 
 void TrackEngine::labSave()
 {
+    labLoad();                           // R544_LAB_SAVE_GUARD: read first (again, if it failed) ...
+    if (m_labLoadBad)
+    {
+        m_labMessage = tr("could not save laser-lab.json");   // ... and never write over a store not read
+        return;
+    }
     QJsonObject root;
     root.insert(QStringLiteral("about"), QStringLiteral("LASER LAB (Track page, SETUP): the operator's verdicts on the animation "
                                                         "laser's looks. v: 1 kept, -1 no, 2 same as the one before. "
@@ -25958,6 +26008,7 @@ qreal TrackEngine::colourLevel(const QString &group) const
     if (colour.isEmpty())
         return 1.0;
     quint32 fid = Function::invalidId();
+    bool copyOf = false;                 // R544_COPYOF_DECL: col: holds a two-colour copy of the colour scene
     if (m_clabActive)
         fid = m_active.value(QStringLiteral("clab:") + group, Function::invalidId());
     else
@@ -25968,6 +26019,8 @@ qreal TrackEngine::colourLevel(const QString &group) const
             const quint32 mf = m_active.value(QStringLiteral("mot:") + group, Function::invalidId());
             if (mf != Function::invalidId() && m_funcs.value(mf).coversColour && m_funcs.value(mf).colour.isEmpty() == false)
                 fid = mf;
+            else if (fid != Function::invalidId())
+                copyOf = true;           // R544_COPY_MARK: measured on the colour's own scene (below)
         }
     }
     if (fid == Function::invalidId() || m_r541BakedIds.contains(fid))
@@ -25975,6 +26028,15 @@ qreal TrackEngine::colourLevel(const QString &group) const
     qreal level = 1.0;
     if (r541Saved(group, colour, &level) == false)
         return 1.0;
+    if (copyOf)
+    {
+        // R544_COPYOF_PEAK: a two-colour copy (CHASE halves, the curtain, the side-by-side drop) carries the
+        // colour scene's values - measured on that scene, and 1.0 when it is baked (its level is in it already)
+        const quint32 src = colourFunction(group, colour);
+        if (src == Function::invalidId() || m_r541BakedIds.contains(src))
+            return 1.0;
+        fid = src;
+    }
     const qreal peak = r541Peak(fid, group);
     if (peak <= 0.0)
         return 1.0;
@@ -26935,6 +26997,11 @@ int TrackEngine::planAheadKey(int boundary, const QString &section) const
             best = it.key();
             dist = qAbs(it.key() - boundary);
         }
+    // R544_PLAN_EARLY: a drop landing early (R521) is planned at its landing - his pick waits at its flag
+    if (best < 0 && section == QStringLiteral("drop"))
+        for (auto it = m_planAhead.constBegin(); it != m_planAhead.constEnd() && best < 0; ++it)
+            if (it.value().section(QLatin1Char('|'), 0, 0) == section && r544EarlyFlag(boundary, it.key()))
+                best = it.key();
     return best;
 }
 
@@ -27390,8 +27457,11 @@ void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int b
         });
     }
     // a jump or a loop away from the drop while dark: the room back, still armed
+    // R544_HIT_DARK_WAIT: a drop waiting for its kick is still before the drop (tick() reads it as the build)
+    const bool kickWait = m_dropLand > 0 && m_lookState != QStringLiteral("drop");
     if (m_hitDark && (beat < m_hitDarkFrom
-                      || (isDrop == false && (nextState != QStringLiteral("drop") || beatsToNext > ENGINE_HIT_DARK_BEATS))))
+                      || (isDrop == false && kickWait == false
+                          && (nextState != QStringLiteral("drop") || beatsToNext > ENGINE_HIT_DARK_BEATS))))
         hitUndark();
     const bool overdue = m_hitDark && beat - m_hitDarkFrom >= ENGINE_HIT_DARK_MAX;
     if (arrives == false && overdue == false)
@@ -29947,7 +30017,8 @@ qreal TrackEngine::lastWhiteShow(const QString &group) const
 {
     // how much of the show's own colour a house group keeps under the white
     if (m_lastWhiteP <= 0.0 || (m_lastStage != 1 && m_lastStage != 2) || group.isEmpty()
-        || m_houseFade.contains(group) == false || houseGroup(group) == false)
+        || m_houseFade.contains(group) == false || houseGroup(group) == false
+        || m_active.contains(QStringLiteral("lastw:") + group) == false)   // R544_WHITE_DRAWN: only under the white itself
         return 1.0;
     return qBound(0.0, 1.0 - m_lastWhiteP, 1.0);
 }
@@ -30160,6 +30231,7 @@ void TrackEngine::enterHouse()
     // start picture does (stopAll), never moved lit
     stopAll();
     stopSweeps();
+    m_closingDim = 1.0;                  // R544_HOUSE_LID: the lid up first - the closing's black masks are not put back
     applyGroupOff();                     // R464_HOUSE_CLEAN: OFF and BLACKOUT's masks back (stopAll dropped them)
     foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_IDLE, QString()))
         run("idle:" + QString::number(info->id), info->id, 0.0, 0, false);   // the aim only, as startLook()
@@ -30199,7 +30271,10 @@ void TrackEngine::lastTrackTick(bool showOn)
         m_houseLevel = -1.0;
         m_closingDim = 1.0;
         if (showOn)
+        {
+            stopAll();                   // R544_NOON_COLD: as the undo - DARK's white at 0 is not the show's base
             idle();
+        }
     }
     const int minutes = lastTrackMinutesNow();
     // R463_LAST_SECS: ten minutes before closing in real seconds, until 06:00
@@ -31782,7 +31857,9 @@ void TrackEngine::colourMemoryBeat(int beat, const QString &state, bool sectionC
         }
         else
         {
-            const QString want = colourMemRecall(beat, state);
+            // R544_MEM_HIS_TILE: his tile carried over (R523: tiles stay) is not replaced by last time's colours
+            const bool hisCarried = m_colMemRecalled == false && (m_overrideSet.isEmpty() == false || m_colourMode != 0);
+            const QString want = hisCarried ? QString() : colourMemRecall(beat, state);
             if (want.isEmpty() == false && want != now && memHeld)
             {
                 m_colMemWait = want;     // R513_COLOUR_MEM_WAIT: HOLD - last time's colours wait for its release
@@ -31837,8 +31914,10 @@ void TrackEngine::colourMemoryTrack()
     if (m_colMemRecalled && m_colMemHand == false && (m_overrideSet.isEmpty() == false || m_colourMode != 0)
         && m_hold == false && m_faderNow >= 0.03)
         setColourOverride(QString());
+    // R544_MEM_CARRIED: a replay carried into the new play under HOLD stays a replay - its first section start
+    // after HOLD takes it back (tilesBackToAuto no longer does, R523)
+    m_colMemRecalled = m_colMemRecalled && m_colMemHand == false && (m_overrideSet.isEmpty() == false || m_colourMode != 0);
     m_colMemHand = false;
-    m_colMemRecalled = false;
     m_colMemSection.clear();
     m_colMemFrom = -1;
     m_colMemWaiting = false;             // a wait belongs to the section of the play it was read in
@@ -34299,8 +34378,16 @@ void TrackEngine::savedBeat(const QString &state, int beat, int boundary)
         if (m_savedUndoFrom == boundary && m_savedUndoState == state) activate = m_savedRestore;
         m_savedRestore.clear();
     }
-    if (m_savedQueue.contains(boundary) && beat >= boundary && beat < boundary + 4) {
-        const QString id = m_savedQueue.take(boundary); const auto row = savedById(id);
+    // R544_SAVED_EARLY: queued at the flag - the section may start on the grid step after it (SETUP quantise) or,
+    // for a drop, where it lands early (R521)
+    int qkey = boundary;
+    if (!m_savedQueue.contains(qkey))
+        for (auto it = m_savedQueue.constBegin(); it != m_savedQueue.constEnd(); ++it)
+            if (savedById(it.value()).value(QStringLiteral("section")).toString() == state
+                && ((it.key() < boundary && boundary - it.key() <= 8)
+                    || (state == QStringLiteral("drop") && r544EarlyFlag(boundary, it.key())))) { qkey = it.key(); break; }
+    if (m_savedQueue.contains(qkey) && beat >= boundary && beat < boundary + 4) {
+        const QString id = m_savedQueue.take(qkey); const auto row = savedById(id);
         if (row.value(QStringLiteral("section")).toString() == state && savedInvalid(row).isEmpty() && !m_hold && calmBarsLeft() == 0) { activate = row; used = true; }
     }
     for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();) if (it.key() + 3 < beat) it = m_savedQueue.erase(it); else ++it;
@@ -37610,7 +37697,8 @@ bool TrackEngine::r497BloomFrame(qint64 now)
         r497BloomStop();            // no next beat came (the deck stopped): let go
         return false;
     }
-    if (r497BloomFree(m_r497BloomKey) == false || m_blackout || m_r497BloomKey != r497BloomWash())
+    if (r497BloomFree(m_r497BloomKey) == false || m_blackout || m_groupOff.contains(m_r497BloomKey)   // R544_BLOOM_OFF
+        || m_r497BloomKey != r497BloomWash())
     {
         r497BloomStop();            // his hand mid-beat: the wash as the engine draws it, at once
         return false;
@@ -39482,6 +39570,10 @@ bool TrackEngine::r498RushFrame(qint64 now)
         r498RushStop();                  // his hand mid-beat: the room as the engine draws it, at once
         return false;
     }
+    // R544_RUSH_STROBES_HAND: the strobes switched off, faded out or under his pad mid-rush are his at once
+    if (m_r498RushWithStrobes && (m_padFlash.contains(m_r498RushStrobeKey) || m_groupOff.contains(m_r498RushStrobeKey)
+                                  || m_groupTrim.value(m_r498RushStrobeKey, 1.0) <= 0.01))
+        m_r498RushWithStrobes = false;
     if (m_r498RushMs < 0)
         return true;                     // the next beat is being drawn: the masks hold as they are
     const qreal sweep = qreal(m_r498RushBeats);
