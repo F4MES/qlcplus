@@ -65,7 +65,8 @@ same choices.
 ## The update (inside TRACK)
 
 `qmlui/trackapp.cpp` reads `track-app.json` in the release `track-app-latest`. It checks 30 s
-after start, then every 30 min, using Windows' own `curl.exe`. When there is a newer build:
+after start, then every 5 min (r551; it was 30 min), using Windows' own `curl.exe`. A check reads
+one small file in the background, so it costs nothing while the show runs. When there is a newer build:
 
 1. It downloads the build in the background, at most 4 MB/s. If the new build needs another
    runtime, that is downloaded too.

@@ -5,7 +5,7 @@
   The TRACK app (track-app branch): the helper's CDJ count and TRACK's own update.
   See trackapp.h for the installed layout.
 
-  The update (runde 548): every 30 min (first after 30 s) Windows' own curl.exe reads the
+  The update (runde 548): every 5 min since r551 (first after 30 s) Windows' own curl.exe reads the
   release's track-app.json. A newer build is downloaded (curl.exe, at most 4 MB/s), its
   size and SHA-256 checked, and unpacked with Windows' own tar.exe into app\<build> - the
   runtime (Java + beat-link) too, when the new build needs another one. Nothing changes
@@ -51,7 +51,9 @@
 namespace
 {
 const int kFirstCheckMs = 30 * 1000;
-const int kCheckEveryMs = 30 * 60 * 1000;
+// R551 (Tobias 11-04: "hvert 15 min fremfor 30 min, saa laenge det ikke gaar ud over performance, maaske endda
+// oftere"): a check is one curl.exe reading a ~400-byte file, off the UI thread - 5 min costs nothing
+const int kCheckEveryMs = 5 * 60 * 1000;
 const qint64 kHashChunk = 4 * 1024 * 1024;
 }
 
@@ -486,7 +488,7 @@ void TrackApp::fetchDone(bool ok, const QString &why)
     if (ok)
         return;
     m_jobs.clear();
-    // said once until something else happens (the check runs every 30 min)
+    // said once until something else happens (the check runs every 5 min)
     if (why != m_lastWhy)
         log(why + QStringLiteral(" - tries again later"));
     m_lastWhy = why;
