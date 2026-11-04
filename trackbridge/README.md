@@ -63,6 +63,19 @@ Every choice holds until AUTO. Nothing is remembered across a restart. LAST TRAC
 the labs and SELF TEST work as before. The engine part is `r552_barshand.inc.cpp` in qlcplus-pr
 (`track_app/`), and `feature_track_app.py` appends it.
 
+## r553-r556: the page
+
+- **r553 / r554:** The clock has no seconds. HEADS sits over BARS, and one tap anywhere on the pair switches.
+- **r555:** LOOK's labels are centred in their column.
+- **r556 warning:** With SHOW ON a red chip takes the status line's place under the time: CDJ READER DOWN,
+  NO CDJs or CDJ LINK LOST. It shows only after the problem has held 5 s, so it does not flash up while TRACK
+  starts.
+- **r556 phone:** The phone shows the same warning in its tempo chip, and has a LASER BARS section under
+  POSITION (AUTO, ON, CHASE, HOME, HOME UNDER, DOWN).
+- **r556 MIDI:** The BARS tiles can be learned with MIDI LEARN while the BARS page is open.
+- **r556 ALL AUTO:** ALL AUTO also gives the laser bars back to the engine, on the desk, from MIDI and from
+  the phone.
+
 ## On the PC: `%LOCALAPPDATA%\TRACK`
 
 | Path | What |

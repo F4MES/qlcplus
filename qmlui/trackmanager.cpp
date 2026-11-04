@@ -1991,6 +1991,15 @@ QVariantList TrackManager::midiTargets() const
     add(QStringLiteral("energyAuto"), QStringLiteral("ENERGY AUTO"), MidiButton);
     add(QStringLiteral("followMusic"), QStringLiteral("SECTION AUTO"), MidiButton);
     add(QStringLiteral("positionAuto"), QStringLiteral("POSITION AUTO"), MidiButton);
+    if (trackAppObject() != nullptr)             // TRACK_APP_MIDI_R556: the BARS page's tiles (their objectNames)
+    {
+        add(QStringLiteral("barsAuto"), QStringLiteral("BARS AUTO"), MidiButton);
+        add(QStringLiteral("bars:on"), QStringLiteral("BARS ON"), MidiButton);
+        add(QStringLiteral("bars:chase"), QStringLiteral("BARS CHASE"), MidiButton);
+        add(QStringLiteral("bars:home"), QStringLiteral("BARS HOME"), MidiButton);
+        add(QStringLiteral("bars:under"), QStringLiteral("BARS HOME UNDER"), MidiButton);
+        add(QStringLiteral("bars:down"), QStringLiteral("BARS DOWN"), MidiButton);
+    }
     add(QStringLiteral("autoColour"), QStringLiteral("COLOUR AUTO"), MidiButton);
     add(QStringLiteral("hazeAuto"), QStringLiteral("HAZE AUTO"), MidiButton);
     const QStringList sections = QStringList() << QStringLiteral("normal") << QStringLiteral("break")
@@ -2410,6 +2419,14 @@ void TrackManager::midiTap(const QString &target)
         setOverrideState(QString());
     else if (target == QLatin1String("positionAuto"))
         e->setPositionMode(QString());
+    else if (target == QLatin1String("barsAuto") && trackAppObject() != nullptr)   // TRACK_APP_MIDI_R556
+        e->barsAuto();
+    else if (target == QLatin1String("bars:on") && trackAppObject() != nullptr)
+        e->setBarsOn(!e->barsOn());
+    else if (target == QLatin1String("bars:chase") && trackAppObject() != nullptr)
+        e->setBarsChase(!e->barsChase());
+    else if (target.startsWith(QLatin1String("bars:")) && trackAppObject() != nullptr)
+        e->setBarsAim(e->barsAim() == target.mid(5) ? QString() : target.mid(5));
     else if (target == QLatin1String("autoColour"))
         e->setColourOverride(QString());
     else if (target == QLatin1String("hazeAuto"))
@@ -2437,6 +2454,8 @@ void TrackManager::allAuto()
     setOverrideState(QString());
     m_engine->setPositionMode(QString());
     m_engine->setColourOverride(QString());
+    if (trackAppObject() != nullptr)             // TRACK_APP_ALLAUTO_R556: the laser bars too
+        m_engine->barsAuto();
 }
 
 /* ---------------------------------------------------------------- LEARN */
@@ -3064,6 +3083,25 @@ QString TrackManager::remoteState()
         o.insert(QStringLiteral("hazeNag"), e->hazeNag());          // R467_HAZE_NAG
         o.insert(QStringLiteral("hazeLimit"), e->hazeLimit());
         o.insert(QStringLiteral("hazeAuto"), e->hazeAuto());        // R484_HZ_PHONE_STATE
+        if (QObject *ta = trackAppObject())       // TRACK_APP_PHONE_R556: the bars by hand, the desk's warning
+        {
+            QJsonObject bars;
+            bars.insert(QStringLiteral("aim"), e->barsAim());
+            bars.insert(QStringLiteral("on"), e->barsOn());
+            bars.insert(QStringLiteral("chase"), e->barsChase());
+            o.insert(QStringLiteral("bars"), bars);
+            QString warn;
+            if (m_autoRun)
+            {
+                if (connected() == false)
+                    warn = QStringLiteral("CDJ READER DOWN");
+                else if (ta->property("cdjCount").toInt() <= 0)
+                    warn = QStringLiteral("NO CDJs");
+                else if (m_linkStale)
+                    warn = QStringLiteral("CDJ LINK LOST");
+            }
+            o.insert(QStringLiteral("warn"), warn);
+        }
         // R468_RATE: the groups on stage - what a held GOOD / BAD can point at
         QJsonArray stage;
         for (const QVariant &row : e->onStage())
@@ -3214,6 +3252,20 @@ QString TrackManager::remoteCommand(const QString &line)
     }
     else if (cmd == QStringLiteral("position"))
         e->setPositionMode(a.value(1) == e->positionMode() ? QString() : a.value(1));
+    else if (cmd == QStringLiteral("barsAuto") && trackAppObject() != nullptr)   // TRACK_APP_PHONE_R556
+        e->barsAuto();
+    else if (cmd == QStringLiteral("bars") && trackAppObject() != nullptr)
+    {
+        const QString k = a.value(1);
+        if (k == QStringLiteral("on"))
+            e->setBarsOn(!e->barsOn());
+        else if (k == QStringLiteral("chase"))
+            e->setBarsChase(!e->barsChase());
+        else if (k == QStringLiteral("home") || k == QStringLiteral("under") || k == QStringLiteral("down"))
+            e->setBarsAim(e->barsAim() == k ? QString() : k);
+        else
+            return bad;
+    }
     else if (cmd == QStringLiteral("speed"))
     {
         if (remoteArg(a, 1, &n) == false)

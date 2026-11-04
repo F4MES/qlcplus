@@ -42,6 +42,7 @@ button{font-family:inherit;cursor:pointer}
 .show.sure,.last.sure{background:var(--gold);color:#1A1408;border:0}
 .link{color:var(--mute);font-weight:600;font-size:11px;letter-spacing:.04em;white-space:nowrap}
 .link b{color:var(--dim)} .link b.ok{color:var(--green)}
+.chip.link.warn{background:#E03030;color:#fff} .chip.link.warn b{color:#fff}   /* TRACK_APP_PHONE_R556 */
 .last{flex:1.6;background:var(--btn);color:var(--gold);border:2px solid var(--gold);justify-content:flex-start;gap:8px;white-space:nowrap;text-align:left;display:none;overflow:hidden}
 .last.on{background:var(--gold);color:#1A1408;border:0}
 .last small{display:block;font-weight:500;font-size:10px;letter-spacing:0;opacity:.85;overflow:hidden;text-overflow:ellipsis}
@@ -199,6 +200,8 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       </div>
       <div class="lbl">POSITION</div>
       <div class="grid g2" id="positions"></div>
+      <div class="lbl" id="barsL" style="display:none">LASER BARS</div><!-- TRACK_APP_PHONE_R556 -->
+      <div class="grid g3" id="barsG" style="display:none"></div>
       <div class="lbl">SPEED</div>
       <div class="grid g3" id="speeds"></div>
     </div>
@@ -231,6 +234,7 @@ const SECTION_COL = {drop:'#E23B3B',build:'#E0921A',break:'#2F7FD0',intro:'#5FB3
 const COLOUR = {red:['#E23B3B','#280808'],orange:['#E8822A','#F09A50'],yellow:['#E8D23A','#F0E070'],green:['#2EC04A','#4FD66A'],cyan:['#23C4D8','#45D6E8'],
   blue:['#3355EE','#7FB2FF'],purple:['#8A4BE0','#B58AF0'],magenta:['#D040D0','#E56FE5'],pink:['#E0609A','#F08CB8'],white:['#E9E9EE','#E9E9EE'],uv:['#6A3AD0','#9D7AF0']};
 let S = null, ws = null, mockOn = false;
+let warnWhat = '', warnSince = 0;        // TRACK_APP_PHONE_R556
 const sent = window.__sent = [];          // R463_PAGE: what was sent - in ?mock=1 only (it grew all night)
 const busy = {};                         // a fader under a finger is not redrawn from the state
 const holding = {};                      // R463_RM_HELD: what a finger holds on THIS phone
@@ -623,6 +627,13 @@ function render() {
   const link = $('link');
   link.querySelector('b').className = S.connected ? 'ok' : '';
   link.querySelector('span').textContent = Math.round(S.bpm || 0) + ' BPM' + (S.tempo ? ' · ' + S.tempo : '');
+  {   // TRACK_APP_PHONE_R556: the desk's warning - what is wrong with the CDJs, once it has held 5 s
+    const w = S.warn || '', now = Date.now();
+    if (w !== warnWhat) { warnWhat = w; warnSince = now; if (w) setTimeout(render, 5100); }
+    const shown = w && now - warnSince >= 5000 ? w : '';
+    link.classList.toggle('warn', !!shown);
+    if (shown) link.querySelector('span').textContent = shown;
+  }
 
   // --- LIVE
   document.querySelectorAll('.fader[data-f]').forEach(el => { if (!(busy[el.dataset.f] > Date.now())) drawFader(el, faderValue(el)); });
@@ -671,6 +682,22 @@ function render() {
     cls(b, 'ring', ov.length === 0 && S.colour === c); });
   cls($('fade'), 'blue', S.colourMode === 1); cls($('chase'), 'blue', S.colourMode === 2);
   cls($('pos-auto'), 'on', !S.position);
+  // TRACK_APP_PHONE_R556: the laser bars by hand - the desk's POSITION row, BARS page (TRACK only)
+  {
+    const B = S.bars, has = !!B;
+    $('barsL').style.display = has ? '' : 'none';
+    $('barsG').style.display = has ? '' : 'none';
+    if (has && !$('bar-auto'))
+      $('barsG').innerHTML = '<button class="b sm" data-c="barsAuto" id="bar-auto">AUTO</button>' +
+        [['on', 'ON'], ['chase', 'CHASE'], ['home', 'HOME'], ['under', 'HOME UNDER'], ['down', 'DOWN']].map(k =>
+          '<button class="b sm" data-c="bars|' + k[0] + '" id="bar-' + k[0] + '">' + k[1] + '</button>').join('');
+    if (has) {
+      cls($('bar-auto'), 'on', !B.on && !B.aim);
+      cls($('bar-on'), 'gold', !!B.on);
+      cls($('bar-chase'), 'gold', !!B.chase);
+      ['home', 'under', 'down'].forEach(k => cls($('bar-' + k), 'gold', B.aim === k));
+    }
+  }
   ['start', 'column', 'down'].forEach(p => cls($('pos-' + p), 'blue', S.position === p));
   [-1, 0, 1].forEach(v => cls($('spd' + v), 'blue', S.speed === v));
 
@@ -826,6 +853,11 @@ function mockApply(cmd) {
     section: () => S.override = a[1] === S.override ? '' : a[1], colourAuto: () => S.overrides = [],
     colour: () => { const i = S.overrides.indexOf(a[1]); i >= 0 ? S.overrides.splice(i, 1) : S.overrides.push(a[1]); },
     colourMode: () => S.colourMode = S.colourMode === +a[1] ? 0 : +a[1], position: () => S.position = a[1] === S.position ? '' : a[1],
+    barsAuto: () => S.bars = {aim: '', on: false, chase: false},   // TRACK_APP_PHONE_R556 (mock)
+    bars: () => { const B = S.bars || (S.bars = {aim: '', on: false, chase: false});
+      if (a[1] === 'on') { B.on = !B.on; if (!B.on) B.chase = false; }
+      else if (a[1] === 'chase') { B.chase = !B.chase; if (B.chase) B.on = true; }
+      else B.aim = B.aim === a[1] ? '' : a[1]; },
     speed: () => S.speed = +a[1], master: () => S.master = a[1] / 100, haze: () => { S.haze = a[1] / 100; S.hazeAuto = false; }, fan: () => { S.fan = a[1] / 100; S.hazeAuto = false; },
     hazeAuto: () => S.hazeAuto = true,   // R484_HZ_PHONE_MOCK
     trim: () => S.trims[a[1]] = a[2] / 100, group: () => S.groups.find(g => g.key === a[1]).enabled = a[2] === '1',

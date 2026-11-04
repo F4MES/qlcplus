@@ -134,6 +134,7 @@ Rectangle
         && (!trackEngine.hazeAvailable || trackEngine.hazeAuto)
         && trackManager.overrideState === ""
         && trackEngine.positionMode === ""
+        && !trackViewRoot.barsHand                 // TRACK_APP_ALLAUTO_R556: the laser bars by hand
         && trackEngine.colourMode === 0 && (trackEngine.colourOverride === "" || trackEngine.colourOverrides.length > 1)
     function allAuto()
     {
@@ -143,6 +144,7 @@ Rectangle
         trackManager.overrideState = ""
         trackEngine.positionMode = ""
         trackEngine.colourOverride = ""        // AUTO colour - and FADE / CHASE off with it
+        if (trackViewRoot.trackApp && trackViewRoot.barsHand) trackEngine.barsAuto()   // TRACK_APP_ALLAUTO_R556
     }             // runde 393: the guide over the page
     // the pencil: the flag tools stay out until it is tapped again (Tobias 10-07)
     property bool markerEdit: false
@@ -1371,6 +1373,7 @@ Rectangle
                     Text
                     {
                         anchors.right: parent.right
+                        visible: !appWarn.visible        // TRACK_APP_WARN_R556: the warning takes its place
                         // runde 308: the tempo the engine times on, and from where.
                         // Anything but LINK is amber
                         text: (trackManager && trackManager.playing ? qsTr("PLAYING") : qsTr("PAUSED"))
@@ -1383,6 +1386,43 @@ Rectangle
                                ? (trackManager.tempoSource === "LINK" ? "#59C36A" : "#E3B44F")
                                : trackViewRoot.cDim
                         font.pixelSize: trackViewRoot.fs(13)
+                    }
+                    // TRACK_APP_WARN_R556: what is wrong with the CDJs, in red - only with SHOW ON, after 5 s
+                    Rectangle
+                    {
+                        id: appWarn
+                        objectName: "appWarn"
+                        readonly property string why: !trackViewRoot.trackApp || !trackManager || trackManager.autoRun !== true ? ""
+                            : (trackManager.connected !== true ? qsTr("CDJ READER DOWN")
+                               : (trackViewRoot.cdjCount <= 0 ? qsTr("NO CDJs")
+                                  : (trackManager.linkStale === true ? qsTr("CDJ LINK LOST") : "")))
+                        property string shown: ""
+                        onWhyChanged: { shown = ""; if (why !== "") appWarnLate.restart(); else appWarnLate.stop() }
+                        Component.onCompleted: if (why !== "") appWarnLate.restart()
+                        Timer { id: appWarnLate; interval: 5000; onTriggered: appWarn.shown = appWarn.why }
+                        visible: shown !== ""
+                        anchors.right: parent.right
+                        width: appWarnText.implicitWidth + Math.round(22 * trackViewRoot.ks)
+                        height: Math.round(22 * trackViewRoot.ks)
+                        radius: height / 2
+                        color: "#E03030"
+                        SequentialAnimation on opacity
+                        {
+                            running: appWarn.visible && trackViewRoot.animate
+                            loops: Animation.Infinite
+                            NumberAnimation { to: 0.55; duration: 700 }
+                            NumberAnimation { to: 1.0; duration: 700 }
+                        }
+                        Text
+                        {
+                            id: appWarnText
+                            anchors.centerIn: parent
+                            text: appWarn.shown
+                            color: "#FFFFFF"
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(12)
+                            font.letterSpacing: trackViewRoot.fs(12) * 0.08
+                        }
                     }
                 }
 
