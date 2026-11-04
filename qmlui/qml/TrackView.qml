@@ -2083,6 +2083,7 @@ Rectangle
                 objectName: "emptyTrack"
                 anchors.centerIn: wfCanvas
                 visible: trackViewRoot.beatCount === 0 || emptyBox.gone   // R518_BLT_GONE_SHOW
+                onVisibleChanged: if (!visible) trackViewRoot.bltGuideOpen = false   // R544_GUIDE_FORGET
                 readonly property bool linked: !!trackManager && trackManager.connected === true
                 // R518_BLT_GONE (Tobias 10-31, approved: "den skal bare tage over hvis den ser at BLT
                 // forsvinder"): BLT gone mid-track - QLC+ looked to the end, no BLT and nothing connected.
@@ -3478,6 +3479,7 @@ Rectangle
                         rest: trackEngine ? trackEngine.hazeLimit / 100 : 0.7
                         onPressed: if (trackEngine && trackEngine.hazeAuto === true) trackEngine.hazeAuto = false
                         function springBack() { if (trackEngine && trackEngine.haze > hazeFader.rest + 0.001) trackEngine.haze = hazeFader.rest }
+                        Component.onDestruction: if (input.down) springBack()   // R544_HZGONE_V2: torn down under the finger
                         Connections
                         {
                             target: hazeFader.input
@@ -3613,6 +3615,8 @@ Rectangle
                             if (blackoutTile.armed && trackEngine) trackEngine.blackout = false
                             blackoutTile.armed = false
                         }
+                        // R544_BOGONE_V2: the page torn down with the finger still down - no release comes (as r199's FLASH)
+                        Component.onDestruction: if (blackoutTile.armed && trackEngine) trackEngine.blackout = false
                     }
                 }
 
@@ -3694,6 +3698,7 @@ Rectangle
                             if (stutterTile.armed && trackEngine) trackEngine.stutter = false
                             stutterTile.armed = false
                         }
+                        Component.onDestruction: if (stutterTile.armed && trackEngine) trackEngine.stutter = false   // R544_ST_GONE
                     }
                     // the rate: over the hold area, each chip its own finger
                     Row
@@ -3933,7 +3938,8 @@ Rectangle
     {
         id: bltGuide
         objectName: "bltGuide"
-        visible: trackViewRoot.bltGuideOpen && trackViewRoot.beatCount === 0 && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
+        // R544_GUIDE_BOX: with the box it explains (the empty page, or BLT gone) - a stale flag brought it back later
+        visible: trackViewRoot.bltGuideOpen && emptyBox.visible && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
         z: 50
         readonly property real pad: Math.round(18 * trackViewRoot.ks)
         width: Math.min(trackViewRoot.width - 2 * pad, Math.round(470 * trackViewRoot.ks))

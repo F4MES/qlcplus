@@ -2523,6 +2523,7 @@ public:
     // R521_EARLYDROP_DECL (runde 521, EARLYDROP): where a drop flagged at `flag` really lands - BLT's raw kick
     // back steady 1-4 bars before it (`flag` when not), and the landing's line on the tracklog
     int r521EarlyLand(int from, int flag) const;
+    bool r544EarlyFlag(int land, int flag) const;   // R544_EARLY_FLAG_DECL
     void r521EarlyNote(int land, int flag);
     // R431_DROP_PICK
     QStringList dropSet() const;
@@ -3351,6 +3352,7 @@ private:
     void labApplyTags();
     bool m_labActive = false;
     bool m_labLoaded = false;
+    bool m_labLoadBad = false;           // R544_LABSTORE_MEMBER: laser-lab.json there but not read - never written over
     bool m_labWired = false;
     bool m_labDark = false;              // STOP / TOO LOW: the lab holds the laser dark
     bool m_labHold = false;              // HOLD: no auto-play
