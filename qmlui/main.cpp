@@ -24,9 +24,11 @@
 #include <QSurfaceFormat>
 #include <QCommandLineParser>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 
 #include "app.h"
-#include "trackbridge.h"          // TRACK_APP_BRIDGE (track-app branch)
+#include "trackapp.h"             // TRACK_APP_BRIDGE (track-app branch)
+#include "doc.h"
 #include "networkmanager.h"
 #include "qlcconfig.h"
 #include "qlcfile.h"
@@ -51,6 +53,10 @@ void printVersion()
 
 int main(int argc, char *argv[])
 {
+    // TRACK_APP_RESTART (R548): an update's restart waits until the TRACK that started it is gone -
+    // the guard below would turn it away while that one still runs
+    TrackApp::waitForPredecessor(argc, argv);
+
     // RIG_SINGLE_INSTANCE: before QApplication, settings, windows or outputs.
     QlcSingleInstance rigInstance;
     if (!rigInstance.allowed())
@@ -111,6 +117,9 @@ int main(int argc, char *argv[])
     QCommandLineOption trackAppOption(QStringList() << "track-app",
                                       "TRACK app: the Track page only, with its own beat-link helper (no Beat Link Trigger)");
     parser.addOption(trackAppOption);
+    QCommandLineOption restartAfterOption(QStringList() << "restart-after",
+                                          "TRACK app: wait for this process to end first (its own update)", "pid");
+    parser.addOption(restartAfterOption);
 
     QCommandLineOption localeOption(QStringList() << "l" << "locale",
                                       "Specify a language to use.",
@@ -207,6 +216,14 @@ int main(int argc, char *argv[])
     QString locale = parser.value(localeOption);
 
     App qlcplusApp;
+
+    // TRACK_APP_BRIDGE: TRACK's own object for the page (trackAppCtl): its beat-link helper, the
+    // CDJs it sees and its own update. Inactive without --track-app; set before the page loads
+    TrackApp trackApp(parser.isSet(trackAppOption), [&qlcplusApp]() {
+        if (qlcplusApp.doc() != nullptr)
+            qlcplusApp.doc()->resetModified();       // the restart: no "save?" box
+    });
+    qlcplusApp.rootContext()->setContextProperty("trackAppCtl", &trackApp);
     if (locale.isEmpty())
     {
         QSettings settings;
@@ -257,11 +274,9 @@ int main(int argc, char *argv[])
     if (parser.isSet(fullscreenOption))
         qlcplusApp.toggleFullscreen();
 
-    // TRACK_APP_BRIDGE: beat-link as QLC+'s own helper process, started here and
-    // stopped (its pipe closed) when QLC+ quits - before the App goes
-    TrackBridge trackBridge;
-    if (parser.isSet(trackAppOption))
-        trackBridge.start();
+    // TRACK_APP_BRIDGE: beat-link as QLC+'s own helper process (stopped - its pipe closed - when
+    // QLC+ quits, before the App goes) and TRACK's update checks
+    trackApp.start();
 
     return app.exec();
 }

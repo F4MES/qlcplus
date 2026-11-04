@@ -25,6 +25,11 @@ import "."
 Rectangle
 {
     id: trackViewRoot
+    // TRACK_APP_UI_R548 (track-app branch, Tobias 11-04: "fjern de knapper vi alligevel ikke kan bruge
+    // mere", mockup approved): the TRACK app reads the CDJs itself - no Beat Link Trigger on its page,
+    // and its update is its own (trackAppCtl, qmlui/trackapp.cpp). Without --track-app: as before
+    readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
+    readonly property int cdjCount: trackApp ? trackAppCtl.cdjCount : 0
     // SAVED_LOOKS_UI: approved 21/10, including touch scroll and outside-to-close.
     readonly property bool savedUiAvailable: true
     readonly property bool savedUndoAvailable: !!trackEngine && trackEngine.canUndoLook
@@ -1157,10 +1162,14 @@ Rectangle
                 {
                     id: updChip
                     objectName: "updateChip"
-                    visible: trackManager ? trackManager.updateAvailable === true : false
-                    readonly property int st: trackManager && trackManager.updateStep !== undefined ? trackManager.updateStep : 0
+                    visible: trackViewRoot.trackApp ? trackAppCtl.updateAvailable === true
+                                                    : (trackManager ? trackManager.updateAvailable === true : false)
+                    readonly property int st: trackViewRoot.trackApp ? trackAppCtl.updateStep
+                                            : (trackManager && trackManager.updateStep !== undefined ? trackManager.updateStep : 0)
                     readonly property bool showOn: trackManager ? trackManager.autoRun === true : false
-                    readonly property string latest: trackManager && trackManager.updateLatest ? trackManager.updateLatest : ""
+                    readonly property string latest: trackViewRoot.trackApp ? trackAppCtl.updateLatest
+                                                   : (trackManager && trackManager.updateLatest ? trackManager.updateLatest : "")
+                    function go() { if (trackViewRoot.trackApp) trackAppCtl.startUpdate(updChip.showOn); else trackManager.startUpdate() }
                     property bool arm: false
                     Timer { id: updArm; interval: 5000; onTriggered: updChip.arm = false }
                     onShowOnChanged: if (showOn) arm = false
@@ -1192,7 +1201,8 @@ Rectangle
                         {
                             objectName: "updateChipText"
                             width: parent.width; elide: Text.ElideRight
-                            text: updChip.st === 1 ? qsTr("UPDATE STARTED") : updChip.arm ? qsTr("SURE? - TAP AGAIN") : qsTr("UPDATE QLC+")
+                            text: updChip.st === 1 ? qsTr("UPDATE STARTED") : updChip.arm ? qsTr("SURE? - TAP AGAIN")
+                                : trackViewRoot.trackApp ? qsTr("UPDATE TRACK") : qsTr("UPDATE QLC+")
                             color: updChip.arm ? "#1A1408" : trackViewRoot.cGold
                             font.bold: true
                             font.pixelSize: trackViewRoot.fs(16)
@@ -1202,10 +1212,10 @@ Rectangle
                         {
                             objectName: "updateChipSub"
                             width: parent.width; elide: Text.ElideRight   // R475_CHIPSUB_DESK: SURE? over a tap's "SHOW OFF first"
-                            text: updChip.st === 1 ? qsTr("QLC+ restarts by itself")
+                            text: updChip.st === 1 ? (trackViewRoot.trackApp ? qsTr("TRACK restarts by itself") : qsTr("QLC+ restarts by itself"))
                                 : updChip.showOn ? qsTr("SHOW OFF first")
-                                : updChip.arm ? qsTr("light out about 1 min")
-                                : updChip.st === 2 ? qsTr("update-qlc.cmd not found")
+                                : updChip.arm ? (trackViewRoot.trackApp ? qsTr("light out about 10 s") : qsTr("light out about 1 min"))
+                                : updChip.st === 2 ? (trackViewRoot.trackApp ? qsTr("did not install - see the log") : qsTr("update-qlc.cmd not found"))
                                 : updChip.st === 3 ? qsTr("SHOW OFF first")
                                 : qsTr("build %1 is ready").arg(updChip.latest)
                             color: updChip.arm ? "#3C2D0A" : trackViewRoot.cMute
@@ -1217,11 +1227,11 @@ Rectangle
                         onReleasedAt: (x, y, inside) => {
                             if (!inside || !trackManager || updChip.st === 1)
                                 return
-                            if (updChip.showOn) { trackManager.startUpdate(); return }   // "SHOW OFF first"
+                            if (updChip.showOn) { updChip.go(); return }   // "SHOW OFF first"
                             if (!updChip.arm) { updChip.arm = true; updChip.armAt = Date.now(); updArm.restart(); return }
                             if (Date.now() - updChip.armAt < 400) return   // R475_CHIPTAP_DESK: a double tap is not SURE? answered
                             updChip.arm = false; updArm.stop()
-                            trackManager.startUpdate()
+                            updChip.go()
                         }
                     }
                 }
@@ -1271,7 +1281,8 @@ Rectangle
                         text: (trackManager && trackManager.playing ? qsTr("PLAYING") : qsTr("PAUSED"))
                               + "  ·  " + (trackManager && trackManager.engineTempo !== undefined ? trackManager.engineTempo.toFixed(1) : "0") + " BPM"
                               + (trackManager && trackManager.tempoSource ? "  ·  " + trackManager.tempoSource : "")
-                              + "  ·  " + (trackManager && trackManager.connected ? qsTr("BLT ok") : qsTr("no BLT"))
+                              + "  ·  " + (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? qsTr("CDJs ok") : qsTr("no CDJs"))
+                                           : (trackManager && trackManager.connected ? qsTr("BLT ok") : qsTr("no BLT")))
                               + (trackViewRoot.testOn ? "  ·  " + qsTr("TEST") : "")   // R450_TEST_TRACK
                         color: trackManager && trackManager.playing
                                ? (trackManager.tempoSource === "LINK" ? "#59C36A" : "#E3B44F")
@@ -2088,7 +2099,7 @@ Rectangle
                 // R518_BLT_GONE (Tobias 10-31, approved: "den skal bare tage over hvis den ser at BLT
                 // forsvinder"): BLT gone mid-track - QLC+ looked to the end, no BLT and nothing connected.
                 // The same box over the waveform, on a panel, with START BLT; gone when BLT runs again
-                readonly property bool gone: trackViewRoot.beatCount > 0 && known && !running
+                readonly property bool gone: !trackViewRoot.trackApp && trackViewRoot.beatCount > 0 && known && !running
                 z: gone ? 20 : 0                 // over the waveform, the cursor and the corner hold
                 // R465_BLT_PAGE (Tobias 10-15): BLT connects only when it has something to send -
                 // running and quiet is the usual state before the first track (QLC+ looks for
@@ -2117,7 +2128,7 @@ Rectangle
                     id: emptyRow
                     spacing: Math.round(18 * trackViewRoot.ks)
                     // R465_BLT_PAGE: Beat Link Trigger's own logo (dim while it does not run)
-                    Image { objectName: "bltLogo"; anchors.verticalCenter: parent.verticalCenter
+                    Image { objectName: "bltLogo"; anchors.verticalCenter: parent.verticalCenter; visible: !trackViewRoot.trackApp
                             width: Math.round(60 * trackViewRoot.ks); height: width
                             source: "blt_logo.png"; smooth: true; mipmap: true; fillMode: Image.PreserveAspectFit
                             opacity: emptyBox.running ? 1.0 : 0.45 }
@@ -2132,7 +2143,9 @@ Rectangle
                             {
                                 objectName: "emptyTitle"
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: emptyBox.gone ? qsTr("Beat Link Trigger stopped")   // R518_BLT_GONE_TITLE
+                                text: trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? qsTr("Waiting for track data")
+                                                                : emptyBox.linked ? qsTr("Looking for the CDJs") : qsTr("Starting TRACK's CDJ reader"))
+                                    : emptyBox.gone ? qsTr("Beat Link Trigger stopped")   // R518_BLT_GONE_TITLE
                                     : emptyBox.running ? qsTr("Waiting for track data")
                                     : emptyBox.known ? qsTr("Beat Link Trigger is not running") : qsTr("Beat Link Trigger is not connected")
                                 color: trackViewRoot.cText
@@ -2166,12 +2179,17 @@ Rectangle
                         {
                             spacing: Math.round(8 * trackViewRoot.ks)
                             Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Math.round(10 * trackViewRoot.ks); height: width; radius: width / 2
-                                        color: emptyBox.running ? trackViewRoot.cGreen : trackViewRoot.cGold }
+                                        color: (trackViewRoot.trackApp ? trackViewRoot.cdjCount > 0 : emptyBox.running) ? trackViewRoot.cGreen : trackViewRoot.cGold }
                             Text
                             {
                                 objectName: "emptySub"
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: emptyBox.linked ? qsTr("Beat Link Trigger is connected - play a track on a CDJ")
+                                text: trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0
+                                        ? (trackViewRoot.cdjCount === 1 ? qsTr("1 player found - play a track on a CDJ")
+                                                                        : qsTr("%1 players found - play a track on a CDJ").arg(trackViewRoot.cdjCount))
+                                        : emptyBox.linked ? qsTr("TRACK reads the CDJs by itself - is the network cable from the DJ booth in?")
+                                                          : qsTr("It takes a few seconds"))
+                                    : emptyBox.linked ? qsTr("Beat Link Trigger is connected - play a track on a CDJ")
                                     : emptyBox.running ? qsTr("Beat Link Trigger is running - play a track on a CDJ")
                                     : emptyBox.bltStart === 1 ? qsTr("Starting Beat Link Trigger - it takes about half a minute")
                                     : emptyBox.bltStart === 2 ? qsTr("It did not start - use its logo on the taskbar, then play a track on a CDJ")
@@ -2186,7 +2204,7 @@ Rectangle
                         Btn
                         {
                             objectName: "startBlt"
-                            visible: !emptyBox.running && emptyBox.known      // R468_BLT_LOOK: never a second BLT
+                            visible: !trackViewRoot.trackApp && !emptyBox.running && emptyBox.known      // R468_BLT_LOOK: never a second BLT
                             width: Math.round(200 * trackViewRoot.ks); height: Math.round(48 * trackViewRoot.ks)
                             text: emptyBox.bltStart === 1 ? qsTr("STARTING ...") : qsTr("START BLT")
                             tone: trackViewRoot.cGold
@@ -2662,7 +2680,8 @@ Rectangle
                             else if (lt >= 3)
                                 parts.push(qsTr("LAST TRACK: the white light goes dark by itself after 5 min - SHOW OFF ends it now"))
                             if (trackManager && trackManager.linkStale)
-                                parts.push(qsTr("BLT link stale - holding the last look"))
+                                parts.push(trackViewRoot.trackApp ? qsTr("CDJ link stale - holding the last look")
+                                                                  : qsTr("BLT link stale - holding the last look"))
                             if (trackEngine)
                                 for (var i = 0; i < trackEngine.warnings.length; i++)
                                     parts.push(trackEngine.warnings[i])
@@ -3977,7 +3996,11 @@ Rectangle
             }
             Repeater
             {
-                model: [
+                model: trackViewRoot.trackApp ? [
+                    qsTr("<b>TRACK reads the CDJs by itself.</b> No other program is needed."),
+                    qsTr("<b>Load and play a track on a CDJ.</b> It shows up here within a second or two."),
+                    qsTr("<b>Still no CDJs?</b> Check the network cable from this PC to the DJ booth."),
+                    qsTr("<b>Beat Link Trigger open?</b> Close it - TRACK takes over within 15 seconds.") ] : [
                     qsTr("<b>Beat Link Trigger has to run.</b> Start it from its logo on the taskbar at the bottom of the screen."),
                     qsTr("<b>Load and play a track on a CDJ.</b> It shows up here within a second or two."),
                     qsTr("<b>Still nothing?</b> Close Beat Link Trigger and start it again from the taskbar."),
@@ -4005,6 +4028,7 @@ Rectangle
             // R465_BLT_PAGE: where to look - its logo on the taskbar (a shortcut, not the tray)
             Row
             {
+                visible: !trackViewRoot.trackApp
                 spacing: Math.round(10 * trackViewRoot.ks)
                 Rectangle
                 {

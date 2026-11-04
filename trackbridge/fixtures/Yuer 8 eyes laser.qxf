@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE FixtureDefinition>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Creator>
+  <Name>Q Light Controller Plus</Name>
+  <Version>5.0.1</Version>
+  <Author>ms</Author>
+ </Creator>
+ <Manufacturer>Yuer</Manufacturer>
+ <Model>8 eyes laser</Model>
+ <Type>LED Bar (Beams)</Type>
+ <Channel Name="Tilt" Preset="PositionTilt"/>
+ <Channel Name="Tilt (fine)" Preset="PositionTiltFine"/>
+ <Channel Name="Motor Speed" Preset="NoFunction"/>
+ <Channel Name="Master Dimmer" Preset="IntensityMasterDimmer"/>
+ <Channel Name="Color" Preset="ColorRGBMixer"/>
+ <Channel Name="Strobe" Preset="ShutterStrobeSlowFast"/>
+ <Channel Name="Effect">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Laser effekt</Capability>
+ </Channel>
+ <Channel Name="Effect Speed">
+  <Group Byte="0">Speed</Group>
+  <Capability Min="0" Max="255">Effect Speed</Capability>
+ </Channel>
+ <Channel Name="Movement Effect">
+  <Group Byte="0">Nothing</Group>
+  <Capability Min="0" Max="255">Movement Effect</Capability>
+ </Channel>
+ <Channel Name="Movement Effect Speed">
+  <Group Byte="0">Nothing</Group>
+  <Capability Min="0" Max="255">Movement Effect Speed</Capability>
+ </Channel>
+ <Channel Name="Laser Color 1" Preset="NoFunction"/>
+ <Channel Name="Laser Color 2" Preset="NoFunction"/>
+ <Channel Name="Laser Color 3" Preset="NoFunction"/>
+ <Channel Name="Laser Color 4" Preset="NoFunction"/>
+ <Channel Name="Laser Color 5" Preset="NoFunction"/>
+ <Channel Name="Laser Color 6" Preset="NoFunction"/>
+ <Channel Name="Laser Color 7" Preset="NoFunction"/>
+ <Channel Name="Laser Color 8" Preset="NoFunction"/>
+ <Channel Name="Reset / Blackout" Preset="NoFunction"/>
+ <Mode Name="New mode">
+  <Channel Number="0">Tilt</Channel>
+  <Channel Number="1">Tilt (fine)</Channel>
+  <Channel Number="2">Motor Speed</Channel>
+  <Channel Number="3">Master Dimmer</Channel>
+  <Channel Number="4">Color</Channel>
+  <Channel Number="5">Strobe</Channel>
+  <Channel Number="6">Effect</Channel>
+  <Channel Number="7">Effect Speed</Channel>
+  <Channel Number="8">Movement Effect</Channel>
+  <Channel Number="9">Movement Effect Speed</Channel>
+  <Channel Number="10">Laser Color 1</Channel>
+  <Channel Number="11">Laser Color 2</Channel>
+  <Channel Number="12">Laser Color 3</Channel>
+  <Channel Number="13">Laser Color 4</Channel>
+  <Channel Number="14">Laser Color 5</Channel>
+  <Channel Number="15">Laser Color 6</Channel>
+  <Channel Number="16">Laser Color 7</Channel>
+  <Channel Number="17">Laser Color 8</Channel>
+  <Channel Number="18">Reset / Blackout</Channel>
+ </Mode>
+ <Physical>
+  <Bulb Type="" Lumens="0" ColourTemperature="0"/>
+  <Dimensions Weight="6.3" Width="1100" Height="63" Depth="63"/>
+  <Lens Name="Other" DegreesMin="0" DegreesMax="0"/>
+  <Focus Type="Fixed" PanMax="0" TiltMax="0"/>
+  <Technical PowerConsumption="100" DmxConnector="3-pin"/>
+ </Physical>
+</FixtureDefinition>

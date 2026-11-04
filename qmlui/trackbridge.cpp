@@ -36,6 +36,7 @@ TrackBridge::TrackBridge(QObject *parent)
     , m_logStart(true)
     , m_waitedForBlt(false)
     , m_failures(0)
+    , m_cdjCount(0)
 {
     m_retry.setSingleShot(true);
     connect(&m_retry, &QTimer::timeout, this, &TrackBridge::slotLaunch);
@@ -44,6 +45,17 @@ TrackBridge::TrackBridge(QObject *parent)
 TrackBridge::~TrackBridge()
 {
     stop();
+}
+
+void TrackBridge::setPlaces(const QString &logDir, const QString &runtimeDir)
+{
+    m_logDir = logDir;
+    m_runtimeDir = runtimeDir;
+}
+
+int TrackBridge::cdjCount() const
+{
+    return m_cdjCount;
 }
 
 void TrackBridge::start()
@@ -76,6 +88,11 @@ void TrackBridge::stop()
     }
     m_process->deleteLater();
     m_process = nullptr;
+    if (m_cdjCount != 0)
+    {
+        m_cdjCount = 0;
+        emit cdjCountChanged(0);
+    }
 }
 
 /*********************************************************************
@@ -149,6 +166,32 @@ bool TrackBridge::locate(QString &java, QStringList &classpath, QString &why) co
 
     QString bltJar = qEnvironmentVariable("QLC_BRIDGE_BLT_JAR");
     java = qEnvironmentVariable("QLC_BRIDGE_JAVA");
+
+    // R548_RUNTIME (Tobias 11-04: "den skal kunne deployes paa en ren pc og saa bare virke fra start"):
+    // the Java and beat-link TRACK ships with (runtime\<id>: java\bin + beat-link-trigger.jar) first
+    if (m_runtimeDir.isEmpty() == false)
+    {
+        QDir rt(m_runtimeDir);
+        const QStringList javas = QStringList()
+            << QStringLiteral("java/bin/javaw.exe") << QStringLiteral("java/bin/java.exe") << QStringLiteral("java/bin/java");
+        QString exe;
+        for (const QString &rel : javas)
+        {
+            if (QFileInfo::exists(rt.filePath(rel)))
+            {
+                exe = rt.filePath(rel);
+                break;
+            }
+        }
+        const QString jar = rt.filePath(QStringLiteral("beat-link-trigger.jar"));
+        if (exe.isEmpty() == false && QFileInfo::exists(jar))
+        {
+            if (java.isEmpty())
+                java = exe;
+            if (bltJar.isEmpty())
+                bltJar = jar;
+        }
+    }
 
     if (bltJar.isEmpty() || java.isEmpty())
     {
@@ -234,7 +277,7 @@ bool TrackBridge::locate(QString &java, QStringList &classpath, QString &why) co
 
     if (bltJar.isEmpty() || java.isEmpty())
     {
-        why = QStringLiteral("Beat Link Trigger is not installed where TRACK looks (its Java and beat-link are needed)");
+        why = QStringLiteral("no Java + beat-link: TRACK's runtime folder is missing and Beat Link Trigger is not installed");
         return false;
     }
 
@@ -275,16 +318,16 @@ void TrackBridge::slotLaunch()
     connect(m_process, &QProcess::finished, this, &TrackBridge::slotFinished);
     connect(m_process, &QProcess::errorOccurred, this, &TrackBridge::slotErrorOccurred);
 
-    // the JVM's own output (crashes, a wrong Java) beside the helper's bridge.log
-    QString logDir = qEnvironmentVariable("LOCALAPPDATA");
-    logDir = logDir.isEmpty() ? QDir::homePath() + QStringLiteral("/.qlc-rig-update")
-                              : QDir(logDir).filePath(QStringLiteral("qlc-rig-update"));
-    QDir().mkpath(logDir);
+    // the JVM's own output (crashes, a wrong Java) goes to bridge-console.log beside the helper's
+    // bridge.log; its "STATUS cdjs=N" lines are read on the way (R548_CDJS)
     m_process->setProcessChannelMode(QProcess::MergedChannels);
-    m_process->setStandardOutputFile(QDir(logDir).filePath(QStringLiteral("bridge-console.log")), QIODevice::Append);
+    connect(m_process, &QProcess::readyReadStandardOutput, this, &TrackBridge::slotOutput);
+    m_outBuf.clear();
 
-    const QStringList args = QStringList()
-        << QStringLiteral("-Dfile.encoding=UTF-8")
+    QStringList args = QStringList() << QStringLiteral("-Dfile.encoding=UTF-8");
+    if (m_logDir.isEmpty() == false)
+        args << QStringLiteral("-Dqlc.bridge.logdir=") + QDir::toNativeSeparators(m_logDir);
+    args
         << QStringLiteral("-cp") << classpath.join(QDir::listSeparator())
         << QStringLiteral("clojure.main") << QStringLiteral("-m") << QStringLiteral("qlc.bridge")
         << QStringLiteral("--parent-pipe");
@@ -310,8 +353,63 @@ void TrackBridge::slotLaunch()
     }
 }
 
+void TrackBridge::slotOutput()
+{
+    if (m_process == nullptr)
+        return;
+    m_outBuf.append(m_process->readAllStandardOutput());
+
+    // R548_CDJS: "STATUS cdjs=N" is read here; every other line goes to bridge-console.log
+    QByteArray keep;
+    int nl;
+    while ((nl = m_outBuf.indexOf('\n')) >= 0)
+    {
+        const QByteArray raw = m_outBuf.left(nl + 1);
+        m_outBuf.remove(0, nl + 1);
+        const QByteArray line = raw.trimmed();
+        if (line.startsWith("STATUS cdjs="))
+        {
+            bool ok = false;
+            const int n = line.mid(12).trimmed().toInt(&ok);
+            if (ok && n != m_cdjCount)
+            {
+                m_cdjCount = n;
+                emit cdjCountChanged(n);
+            }
+        }
+        else
+            keep.append(raw);
+    }
+    if (m_outBuf.size() > 65536)
+    {
+        keep.append(m_outBuf);      // no line end in 64 kB: not ours, keep it in the log
+        m_outBuf.clear();
+    }
+    if (keep.isEmpty())
+        return;
+
+    QString dir = m_logDir;
+    if (dir.isEmpty())
+    {
+        dir = qEnvironmentVariable("LOCALAPPDATA");
+        dir = dir.isEmpty() ? QDir::homePath() + QStringLiteral("/.qlc-rig-update")
+                            : QDir(dir).filePath(QStringLiteral("qlc-rig-update"));
+    }
+    QDir().mkpath(dir);
+    QFile f(QDir(dir).filePath(QStringLiteral("bridge-console.log")));
+    if (f.size() > 2000000)
+        f.remove();                 // the JVM's own lines only: a fresh file past 2 MB
+    if (f.open(QIODevice::Append))
+        f.write(keep);
+}
+
 void TrackBridge::slotFinished(int exitCode, QProcess::ExitStatus status)
 {
+    if (m_cdjCount != 0)
+    {
+        m_cdjCount = 0;
+        emit cdjCountChanged(0);
+    }
     if (m_wanted == false)
         return;
     if (status == QProcess::NormalExit && exitCode == kBltRunning)
@@ -355,12 +453,23 @@ void TrackBridge::retryIn(int ms, const QString &why)
 
 void TrackBridge::log(const QString &what) const
 {
-    // one line per event beside QLC+'s and the BLT guard's lines: never a reason to stop
-    QString dir = qEnvironmentVariable("LOCALAPPDATA");
-    dir = dir.isEmpty() ? QDir::homePath() + QStringLiteral("/.qlc-rig-update")
-                        : QDir(dir).filePath(QStringLiteral("qlc-rig-update"));
+    writeLog(m_logDir, what);
+}
+
+void TrackBridge::writeLog(const QString &logDir, const QString &what)
+{
+    // R548_PLACES: TRACK's own logs folder (installed TRACK), else beside QLC+'s and the BLT guard's lines
+    QString dir = logDir;
+    QString name = QStringLiteral("track.log");
+    if (dir.isEmpty())
+    {
+        dir = qEnvironmentVariable("LOCALAPPDATA");
+        dir = dir.isEmpty() ? QDir::homePath() + QStringLiteral("/.qlc-rig-update")
+                            : QDir(dir).filePath(QStringLiteral("qlc-rig-update"));
+        name = QStringLiteral("startup.log");
+    }
     QDir().mkpath(dir);
-    QFile f(QDir(dir).filePath(QStringLiteral("startup.log")));
+    QFile f(QDir(dir).filePath(name));
     if (f.open(QIODevice::Append | QIODevice::Text) == false)
         return;
     QTextStream out(&f);

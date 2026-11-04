@@ -4,7 +4,8 @@
 
   QLC+ (TRACK.exe --track-app) starts this as a hidden Java process instead of
   Beat Link Trigger. It runs our qlc_shared_functions.clj UNCHANGED on beat-link -
-  the same classes BLT runs it on, from BLT's own installed jar - and calls it the
+  the same classes BLT runs it on: BLT 8.0.0's own jar from TRACK's runtime folder (r548)
+  or an installed BLT's - and calls it the
   way BLT's one trigger did:
       Watch:            Master Player
       Beat:             (qlc-beat! beat-number)
@@ -32,18 +33,21 @@
            [org.deepsymmetry.beatlink.data AnalysisTagFinder BeatGridFinder CrateDigger MetadataFinder
             TimeFinder WaveformFinder WaveformFinder$WaveformStyle]))
 
-(def bridge-version "1 (track-app 11-04)")
+(def bridge-version "2 (track-app r548)")
 
 ;; ---------------------------------------------------------------- places
 
 (defn- windows? [] (str/starts-with? (str/lower-case (System/getProperty "os.name" "")) "windows"))
 
 (defn- log-dir
-  "Beside QLC+'s and the guard's startup.log on the lys-PC."
+  "TRACK's own logs folder (-Dqlc.bridge.logdir, R548_PLACES), else beside QLC+'s and the
+  guard's startup.log on the lys-PC."
   ^java.io.File []
-  (if-let [local (and (windows?) (System/getenv "LOCALAPPDATA"))]
-    (io/file local "qlc-rig-update")
-    (io/file (System/getProperty "user.home") ".qlc-rig-update")))
+  (let [given (System/getProperty "qlc.bridge.logdir")]
+    (cond
+      (not (str/blank? given)) (io/file given)
+      (and (windows?) (System/getenv "LOCALAPPDATA")) (io/file (System/getenv "LOCALAPPDATA") "qlc-rig-update")
+      :else (io/file (System/getProperty "user.home") ".qlc-rig-update"))))
 
 (defn- lock-file
   "The BLT startup guard's lock: one beat-link program on the PC at a time."
@@ -53,15 +57,13 @@
     (io/file (System/getProperty "user.home") ".qlc-rig" "blt-instance.lock")))
 
 (defn- shared-file
-  "The functions BLT loads today: Downloads\\qlc-update\\qlc_shared_functions.clj
-  (UPDATE puts it there). -Dqlc.bridge.clj=<file> wins; nil = the copy in our jar."
+  "-Dqlc.bridge.clj=<file>, or nil = the copy in our jar. R548 (Tobias 11-04: \"den skal kunne
+  deployes paa en ren pc\"): TRACK runs the functions it was built with, not BLT's copy in
+  Downloads\\qlc-update - TRACK updates them itself."
   []
-  (let [given (System/getProperty "qlc.bridge.clj")
-        dl    (io/file (System/getProperty "user.home") "Downloads" "qlc-update" "qlc_shared_functions.clj")]
-    (cond
-      (not (str/blank? given)) (io/file given)
-      (.isFile dl)             dl
-      :else                    nil)))
+  (let [given (System/getProperty "qlc.bridge.clj")]
+    (when-not (str/blank? given)
+      (io/file given))))
 
 ;; ---------------------------------------------------------------- the log
 
@@ -177,6 +179,29 @@
       (when (and (.isRunning (VirtualCdj/getInstance)) (.isTempoMaster ^Beat beat))
         (run-expression :beat (shared 'qlc-beat!) (or (current-beat beat) -1))))))
 
+;; ---------------------------------------------------------------- R548_CDJS: what QLC+ shows
+
+(defonce ^:private last-status (atom [nil 0]))
+
+(defn- report-cdjs!
+  "\"STATUS cdjs=N\" on stdout for QLC+ (trackbridge.cpp reads it): the players (numbers 1-6)
+  on the DJ Link network. When it changes, and every 5 s."
+  []
+  (try
+    (let [df  (DeviceFinder/getInstance)
+          n   (if (.isRunning df)
+                (count (filter #(<= 1 (.getDeviceNumber ^org.deepsymmetry.beatlink.DeviceAnnouncement %) 6)
+                               (.getCurrentDevices df)))
+                0)
+          now (System/currentTimeMillis)
+          [was at] @last-status]
+      (when (or (not= n was) (> (- now (long at)) 5000))
+        (reset! last-status [n now])
+        (locking last-status
+          (.println System/out (str "STATUS cdjs=" n))
+          (.flush System/out))))
+    (catch Throwable _ nil)))
+
 ;; ---------------------------------------------------------------- online, as BLT goes online
 
 (defn- set-passive!
@@ -194,10 +219,12 @@
   (reify DeviceAnnouncementListener
     (deviceFound [_ a]
       (timbre/info "DJ Link device found:" (.getDeviceName a) "number" (.getDeviceNumber a) "at" (.getHostAddress (.getAddress a)))
-      (set-passive!))
+      (set-passive!)
+      (report-cdjs!))
     (deviceLost [_ a]
       (timbre/info "DJ Link device lost:" (.getDeviceName a) "number" (.getDeviceNumber a))
-      (set-passive!))))
+      (set-passive!)
+      (report-cdjs!))))
 
 (defn- start-finders!
   "BLT's start-other-finders (and its beat finder), without the album art and
@@ -300,5 +327,6 @@
         (System/exit 4)))
     (loop [state nil]
       (let [state* (go-online! state)]
+        (report-cdjs!)
         (Thread/sleep (if (= state* :online) 1000 500))
         (recur state*)))))

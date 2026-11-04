@@ -24,6 +24,7 @@
 #ifndef TRACKBRIDGE_H
 #define TRACKBRIDGE_H
 
+#include <QByteArray>
 #include <QElapsedTimer>
 #include <QObject>
 #include <QProcess>
@@ -47,10 +48,24 @@ public:
     /** The helper's exit code when Beat Link Trigger holds the PC's beat-link lock */
     static const int kBltRunning = 3;
 
+    /** R548_PLACES: where the logs go, and the runtime (Java + beat-link) shipped with TRACK
+     *  (empty: Beat Link Trigger's installed Java and jar) */
+    void setPlaces(const QString &logDir, const QString &runtimeDir);
+
+    /** R548_CDJS: the CDJs the helper sees (its "STATUS cdjs=N" lines); 0 while it does not run */
+    int cdjCount() const;
+
+    /** One line in <dir>/track.log - never a reason to stop */
+    static void writeLog(const QString &dir, const QString &what);
+
+signals:
+    void cdjCountChanged(int count);
+
 private slots:
     void slotFinished(int exitCode, QProcess::ExitStatus status);
     void slotErrorOccurred(QProcess::ProcessError error);
     void slotLaunch();
+    void slotOutput();
 
 private:
     /** Beat Link Trigger's own Java and jar, the helper jar, and anything in trackbridge-lib first */
@@ -67,6 +82,10 @@ private:
     bool m_waitedForBlt;
     int m_failures;
     QString m_lastWhy;
+    QString m_logDir;
+    QString m_runtimeDir;
+    QByteArray m_outBuf;
+    int m_cdjCount;
 };
 
 #endif

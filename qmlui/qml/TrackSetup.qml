@@ -806,8 +806,10 @@ Rectangle
                         Layout.fillWidth: true
                         text: !trackManager ? ""
                               : (trackManager.connected === false
-                                 ? qsTr("Beat Link Trigger is not connected - the cache lives there")
-                                 : qsTr("%1 tracks in BLT's cache - MANUAL ones are your corrections and never re-analysed").arg(trackManager.cacheList.length))
+                                 ? ((typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true) ? qsTr("TRACK's CDJ reader is not running - the cache lives there")   // TRACK_APP_UI_R548
+                                                                   : qsTr("Beat Link Trigger is not connected - the cache lives there"))
+                                 : ((typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true) ? qsTr("%1 tracks in the cache - MANUAL ones are your corrections and never re-analysed").arg(trackManager.cacheList.length)
+                                                                   : qsTr("%1 tracks in BLT's cache - MANUAL ones are your corrections and never re-analysed").arg(trackManager.cacheList.length)))
                         color: setupRoot.cDim
                         font.pixelSize: 12
                         elide: Text.ElideRight

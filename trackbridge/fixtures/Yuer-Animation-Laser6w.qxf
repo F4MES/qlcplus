@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE FixtureDefinition>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Creator>
+  <Name>Q Light Controller Plus</Name>
+  <Version>5.0.1</Version>
+  <Author>Me</Author>
+ </Creator>
+ <Manufacturer>Yuer</Manufacturer>
+ <Model>Animation laser 6w</Model>
+ <Type>Laser</Type>
+ <Channel Name="Master Dimmer" Preset="IntensityMasterDimmer"/>
+ <Channel Name="Color Select" Preset="ColorMacro"/>
+ <Channel Name="Color Flow Rate">
+  <Group Byte="0">Speed</Group>
+  <Capability Min="0" Max="255">Color Flow Speed</Capability>
+ </Channel>
+ <Channel Name="Graphic Group">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Graphic Group Selection</Capability>
+ </Channel>
+ <Channel Name="Group Selection">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Pattern Selection (Pattern Group is selected on CH4)</Capability>
+ </Channel>
+ <Channel Name="Bult In Dynamic Effects">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Built in Random Effects</Capability>
+ </Channel>
+ <Channel Name="Dynamic Effects Speed">
+  <Group Byte="0">Speed</Group>
+  <Capability Min="0" Max="255">Speed for the the built in random/dynamic effects</Capability>
+ </Channel>
+ <Channel Name="Pattern Size" Preset="BeamZoomSmallBig"/>
+ <Channel Name="Automatic Scaling of Patterns">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Unknown</Capability>
+ </Channel>
+ <Channel Name="Pattern Rotates around the center">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Unknown</Capability>
+ </Channel>
+ <Channel Name="Rotate around X-Axis">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">.</Capability>
+ </Channel>
+ <Channel Name="Rotate around Y-Axis">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">.</Capability>
+ </Channel>
+ <Channel Name="Horizontal position selection" Preset="PositionPan"/>
+ <Channel Name="Vertical position selection" Preset="PositionTilt"/>
+ <Channel Name="Wave">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Wave Amplitude and speed adjustment</Capability>
+ </Channel>
+ <Channel Name="Gradual Drawing of patterns">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">.</Capability>
+ </Channel>
+ <Mode Name="16channel">
+  <Channel Number="0">Master Dimmer</Channel>
+  <Channel Number="1">Color Select</Channel>
+  <Channel Number="2">Color Flow Rate</Channel>
+  <Channel Number="3">Graphic Group</Channel>
+  <Channel Number="4">Group Selection</Channel>
+  <Channel Number="5">Bult In Dynamic Effects</Channel>
+  <Channel Number="6">Dynamic Effects Speed</Channel>
+  <Channel Number="7">Pattern Size</Channel>
+  <Channel Number="8">Automatic Scaling of Patterns</Channel>
+  <Channel Number="9">Pattern Rotates around the center</Channel>
+  <Channel Number="10">Rotate around X-Axis</Channel>
+  <Channel Number="11">Rotate around Y-Axis</Channel>
+  <Channel Number="12">Horizontal position selection</Channel>
+  <Channel Number="13">Vertical position selection</Channel>
+  <Channel Number="14">Wave</Channel>
+  <Channel Number="15">Gradual Drawing of patterns</Channel>
+  <Head>
+   <Channel>0</Channel>
+  </Head>
+ </Mode>
+ <Physical>
+  <Bulb Type="" Lumens="0" ColourTemperature="0"/>
+  <Dimensions Weight="0.01" Width="200" Height="200" Depth="200"/>
+  <Lens Name="Other" DegreesMin="0" DegreesMax="20"/>
+  <Focus Type="Fixed" PanMax="0" TiltMax="0"/>
+  <Technical PowerConsumption="6" DmxConnector="5-pin"/>
+ </Physical>
+</FixtureDefinition>

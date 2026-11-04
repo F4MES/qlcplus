@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE FixtureDefinition>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Creator>
+  <Name>Q Light Controller Plus</Name>
+  <Version>5.0.1</Version>
+  <Author>Tobias Schwartzlose</Author>
+ </Creator>
+ <Manufacturer>Yuer</Manufacturer>
+ <Model>Strobe 80 segment (no flash)</Model>
+ <Type>Strobe</Type>
+ <Channel Name="Master dimmer" Preset="IntensityMasterDimmer"/>
+ <Channel Name="Strobe" Preset="ShutterStrobeSlowFast"/>
+ <Channel Name="Red" Preset="IntensityRed"/>
+ <Channel Name="Green" Preset="IntensityGreen"/>
+ <Channel Name="Blue" Preset="IntensityBlue"/>
+ <Channel Name="Built In Macros">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Macros</Capability>
+ </Channel>
+ <Channel Name="Macro Mode Speed">
+  <Group Byte="0">Speed</Group>
+  <Capability Min="0" Max="255">Macro Speed</Capability>
+ </Channel>
+ <Channel Name="Color Select">
+  <Group Byte="0">Colour</Group>
+  <Capability Min="0" Max="255">Color Select</Capability>
+ </Channel>
+ <Mode Name="8channel">
+  <Channel Number="0">Master dimmer</Channel>
+  <Channel Number="1">Strobe</Channel>
+  <Channel Number="2">Built In Macros</Channel>
+  <Channel Number="3">Macro Mode Speed</Channel>
+  <Channel Number="4">Color Select</Channel>
+  <Channel Number="5">Red</Channel>
+  <Channel Number="6">Green</Channel>
+  <Channel Number="7">Blue</Channel>
+ </Mode>
+ <Physical>
+  <Bulb Type="LED Panel" Lumens="0" ColourTemperature="0"/>
+  <Dimensions Weight="0" Width="4000" Height="2000" Depth="500"/>
+  <Lens Name="Other" DegreesMin="119" DegreesMax="120"/>
+  <Focus Type="Fixed" PanMax="0" TiltMax="0"/>
+  <Layout Width="8" Height="3"/>
+  <Technical PowerConsumption="160" DmxConnector="3-pin"/>
+ </Physical>
+</FixtureDefinition>

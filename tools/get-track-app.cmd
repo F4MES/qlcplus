@@ -7,21 +7,25 @@ pause
 exit /b
 #>
 <#
-  get-track-app.cmd - the TRACK app test build (branch track-app, Tobias 11-04: "Lav en ny
-  gren ... saa kan jeg teste i weekenden om det virker"), BESIDE the rig's QLC+.
+  get-track-app.cmd - installs the TRACK app (branch track-app) - the FIRST time. After that
+  TRACK updates itself: the UPDATE TRACK chip on its page (runde 548, Tobias 11-04: "bygge
+  opdateringen bedre, saa den bare opdatere inde i qlc ... og genstarter sig selv, fremfor
+  alt det cmd stuff (fint til foerste installering)").
 
-  1. reads the release "track-app-latest" on github.com/F4MES/qlcplus (no login)
-  2. downloads TRACK-app.zip to Downloads\qlc-update (only when the build is new)
-  3. unzips it to %LOCALAPPDATA%\TRACK-test\<build>. Nothing of the rig's QLC+ is touched:
-     not its install folder, not the registry, not its shortcuts, not rig-latest/update-qlc.cmd
-  4. makes the desktop shortcut "TRACK (test)": TRACK.exe --track-app, opening the same
-     PSMAIN.qxw your QLC+ shortcut opens (found the way update-qlc.cmd finds it)
-  5. says whether Beat Link Trigger is installed - TRACK's beat-link helper runs on its Java
-     and its beat-link (BLT itself is not started)
-  Nothing is ever deleted. Back to normal: close TRACK, start QLC+ and BLT as always.
+  Works on a clean PC (Tobias 11-04: "den skal kunne deployes paa en ren pc og saa bare
+  virke fra start"): TRACK brings its own Java and beat-link - nothing else to install.
+
+  1. reads track-app.json in the release "track-app-latest" on github.com/F4MES/qlcplus
+  2. downloads and checks (size + SHA-256) TRACK and its runtime (Java + beat-link, once)
+  3. puts everything in %LOCALAPPDATA%\TRACK:
+        TRACK.exe (the launcher), app\<build>\, runtime\<id>\, logs\, current.txt
+     Nothing of the rig's QLC+ is touched: not its folder, registry or shortcuts.
+  4. the show: the PSMAIN.qxw your QLC+ shortcut opens; on a PC without one, Documents\TRACK\
+     PSMAIN.qxw (downloaded from the rig release once, never written over)
+  5. the desktop shortcut "TRACK" (it replaces this script's earlier "TRACK (test)")
   Options (after the file name in a cmd window):
-      -ShowPath X  the show file (when no QLC+ shortcut points at one)
-      -Force       download and unzip again even when the build is there
+      -ShowPath X  the show file to open
+      -Force       download and unpack again even when the build is there
 #>
 param(
     [string]$ShowPath = "",
@@ -34,15 +38,48 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$work = Join-Path $env:USERPROFILE "Downloads\qlc-update"
-$home2 = Join-Path $env:LOCALAPPDATA "TRACK-test"
-New-Item -ItemType Directory -Force -Path $work | Out-Null
-New-Item -ItemType Directory -Force -Path $home2 | Out-Null
+$root = Join-Path $env:LOCALAPPDATA "TRACK"
+foreach ($d in @($root, (Join-Path $root "app"), (Join-Path $root "runtime"), (Join-Path $root "downloads"), (Join-Path $root "logs"))) {
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+}
+$base = "https://github.com/$Repo/releases/download/$Tag/"
 
 function Say($text, $colour = "Gray") { Write-Host $text -ForegroundColor $colour }
 
-function Get-Asset($release, $name) {
-    return $release.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+function Log($text) {
+    $line = "{0}  TRACK  get-track-app: {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $text
+    Add-Content -LiteralPath (Join-Path $root "logs\track.log") -Value $line -Encoding UTF8
+}
+
+# one file from the release: downloaded as .part, size and SHA-256 checked, then unpacked
+# into <target>.unpacking and moved in place only when <marker> is in it
+function Fetch-Unpack($item, $target, $marker) {
+    $zip = Join-Path $root ("downloads\" + $item.asset)
+    $part = "$zip.part"
+    Say ("  downloading {0} ({1:N1} MB) ..." -f $item.asset, ($item.size / 1MB))
+    if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force }
+    Invoke-WebRequest -UseBasicParsing -Uri ($base + $item.asset) -OutFile $part
+    if ((Get-Item -LiteralPath $part).Length -ne $item.size) { throw ("{0}: the download is not whole" -f $item.asset) }
+    $sha = (Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($sha -ne $item.sha256) { Remove-Item -LiteralPath $part -Force; throw ("{0}: SHA-256 does not match the release" -f $item.asset) }
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+    Move-Item -LiteralPath $part -Destination $zip
+    Unblock-File -LiteralPath $zip
+    $tmp = "$target.unpacking"
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    Say "  unpacking ..."
+    $tar = Join-Path $env:SystemRoot "System32\tar.exe"
+    if (Test-Path -LiteralPath $tar) {
+        & $tar -xf $zip -C $tmp
+        if ($LASTEXITCODE -ne 0) { throw ("{0}: tar.exe could not unpack it" -f $item.asset) }
+    } else {
+        Expand-Archive -LiteralPath $zip -DestinationPath $tmp
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $tmp $marker))) { throw ("{0}: {1} missing after unpacking - Windows Defender? (Protection history)" -f $item.asset, $marker) }
+    if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+    Move-Item -LiteralPath $tmp -Destination $target
+    Remove-Item -LiteralPath $zip -Force
 }
 
 # the QLC+ shortcut that opens the show (as update-qlc.cmd's Find-Shortcut) - only read
@@ -71,101 +108,95 @@ function Find-Shortcut {
     return $null
 }
 
-# Beat Link Trigger's install (as tools/install-blt-guard.ps1 and TRACK's trackbridge.cpp look) - only read
-function Find-Blt {
-    $roots = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)) {
-        if ($base) {
-            foreach ($relative in @('Beat Link Trigger', 'Programs\Beat Link Trigger', 'Deep Symmetry\Beat Link Trigger')) {
-                $roots.Add((Join-Path $base $relative))
-            }
-        }
-    }
-    foreach ($key in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
-        foreach ($entry in @(Get-ItemProperty $key -ErrorAction SilentlyContinue)) {
-            if ($entry.DisplayName -like '*Beat Link Trigger*' -and $entry.InstallLocation) { $roots.Add($entry.InstallLocation) }
-        }
-    }
-    foreach ($root in @($roots | Sort-Object -Unique)) {
-        $app = Join-Path $root 'app'
-        $java = @('runtime\bin\javaw.exe', 'runtime\bin\java.exe') | ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-        if ((Test-Path -LiteralPath $app) -and $java -and @(Get-ChildItem -LiteralPath $app -Filter '*.jar' -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike 'qlc-blt-guard*' }).Count -gt 0) {
-            return [pscustomobject]@{ Root = $root; Java = $java }
-        }
-    }
-    return $null
+Say "TRACK app ($Repo, $Tag) - in $root, beside the rig's QLC+ (which is not touched)" "Cyan"
+if (@(Get-Process -Name "TRACK-engine" -ErrorAction SilentlyContinue).Count -gt 0) {
+    Say "TRACK is running - close it first (TRACK updates itself from now on: UPDATE TRACK on its page)." "Yellow"
+    exit 3
 }
-
-Say "TRACK app test build ($Repo, $Tag) - beside the rig's QLC+, which is not touched" "Cyan"
 try {
-    $release = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" `
-        -Headers @{ "User-Agent" = "track-app-test"; "Accept" = "application/vnd.github+json" }
+    $m = Invoke-RestMethod -UseBasicParsing -Uri ($base + "track-app.json") -Headers @{ "User-Agent" = "track-app-install" }
 } catch {
-    Say "Could not reach GitHub (or the release is not built yet): $($_.Exception.Message)" "Red"
+    Say "Could not read the release (or it is not built yet): $($_.Exception.Message)" "Red"
     exit 2
 }
-Say ("  release: {0}" -f $release.body)
+foreach ($v in @($m.rev, $m.runtime.id, $m.app.asset, $m.runtime.asset)) {
+    if ("$v" -notmatch '^[A-Za-z0-9._-]{1,64}$') { Say "The release's track-app.json looks odd ('$v') - stopping." "Red"; exit 2 }
+}
+$rev = "$($m.rev)"; $rid = "$($m.runtime.id)"
 
-$zip = Get-Asset $release "TRACK-app.zip"
-$revA = Get-Asset $release "track-app-build.txt"
-if (-not $zip -or -not $revA) { Say "The release has no TRACK-app.zip yet - the build may still be running." "Yellow"; exit 2 }
-$rev = (Invoke-WebRequest -UseBasicParsing -Uri $revA.browser_download_url).Content
-if ($rev -is [byte[]]) { $rev = [Text.Encoding]::UTF8.GetString($rev) }
-$rev = "$rev".Trim()
-if ($rev -notmatch '^[0-9a-f]{6,40}$') { Say "Odd build id '$rev' - stopping." "Red"; exit 2 }
-
-$dest = Join-Path $home2 $rev
-if ((Test-Path -LiteralPath (Join-Path $dest "TRACK.exe")) -and -not $Force) {
-    Say "TRACK $rev is already unpacked: $dest" "Green"
-} else {
-    $file = Join-Path $work ("TRACK-app-{0}.zip" -f $rev)
-    if (-not (Test-Path -LiteralPath $file) -or (Get-Item -LiteralPath $file).Length -ne $zip.size) {
-        Say ("  downloading TRACK-app.zip ({0:N1} MB) ..." -f ($zip.size / 1MB))
-        $part = "$file.part"
-        Invoke-WebRequest -UseBasicParsing -Uri $zip.browser_download_url -OutFile $part
-        if ((Get-Item -LiteralPath $part).Length -ne $zip.size) { throw "TRACK-app.zip: the download is not whole" }
-        Move-Item -LiteralPath $part -Destination $file -Force
+try {
+    $rt = Join-Path $root "runtime\$rid"
+    if ((Test-Path -LiteralPath (Join-Path $rt "beat-link-trigger.jar")) -and -not $Force) {
+        Say "Runtime $rid (Java + beat-link) is already there." "Green"
+    } else {
+        Say "Runtime $rid (Java + beat-link) - once:"
+        Fetch-Unpack $m.runtime $rt "beat-link-trigger.jar"
     }
-    Unblock-File -LiteralPath $file
-    $tmp = "$dest.unpacking-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
-    Say "  unpacking to $dest ..."
-    Expand-Archive -LiteralPath $file -DestinationPath $tmp
-    if (Test-Path -LiteralPath $dest) { $dest = "$dest-" + (Get-Date -Format 'yyyyMMdd-HHmmss') }   # never over a folder
-    Move-Item -LiteralPath $tmp -Destination $dest
-    if (-not (Test-Path -LiteralPath (Join-Path $dest "TRACK.exe"))) { Say "TRACK.exe is missing after unpacking - Windows Defender? (Protection history)" "Red"; exit 2 }
-    Say "TRACK $rev unpacked: $dest" "Green"
+    $app = Join-Path $root "app\$rev"
+    if ((Test-Path -LiteralPath (Join-Path $app "TRACK-engine.exe")) -and -not $Force) {
+        Say "TRACK $rev is already there." "Green"
+    } else {
+        Say "TRACK ${rev}:"
+        Fetch-Unpack $m.app $app "TRACK-engine.exe"
+    }
+} catch {
+    Say $_.Exception.Message "Red"
+    Log ("install failed: " + $_.Exception.Message)
+    exit 2
 }
 
-# the show file and the rig shortcut's own options (fullscreen) - nothing of it changed
+# the launcher and which build it starts
+Copy-Item -LiteralPath (Join-Path $app "TRACK-launcher.exe") -Destination (Join-Path $root "TRACK.exe") -Force
+$curFile = Join-Path $root "current.txt"
+$old = if (Test-Path -LiteralPath $curFile) { (Get-Content -LiteralPath $curFile -TotalCount 1).Trim() } else { "" }
+if ($old -and $old -ne $rev) { Set-Content -LiteralPath (Join-Path $root "previous.txt") -Value $old -Encoding ASCII }
+Set-Content -LiteralPath $curFile -Value $rev -Encoding ASCII
+Log "installed $rev (runtime $rid)"
+
+# the show
 $sc = Find-Shortcut
 if (-not $ShowPath -and $sc) { $ShowPath = $sc.Show; Say ("  your QLC+ shortcut {0} opens {1}" -f (Split-Path $sc.Link -Leaf), $ShowPath) }
-if (-not $ShowPath) { $ShowPath = Read-Host "Where is your PSMAIN.qxw? (full path)" }
-if (-not (Test-Path -LiteralPath $ShowPath)) { Say "No show file at '$ShowPath' - run again with -ShowPath" "Red"; exit 2 }
-$args2 = '--track-app -o "{0}"' -f $ShowPath
-if ($sc -and $sc.Arguments -match '(^|\s)(-f|--fullscreen)(\s|$)') { $args2 += ' -f' }
-
-$link = Join-Path ([Environment]::GetFolderPath("Desktop")) "TRACK (test).lnk"
-$shell = New-Object -ComObject WScript.Shell
-$s = $shell.CreateShortcut($link)
-$s.TargetPath = Join-Path $dest "TRACK.exe"
-$s.Arguments = $args2
-$s.WorkingDirectory = $dest
-$s.IconLocation = (Join-Path $dest "TRACK.exe") + ",0"
-$s.Description = "TRACK app test (track-app $rev) - QLC+'s engine with its own beat-link helper"
-$s.Save()
-Say "Desktop shortcut: TRACK (test) -> TRACK.exe $args2" "Green"
-
-$blt = Find-Blt
-if ($blt) {
-    Say ("Beat Link Trigger found: {0} - TRACK's beat-link helper runs on its Java ({1})" -f $blt.Root, $blt.Java) "Green"
-} else {
-    Say "Beat Link Trigger was NOT found - TRACK's beat-link helper needs its Java and beat-link. Install BLT 8 as before." "Red"
+if (-not $ShowPath) {
+    $docs = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "TRACK"
+    New-Item -ItemType Directory -Force -Path $docs | Out-Null
+    $ShowPath = Join-Path $docs "PSMAIN.qxw"
+    if (Test-Path -LiteralPath $ShowPath) {
+        Say "  show: $ShowPath (yours, kept)"
+    } else {
+        Say "  no QLC+ on this PC - fetching the rig's show (PSMAIN.qxw) to $ShowPath"
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/releases/download/rig-latest/PSMAIN.qxw" -OutFile "$ShowPath.part"
+            Move-Item -LiteralPath "$ShowPath.part" -Destination $ShowPath
+        } catch {
+            Say "  could not fetch PSMAIN.qxw: $($_.Exception.Message) - run again with -ShowPath" "Red"
+            exit 2
+        }
+    }
 }
+if (-not (Test-Path -LiteralPath $ShowPath)) { Say "No show file at '$ShowPath' - run again with -ShowPath" "Red"; exit 2 }
+$args2 = '-o "{0}"' -f $ShowPath
+if (-not $sc -or $sc.Arguments -match '(^|\s)(-f|--fullscreen)(\s|$)') { $args2 += ' -f' }
+
+# the shortcut (and away with this script's own earlier one, which pointed at TRACK-test)
+$desktop = [Environment]::GetFolderPath("Desktop")
+$shell = New-Object -ComObject WScript.Shell
+$oldLink = Join-Path $desktop "TRACK (test).lnk"
+if (Test-Path -LiteralPath $oldLink) {
+    if ($shell.CreateShortcut($oldLink).TargetPath -match '\\TRACK-test\\') { Remove-Item -LiteralPath $oldLink -Force; Say "  the old 'TRACK (test)' shortcut is replaced" }
+}
+$s = $shell.CreateShortcut((Join-Path $desktop "TRACK.lnk"))
+$s.TargetPath = Join-Path $root "TRACK.exe"
+$s.Arguments = $args2
+$s.WorkingDirectory = $root
+$s.IconLocation = (Join-Path $app "TRACK-engine.exe") + ",0"
+$s.Description = "TRACK - QLC+'s engine with its own beat-link (updates itself)"
+$s.Save()
+Say "Desktop shortcut: TRACK -> TRACK.exe $args2" "Green"
 
 Say ""
-Say "To test:" "Cyan"
-Say "  1. Close QLC+ AND Beat Link Trigger (only one QLC+ and one beat-link program can run at a time)."
-Say "  2. Double-click 'TRACK (test)' on the desktop. The Track page opens; after a few seconds the"
-Say "     helper finds the CDJs and the first track arrives - as with BLT, but no BLT window."
-Say "  3. The helper's log: %LOCALAPPDATA%\qlc-rig-update\bridge.log (and TRACK lines in startup.log)."
-Say "  Back to normal: close TRACK, then start QLC+ and BLT as always."
+Say "Next:" "Cyan"
+Say "  1. Close QLC+ and Beat Link Trigger (one light program and one beat-link program at a time)."
+Say "  2. Double-click 'TRACK'. The first time, Windows may ask whether Java (OpenJDK Platform binary)"
+Say "     may use the network: allow it on private networks - that is how TRACK hears the CDJs."
+Say "  3. TRACK finds the CDJs by itself ('2 players found'). New builds: UPDATE TRACK on the page."
+Say "  Logs: $root\logs (track.log, bridge.log). Back to normal: close TRACK, start QLC+ and BLT."

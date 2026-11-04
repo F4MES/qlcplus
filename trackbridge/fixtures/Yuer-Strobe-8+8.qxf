@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE FixtureDefinition>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Creator>
+  <Name>Q Light Controller Plus</Name>
+  <Version>5.0.1</Version>
+  <Author>Tobias Schwartzlose</Author>
+ </Creator>
+ <Manufacturer>Yuer</Manufacturer>
+ <Model>Strobe 8+8</Model>
+ <Type>Strobe</Type>
+ <Channel Name="Master dimmer" Preset="IntensityMasterDimmer"/>
+ <Channel Name="RGB Strobe" Preset="ShutterStrobeSlowFast"/>
+ <Channel Name="Red" Preset="IntensityRed"/>
+ <Channel Name="Green" Preset="IntensityGreen"/>
+ <Channel Name="Blue" Preset="IntensityBlue"/>
+ <Channel Name="RGB Mode">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">RGB Mode</Capability>
+ </Channel>
+ <Channel Name="RGB Mode Speed">
+  <Group Byte="0">Speed</Group>
+  <Capability Min="0" Max="255">RGB Mode Speed</Capability>
+ </Channel>
+ <Channel Name="White Strobe" Preset="ShutterStrobeSlowFast"/>
+ <Channel Name="White" Preset="IntensityWhite"/>
+ <Channel Name="White Mode">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">White Mode</Capability>
+ </Channel>
+ <Channel Name="White Mode Speed">
+  <Group Byte="0">Speed</Group>
+  <Capability Min="0" Max="255">White Mode Speed</Capability>
+ </Channel>
+ <Channel Name="Total Strobe" Preset="ShutterStrobeSlowFast"/>
+ <Channel Name="Total Macro">
+  <Group Byte="0">Effect</Group>
+  <Capability Min="0" Max="255">Total Macro</Capability>
+ </Channel>
+ <Channel Name="RGB Background">
+  <Group Byte="0">Colour</Group>
+  <Capability Min="0" Max="255">RGB Background</Capability>
+ </Channel>
+ <Channel Name="RGB Background Dimmer" Preset="IntensityDimmer"/>
+ <Channel Name="Total Macro Speed">
+  <Group Byte="0">Speed</Group>
+  <Capability Min="0" Max="255">Macro Speed Total</Capability>
+ </Channel>
+ <Mode Name="16-channel">
+  <Channel Number="0">Master dimmer</Channel>
+  <Channel Number="1">RGB Strobe</Channel>
+  <Channel Number="2">Red</Channel>
+  <Channel Number="3">Green</Channel>
+  <Channel Number="4">Blue</Channel>
+  <Channel Number="5">RGB Mode</Channel>
+  <Channel Number="6">RGB Mode Speed</Channel>
+  <Channel Number="7">White Strobe</Channel>
+  <Channel Number="8">White</Channel>
+  <Channel Number="9">White Mode</Channel>
+  <Channel Number="10">White Mode Speed</Channel>
+  <Channel Number="11">Total Strobe</Channel>
+  <Channel Number="12">Total Macro</Channel>
+  <Channel Number="13">Total Macro Speed</Channel>
+  <Channel Number="14">RGB Background</Channel>
+  <Channel Number="15">RGB Background Dimmer</Channel>
+ </Mode>
+ <Physical>
+  <Bulb Type="LED Panel" Lumens="0" ColourTemperature="0"/>
+  <Dimensions Weight="0" Width="4000" Height="2000" Depth="500"/>
+  <Lens Name="Other" DegreesMin="119" DegreesMax="120"/>
+  <Focus Type="Fixed" PanMax="0" TiltMax="0"/>
+  <Layout Width="8" Height="3"/>
+  <Technical PowerConsumption="200" DmxConnector="3-pin"/>
+ </Physical>
+</FixtureDefinition>
