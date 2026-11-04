@@ -693,6 +693,12 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool startScene READ startScene WRITE setStartScene NOTIFY liveChanged)
     /** R378_POSITIONS: "" AUTO, "start", "column" (Soejle midt), "down" (lige ned) */
     Q_PROPERTY(QString positionMode READ positionMode WRITE setPositionMode NOTIFY liveChanged)
+    /** TRACK_APP_BARS_R552: the laser bars by hand (the TRACK app's POSITION row, BARS page) -
+     *  aim "" AUTO / "home" / "under" / "down", ON (lit, still), CHASE (all bars to 40 %, then the engine's) */
+    Q_PROPERTY(QString barsAim READ barsAim WRITE setBarsAim NOTIFY barsHandChanged)
+    Q_PROPERTY(bool barsOn READ barsOn WRITE setBarsOn NOTIFY barsHandChanged)
+    Q_PROPERTY(bool barsChase READ barsChase WRITE setBarsChase NOTIFY barsHandChanged)
+    Q_PROPERTY(QString barsNote READ barsNote NOTIFY barsHandChanged)
 
     /** Freeze the look: no colour, cast or move changes until released. */
     Q_PROPERTY(bool hold READ hold WRITE setHold NOTIFY liveChanged)
@@ -1373,6 +1379,7 @@ signals:
     void hazeNagChanged();               // R467_HAZE_NAG
     void flashGroupsChanged();           // R469_GROUP_FLASH
     void syncChanged();                  // R470_SYNC
+    void barsHandChanged();              // TRACK_APP_BARS_R552
     void clockHandChanged();             // R470_CLOCK_HAND
     void atmosChanged();                 // R473_ATMOS
     void micChanged();                   // R467_MIC_CHECK
@@ -3715,6 +3722,43 @@ private:
     QMap<QString, qreal> m_activeOut;      // what was actually written (pulse, trim, master, blackout applied)
     QMap<quint32, int> m_fadeAttr;
     QMap<quint32, qreal> m_fadeLevel;
+
+public:
+    // TRACK_APP_BARS_R552: the laser bars by hand (r552_barshand.inc.cpp)
+    QString barsAim() const;
+    void setBarsAim(const QString &aim);
+    bool barsOn() const;
+    void setBarsOn(bool on);
+    bool barsChase() const;
+    void setBarsChase(bool chase);
+    bool barsAvailable() const;
+    QString barsNote() const;
+    Q_INVOKABLE void barsAuto();
+private:
+    QString r552BarsKey() const;
+    bool r552Engaged() const;
+    quint32 r552NamedAim(const QString &aim) const;
+    quint32 r552HomeFor(const QString &group) const;
+    bool r552MoveAllowed() const;
+    bool r552PinAim(const QString &group) const;
+    bool r552ChaseOn(const QString &group) const;
+    bool r552SkipMotion(const QString &group, const TrackFuncInfo &info) const;
+    bool r552BlocksMotion(const QString &key, const TrackFuncInfo &info) const;
+    bool r552RunGate(const QString &slot, quint32 &fid, bool hard);
+    void r552BarsCast(QSet<QString> &castSet);
+    void r552Aim(bool restart);
+    void r552Changed(const QString &why);
+    bool r552Still() const;
+    bool r552Travelling(const QString &group, qint64 now) const;
+    void r552TravelDark(const QString &key);
+    void r552StillMove(const QString &key, TrackMove &mv) const;
+    qint64 m_r552TravelUntil = 0;        // m_clock ms: dark while the motors travel to his aim
+    QString m_r552Aim;                   // "" AUTO, "home", "under", "down"
+    bool m_r552On = false;               // ON: on stage, still
+    bool m_r552Chase = false;            // CHASE (with ON)
+    bool m_r552Running = false;          // r552Aim()'s own run(): past the gate
+    QString m_r552Note;
+    mutable QHash<QString, quint32> m_r552AimCache;
 };
 
 #endif // TRACKENGINE_H

@@ -30,6 +30,9 @@ Rectangle
     // and its update is its own (trackAppCtl, qmlui/trackapp.cpp). Without --track-app: as before
     readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
     readonly property int cdjCount: trackApp ? trackAppCtl.cdjCount : 0
+    // TRACK_APP_BARS_R552: the POSITION row's page - "heads" (as before) or "bars"
+    property string posPage: "heads"
+    readonly property bool barsHand: trackApp && !!trackEngine && (trackEngine.barsOn || trackEngine.barsAim !== "")
     // TRACK_APP_SETUP_R550 (Tobias 11-04: "FULL AUTO (skal altid vaere paa, saa unoedvendig)"): kept on
     Timer
     {
@@ -3366,10 +3369,33 @@ Rectangle
                     objectName: "positionsPanel"
                     anchors.fill: parent
                     visible: trackManager && trackEngine && trackManager.roleMode
-                    RowLabel { x: lookCard.inX; y: deck.rowY(2); width: lookCard.labW; height: trackViewRoot.rowH; text: "POSITION" }
+                    RowLabel { x: lookCard.inX; y: deck.rowY(2); width: lookCard.labW; height: trackViewRoot.rowH; text: "POSITION"
+                               visible: !trackViewRoot.trackApp }   // TRACK_APP_BARS_R552: HEADS / BARS there
+                    // TRACK_APP_BARS_R552: the two pages of the row - HEADS (the moving heads) and BARS (the laser bars)
+                    Repeater
+                    {
+                        model: trackViewRoot.trackApp ? [ { key: "heads", label: qsTr("HEADS") }, { key: "bars", label: qsTr("BARS") } ] : []
+                        Btn
+                        {
+                            objectName: "posPage:" + modelData.key
+                            readonly property real half: (trackViewRoot.rowH - Math.round(4 * trackViewRoot.ks)) / 2
+                            x: lookCard.inX - Math.round(4 * trackViewRoot.ks)
+                            y: deck.rowY(2) + index * (half + Math.round(4 * trackViewRoot.ks))
+                            width: lookCard.labW; height: half
+                            radius: Math.round(6 * trackViewRoot.ks)
+                            text: modelData.label
+                            fontPx: trackViewRoot.fs(11)
+                            tone: trackViewRoot.cGold
+                            active: trackViewRoot.posPage === modelData.key
+                            // the bars under his hand while HEADS shows: a gold foot on BARS
+                            idleTint: modelData.key === "bars" && trackViewRoot.barsHand
+                            onTapped: trackViewRoot.posPage = modelData.key
+                        }
+                    }
                     Btn
                     {
                         objectName: "positionAuto"
+                        visible: !trackViewRoot.trackApp || trackViewRoot.posPage === "heads"   // TRACK_APP_BARS_R552
                         x: lookCard.autoX; y: deck.rowY(2); width: lookCard.autoW; height: trackViewRoot.rowH
                         text: qsTr("AUTO"); icon: "revert"; autoKind: true
                         active: trackEngine ? trackEngine.positionMode === "" : true
@@ -3383,6 +3409,7 @@ Rectangle
                         Btn
                         {
                             objectName: "position:" + modelData.key
+                            visible: !trackViewRoot.trackApp || trackViewRoot.posPage === "heads"   // TRACK_APP_BARS_R552
                             x: lookCard.cX + index * (lookCard.cell(3) + lookCard.cg)
                             y: deck.rowY(2); width: lookCard.cell(3); height: trackViewRoot.rowH
                             text: modelData.label
@@ -3390,6 +3417,54 @@ Rectangle
                             active: trackEngine ? trackEngine.positionMode === modelData.key : false
                             // tapped again: AUTO
                             onTapped: trackEngine.positionMode = (trackEngine.positionMode === modelData.key) ? "" : modelData.key
+                        }
+                    }
+                }
+
+                // TRACK_APP_BARS_R552 (Tobias 11-04, mockup B): the POSITION row's BARS page - the laser bars by
+                // hand. AUTO = the engine; ON = lit, still; HOME / HOME UNDER / DOWN = where they point (held
+                // until AUTO); CHASE = chases over all the bars up to 40 % ENERGY, the engine's moves above
+                Item
+                {
+                    objectName: "barsPanel"
+                    anchors.fill: parent
+                    visible: trackViewRoot.trackApp && trackViewRoot.posPage === "bars"
+                             && !!trackManager && !!trackEngine && trackManager.roleMode
+                    Btn
+                    {
+                        objectName: "barsAuto"
+                        x: lookCard.autoX; y: deck.rowY(2); width: lookCard.autoW; height: trackViewRoot.rowH
+                        text: qsTr("AUTO"); icon: "revert"; autoKind: true
+                        active: !trackViewRoot.barsHand
+                        onTapped: trackEngine.barsAuto()
+                    }
+                    Repeater
+                    {
+                        model: [ { key: "on", label: qsTr("ON") },
+                                 { key: "home", label: qsTr("HOME") },
+                                 { key: "under", label: qsTr("HOME UNDER") },
+                                 { key: "down", label: qsTr("DOWN") },
+                                 { key: "chase", label: qsTr("CHASE") } ]
+                        Btn
+                        {
+                            objectName: "bars:" + modelData.key
+                            x: lookCard.cX + index * (lookCard.cell(5) + lookCard.cg)
+                            y: deck.rowY(2); width: lookCard.cell(5); height: trackViewRoot.rowH
+                            text: modelData.label
+                            tone: trackViewRoot.cGold
+                            active: !trackEngine ? false
+                                    : (modelData.key === "on" ? trackEngine.barsOn
+                                       : (modelData.key === "chase" ? trackEngine.barsChase
+                                          : trackEngine.barsAim === modelData.key))
+                            onTapped:
+                            {
+                                if (modelData.key === "on")
+                                    trackEngine.barsOn = !trackEngine.barsOn
+                                else if (modelData.key === "chase")
+                                    trackEngine.barsChase = !trackEngine.barsChase
+                                else          // tapped again: AUTO for the aim
+                                    trackEngine.barsAim = (trackEngine.barsAim === modelData.key) ? "" : modelData.key
+                            }
                         }
                     }
                 }

@@ -19,8 +19,8 @@ This branch is the TRACK app as a program of its own. It lives only here: `track
 - **Full screen from the start.** `--track-app` always starts in full screen, whether or
   not `-f` is given.
 - **The top of the page** (mockup A was approved). On the Track page, the kiosk strip
-  (TRACK / VIRTUAL CONSOLE, BPM, LINK and the beat dot) is gone: TRACK / VIRTUAL CONSOLE sit
-  over the clock. The Virtual Console keeps the strip as it is. The four beat dots are on
+  (TRACK / VIRTUAL CONSOLE, BPM, LINK and the beat dot) is gone: VIRTUAL CONSOLE sits over
+  the clock (r551: the TRACK button there went, the Virtual Console has its own). The Virtual Console keeps the strip as it is. The four beat dots are on
   the time's line, above PAUSED.
 - **The phone** (*"husk også telefonen i track-app"*): TRACK always serves the phone
   (`http://<pc>:9999/track`), as the rig's `-w` does. On the phone, UPDATE is TRACK's own
@@ -40,6 +40,28 @@ The top row of SETUP no longer has RE-GUESS, FULL AUTO or SELF TEST:
 
 A group switches on or off with two taps: the first tap asks SURE?, and the second, within
 4 s, switches it. Holding a group still makes it BASE.
+
+## r552: the laser bars by hand (TRACK app only, mockup B approved)
+
+The POSITION row has two pages, HEADS (as before) and BARS. BARS reads
+AUTO | ON | HOME | HOME UNDER | DOWN | CHASE:
+
+- **HOME / HOME UNDER / DOWN** say where the bars point: the show's `LaserUPP`,
+  `LaseDOwnforBump` and `LaserDOWN`, found by name. Tobias chose that his aim wins, so it may
+  light still below home. A held aim is the bars' home for the whole engine. Held, they do not
+  roam, and no programme or figure that aims them runs. On a new aim they go dark for 1.5 s
+  while the motors travel, as BARS LAB does.
+- **ON** puts the bars on stage whatever the engine casts. The animation laser comes out unless
+  he picked it himself. ON is still: no programme, no pattern, no gradient, no drop form on the
+  bars, the room's colour on every eye. The level still breathes with the music.
+- **CHASE** also switches ON on. Up to 40 % ENERGY it runs only chases of whole bars over every
+  bar, never one that aims. Above 40 % the engine's own programmes and figures run, following
+  the slider.
+- **AUTO** turns all three off and gives the bars back to the engine.
+
+Every choice holds until AUTO. Nothing is remembered across a restart. LAST TRACK, SHOW OFF,
+the labs and SELF TEST work as before. The engine part is `r552_barshand.inc.cpp` in qlcplus-pr
+(`track_app/`), and `feature_track_app.py` appends it.
 
 ## On the PC: `%LOCALAPPDATA%\TRACK`
 

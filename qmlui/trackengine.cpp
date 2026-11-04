@@ -9132,6 +9132,8 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             continue;
         if (aimHeld && info->aims)       // R378_POSITIONS: the held aim stands
             continue;
+        if (r552SkipMotion(group, *info))     // TRACK_APP_BARS_R552: ON still / CHASE's menu / his held aim
+            continue;
         // R410_LAB: a kept lab look runs in the ENERGY window it was given
         if (info->lab && (m_faderNow + 1e-6 < info->labMin || m_faderNow - 1e-6 > info->labMax))
             continue;
@@ -9142,7 +9144,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
             continue;
         // a static pattern scene is a look and may show in any section; a
         // chase or EFX is movement and belongs to drops and builds
-        if (staticOnly && info->type != int(Function::SceneType))
+        if (staticOnly && r552ChaseOn(group) == false && info->type != int(Function::SceneType))   // TRACK_APP_BARS_R552: CHASE chases
             continue;
         // A chase that lights NOTHING in any step cannot be a look, and since
         // the dimmers are handed to the chase (runde 69) it would hold the
@@ -9785,6 +9787,9 @@ int TrackEngine::tierOf(const QString &text) const
 
 quint32 TrackEngine::homePosition(const QString &group) const
 {
+    const quint32 r552 = r552HomeFor(group);    // TRACK_APP_BARS_R552: his held aim IS the bars' home
+    if (r552 != Function::invalidId())
+        return r552;
     // Asked on every beat for the bars, again inside every laserAimSafe() and
     // laserSweepSafe() - once per laser candidate when positionFunction()
     // draws - and each answer is a candidates() call plus up to two walks of
@@ -12998,6 +13003,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // stage, a drawn share walks a window of two whole bars with the melody (r515_melbars.inc.cpp) - never
         // puts the bars in the cast, never with an animation laser, never under his hand
         r515MelbarsBeat(castSet, state, beat, secStart, fader, hold, isCalm, still, forceNext);
+        // TRACK_APP_BARS_R552: his ON - the bars on stage, after everything else cast them or not
+        r552BarsCast(castSet);
         // the plan for the next section
         const int boundary = (nextState.isEmpty() || beatsToNext <= 0) ? -1 : beat + beatsToNext;
         if (boundary < 0)
@@ -15359,6 +15366,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
 
         TrackMove mv = m_moves.value(key);
+        r552StillMove(key, mv);           // TRACK_APP_BARS_R552: ON (still) - no pattern over the bars
         // C20261020_HIT_RETURN: change on bar lines, retain the same pattern,
         // phase and aim. Laser movement is deliberately not reshaped here.
         if (m_hitReturning && g.lasers == false && g.patternDevice == false && hold == false)
@@ -20883,6 +20891,8 @@ bool TrackEngine::varietyDraw(int &wait, QRandomGenerator *rng) const
 
 bool TrackEngine::heldAimBlocks(const QString &key, const TrackFuncInfo &info) const
 {
+    if (r552BlocksMotion(key, info))     // TRACK_APP_BARS_R552: the bars under his hand
+        return true;
     // R400_HOLD_AIM: what a position held on the page keeps off the heads -
     // a programme that aims them (R378), and under STRAIGHT DOWN one that
     // zooms them by itself (R398)
@@ -22517,6 +22527,10 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         stopSlot(slot, hard);
         return;
     }
+    // TRACK_APP_BARS_R552: the bars under his hand - their aim is his, a figure or programme
+    // that may not run now does not (nothing here while AUTO)
+    if (r552RunGate(slot, fid, hard))
+        return;
     // R507_SAFE_RUN_PICTURE: an animation laser's col:/mot: scene (re)started writes its pattern and its
     // CH13/CH14 position - the group goes dark BEFORE the scene reaches the MasterTimer (r507SafeHold)
     if (slot.startsWith(QStringLiteral("col:")) || slot.startsWith(QStringLiteral("colx:"))
@@ -22893,6 +22907,8 @@ bool TrackEngine::r507SafeClosed(const QString &group)
     if (it == m_r507Safe.end() || m_flashHeld.contains(group))
         return false;
     const qint64 now = m_clock.elapsed();
+    if (r552Travelling(group, now))      // TRACK_APP_BARS_R552: his aim's travel - dark until the motors are there
+        return true;
     const qint64 since = now - it->ms;
     if (since >= R507_SAFE_CAP_MS)
         return false;                    // a stalled MasterTimer: at most a second, as R503_SAFE_DARK
@@ -28147,6 +28163,8 @@ bool TrackEngine::dropFormBlocked(int at) const
 
 QString TrackEngine::dropFormBars() const
 {
+    if (m_r552On && m_r552Chase == false)
+        return QString();                // TRACK_APP_BARS_R552: ON (still) - no form, countdown or walk on the bars
     // the laser bars the forms use: a bar group on tonight, never the animation laser
     foreach (const QString &key, m_groupOrder)
     {
@@ -29194,7 +29212,8 @@ bool TrackEngine::dropFormRiseAim(const QString &key, QSet<QString> &darkGroups,
         case 0:
         {
             if (risePlan == false || isDrop || beat != m_formPlanFor - 2 || stopNow || m_hold
-                || allowed < 4 || dropFormBlocked(m_formPlanFor))
+                || allowed < 4 || dropFormBlocked(m_formPlanFor)
+                || r552PinAim(key))          // TRACK_APP_BARS_R552: his aim stands - no rise
                 return false;
             m_riseStage = 1;
             m_riseBeat = beat;
@@ -44879,6 +44898,8 @@ QString TrackEngine::r514GradBusy(const QString &key, quint32 splitScene, quint3
     // (a programme draws the bars: its own colours) - as a reason for the crumbs; "" none: it may show
     if (m_fullAuto == false || m_startScene || m_testTimer.isActive())
         return QStringLiteral("auto-off");
+    if (r552Still())
+        return QStringLiteral("his-bars");           // TRACK_APP_BARS_R552: ON (still) - no gradient walking over them
     if (m_forceOn)
         return QStringLiteral("his-pick");           // RIG/PLAN: his groups for the section
     if (m_lastStage != 0)
@@ -45703,4 +45724,368 @@ qreal TrackEngine::r515MelbarsPlace(int i, int n) const
     const qreal a = m_r493MelArc.at(qBound(0, i, len - 1));
     const qreal u = range > 1e-6 ? qBound(0.0, (a - m_r515MbLo) / range, 1.0) : 0.5;
     return u * qreal(n - R515_MELBARS_WIDTH);
+}
+
+/* =====================================================================
+ *  TRACK_APP_BARS_R552 - the laser bars by hand (TRACK app only, runde 552).
+ *  Appended to trackengine.cpp by feature_track_app.py (qlcplus-pr), in the
+ *  track-app tree only.
+ *
+ *  Tobias 11-04: "forskellige positioner til laser-bars ... laser home, laser
+ *  down, laser home 'under', maaske ogsaa en knap til at aktivere laserne
+ *  manuelt" + "en maade man manuelt kan starte ... chases paa laser-bars der er
+ *  aktiveret (kun chases der bruger alle barene) ... men med bevaegelser osv.
+ *  der foelger energien. Kun op til 40% skal det vaere langsomme chases der
+ *  bruger alle bars." Mockup B approved (the POSITION row's BARS page), "Mit
+ *  valg vinder" (his aim may light still below home), held until AUTO.
+ *
+ *  - AIM  ("" = AUTO, "home", "under", "down"): where the bars point. HOME is
+ *    the show's home aim (LaserUPP); HOME UNDER and DOWN are the show's own
+ *    scenes LaseDOwnforBump and LaserDOWN (found by name). A held aim IS the
+ *    bars' home for the whole engine (homePosition): parking, the rise, the
+ *    fader's lines all measure from it. Held, the bars do not roam and no
+ *    programme that aims them runs (as R378 for the heads).
+ *  - ON: the bars are on stage, whatever the engine casts (never the
+ *    animation laser with them unless he picked it). Still: no programme, the
+ *    room's colour on every eye.
+ *  - CHASE (turns ON on): up to 40 % on the ENERGY slider only chases that use
+ *    every bar (barCoverage.whole) and never aim; above 40 % the engine's own
+ *    programmes and figures, following the slider as they always do.
+ *  - AUTO: all three off - the engine as before. Nothing here acts while all
+ *    three are off (every hook returns at its first line).
+ *  Not remembered across a restart. LAST TRACK, SHOW OFF, the labs and SELF
+ *  TEST keep the stage as before (the beat that would cast them never runs).
+ * ===================================================================== */
+
+#define R552_CHASE_MOVE 0.40           // CHASE: above this on the slider the bars may move
+#define R552_TRAVEL_MS 1500            // a new aim: the bars dark this long, as BARS LAB (ENGINE_SLAB_AIM_MS)
+
+QString TrackEngine::r552BarsKey() const
+{
+    // the laser bars: as dropFormBars() (a bar group on tonight, never the animation laser) - its own
+    // walk, because dropFormBars() answers "none" to the forms while ON holds the bars still
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.lasers && g.patternDevice == false && g.parts.count() >= 2 && m_groupOff.contains(key) == false)
+            return key;
+    }
+    return QString();
+}
+
+bool TrackEngine::r552Still() const
+{
+    return m_r552On && m_r552Chase == false;
+}
+
+bool TrackEngine::r552Travelling(const QString &group, qint64 now) const
+{
+    return m_r552TravelUntil > 0 && now < m_r552TravelUntil && group.isEmpty() == false && group == r552BarsKey();
+}
+
+void TrackEngine::r552TravelDark(const QString &key)
+{
+    // "never move a lit laser": dark NOW (R507's gate, every slot but the aim at 0), and kept dark on the wall
+    // clock until the motors have had time to get there (r507SafeClosed asks r552Travelling)
+    m_r552TravelUntil = m_clock.elapsed() + R552_TRAVEL_MS;
+    r507SafeHold(key, Function::invalidId());
+    crumb(QStringLiteral("r552 travel dark ") + key);
+}
+
+bool TrackEngine::r552Engaged() const
+{
+    return m_r552On || m_r552Aim.isEmpty() == false;
+}
+
+QString TrackEngine::barsAim() const { return m_r552Aim; }
+bool TrackEngine::barsOn() const { return m_r552On; }
+bool TrackEngine::barsChase() const { return m_r552On && m_r552Chase; }
+
+bool TrackEngine::barsAvailable() const
+{
+    return r552BarsKey().isEmpty() == false;
+}
+
+QString TrackEngine::barsNote() const { return m_r552Note; }
+
+quint32 TrackEngine::r552NamedAim(const QString &aim) const
+{
+    // HOME UNDER / DOWN: the show's own aims for the bars, by name - a scene of the
+    // bars' group alone that says DOWN; UNDER is the one that also says BUMP
+    const QString key = r552BarsKey();
+    if (key.isEmpty() || m_doc == nullptr)
+        return Function::invalidId();
+    // homePosition() asks on every beat: the answer is kept while its scene is there
+    const QString ck = key + QLatin1Char('|') + aim;
+    const quint32 kept = m_r552AimCache.value(ck, Function::invalidId());
+    if (kept != Function::invalidId() && m_funcs.contains(kept) && m_doc->function(kept) != nullptr)
+        return kept;
+    const bool under = aim == QStringLiteral("under");
+    const TrackFuncInfo *best = nullptr;
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &info = it.value();
+        if (info.type != int(Function::SceneType) || info.junk || info.generated)
+            continue;
+        if (info.groups.count() != 1 || info.groups.contains(key) == false)
+            continue;
+        if (m_doc->function(info.id) == nullptr)
+            continue;
+        const QString n = info.name.toLower();
+        if (n.contains(QStringLiteral("down")) == false || n.contains(QStringLiteral("beat"))
+            || n.contains(QStringLiteral("move")) || n.contains(QStringLiteral("wiggle")))
+            continue;
+        if (n.contains(QStringLiteral("bump")) != under)
+            continue;
+        if (best == nullptr || info.fixtureCount > best->fixtureCount)
+            best = &info;
+    }
+    const quint32 found = best != nullptr ? best->id : Function::invalidId();
+    m_r552AimCache.insert(ck, found);
+    return found;
+}
+
+quint32 TrackEngine::r552HomeFor(const QString &group) const
+{
+    // homePosition()'s first question: his aim, when he holds one other than HOME
+    if (m_r552Aim.isEmpty() || m_r552Aim == QStringLiteral("home"))
+        return Function::invalidId();
+    if (group != r552BarsKey())
+        return Function::invalidId();
+    return r552NamedAim(m_r552Aim);
+}
+
+bool TrackEngine::r552MoveAllowed() const
+{
+    // the bars may move: AUTO, or his CHASE above 40 % on the slider
+    if (r552Engaged() == false)
+        return true;
+    return m_r552On && m_r552Chase && m_faderNow > R552_CHASE_MOVE;
+}
+
+bool TrackEngine::r552PinAim(const QString &group) const
+{
+    if (r552Engaged() == false || group.isEmpty() || group != r552BarsKey())
+        return false;
+    return m_r552Aim.isEmpty() == false || r552MoveAllowed() == false;
+}
+
+bool TrackEngine::r552ChaseOn(const QString &group) const
+{
+    return m_r552On && m_r552Chase && group.isEmpty() == false && group == r552BarsKey();
+}
+
+bool TrackEngine::r552SkipMotion(const QString &group, const TrackFuncInfo &info) const
+{
+    // motionFor()'s filter for the bars under his hand
+    if (r552Engaged() == false || group != r552BarsKey())
+        return false;
+    if (m_r552On && m_r552Chase == false)
+        return true;                                     // ON: still - no programme at all
+    if (r552ChaseOn(group))
+    {
+        if (m_faderNow > R552_CHASE_MOVE)
+            return info.aims && m_r552Aim.isEmpty() == false;   // above 40 %: the engine's own, at his held aim
+        // up to 40 %: only a chase of whole bars over every bar of the group, never one that aims
+        return info.type == int(Function::SceneType) || info.aims || info.barCoverage.whole == false
+            || info.fixtureCount < m_groups.value(group).fixtures.count();
+    }
+    return info.aims;                                    // an aim held, the engine lighting: no programme aims
+}
+
+bool TrackEngine::r552BlocksMotion(const QString &key, const TrackFuncInfo &info) const
+{
+    // heldAimBlocks()'s answer for the bars: what may not run now (a running one goes hard)
+    if (r552Engaged() == false || key != r552BarsKey())
+        return false;
+    return r552SkipMotion(key, info);
+}
+
+bool TrackEngine::r552RunGate(const QString &slot, quint32 &fid, bool hard)
+{
+    // run()'s first question (after "nothing to run"): the bars' aim and figures under his hand
+    Q_UNUSED(hard)
+    if (r552Engaged() == false || m_r552Running)
+        return false;
+    const int colon = slot.indexOf(QLatin1Char(':'));
+    if (colon <= 0)
+        return false;
+    const QString key = r552BarsKey();
+    if (key.isEmpty() || slot.mid(colon + 1) != key)
+        return false;
+    const QString kind = slot.left(colon + 1);
+    if (kind == QStringLiteral("pos:"))
+    {
+        if (r552PinAim(key))
+        {
+            const quint32 aim = homePosition(key);
+            if (aim != Function::invalidId())
+                fid = aim;
+        }
+        // his aim far from where they stand: dark for the whole travel
+        if (m_r552Aim.isEmpty() == false && m_active.value(slot, Function::invalidId()) != fid)
+            r552TravelDark(key);
+        return false;
+    }
+    if (kind == QStringLiteral("efx:"))
+    {
+        if (r552MoveAllowed() == false)
+        {
+            stopSlot(slot, true);
+            return true;
+        }
+        return false;
+    }
+    if (kind == QStringLiteral("mot:"))
+    {
+        if (m_funcs.contains(fid) && r552SkipMotion(key, m_funcs.value(fid)))
+        {
+            stopSlot(slot, true);
+            return true;
+        }
+    }
+    return false;
+}
+
+void TrackEngine::r552BarsCast(QSet<QString> &castSet)
+{
+    // ON: the bars on stage, after everything else cast this beat; the animation
+    // laser goes unless he picked it himself (the engine never lights both)
+    if (m_r552On == false || m_lastStage != 0)
+        return;
+    const QString key = r552BarsKey();
+    if (key.isEmpty())
+        return;
+    castSet.insert(key);
+    foreach (const QString &other, castSet.values())
+    {
+        const TrackGroup &g = m_groups.value(other);
+        if (g.patternDevice && m_forceSet.contains(other) == false)
+            castSet.remove(other);
+    }
+}
+
+void TrackEngine::r552Aim(bool restart)
+{
+    // a new aim (or ON / CHASE changing what may move): the bars take it now,
+    // dark while the mirror travels (run() -> r503SafeAim)
+    const QString key = r552BarsKey();
+    if (key.isEmpty())
+        return;
+    const quint32 motNow = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+    if (motNow != Function::invalidId() && m_funcs.contains(motNow) && r552SkipMotion(key, m_funcs.value(motNow)))
+    {
+        stopSlot(QStringLiteral("mot:") + key, true);
+        m_motionDim.remove(key);
+        m_sectionMotion.remove(key);
+    }
+    if (r552MoveAllowed() == false)
+        stopSlot(QStringLiteral("efx:") + key, true);
+    if (restart == false)
+        return;
+    const quint32 aim = homePosition(key);
+    if (aim == Function::invalidId())
+        return;
+    if (m_cast.contains(key) || m_r552On)
+    {
+        if (m_active.value(QStringLiteral("pos:") + key, Function::invalidId()) != aim)
+            r552TravelDark(key);
+        m_r552Running = true;
+        run(QStringLiteral("pos:") + key, aim, 1.0, 0, true);
+        m_r552Running = false;
+        m_position.insert(key, aim);
+    }
+    else
+        m_position.remove(key);          // the engine aims them again when it lights them
+}
+
+void TrackEngine::r552Changed(const QString &why)
+{
+    m_homeCache.clear();
+    m_r552AimCache.clear();                 // homePosition() answers with his aim
+    QString note;
+    const QString key = r552BarsKey();
+    if (r552Engaged() && key.isEmpty())
+        note = tr("No laser bars on tonight (RIG)");
+    else if ((m_r552Aim == QStringLiteral("under") || m_r552Aim == QStringLiteral("down"))
+             && r552NamedAim(m_r552Aim) == Function::invalidId())
+        note = tr("No %1 aim for the bars in the show - they stay on HOME")
+                   .arg(m_r552Aim == QStringLiteral("under") ? QStringLiteral("HOME UNDER") : QStringLiteral("DOWN"));
+    m_r552Note = note;
+    if (note.isEmpty() == false)
+        m_report = note;
+    logSignal(QStringLiteral("sig:bars-hand:") + why);
+    emit barsHandChanged();
+    emit liveChanged();
+}
+
+void TrackEngine::setBarsAim(const QString &aim)
+{
+    if (aim.isEmpty() == false && aim != QStringLiteral("home") && aim != QStringLiteral("under")
+        && aim != QStringLiteral("down"))
+        return;
+    if (aim == m_r552Aim)
+        return;
+    ensureTable();
+    m_r552Aim = aim;
+    m_homeCache.clear();
+    r552Aim(true);
+    r552Changed(QStringLiteral("aim:") + (aim.isEmpty() ? QStringLiteral("auto") : aim));
+}
+
+void TrackEngine::r552StillMove(const QString &key, TrackMove &mv) const
+{
+    // ON (still): the bars stand lit - no pattern walking over them, no drop form's picture; the level
+    // may still breathe with the music as every group's does
+    if (r552Still() == false || key.isEmpty() || key != r552BarsKey())
+        return;
+    mv.pattern = ENGINE_PAT_STATIC;
+    mv.subSteps = 1;
+    mv.flashBar = false;
+    mv.formMask = 0;
+    mv.texture = 0.0;
+    mv.bare = false;
+    mv.width = 1;
+}
+
+void TrackEngine::setBarsOn(bool on)
+{
+    if (on == m_r552On)
+        return;
+    ensureTable();
+    m_r552On = on;
+    if (on == false)
+        m_r552Chase = false;
+    r552Aim(on);
+    r552Changed(on ? QStringLiteral("on") : QStringLiteral("off"));
+}
+
+void TrackEngine::setBarsChase(bool chase)
+{
+    if (chase == (m_r552On && m_r552Chase))
+        return;
+    ensureTable();
+    m_r552Chase = chase;
+    if (chase)
+        m_r552On = true;                 // CHASE lights them
+    m_sectionMotion.remove(r552BarsKey());   // the next beat draws their programme again
+    r552Aim(chase);
+    r552Changed(chase ? QStringLiteral("chase") : QStringLiteral("still"));
+}
+
+void TrackEngine::barsAuto()
+{
+    if (r552Engaged() == false && m_r552Chase == false)
+        return;
+    m_r552On = false;
+    m_r552Chase = false;
+    m_r552Aim.clear();
+    m_homeCache.clear();
+    const QString key = r552BarsKey();
+    if (key.isEmpty() == false)
+    {
+        m_position.remove(key);          // the engine aims them again
+        m_sectionMotion.remove(key);
+    }
+    r552Changed(QStringLiteral("auto"));
 }
