@@ -90,6 +90,10 @@ TrackApp::TrackApp(bool active, std::function<void()> beforeQuit, QObject *paren
     m_checkTimer.setSingleShot(true);
     connect(&m_checkTimer, &QTimer::timeout, this, &TrackApp::slotCheck);
 
+    // TRACK_APP_PHONE_R549: TrackManager (the phone's UPDATE, its state) finds this object here
+    if (QCoreApplication::instance() != nullptr)
+        QCoreApplication::instance()->setProperty("trackAppCtl", QVariant::fromValue<QObject *>(this));
+
     // before App::startup() loads the fixture definitions (main.cpp makes this object first)
     if (m_active)
         ensureFixtures();
@@ -97,6 +101,8 @@ TrackApp::TrackApp(bool active, std::function<void()> beforeQuit, QObject *paren
 
 TrackApp::~TrackApp()
 {
+    if (QCoreApplication::instance() != nullptr)
+        QCoreApplication::instance()->setProperty("trackAppCtl", QVariant());
     m_checkTimer.stop();
     if (m_proc != nullptr && m_proc->state() != QProcess::NotRunning)
     {
@@ -138,6 +144,7 @@ void TrackApp::waitForPredecessor(int argc, char *argv[])
  *********************************************************************/
 
 bool TrackApp::active() const { return m_active; }
+QString TrackApp::build() const { return m_rev; }
 int TrackApp::cdjCount() const { return m_active ? m_bridge.cdjCount() : 0; }
 bool TrackApp::updateAvailable() const { return m_active && m_staged.isEmpty() == false; }
 QString TrackApp::updateLatest() const { return m_staged; }

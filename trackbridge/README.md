@@ -9,6 +9,27 @@ This branch is the TRACK app as a program of its own. It lives only here: `track
   start ... bygge opdateringen bedre, så den bare opdatere inde i qlc ... og genstarter sig
   selv ... og fjern de knapper vi alligevel ikke kan bruge mere."* The mockup was approved.
 
+## r549: its own name and look, full screen, the phone
+
+- **Its own name and logo** (Tobias 11-04: *"QLC skal fjernes fra navne, logoer osv"*): the
+  program file, the launcher, the window and the shortcut are all TRACK, with its own logo
+  (`branding/`: the gold waveform tile). The window title is "TRACK". The shared start
+  guard says "TRACK cannot start while QLC+ (or TRACK) is running" instead of the QLC+
+  text.
+- **Full screen from the start.** `--track-app` always starts in full screen, whether or
+  not `-f` is given.
+- **The top of the page** (mockup A was approved). On the Track page, the kiosk strip
+  (TRACK / VIRTUAL CONSOLE, BPM, LINK and the beat dot) is gone: TRACK / VIRTUAL CONSOLE sit
+  over the clock. The Virtual Console keeps the strip as it is. The four beat dots are on
+  the time's line, above PAUSED.
+- **The phone** (*"husk også telefonen i track-app"*): TRACK always serves the phone
+  (`http://<pc>:9999/track`), as the rig's `-w` does. On the phone, UPDATE is TRACK's own
+  update, and the phone says TRACK.
+- **Defender:**
+  - `get-track-app.cmd` reads Windows Defender's history for TRACK's files and says what it
+    finds. It only reads; nothing in Defender is changed.
+  - Both programs carry version information, and TRACK still starts no PowerShell.
+
 ## On the PC: `%LOCALAPPDATA%\TRACK`
 
 | Path | What |

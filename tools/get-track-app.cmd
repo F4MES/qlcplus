@@ -174,8 +174,7 @@ if (-not $ShowPath) {
     }
 }
 if (-not (Test-Path -LiteralPath $ShowPath)) { Say "No show file at '$ShowPath' - run again with -ShowPath" "Red"; exit 2 }
-$args2 = '-o "{0}"' -f $ShowPath
-if (-not $sc -or $sc.Arguments -match '(^|\s)(-f|--fullscreen)(\s|$)') { $args2 += ' -f' }
+$args2 = '-o "{0}"' -f $ShowPath        # TRACK starts in full screen by itself (r549)
 
 # the shortcut (and away with this script's own earlier one, which pointed at TRACK-test)
 $desktop = [Environment]::GetFolderPath("Desktop")
@@ -188,15 +187,34 @@ $s = $shell.CreateShortcut((Join-Path $desktop "TRACK.lnk"))
 $s.TargetPath = Join-Path $root "TRACK.exe"
 $s.Arguments = $args2
 $s.WorkingDirectory = $root
-$s.IconLocation = (Join-Path $app "TRACK-engine.exe") + ",0"
+Copy-Item -LiteralPath (Join-Path $app "track.ico") -Destination (Join-Path $root "track.ico") -Force -ErrorAction SilentlyContinue
+$s.IconLocation = (Join-Path $root "TRACK.exe") + ",0"
 $s.Description = "TRACK - QLC+'s engine with its own beat-link (updates itself)"
 $s.Save()
 Say "Desktop shortcut: TRACK -> TRACK.exe $args2" "Green"
 
+# R549 (Tobias 11-04: "check defender og virus checks at den ikke bliver blokeret"): what Windows
+# Defender did to TRACK's files - only read, nothing changed in Defender
+try {
+    $hits = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object { "$($_.Resources)" -match '\\TRACK\\|TRACK-engine|trackbridge' } |
+              Sort-Object InitialDetectionTime -Descending | Select-Object -First 3)
+    if ($hits.Count -eq 0) { Say "Windows Defender has nothing on record against TRACK." "Green" }
+    foreach ($h in $hits) {
+        Say ("Windows Defender {0}: {1}" -f $h.InitialDetectionTime, ("$($h.Resources)")) "Red"
+        Log ("Defender: " + "$($h.Resources)")
+    }
+    if ($hits.Count -gt 0) { Say "  Windows Security > Virus & threat protection > Protection history: Restore / Allow, then run this again." "Yellow" }
+} catch { Say "  (Windows Defender's history is not readable here: $($_.Exception.Message))" "Yellow" }
+if (-not (Test-Path -LiteralPath (Join-Path $root "TRACK.exe")) -or -not (Test-Path -LiteralPath (Join-Path $app "TRACK-engine.exe"))) {
+    Say "TRACK.exe or TRACK-engine.exe is gone right after the install - Windows Defender took it (see above)." "Red"
+    exit 2
+}
+
 Say ""
 Say "Next:" "Cyan"
 Say "  1. Close QLC+ and Beat Link Trigger (one light program and one beat-link program at a time)."
-Say "  2. Double-click 'TRACK'. The first time, Windows may ask whether Java (OpenJDK Platform binary)"
-Say "     may use the network: allow it on private networks - that is how TRACK hears the CDJs."
+Say "  2. Double-click 'TRACK' (the gold waveform icon). The first time, Windows may ask whether TRACK"
+Say "     and Java (OpenJDK Platform binary) may use the network: allow both on private networks - that is"
+Say "     how TRACK hears the CDJs and how the phone reaches it (http://<this PC>:9999/track)."
 Say "  3. TRACK finds the CDJs by itself ('2 players found'). New builds: UPDATE TRACK on the page."
 Say "  Logs: $root\logs (track.log, bridge.log). Back to normal: close TRACK, start QLC+ and BLT."

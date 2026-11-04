@@ -128,7 +128,8 @@ private:
             return TRUE;
         wchar_t title[256] = { 0 };
         GetWindowTextW(window, title, 256);
-        if (std::wcsstr(title, L"Q Light Controller Plus") == nullptr)
+        // TRACK_APP_NAME_R549: the TRACK app's window is "TRACK"
+        if (std::wcsstr(title, L"Q Light Controller Plus") == nullptr && std::wcscmp(title, L"TRACK") != 0)
             return TRUE;
         if (IsIconic(window))
             ShowWindow(window, SW_RESTORE);
@@ -141,11 +142,19 @@ private:
     {
         if (quiet())
             return;
+        // TRACK_APP_NAME_R549 (Tobias 11-04: "det ser ikke ud til at jeg kan aabne appen fordi den bare hedder
+        // det samme"): TRACK and QLC+ share this guard - one of them drives the lights - and the notice says so
+        const bool track = std::wcsstr(GetCommandLineW(), L"--track-app") != nullptr;
         if (running)
         {
             EnumWindows(front, LPARAM(GetCurrentProcessId()));
-            MessageBoxW(nullptr, L"QLC+ is already running.\n\nThis start was ignored - the open QLC+ window is in front.",
-                        L"QLC+", MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
+            if (track)
+                MessageBoxW(nullptr, L"TRACK cannot start while QLC+ (or TRACK) is running - only one of them can run the lights.\n\n"
+                                     L"Close the open one first - it is in front.",
+                            L"TRACK", MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
+            else
+                MessageBoxW(nullptr, L"QLC+ is already running.\n\nThis start was ignored - the open QLC+ window is in front.",
+                            L"QLC+", MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
             return;
         }
         wchar_t text[256] = { 0 };

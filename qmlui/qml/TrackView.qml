@@ -61,7 +61,10 @@ Rectangle
     readonly property real gapB: Math.max(8, Math.round(12 * ks))   // between the page's blocks
     readonly property real cardPad: Math.max(10, Math.round(18 * ks))
     readonly property real headH: Math.max(20, Math.round(28 * ks))
-    readonly property real topH: Math.max(50, Math.round(92 * ks))   // R481_CLOCK_BAR: was 64 - the big clock
+    readonly property real topH: Math.max(50, Math.round(92 * ks)) + (trackApp ? appTabsH : 0)   // R481_CLOCK_BAR: was 64 - the big clock
+    // TRACK_APP_TOP_R549 (Tobias 11-04: "saet track/vs knapperne i midten lige over uret saa vi kan fjerne
+    // hele toppen"): no kiosk strip on the TRACK app's Track page - TRACK / VIRTUAL CONSOLE over the clock
+    readonly property real appTabsH: Math.round(30 * ks)
     // R481_CLOCK (Tobias 10-19, mockup B): the time, big, in the middle of the top bar
     property string clockHM: Qt.formatTime(new Date(), "hh:mm")
     property string clockS: Qt.formatTime(new Date(), "ss")
@@ -884,6 +887,7 @@ Rectangle
                                              : (oldShowChip.visible ? oldShowChip.x : statusRight.x))
                 x: Math.round(Math.min((parent.width - width) / 2, edge - width - 22 * trackViewRoot.ks))
                 anchors.verticalCenter: parent.verticalCenter
+                anchors.verticalCenterOffset: trackViewRoot.trackApp ? Math.round(trackViewRoot.appTabsH / 2) : 0
                 spacing: Math.round(4 * trackViewRoot.ks)
                 Text
                 {
@@ -1087,6 +1091,49 @@ Rectangle
                 }
             }
 
+            // TRACK_APP_TOP_R549: TRACK / VIRTUAL CONSOLE over the clock (MainView's kiosk strip is
+            // hidden on this page in the TRACK app; the Virtual Console keeps it, with its TRACK tab)
+            Row
+            {
+                id: appTabs
+                objectName: "appTabs"
+                visible: trackViewRoot.trackApp
+                x: Math.round(bigClock.x + (bigClock.width - width) / 2)
+                anchors.bottom: bigClock.top
+                anchors.bottomMargin: Math.round(2 * trackViewRoot.ks)
+                spacing: Math.round(4 * trackViewRoot.ks)
+                Repeater
+                {
+                    model: [ { key: "TRACK", label: qsTr("TRACK") }, { key: "VC", label: qsTr("VIRTUAL CONSOLE") } ]
+                    Rectangle
+                    {
+                        objectName: "appTab" + modelData.key
+                        readonly property bool on: modelData.key === "TRACK"
+                        width: appTabLabel.implicitWidth + Math.round(28 * trackViewRoot.ks)
+                        height: trackViewRoot.appTabsH - Math.round(4 * trackViewRoot.ks)
+                        radius: Math.round(6 * trackViewRoot.ks)
+                        color: on ? "#2A6FDB" : trackViewRoot.cBtn
+                        Text
+                        {
+                            id: appTabLabel
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: parent.on ? "#FFFFFF" : trackViewRoot.cMute
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(12)
+                            font.letterSpacing: trackViewRoot.fs(12) * 0.06
+                        }
+                        TouchInput
+                        {
+                            onReleasedAt: (x, y, inside) => {
+                                if (inside && !parent.on && typeof mainView !== "undefined" && typeof vcEntry !== "undefined")
+                                    mainView.switchToContext(vcEntry.ctxName, vcEntry.ctxRes)
+                            }
+                        }
+                    }
+                }
+            }
+
             // R450_TEST_TRACK (mockup 4): STOP TEST while the made-up track plays
             Rectangle
             {
@@ -1242,6 +1289,7 @@ Rectangle
                 Row
                 {
                     objectName: "beatDots"
+                    visible: !trackViewRoot.trackApp          // TRACK_APP_TOP_R549: on the time's line instead
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Math.round(8 * trackViewRoot.ks)
                     Repeater
@@ -1265,13 +1313,42 @@ Rectangle
                 {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 3
-                    Text
+                    // TRACK_APP_TOP_R549 (Tobias 11-04: "ryk ogsaa de 4 beat-prikker op over paused og bpm, saa
+                    // den ikke fylder saa meget i breden"): in the TRACK app the dots are on the time's line
+                    Row
                     {
                         anchors.right: parent.right
-                        text: trackViewRoot.fmtTime(trackManager ? trackManager.positionMs : 0)
-                              + " / " + trackViewRoot.fmtTime(trackManager ? trackManager.durationMs : 0)
-                        color: trackViewRoot.cText
-                        font.pixelSize: trackViewRoot.fs(21)
+                        spacing: Math.round(14 * trackViewRoot.ks)
+                        Row
+                        {
+                            objectName: "appBeatDots"
+                            visible: trackViewRoot.trackApp
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: Math.round(8 * trackViewRoot.ks)
+                            Repeater
+                            {
+                                model: 4
+                                Rectangle
+                                {
+                                    id: appBeatDot
+                                    objectName: "appBeatDot" + index
+                                    readonly property bool on: trackManager && trackManager.playing && trackViewRoot.beatInBar === index
+                                    width: Math.round(12 * trackViewRoot.ks); height: width; radius: width / 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: on ? (index === 0 ? "#FFFFFF" : trackViewRoot.cGreen) : Qt.rgba(1, 1, 1, 0.14)
+                                    onOnChanged: if (on && trackViewRoot.animate) appBeatPop.restart()
+                                    ScaleAnimator { id: appBeatPop; target: appBeatDot; from: 1.45; to: 1.0; duration: 180; easing.type: Easing.OutQuad }
+                                }
+                            }
+                        }
+                        Text
+                        {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: trackViewRoot.fmtTime(trackManager ? trackManager.positionMs : 0)
+                                  + " / " + trackViewRoot.fmtTime(trackManager ? trackManager.durationMs : 0)
+                            color: trackViewRoot.cText
+                            font.pixelSize: trackViewRoot.fs(21)
+                        }
                     }
                     Text
                     {

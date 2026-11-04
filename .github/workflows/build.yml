@@ -577,7 +577,9 @@ jobs:
         shell: msys2 {0}
         run: |
           CC=$(command -v x86_64-w64-mingw32-gcc || command -v gcc)
-          $CC -O2 -s -Wall -Wextra -Werror -municode -mwindows -o /c/qlcplus/TRACK-launcher.exe trackbridge/launcher/track_launcher.c
+          WR=$(command -v x86_64-w64-mingw32-windres || command -v windres)
+          $WR trackbridge/launcher/track_launcher.rc -O coff -o track_launcher.res      # R549: TRACK's icon + version info
+          $CC -O2 -s -Wall -Wextra -Werror -municode -mwindows -o /c/qlcplus/TRACK-launcher.exe trackbridge/launcher/track_launcher.c track_launcher.res
           ls -la /c/qlcplus/TRACK-launcher.exe
 
       - name: Portable folder for the TRACK app

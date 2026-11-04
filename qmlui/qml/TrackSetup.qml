@@ -464,7 +464,9 @@ Rectangle
                 objectName: "midiListen"
                 x: 38; y: 50; width: parent.width - 58; elide: Text.ElideRight
                 text: midiPanel.listen !== "" ? midiPanel.listen
-                      : qsTr("No MIDI input patched in QLC+ - patch your controller under Inputs/Outputs (start QLC+ once without -k, then save the show)")
+                      : (typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true)   // TRACK_APP_NAME_R549
+                        ? qsTr("No MIDI input patched in the show - patch your controller once in QLC+ under Inputs/Outputs and save the show")
+                        : qsTr("No MIDI input patched in QLC+ - patch your controller under Inputs/Outputs (start QLC+ once without -k, then save the show)")
                 color: midiPanel.listen !== "" ? setupRoot.cText : "#F05050"; font.pixelSize: 14; font.bold: midiPanel.listen === ""
             }
             Text

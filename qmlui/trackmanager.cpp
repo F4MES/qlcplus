@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QFile>                    // R474_UPDATE_INC: update-qlc's state.json
 #include <QCoreApplication>         // R459_RM_APPINC
+static QObject *trackAppObject();          // TRACK_APP_PHONE_R549 (with the update, below)
 #include <QProcess>                 // R465_BLT_LIVE_INC
 #include <QDesktopServices>         // R468_START_BLT_INC
 #include <QStandardPaths>           // R468_START_BLT_INC2: bltShortcut()'s Windows branch
@@ -3020,11 +3021,23 @@ QString TrackManager::remoteState()
     // R474_UPDATE: a newer rig build, and whether update-qlc.cmd can run
     {
         QJsonObject upd;
+        if (QObject *ta = trackAppObject())          // TRACK_APP_PHONE_R549
+        {
+            upd.insert(QStringLiteral("app"), QStringLiteral("TRACK"));
+            upd.insert(QStringLiteral("latest"), ta->property("updateLatest").toString());
+            upd.insert(QStringLiteral("installed"), ta->property("build").toString());
+            upd.insert(QStringLiteral("avail"), ta->property("updateAvailable").toBool());
+            upd.insert(QStringLiteral("found"), true);
+            upd.insert(QStringLiteral("st"), ta->property("updateStep").toInt());
+        }
+        else
+        {
         upd.insert(QStringLiteral("latest"), m_updateLatest);
         upd.insert(QStringLiteral("installed"), m_updateInstalled);
         upd.insert(QStringLiteral("avail"), updateAvailable());
         upd.insert(QStringLiteral("found"), m_updateScript.isEmpty() == false);
         upd.insert(QStringLiteral("st"), m_updateStep);
+        }
         o.insert(QStringLiteral("upd"), upd);
     }
     if (m_engine != nullptr)
@@ -3327,6 +3340,15 @@ QString TrackManager::remoteCommand(const QString &line)
  *    start), 3 SHOW OFF first
  * ===================================================================== */
 
+// TRACK_APP_PHONE_R549: the TRACK app's own object (main.cpp puts it on the application) - while it
+// is active, the update the page, the phone and the chip deal with is TRACK's own
+static QObject *trackAppObject()
+{
+    QObject *o = QCoreApplication::instance()
+                 ? qvariant_cast<QObject *>(QCoreApplication::instance()->property("trackAppCtl")) : nullptr;
+    return (o != nullptr && o->property("active").toBool()) ? o : nullptr;
+}
+
 QString TrackManager::updateLatest() const { return m_updateLatest; }
 QString TrackManager::updateInstalled() const { return m_updateInstalled; }
 QString TrackManager::updateScript() const { return m_updateScript; }
@@ -3392,6 +3414,8 @@ void TrackManager::setUpdateStep(int state)
 
 void TrackManager::updateCheck()
 {
+    if (trackAppObject() != nullptr)
+        return;                          // TRACK_APP_PHONE_R549: TRACK checks its own release
     m_updateScript = findUpdateScript();
     readUpdateInstalled();
     emit updateChanged();
@@ -3456,6 +3480,12 @@ void TrackManager::updateCheck()
 
 void TrackManager::startUpdate()
 {
+    // TRACK_APP_PHONE_R549: the phone's UPDATE in the TRACK app - TRACK's own (SHOW OFF only, as here)
+    if (QObject *ta = trackAppObject())
+    {
+        QMetaObject::invokeMethod(ta, "startUpdate", Q_ARG(bool, m_autoRun));
+        return;
+    }
     if (m_autoRun)
     {
         // SHOW OFF first - the update closes QLC+ and the light with it

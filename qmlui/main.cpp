@@ -25,6 +25,9 @@
 #include <QCommandLineParser>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QDir>
+#include <QFileInfo>
+#include <QIcon>
 
 #include "app.h"
 #include "trackapp.h"             // TRACK_APP_BRIDGE (track-app branch)
@@ -162,7 +165,9 @@ int main(int argc, char *argv[])
 
     parser.process(app);
 
-    bool enableWebAccess = parser.isSet(webAccessOption)
+    // TRACK_APP_PHONE_R549 (Tobias 11-04: "husk ogsaa telefonen i track-app"): the TRACK app always serves
+    // the phone (http://<pc>:9999/track), as the rig's -w does
+    bool enableWebAccess = parser.isSet(trackAppOption) || parser.isSet(webAccessOption)
         || parser.isSet(webPortOption)
         || parser.isSet(webAuthOption)
         || parser.isSet(webAuthFileOption);
@@ -270,9 +275,27 @@ int main(int argc, char *argv[])
             qlcplusApp.networkManager()->startServer();
     }
 
-    // fullscreen mode
-    if (parser.isSet(fullscreenOption))
+    // fullscreen mode - TRACK_APP_FULLSCREEN_R549 (Tobias 11-04: "check at track appen starter i
+    // fullskaerm fra start af app"): the TRACK app always (one toggle, -f or not)
+    if (parser.isSet(fullscreenOption) || parser.isSet(trackAppOption))
         qlcplusApp.toggleFullscreen();
+
+    // TRACK_APP_NAME_R549 (Tobias 11-04: "QLC skal fjernes fra navne, logoer osv, saa det er nemmere at
+    // kende forskel"): the window is TRACK, with TRACK's logo - also after a show file is loaded
+    if (parser.isSet(trackAppOption))
+    {
+        const QString logo = QDir(QCoreApplication::applicationDirPath()).filePath("track.png");
+        if (QFileInfo::exists(logo))
+        {
+            QGuiApplication::setWindowIcon(QIcon(logo));
+            qlcplusApp.setIcon(QIcon(logo));
+        }
+        qlcplusApp.setTitle("TRACK");
+        QObject::connect(&qlcplusApp, &QWindow::windowTitleChanged, &qlcplusApp, [&qlcplusApp](const QString &title) {
+            if (title != QLatin1String("TRACK"))
+                qlcplusApp.setTitle("TRACK");
+        });
+    }
 
     // TRACK_APP_BRIDGE: beat-link as QLC+'s own helper process (stopped - its pipe closed - when
     // QLC+ quits, before the App goes) and TRACK's update checks

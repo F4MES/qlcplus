@@ -51,6 +51,7 @@ class TrackApp : public QObject
     Q_OBJECT
 
     Q_PROPERTY(bool active READ active CONSTANT)
+    Q_PROPERTY(QString build READ build CONSTANT)
     Q_PROPERTY(int cdjCount READ cdjCount NOTIFY cdjCountChanged)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateChanged)
     Q_PROPERTY(QString updateLatest READ updateLatest NOTIFY updateChanged)
@@ -69,6 +70,7 @@ public:
     void start();
 
     bool active() const;
+    QString build() const;
     int cdjCount() const;
     bool updateAvailable() const;
     QString updateLatest() const;

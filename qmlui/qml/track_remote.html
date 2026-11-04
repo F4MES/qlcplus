@@ -212,7 +212,7 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       <div class="fader" data-f="haze" data-rest="70" style="margin-bottom:8px"><!-- R484_HZ_PHONE_ZONE --><div class="rest" style="left:70%"></div><div class="fill" style="background:#8C8C96"></div><div class="grip"></div><div class="name" style="color:#141418">HAZE</div><div class="val"></div></div>
       <div class="grid g2" style="margin-bottom:8px"><button class="b sm" data-c="hazeAuto">AUTO<span class="sub">HAZE + FAN by clock</span></button></div><!-- R484_HZ_PHONE_AUTO_BTN -->
       <div class="fader" data-f="fan"><div class="fill" style="background:#6A8496"></div><div class="grip"></div><div class="name" style="color:#141418">FAN SPEED</div><div class="val"></div></div>
-      <div class="lbl">QLC+</div>
+      <div class="lbl" id="updL">QLC+</div><!-- TRACK_APP_PHONE_R549 -->
       <div class="upd" id="upd"><div><b id="updT">QLC+</b><small id="updS"></small></div><button id="updB">UPDATE</button></div>
       <div class="note">The same controls as the desk - the last touch wins. A held button lets go by itself if the phone loses the Wi-Fi.</div>
     </div>
@@ -678,6 +678,23 @@ function render() {
   {
     const U = S.upd || {}, nb = !!U.avail;
     if (updSure && (S.show || U.st === 1)) { clearTimeout(updSure); updSure = 0; }
+    // TRACK_APP_PHONE_R549: the TRACK app updates itself (no update-qlc.cmd, about 10 s without light)
+    const isApp = U.app === 'TRACK', nm = isApp ? 'TRACK' : 'QLC+';
+    $('updL').textContent = nm;
+    $('offline').textContent = 'NO CONNECTION TO ' + nm + ' - TRYING AGAIN ...';
+    if (isApp) {
+      $('updT').textContent = U.st === 1 ? 'UPDATE STARTED' : nb ? 'NEW BUILD ' + U.latest + ' READY' : 'TRACK' + (U.installed ? ' · build ' + U.installed : '');
+      $('updS').textContent = U.st === 1 ? 'TRACK restarts by itself - the light is out a few seconds'
+        : S.show || U.st === 3 ? 'SHOW OFF first - not while the show runs'
+        : updSure ? 'tap again: TRACK switches to ' + U.latest + ' and starts again - the light is out about 10 s'
+        : U.st === 2 ? 'it did not switch - see TRACK\'s log'
+        : nb ? 'fetched and checked - ready to switch' : 'TRACK fetches new builds by itself';
+      cls($('updS'), 'gold', !!updSure);
+      const ab = $('updB');
+      ab.textContent = updSure ? 'SURE?' : 'UPDATE';
+      cls(ab, 'new', nb); cls(ab, 'sure', !!updSure); cls(ab, 'off', !!S.show || !nb || U.st === 1);
+      const adot = document.querySelector('[data-p="rig"] .dot'); if (adot) adot.style.display = nb ? '' : 'none';
+    } else {
     $('updT').textContent = U.st === 1 ? 'UPDATE STARTED' : nb ? 'NEW BUILD ' + U.latest + ' READY' : 'QLC+' + (U.installed ? ' · build ' + U.installed : '');
     // R475_UPDTEXT_PHONE: SURE? says what it does - the SHOW OFF text of a tap 4 s ago was over it
     $('updS').textContent = U.st === 1 ? 'update-qlc.cmd runs on the PC - QLC+ closes and comes back by itself'
@@ -691,6 +708,7 @@ function render() {
     ub.textContent = updSure ? 'SURE?' : 'UPDATE';
     cls(ub, 'new', nb); cls(ub, 'sure', !!updSure); cls(ub, 'off', !!S.show || !U.found || U.st === 1);
     const dot = document.querySelector('[data-p="rig"] .dot'); if (dot) dot.style.display = nb ? '' : 'none';
+    }
   }
   // --- RIG
   const groups = S.groups || [];

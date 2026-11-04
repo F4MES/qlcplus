@@ -34,6 +34,10 @@ Rectangle
     color: UISettings.bgMedium
 
     property string currentContext: ""
+    // TRACK_APP_TOP_R549: the TRACK app's Track page has TRACK / VIRTUAL CONSOLE over its clock -
+    // the kiosk strip (and its BPM / LINK) only on the Virtual Console there ("bare som det er nu")
+    readonly property bool trackAppStrip: typeof trackAppCtl === "undefined" || !trackAppCtl
+                                          || trackAppCtl.active !== true || currentContext === "VC"
 
     Component.onCompleted: UISettings.sidePanelWidth = Math.min(width / 3, UISettings.bigItemHeight * 5)
     onWidthChanged: UISettings.sidePanelWidth = Math.min(width / 3, UISettings.bigItemHeight * 5)
@@ -633,7 +637,7 @@ Rectangle
     Rectangle
     {
         id: kioskBar
-        visible: qlcplus.accessMask === App.AC_VCControl
+        visible: qlcplus.accessMask === App.AC_VCControl && mainView.trackAppStrip
         z: 59
         anchors.top: parent.top
         width: parent.width
@@ -704,7 +708,7 @@ Rectangle
     Rectangle
     {
         id: kioskBeatHeader
-        visible: qlcplus.accessMask === App.AC_VCControl
+        visible: qlcplus.accessMask === App.AC_VCControl && mainView.trackAppStrip
         z: 60
         anchors.top: parent.top
         anchors.right: parent.right

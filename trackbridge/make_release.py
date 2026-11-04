@@ -105,6 +105,9 @@ def build_app(base, rev, rid, target):
         put(out, 'track-app-build.txt', rev + '\n')
         put(out, 'runtime.txt', rid + '\n')
         put(out, 'TRACK-README.md', (HERE / 'README.md').read_bytes())
+        # R549 (Tobias 11-04: "QLC skal fjernes fra navne, logoer osv"): TRACK's logo for its window and shortcut
+        put(out, 'track.png', (HERE / 'branding' / 'track.png').read_bytes())
+        put(out, 'track.ico', (HERE / 'branding' / 'track.ico').read_bytes())
         # R548_FIXTURES: the rig's own definitions (not in QLC+'s library) - TRACK copies each one
         # into the user's QLC+ fixture folder at start, only when no definition of that model is there
         for qxf in sorted((HERE / 'fixtures').glob('*.qxf')):
