@@ -1111,7 +1111,8 @@ Rectangle
                 spacing: Math.round(4 * trackViewRoot.ks)
                 Repeater
                 {
-                    model: [ { key: "TRACK", label: qsTr("TRACK") }, { key: "VC", label: qsTr("VIRTUAL CONSOLE") } ]
+                    // TRACK_APP_TOP_R551: no TRACK button here - the Virtual Console has its own
+                    model: [ { key: "VC", label: qsTr("VIRTUAL CONSOLE") } ]
                     Rectangle
                     {
                         objectName: "appTab" + modelData.key
