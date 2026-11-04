@@ -34767,8 +34767,9 @@ static const R493RoomRow r493RoomRows[] = {
     { 499, "Mini 4 Eyes", 0.6650, 0.0410 },
 };
 static const int r493RoomRowCount = 24;
-static const int r493RoomDisco[] = { 132, 96, 59, 1 };
-static const int r493RoomDiscoCount = 4;
+static const int r493RoomDisco[] = { 96, 59 };
+static const int r493RoomDiscoCount = 2;
+static const int r493RoomDiscoZoom[] = { 0, 5 };
 static const qreal r493RoomBallX = 0.5040;
 static const qreal r493RoomBallY = 0.0600;
 static const char r493RoomStatus[] = "map";
@@ -36655,19 +36656,18 @@ bool TrackEngine::r493DiscoBuild(const QString &group, const QList<quint32> &hea
     if (colourScene == nullptr)
         return false;
     QList<Scene *> starts;
-    // R524_BALL_AIM (Tobias 11-01: "den mangler hoejre side"): his own disco scene first - "START DISCO FADE"
-    // aims the two right heads (Light Rider 07 and 08) at the ball, the START scene only the two left ones
-    // (the same aim there); then the START scene as before
-    foreach (Function *func, m_doc->functions())
-    {
-        Scene *sc = qobject_cast<Scene *>(func);
-        if (sc != nullptr && sc->name().startsWith(QStringLiteral("START DISCO"), Qt::CaseInsensitive))
-            starts << sc;
-    }
+    // R545_BALL_AIM_START (Tobias 11-04: "brug sigtet fra start-programmet"): the START scene's aim first; his
+    // own "START DISCO ..." scenes (R524_BALL_AIM) only for a head the START scene does not aim
     foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_IDLE, QString()))
     {
         Scene *sc = qobject_cast<Scene *>(m_doc->function(info->id));
         if (sc != nullptr)
+            starts << sc;
+    }
+    foreach (Function *func, m_doc->functions())
+    {
+        Scene *sc = qobject_cast<Scene *>(func);
+        if (sc != nullptr && sc->name().startsWith(QStringLiteral("START DISCO"), Qt::CaseInsensitive))
             starts << sc;
     }
     QList<SceneValue> look, dark;
@@ -36718,7 +36718,13 @@ bool TrackEngine::r493DiscoBuild(const QString &group, const QList<quint32> &hea
         }
         if (aimed == 0 || zoomCh < 0)
             return false;                       // no aim to go to, or no beam to sharpen
-        look.append(SceneValue(fxid, quint32(zoomCh), uchar(zoomValue)));
+        // R545_HEAD_ZOOM (Tobias 11-04: "zoom til helt skarp paa 96 og zoom 5% ud paa 59"): percent out per head
+        int zoomOut = 0;
+        for (int i = 0; i < r493RoomDiscoCount; i++)
+            if (fxi->universe() == 0 && int(fxi->address()) + 1 == r493RoomDisco[i])
+                zoomOut = qBound(0, r493RoomDiscoZoom[i], 100);
+        const int zoomStep = int(qRound(255.0 * zoomOut / 100.0));
+        look.append(SceneValue(fxid, quint32(zoomCh), uchar(zoomValue == 0 ? zoomStep : 255 - zoomStep)));
         setCh.insert(quint32(zoomCh));
         if (dimCh != QLCChannel::invalid())
         {
