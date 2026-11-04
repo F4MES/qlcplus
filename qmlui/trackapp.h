@@ -45,6 +45,7 @@
 #include <QTimer>
 
 #include "trackbridge.h"
+#include "trackreader.h"
 
 class TrackApp : public QObject
 {
@@ -56,6 +57,8 @@ class TrackApp : public QObject
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateChanged)
     Q_PROPERTY(QString updateLatest READ updateLatest NOTIFY updateChanged)
     Q_PROPERTY(int updateStep READ updateStep NOTIFY updateChanged)
+    /** R557_READER: the CDJ reader's own updates (Beat Link Trigger's jar) - SETUP, ADVANCED */
+    Q_PROPERTY(QObject *reader READ reader CONSTANT)
 
 public:
     /** beforeQuit: what the restart does just before QLC+ quits (main.cpp: no "save?" box) */
@@ -76,6 +79,7 @@ public:
     QString updateLatest() const;
     /** As TrackManager's (R474): 0, 1 started, 2 did not start, 3 SHOW OFF first */
     int updateStep() const;
+    QObject *reader() const;
 
     /** Two taps on the chip: switch to the fetched build and start again (SHOW OFF only) */
     Q_INVOKABLE void startUpdate(bool showOn);
@@ -116,6 +120,7 @@ private:
     std::function<void()> m_beforeQuit;
     bool m_active;
     TrackBridge m_bridge;
+    TrackReader *m_reader;      // R557_READER
 
     // the installed layout
     bool m_installed;

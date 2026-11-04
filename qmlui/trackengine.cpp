@@ -6779,6 +6779,7 @@ void TrackEngine::saveRoles()
     }
     QSettings().setValue(SETTINGS_ENGINE_AUTORATING,
                          QString::fromUtf8(QJsonDocument(recipes).toJson(QJsonDocument::Compact)));
+    r557HandStamp();                     // TRACK_APP_LIST_R557: when each of his changes was made
 }
 
 void TrackEngine::rebuild()
@@ -46088,4 +46089,193 @@ void TrackEngine::barsAuto()
         m_sectionMotion.remove(key);
     }
     r552Changed(QStringLiteral("auto"));
+}
+
+/* =====================================================================
+ *  TRACK_APP_LIST_R557 - SETUP's YOUR CHANGES (TRACK app only, runde 557).
+ *  Appended to trackengine.cpp by feature_track_app.py (qlcplus-pr), in the
+ *  track-app tree only.
+ *
+ *  Tobias 11-04: "gemme listen over alle programmer under show all og maaske kun
+ *  vise en liste over sidste gemte og manuelt vaegtede looks/programmer ... noget
+ *  der goer det nemmere at gaa ind og aendre i de manuelle rettelser, tilfoejelser
+ *  osv. man har lavet" (mockup approved).
+ *
+ *  A programme is HIS when he gave it a role (role != guess), energy stars
+ *  (stars != starsGuess), a ban or a thumb. When that last changed is kept here
+ *  (QSettings, R557_HAND_KEY: fid -> [seconds, what]), stamped at the end of every
+ *  saveRoles() - so every way a change is made (SETUP, the page's thumbs, MIDI)
+ *  is caught without a hook of its own. What was his before this round has the
+ *  time 0: it lists last, as "earlier".
+ *  handReset() gives one back to the engine: its guessed role and stars, no ban,
+ *  no thumbs.
+ * ===================================================================== */
+
+#define R557_HAND_KEY "trackengine/r557-hand"
+
+static QString r557HandState(const TrackFuncInfo &info)
+{
+    // what of it is his - "" when nothing is
+    if (info.generated)
+        return QString();
+    const bool role = info.role != info.guess && info.step == false;
+    const bool stars = info.stars != info.starsGuess;
+    int up = 0, down = 0;
+    for (int b = 0; b < ENGINE_RATE_BUCKETS; b++)
+    {
+        up += info.up[b];
+        down += info.down[b];
+    }
+    if (role == false && stars == false && info.banned == false && up == 0 && down == 0)
+        return QString();
+    return QStringLiteral("%1|%2|%3|%4|%5").arg(role ? info.role : -9).arg(stars ? info.stars : 0)
+                                           .arg(info.banned ? 1 : 0).arg(up).arg(down);
+}
+
+void TrackEngine::r557HandStamp()
+{
+    if (m_funcs.isEmpty())
+        return;
+    QSettings settings;
+    const bool first = m_r557HandLoaded == false && settings.contains(QStringLiteral(R557_HAND_KEY)) == false;
+    if (m_r557HandLoaded == false)
+    {
+        m_r557HandLoaded = true;
+        const QJsonObject o = QJsonDocument::fromJson(settings.value(QStringLiteral(R557_HAND_KEY)).toString().toUtf8()).object();
+        for (auto it = o.constBegin(); it != o.constEnd(); ++it)
+        {
+            const QJsonArray a = it.value().toArray();
+            if (a.size() == 2)
+                m_r557Hand.insert(it.key().toUInt(), qMakePair(qint64(a.at(0).toDouble()), a.at(1).toString()));
+        }
+    }
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    bool dirty = first;
+    QSet<quint32> his;
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const QString state = r557HandState(it.value());
+        if (state.isEmpty())
+            continue;
+        his.insert(it.key());
+        auto at = m_r557Hand.find(it.key());
+        if (at == m_r557Hand.end())
+        {
+            m_r557Hand.insert(it.key(), qMakePair(first ? qint64(0) : now, state));
+            dirty = true;
+        }
+        else if (at.value().second != state)
+        {
+            at.value() = qMakePair(now, state);
+            dirty = true;
+        }
+    }
+    for (auto it = m_r557Hand.begin(); it != m_r557Hand.end(); )
+    {
+        // given back (RESET, a second tap, RE-GUESS) - or a function of a show not loaded: only the
+        // ones this table knows go, so another show's list is not thrown away
+        if (m_funcs.contains(it.key()) && his.contains(it.key()) == false)
+        {
+            it = m_r557Hand.erase(it);
+            dirty = true;
+        }
+        else
+            ++it;
+    }
+    if (dirty == false)
+        return;
+    QJsonObject o;
+    for (auto it = m_r557Hand.constBegin(); it != m_r557Hand.constEnd(); ++it)
+        o.insert(QString::number(it.key()), QJsonArray() << double(it.value().first) << it.value().second);
+    settings.setValue(QStringLiteral(R557_HAND_KEY), QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+}
+
+QVariantList TrackEngine::handChanges()
+{
+    ensureTable();
+    r557HandStamp();
+    struct Row { qint64 t; QVariantMap m; };
+    QList<Row> rows;
+    const QDateTime now = QDateTime::currentDateTime();
+    for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
+    {
+        const TrackFuncInfo &info = it.value();
+        if (r557HandState(info).isEmpty())
+            continue;
+        QStringList groups = info.groups.values();
+        groups.sort();
+        int up = 0, down = 0;
+        for (int b = 0; b < ENGINE_RATE_BUCKETS; b++)
+        {
+            up += info.up[b];
+            down += info.down[b];
+        }
+        const qint64 t = m_r557Hand.value(it.key()).first;
+        QString when = QStringLiteral("earlier");
+        if (t > 0)
+        {
+            const QDateTime at = QDateTime::fromSecsSinceEpoch(t);
+            const qint64 ago = at.secsTo(now);
+            if (ago < 3600)
+                when = ago < 120 ? QStringLiteral("just now") : QStringLiteral("%1 min ago").arg(ago / 60);
+            else if (at.date() == now.date() || ago < 12 * 3600)
+                when = QLocale::c().toString(at, QStringLiteral("HH:mm"));
+            else if (ago < 6 * 24 * 3600)
+                when = QLocale::c().toString(at, QStringLiteral("ddd HH:mm"));
+            else
+                when = QLocale::c().toString(at, QStringLiteral("d MMM"));
+        }
+        QVariantMap m;
+        m.insert(QStringLiteral("id"), QVariant::fromValue(it.key()));
+        m.insert(QStringLiteral("name"), info.name);
+        m.insert(QStringLiteral("group"), groups.join(QStringLiteral(" + ")));
+        m.insert(QStringLiteral("role"), info.step ? info.guess : info.role);
+        m.insert(QStringLiteral("guess"), info.guess);
+        m.insert(QStringLiteral("stars"), info.stars);
+        m.insert(QStringLiteral("starsGuess"), info.starsGuess);
+        m.insert(QStringLiteral("banned"), info.banned);
+        m.insert(QStringLiteral("rateUp"), up);
+        m.insert(QStringLiteral("rateDown"), down);
+        m.insert(QStringLiteral("when"), when);
+        rows.append(Row{ t, m });
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) {
+        if (a.t != b.t)
+            return a.t > b.t;
+        return a.m.value(QStringLiteral("name")).toString().compare(b.m.value(QStringLiteral("name")).toString(),
+                                                                   Qt::CaseInsensitive) < 0;
+    });
+    QVariantList out;
+    for (const Row &r : rows)
+        out << r.m;
+    return out;
+}
+
+void TrackEngine::handReset(quint32 fid)
+{
+    ensureTable();
+    if (m_funcs.contains(fid) == false || m_funcs.value(fid).generated)
+        return;
+    TrackFuncInfo &info = m_funcs[fid];
+    const bool roleBack = info.step == false && info.role != info.guess;
+    if (roleBack)
+        info.role = info.guess;
+    info.stars = info.starsGuess;
+    info.banned = false;
+    for (int b = 0; b < ENGINE_RATE_BUCKETS; b++)
+    {
+        info.up[b] = 0;
+        info.down[b] = 0;
+    }
+    invalidateCandidates();
+    m_savedAutoCache.clear();
+    m_moves.clear();
+    saveRoles();
+    logSignal(QStringLiteral("sig:hand-reset:") + QString::number(fid));
+    if (roleBack)
+    {
+        m_dirty = true;                  // the palette may change with a role, as assignRole()
+        ensureTable();
+    }
+    emit tableChanged();
 }

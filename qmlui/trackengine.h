@@ -3759,6 +3759,15 @@ private:
     bool m_r552Running = false;          // r552Aim()'s own run(): past the gate
     QString m_r552Note;
     mutable QHash<QString, quint32> m_r552AimCache;
+
+public:
+    // TRACK_APP_LIST_R557: SETUP's YOUR CHANGES (r557_handlist.inc.cpp)
+    Q_INVOKABLE QVariantList handChanges();
+    Q_INVOKABLE void handReset(quint32 fid);
+private:
+    void r557HandStamp();
+    QHash<quint32, QPair<qint64, QString> > m_r557Hand;   // fid -> when (s), what of it is his
+    bool m_r557HandLoaded = false;
 };
 
 #endif // TRACKENGINE_H

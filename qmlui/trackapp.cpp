@@ -62,6 +62,7 @@ TrackApp::TrackApp(bool active, std::function<void()> beforeQuit, QObject *paren
     , m_beforeQuit(beforeQuit)
     , m_active(active)
     , m_bridge(this)
+    , m_reader(nullptr)
     , m_installed(false)
     , m_proc(nullptr)
     , m_busy(false)
@@ -87,6 +88,10 @@ TrackApp::TrackApp(bool active, std::function<void()> beforeQuit, QObject *paren
     if (m_installed && m_runtimeId.isEmpty() == false)
         runtimeDir = file(QStringLiteral("runtime/") + m_runtimeId);
     m_bridge.setPlaces(m_logDir, runtimeDir);
+    // R557_READER: a newer Beat Link Trigger fetched in SETUP runs instead of the runtime's own
+    m_reader = new TrackReader(&m_bridge, m_installed && m_active ? m_root : QString(), m_logDir,
+                               runtimeDir.isEmpty() ? QString() : QDir(runtimeDir).filePath(QStringLiteral("beat-link-trigger.jar")),
+                               TrackReader::versionOfRuntime(m_runtimeId), this);
     connect(&m_bridge, &TrackBridge::cdjCountChanged, this, &TrackApp::cdjCountChanged);
 
     m_checkTimer.setSingleShot(true);
@@ -151,11 +156,13 @@ int TrackApp::cdjCount() const { return m_active ? m_bridge.cdjCount() : 0; }
 bool TrackApp::updateAvailable() const { return m_active && m_staged.isEmpty() == false; }
 QString TrackApp::updateLatest() const { return m_staged; }
 int TrackApp::updateStep() const { return m_step; }
+QObject *TrackApp::reader() const { return m_reader; }
 
 void TrackApp::start()
 {
     if (m_active == false)
         return;
+    m_reader->start();                   // R557_READER: the jar, before the helper starts
     m_bridge.start();
     if (m_installed == false)
     {

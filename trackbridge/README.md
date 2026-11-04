@@ -155,6 +155,26 @@ Jars in `app\<build>\trackbridge-lib\` go first on the classpath, so a newer bea
 wins over the one in the runtime. The other way is a new runtime id with a newer jar, which
 `make_release.py` builds.
 
+## CDJ READER in SETUP (runde 557)
+
+SETUP > ADVANCED > CDJ READER updates Beat Link Trigger's jar without a new TRACK release
+(`qmlui/trackreader.{h,cpp}`):
+
+- 2 min after start, every 6 h and on CHECK NOW it reads Deep Symmetry's releases
+  (`api.github.com/repos/Deep-Symmetry/beat-link-trigger/releases`): the newest release and
+  the newest preview that have a `beat-link-trigger-<ver>.jar` with GitHub's SHA-256.
+- A newer one (a preview only when newer than the newest release) is downloaded in the
+  background (curl, at most 4 MB/s) to `%LOCALAPPDATA%\TRACK\cdjreader\<ver>\` and checked.
+- UPDATE TO <ver> (two taps, SHOW OFF only) writes `cdjreader\current.txt` / `previous.txt`
+  and restarts only the helper on the new jar (the runtime's Java). If the helper has not
+  printed a STATUS line within 60 s, TRACK goes back by itself and writes `bad.txt` (that
+  version is not offered again).
+- ROLL BACK TO <ver> goes to the one before (the runtime's own jar counts).
+- Only the jar in use, the one before and a ready candidate are kept.
+- A runtime that brings the same or a newer version drops the override.
+- Test hooks: `QLC_TRACK_BLT_API` (another releases URL; http only then),
+  `QLC_TRACK_BLT_FIRST_MS` (the first check).
+
 ## Files in the repo
 
 | File | What |
@@ -165,6 +185,7 @@ wins over the one in the runtime. The other way is a new runtime id with a newer
 | `trackbridge/launcher/track_launcher.c` | `TRACK.exe` |
 | `trackbridge/smoke_test.py` | CI: the helper on BLT 8.0.0's jar |
 | `qmlui/trackapp.{h,cpp}`, `qmlui/trackbridge.{h,cpp}` | TRACK's object (`trackAppCtl`): the helper, CDJ count, update, restart |
+| `qmlui/trackreader.{h,cpp}` | SETUP's CDJ READER: Beat Link Trigger's jar, update and roll back (`trackAppCtl.reader`) |
 | `tools/get-track-app.cmd` | First install |
 
 ## Limits

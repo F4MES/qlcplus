@@ -53,6 +53,23 @@ void TrackBridge::setPlaces(const QString &logDir, const QString &runtimeDir)
     m_runtimeDir = runtimeDir;
 }
 
+void TrackBridge::setJarOverride(const QString &jar)
+{
+    m_jarOverride = jar;
+}
+
+void TrackBridge::restart()
+{
+    // R557_READER: another Beat Link Trigger jar - the helper closes the network the proper way
+    // (its pipe) and starts again at once on the new one
+    stop();
+    m_wanted = true;
+    m_failures = 0;
+    m_logStart = true;               // the new jar in the log
+    m_lastWhy.clear();
+    slotLaunch();
+}
+
 int TrackBridge::cdjCount() const
 {
     return m_cdjCount;
@@ -191,6 +208,10 @@ bool TrackBridge::locate(QString &java, QStringList &classpath, QString &why) co
             if (bltJar.isEmpty())
                 bltJar = jar;
         }
+        // R557_READER: a newer Beat Link Trigger fetched in SETUP (cdjreader\<version>), on the runtime's Java
+        if (exe.isEmpty() == false && m_jarOverride.isEmpty() == false && QFileInfo::exists(m_jarOverride)
+            && qEnvironmentVariable("QLC_BRIDGE_BLT_JAR").isEmpty())
+            bltJar = m_jarOverride;
     }
 
     if (bltJar.isEmpty() || java.isEmpty())
@@ -376,6 +397,8 @@ void TrackBridge::slotOutput()
                 m_cdjCount = n;
                 emit cdjCountChanged(n);
             }
+            if (ok)
+                emit statusSeen();       // R557_READER
         }
         else
             keep.append(raw);
@@ -410,6 +433,7 @@ void TrackBridge::slotFinished(int exitCode, QProcess::ExitStatus status)
         m_cdjCount = 0;
         emit cdjCountChanged(0);
     }
+    emit helperExited(status == QProcess::NormalExit ? exitCode : -1);   // R557_READER
     if (m_wanted == false)
         return;
     if (status == QProcess::NormalExit && exitCode == kBltRunning)

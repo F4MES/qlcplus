@@ -45,6 +45,7 @@ set(SRC_FILES
     main.cpp
     trackapp.cpp trackapp.h
     trackbridge.cpp trackbridge.h
+    trackreader.cpp trackreader.h
     mainview2d.cpp mainview2d.h
     mainview3d.cpp mainview3d.h
     mainviewdmx.cpp mainviewdmx.h

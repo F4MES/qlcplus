@@ -23,19 +23,34 @@ Rectangle
     property color activeColor: "#4A4A4A"
     signal tapped()
 
-    radius: 3
-    color: tileMouse.pressed ? Qt.lighter(active ? activeColor : "#3A3A3A", 1.35)
-                             : (active ? activeColor : "#3A3A3A")
-    border.width: 1
+    // TRACK_APP_STYLE_R557: the TRACK app's tiles as the Track page's - flat, round, bold capitals
+    readonly property bool appStyle: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
+    readonly property color idle: appStyle ? "#2A2A33" : "#3A3A3A"
+    readonly property bool lightFill: 0.299 * activeColor.r + 0.587 * activeColor.g + 0.114 * activeColor.b > 0.5
+
+    radius: appStyle ? 10 : 3
+    color: tileMouse.pressed ? Qt.lighter(active ? activeColor : idle, 1.35)
+                             : (active ? activeColor : idle)
+    border.width: appStyle ? 0 : 1
     border.color: active ? Qt.lighter(activeColor, 1.3) : "#555555"
+    opacity: enabled ? 1.0 : (appStyle ? 0.35 : 1.0)
 
     Text
     {
         id: tileText
         anchors.centerIn: parent
-        color: tileRoot.active ? "#101010" : "#EEEEEE"
-        font.bold: tileRoot.active
-        font.pixelSize: 13
+        // a long label shrinks to fit (down to 9 px) before it is cut
+        width: tileRoot.appStyle ? Math.max(0, tileRoot.width - 12) : implicitWidth
+        horizontalAlignment: Text.AlignHCenter
+        fontSizeMode: tileRoot.appStyle ? Text.HorizontalFit : Text.FixedSize
+        minimumPixelSize: 9
+        elide: tileRoot.appStyle ? Text.ElideRight : Text.ElideNone
+        color: tileRoot.active ? (tileRoot.appStyle && !tileRoot.lightFill ? "#FFFFFF" : "#101010")
+                               : (tileRoot.appStyle ? "#D6D6DC" : "#EEEEEE")
+        font.bold: tileRoot.active || tileRoot.appStyle
+        font.pixelSize: tileRoot.appStyle ? 12 : 13
+        font.letterSpacing: tileRoot.appStyle ? 0.7 : 0
+        font.capitalization: tileRoot.appStyle ? Font.AllUppercase : Font.MixedCase
     }
 
     MouseArea

@@ -55,11 +55,21 @@ public:
     /** R548_CDJS: the CDJs the helper sees (its "STATUS cdjs=N" lines); 0 while it does not run */
     int cdjCount() const;
 
+    /** R557_READER: Beat Link Trigger's jar to run on instead of the runtime's ("" = the runtime's) */
+    void setJarOverride(const QString &jar);
+
+    /** R557_READER: the helper stops and starts again (another jar) - TRACK keeps running */
+    void restart();
+
     /** One line in <dir>/track.log - never a reason to stop */
     static void writeLog(const QString &dir, const QString &what);
 
 signals:
     void cdjCountChanged(int count);
+    /** R557_READER: a "STATUS cdjs=N" line - the helper runs and sees the network */
+    void statusSeen();
+    /** R557_READER: the helper ended (its exit code; -1 a crash) */
+    void helperExited(int code);
 
 private slots:
     void slotFinished(int exitCode, QProcess::ExitStatus status);
@@ -84,6 +94,7 @@ private:
     QString m_lastWhy;
     QString m_logDir;
     QString m_runtimeDir;
+    QString m_jarOverride;       // R557_READER
     QByteArray m_outBuf;
     int m_cdjCount;
 };

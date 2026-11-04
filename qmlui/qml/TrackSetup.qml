@@ -22,8 +22,9 @@ import "."
 Rectangle
 {
     id: setupRoot
-    color: "#262626"
-    radius: 4
+    // TRACK_APP_STYLE_R557: the Track page's card in the TRACK app
+    color: setupRoot.trackApp ? "#141418" : "#262626"
+    radius: setupRoot.trackApp ? 14 : 4
 
     // First child, so every control below sits above it: a plain Rectangle
     // lets a touch through to the page underneath, and the gaps between the
@@ -71,9 +72,9 @@ Rectangle
     // from the other file is not in scope here, see the note at the Loader.
     property var host: null
 
-    readonly property color cText: "#EEEEEE"
-    readonly property color cDim:  "#9A9A9A"
-    readonly property color cLine: "#555555"
+    readonly property color cText: trackApp ? "#E6E6EA" : "#EEEEEE"     // TRACK_APP_STYLE_R557
+    readonly property color cDim:  trackApp ? "#8A8A94" : "#9A9A9A"
+    readonly property color cLine: trackApp ? "#2A2A33" : (setupRoot.trackApp ? "#2A2A33" : "#555555")
 
     property string filter: ""
     property bool advancedOpen: false
@@ -81,6 +82,25 @@ Rectangle
     // in ADVANCED, and a group switches on / off with two taps
     readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
     property bool cacheOpen: false
+    // TRACK_APP_LIST_R557 (Tobias 11-04: "gemme listen over alle programmer under show all og maaske kun vise en
+    // liste over sidste gemte og manuelt vaegtede looks/programmer"): in the TRACK app the list is SAVED LOOKS
+    // + YOUR CHANGES; SHOW ALL shows every programme as before (HIDDEN: the hidden ones too)
+    property bool fullList: false
+    // TRACK_APP_CACHE_R557 ("cache siden i settings skal fylde hele skaermen")
+    readonly property bool cacheFull: trackApp && cacheOpen
+    readonly property bool listMine: trackApp && !fullList && !cacheFull
+    readonly property bool advShown: advancedOpen && !cacheFull
+    property var handRows: []
+    function reloadHand()
+    {
+        handRows = (trackApp && trackEngine && typeof trackEngine.handChanges === "function") ? trackEngine.handChanges() : []
+    }
+    // EDIT on a row of YOUR CHANGES: the full list, searched for it
+    function editProgramme(name)
+    {
+        fullList = true
+        filterInput.text = name
+    }
     property bool learnedOpen: false     // R436_LEARNED
     property bool midiOpen: false        // R486_MI_SETUP_OPEN
     property bool labMenuOpen: false     // R436_LAB_MENU
@@ -127,7 +147,7 @@ Rectangle
         case "uv":      return "#7030C0"
         case "white":   return "#E8E8E8"
         }
-        return "#3A3A3A"
+        return (setupRoot.trackApp ? "#202027" : "#3A3A3A")
     }
 
     // every function with its role, fetched when the table really changes -
@@ -145,6 +165,7 @@ Rectangle
         if (trackEngine)
             trackEngine.autoAssign(false)
         reloadRows()
+        reloadHand()                     // TRACK_APP_LIST_R557
     }
 
     Connections
@@ -156,6 +177,7 @@ Rectangle
             // where the finger was
             var y = funcList.contentY
             setupRoot.reloadRows()
+            setupRoot.reloadHand()       // TRACK_APP_LIST_R557
             Qt.callLater(function() { funcList.contentY = Math.min(y, Math.max(0, funcList.contentHeight - funcList.height)) })
         }
     }
@@ -191,8 +213,8 @@ Rectangle
             {
                 Layout.preferredWidth: setupRoot.width >= 1640 ? 200 : 120
                 Layout.preferredHeight: 34
-                color: "#1B1B1B"
-                radius: 3
+                color: (setupRoot.trackApp ? "#0E0E11" : "#1B1B1B")
+                radius: setupRoot.trackApp ? 8 : 3
                 border.width: 1
                 border.color: setupRoot.cLine
 
@@ -215,7 +237,7 @@ Rectangle
                     verticalAlignment: Text.AlignVCenter
                     visible: filterInput.text.length === 0
                     text: qsTr("search…")
-                    color: "#666666"
+                    color: (setupRoot.trackApp ? "#5E5E68" : "#666666")
                     font.pixelSize: 14
                 }
             }
@@ -226,7 +248,26 @@ Rectangle
             {
                 Layout.preferredWidth: 100
                 Layout.preferredHeight: 34
+                objectName: "showAllTile"
                 label: qsTr("SHOW ALL")
+                // TRACK_APP_LIST_R557: in the TRACK app SHOW ALL is the full list of programmes
+                active: setupRoot.trackApp ? setupRoot.fullList : (trackEngine ? trackEngine.showAll : false)
+                onTapped:
+                {
+                    if (setupRoot.trackApp)
+                        setupRoot.fullList = !setupRoot.fullList
+                    else if (trackEngine)
+                        trackEngine.showAll = !trackEngine.showAll
+                }
+            }
+            // TRACK_APP_LIST_R557: the full list's own SHOW ALL of before - the hidden rows too
+            TrackTile
+            {
+                objectName: "hiddenTile"
+                visible: setupRoot.trackApp && setupRoot.fullList
+                Layout.preferredWidth: 90
+                Layout.preferredHeight: 34
+                label: qsTr("HIDDEN")
                 active: trackEngine ? trackEngine.showAll : false
                 onTapped: if (trackEngine) trackEngine.showAll = !trackEngine.showAll
             }
@@ -396,7 +437,7 @@ Rectangle
         // SAVED_LOOKS_SETUP: separate row keeps the 1366 toolbar intact.
         TrackTile {
             objectName: "savedLooksSetup"
-            visible: setupRoot.host && setupRoot.host.savedUiAvailable === true
+            visible: setupRoot.host && setupRoot.host.savedUiAvailable === true && !setupRoot.trackApp   // TRACK_APP_LIST_R557: in the list
             Layout.preferredWidth: 180; Layout.preferredHeight: visible ? 40 : 0
             label: qsTr("SAVED LOOKS")
             onTapped: if (setupRoot.host) setupRoot.host.savedFavoritesOpen = true
@@ -786,14 +827,14 @@ Rectangle
         Rectangle
         {
             Layout.fillWidth: true
-            Layout.fillHeight: false
+            Layout.fillHeight: setupRoot.cacheFull          // TRACK_APP_CACHE_R557: all of SETUP in the TRACK app
             Layout.preferredHeight: visible ? 260 : 0
-            Layout.maximumHeight: 260
+            Layout.maximumHeight: setupRoot.cacheFull ? 100000 : 260
             visible: setupRoot.cacheOpen
-            color: "#181818"
-            radius: 4
+            color: (setupRoot.trackApp ? "#17171C" : "#181818")
+            radius: setupRoot.trackApp ? 10 : 4
             border.width: 1
-            border.color: "#333333"
+            border.color: (setupRoot.trackApp ? "#2A2A33" : "#333333")
 
             ColumnLayout
             {
@@ -913,8 +954,8 @@ Rectangle
                         {
                         width: parent.width
                         height: 42
-                        color: "#1F1F1F"
-                        radius: 3
+                        color: (setupRoot.trackApp ? "#202027" : "#1F1F1F")
+                        radius: setupRoot.trackApp ? 8 : 3
 
                         RowLayout
                         {
@@ -942,7 +983,7 @@ Rectangle
                                 Layout.preferredWidth: 72
                                 Layout.preferredHeight: 22
                                 radius: 11
-                                color: md.manual ? "#E3B44F" : "#3A3A3A"
+                                color: md.manual ? "#E3B44F" : (setupRoot.trackApp ? "#202027" : "#3A3A3A")
                                 Text
                                 {
                                     anchors.centerIn: parent
@@ -982,6 +1023,7 @@ Rectangle
         // ------------------------------------------------- groups
         RowLayout
         {
+            visible: !setupRoot.cacheFull        // TRACK_APP_CACHE_R557
             Layout.fillWidth: true
             Layout.fillHeight: false
             Layout.preferredHeight: 56
@@ -992,7 +1034,7 @@ Rectangle
             {
                 Layout.preferredWidth: 96
                 Layout.minimumWidth: 96
-                text: qsTr("GROUPS") + "\n" + (setupRoot.trackApp ? qsTr("2 taps: on / off · hold: base")   // TRACK_APP_SETUP_R550
+                text: qsTr("GROUPS") + "\n" + (setupRoot.trackApp ? qsTr("2 taps: on / off") + "\n" + qsTr("hold: base")   // TRACK_APP_SETUP_R550
                                                               : qsTr("tap: on / off · hold: base"))   // runde 234 changed the tap (fixed runde 248)
                 lineHeight: 0.9
                 color: setupRoot.cDim
@@ -1016,13 +1058,13 @@ Rectangle
                                        fixtures: 0, colours: 0, motions: 0, dimmer: false })
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    radius: 3
+                    radius: setupRoot.trackApp ? 8 : 3
                     // TRACK_APP_SETUP_R550: the first tap only asks (SURE?), the second within 4 s switches
                     property bool armed: false
                     Timer { id: groupArm; interval: 4000; onTriggered: groupTile.armed = false }
-                    color: armed ? "#3C2E12" : (g.base ? "#2A3F55" : (g.enabled ? "#333333" : "#1F1F1F"))
-                    border.width: armed || g.base ? 2 : 1
-                    border.color: armed ? "#E3B44F" : (g.base ? "#4FA3E3" : (g.enabled ? "#666666" : "#333333"))
+                    color: armed ? "#3C2E12" : (g.base ? "#2A3F55" : (g.enabled ? (setupRoot.trackApp ? "#2A2A33" : "#333333") : (setupRoot.trackApp ? "#202027" : "#1F1F1F")))
+                    border.width: armed || g.base ? 2 : (setupRoot.trackApp ? 0 : 1)
+                    border.color: armed ? "#E3B44F" : (g.base ? "#4FA3E3" : (g.enabled ? (setupRoot.trackApp ? "#5E5E68" : "#666666") : (setupRoot.trackApp ? "#2A2A33" : "#333333")))
 
                     Column
                     {
@@ -1035,7 +1077,7 @@ Rectangle
                             text: groupTile.armed ? (groupTile.g.enabled ? qsTr("SURE? - TAP AGAIN TO SWITCH OFF") : qsTr("SURE? - TAP AGAIN TO SWITCH ON"))
                                   : groupTile.g.key
                                   + (groupTile.g.base ? "  · BASE" : (groupTile.g.enabled ? "" : "  · OFF"))
-                            color: groupTile.g.enabled ? setupRoot.cText : "#666666"
+                            color: groupTile.g.enabled ? setupRoot.cText : (setupRoot.trackApp ? "#5E5E68" : "#666666")
                             font.bold: true
                             font.pixelSize: 12
                         }
@@ -1084,6 +1126,7 @@ Rectangle
             Layout.fillHeight: false
             Layout.preferredHeight: 28
             Layout.maximumHeight: 28
+            visible: !setupRoot.cacheFull && !setupRoot.listMine   // TRACK_APP_LIST_R557: with SHOW ALL's list
             spacing: 4
 
             Item { Layout.fillWidth: true }
@@ -1098,8 +1141,8 @@ Rectangle
                     Layout.minimumWidth: 110
                     Layout.maximumWidth: 110
                     Layout.fillHeight: true
-                    color: "#1B1B1B"
-                    radius: 3
+                    color: (setupRoot.trackApp ? "#0E0E11" : "#1B1B1B")
+                    radius: setupRoot.trackApp ? 8 : 3
                     border.width: 1
                     border.color: setupRoot.roleColor(index)
 
@@ -1125,8 +1168,8 @@ Rectangle
                 Layout.minimumWidth: 100
                 Layout.maximumWidth: 100
                 Layout.fillHeight: true
-                color: "#1B1B1B"
-                radius: 3
+                color: (setupRoot.trackApp ? "#0E0E11" : "#1B1B1B")
+                radius: setupRoot.trackApp ? 8 : 3
                 border.width: 1
                 border.color: "#E3B44F"
 
@@ -1152,6 +1195,8 @@ Rectangle
         ListView
         {
             id: funcList
+            objectName: "funcList"
+            visible: !setupRoot.cacheFull && !setupRoot.listMine   // TRACK_APP_LIST_R557: SHOW ALL
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.preferredHeight: 300
@@ -1184,8 +1229,8 @@ Rectangle
                 id: funcRow
                 width: funcList.width
                 height: 44
-                color: (modelData && modelData.hidden) ? "#181818" : "#1F1F1F"
-                radius: 3
+                color: (modelData && modelData.hidden) ? (setupRoot.trackApp ? "#17171C" : "#181818") : (setupRoot.trackApp ? "#202027" : "#1F1F1F")
+                radius: setupRoot.trackApp ? 8 : 3
 
                 // a model reset can re-evaluate these while the row is gone
                 property int rowRole: modelData ? modelData.role : -1
@@ -1350,6 +1395,218 @@ Rectangle
             }
         }
 
+        // ------------------------------------------------- TRACK_APP_LIST_R557: SAVED LOOKS + YOUR CHANGES
+        // Tobias 11-04 (mockup approved): the TRACK app's SETUP lists what is his - the saved looks (newest first,
+        // NEXT queues one for its section, REMOVE two taps) and the programmes he changed (a role, energy stars,
+        // a ban, a thumb - newest first; EDIT opens it in SHOW ALL's list, RESET two taps gives it back)
+        Flickable
+        {
+            id: handList
+            objectName: "handList"
+            visible: setupRoot.listMine
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 120
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            contentWidth: width
+            contentHeight: handCol.height + 8
+            readonly property var looks: trackEngine && trackEngine.savedLooks ? trackEngine.savedLooks : []
+
+            Column
+            {
+                id: handCol
+                width: handList.width
+                spacing: 6
+
+                Row
+                {
+                    spacing: 12
+                    height: 26
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: qsTr("SAVED LOOKS"); color: "#8A8A94"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 1.6 }
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: qsTr("newest first · NEXT plays it at its next section"); color: "#6E6E78"; font.pixelSize: 12 }
+                }
+                Text
+                {
+                    visible: handList.looks.length === 0
+                    leftPadding: 12
+                    text: qsTr("No saved looks yet - SAVE on the Track page keeps the look that runs")
+                    color: "#6E6E78"; font.pixelSize: 13
+                }
+                Repeater
+                {
+                    model: handList.looks
+                    Rectangle
+                    {
+                        id: lookRow
+                        objectName: "handLook:" + index
+                        width: handCol.width
+                        height: 44
+                        radius: 10
+                        color: "#202027"
+                        property bool armed: false
+                        Timer { id: lookArm; interval: 4000; onTriggered: lookRow.armed = false }
+                        Text
+                        {
+                            x: 14; width: 300; anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.name || ""; color: "#E6E6EA"; font.bold: true; font.pixelSize: 13; elide: Text.ElideRight
+                        }
+                        Rectangle
+                        {
+                            x: 324; anchors.verticalCenter: parent.verticalCenter
+                            width: 64; height: 22; radius: 8
+                            readonly property string sec: (modelData.section || "").toUpperCase()
+                            color: sec === "DROP" ? "#402126" : (sec === "BREAK" ? "#183148" : "#303039")
+                            Text { anchors.centerIn: parent; text: parent.sec; color: parent.sec === "DROP" ? "#FF9299" : (parent.sec === "BREAK" ? "#7EC5FF" : "#C0C0CE"); font.bold: true; font.pixelSize: 11 }
+                        }
+                        Text
+                        {
+                            x: 404; width: parent.width - 404 - 260; anchors.verticalCenter: parent.verticalCenter
+                            text: (modelData.title || "") + (modelData.groups && modelData.groups.length ? "  ·  " + modelData.groups.join(" · ") : "")
+                            color: "#A0A0AA"; font.pixelSize: 12; elide: Text.ElideRight
+                        }
+                        TrackTile
+                        {
+                            objectName: "handLookNext:" + index
+                            x: parent.width - 252; anchors.verticalCenter: parent.verticalCenter
+                            width: 140; height: 32
+                            enabled: modelData.canQueue === true
+                            active: modelData.queued === true
+                            activeColor: "#6ECD82"
+                            label: active ? qsTr("QUEUED") : (enabled ? qsTr("NEXT ") + (modelData.section || "").toUpperCase() : (modelData.reason || qsTr("NO NEXT")))
+                            onTapped: if (trackEngine && enabled) trackEngine.queueSavedLook(modelData.id)
+                        }
+                        TrackTile
+                        {
+                            objectName: "handLookRemove:" + index
+                            x: parent.width - 104; anchors.verticalCenter: parent.verticalCenter
+                            width: 92; height: 32
+                            label: lookRow.armed ? qsTr("SURE?") : qsTr("REMOVE")
+                            active: lookRow.armed
+                            activeColor: "#E36B6B"
+                            onTapped:
+                            {
+                                if (lookRow.armed === false) { lookRow.armed = true; lookArm.restart(); return }
+                                lookRow.armed = false
+                                if (trackEngine) trackEngine.removeSavedLook(modelData.id)
+                            }
+                        }
+                    }
+                }
+
+                Item { width: 1; height: 6 }
+                Row
+                {
+                    spacing: 12
+                    height: 26
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: qsTr("YOUR CHANGES"); color: "#8A8A94"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 1.6 }
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: qsTr("a role, energy stars, a ban or a thumb you gave - newest first · RESET gives it back to the engine (2 taps)"); color: "#6E6E78"; font.pixelSize: 12 }
+                }
+                Text
+                {
+                    visible: setupRoot.handRows.length === 0
+                    leftPadding: 12
+                    text: qsTr("Nothing changed by hand yet - SHOW ALL lists every programme")
+                    color: "#6E6E78"; font.pixelSize: 13
+                }
+                Repeater
+                {
+                    model: setupRoot.handRows
+                    Rectangle
+                    {
+                        id: handRow
+                        objectName: "handRow:" + index
+                        width: handCol.width
+                        height: 44
+                        radius: 10
+                        color: "#202027"
+                        property bool armed: false
+                        Timer { id: handArm; interval: 4000; onTriggered: handRow.armed = false }
+                        readonly property var md: modelData || ({})
+                        Text
+                        {
+                            x: 14; width: 330; anchors.verticalCenter: parent.verticalCenter
+                            text: handRow.md.name || ""; color: "#E6E6EA"; font.bold: true; font.pixelSize: 13; elide: Text.ElideRight
+                        }
+                        Text
+                        {
+                            x: 352; width: 150; anchors.verticalCenter: parent.verticalCenter
+                            text: handRow.md.group || ""; color: "#8A8A94"; font.pixelSize: 12; elide: Text.ElideRight
+                        }
+                        Row
+                        {
+                            x: 512; anchors.verticalCenter: parent.verticalCenter
+                            spacing: 8
+                            // what of it is his
+                            Rectangle
+                            {
+                                visible: handRow.md.role !== handRow.md.guess
+                                width: roleChip.implicitWidth + 18; height: 22; radius: 11; color: "#22374D"
+                                Text { id: roleChip; anchors.centerIn: parent; color: "#CFE6FF"; font.bold: true; font.pixelSize: 11
+                                       text: setupRoot.roleShort(handRow.md.role) + " · " + qsTr("was") + " " + setupRoot.roleShort(handRow.md.guess) }
+                            }
+                            Rectangle
+                            {
+                                visible: handRow.md.stars !== handRow.md.starsGuess
+                                width: starChip.implicitWidth + 18; height: 22; radius: 11; color: "#4A3C15"
+                                Text { id: starChip; anchors.centerIn: parent; color: "#F5D58A"; font.bold: true; font.pixelSize: 11
+                                       text: "★".repeat(Math.max(1, handRow.md.stars || 1)) + " " + qsTr("you") + " · " + qsTr("was") + " " + "★".repeat(Math.max(1, handRow.md.starsGuess || 1)) }
+                            }
+                            Rectangle
+                            {
+                                visible: handRow.md.banned === true
+                                width: banChip.implicitWidth + 18; height: 22; radius: 11; color: "#4A1A1A"
+                                Text { id: banChip; anchors.centerIn: parent; text: qsTr("BANNED"); color: "#FFB4B4"; font.bold: true; font.pixelSize: 11 }
+                            }
+                            Rectangle
+                            {
+                                visible: (handRow.md.rateUp || 0) > 0 || (handRow.md.rateDown || 0) > 0
+                                width: rateChip.implicitWidth + 18; height: 22; radius: 11; color: "#173A22"
+                                Text { id: rateChip; anchors.centerIn: parent; color: "#A8F0B8"; font.bold: true; font.pixelSize: 11
+                                       text: ((handRow.md.rateUp || 0) > 0 ? "+" + handRow.md.rateUp : "") + ((handRow.md.rateUp || 0) > 0 && (handRow.md.rateDown || 0) > 0 ? "  " : "")
+                                             + ((handRow.md.rateDown || 0) > 0 ? "−" + handRow.md.rateDown : "") }
+                            }
+                        }
+                        Text
+                        {
+                            x: parent.width - 330; width: 110; anchors.verticalCenter: parent.verticalCenter
+                            text: handRow.md.when || ""; color: "#8A8A94"; font.pixelSize: 12; horizontalAlignment: Text.AlignRight
+                        }
+                        TrackTile
+                        {
+                            objectName: "handEdit:" + index
+                            x: parent.width - 204; anchors.verticalCenter: parent.verticalCenter
+                            width: 92; height: 32
+                            label: qsTr("EDIT")
+                            onTapped: setupRoot.editProgramme(handRow.md.name || "")
+                        }
+                        TrackTile
+                        {
+                            objectName: "handReset:" + index
+                            x: parent.width - 104; anchors.verticalCenter: parent.verticalCenter
+                            width: 92; height: 32
+                            label: handRow.armed ? qsTr("SURE?") : qsTr("RESET")
+                            active: handRow.armed
+                            activeColor: "#E3B44F"
+                            onTapped:
+                            {
+                                if (handRow.armed === false) { handRow.armed = true; handArm.restart(); return }
+                                handRow.armed = false
+                                if (trackEngine) trackEngine.handReset(handRow.md.id)
+                            }
+                        }
+                    }
+                }
+                Text
+                {
+                    leftPadding: 4
+                    text: setupRoot.handRows.length + " " + qsTr("changes") + "  ·  " + handList.looks.length + " " + qsTr("saved looks")
+                          + "  ·  " + qsTr("SHOW ALL = every programme, as the list was - with roles, stars, BAN and the search")
+                    color: "#6E6E78"; font.pixelSize: 12
+                }
+            }
+        }
+
         // ------------------------------------------------- advanced
         RowLayout
         {
@@ -1357,7 +1614,7 @@ Rectangle
             Layout.fillHeight: false
             Layout.preferredHeight: 40
             Layout.maximumHeight: 40
-            visible: setupRoot.advancedOpen
+            visible: setupRoot.advShown
             spacing: 8
 
             Text
@@ -1517,7 +1774,7 @@ Rectangle
             Layout.fillWidth: true
             Layout.fillHeight: false
             Layout.preferredHeight: 40
-            visible: setupRoot.advancedOpen
+            visible: setupRoot.advShown
             spacing: 10
             Text { text: qsTr("TRACK ANALYSIS"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
             TrackTile
@@ -1595,7 +1852,7 @@ Rectangle
             Layout.fillWidth: true
             Layout.fillHeight: false
             Layout.preferredHeight: 40
-            visible: setupRoot.advancedOpen
+            visible: setupRoot.advShown
             spacing: 10
             Text { text: qsTr("BREAK STABS"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
             TrackTile
@@ -1630,7 +1887,7 @@ Rectangle
             objectName: "clockLegend"
             Layout.fillWidth: true
             Layout.fillHeight: false
-            visible: setupRoot.advancedOpen
+            visible: setupRoot.advShown
             spacing: 10
             Text { text: qsTr("ENERGY BY CLOCK"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
             TrackTile
@@ -1686,7 +1943,7 @@ Rectangle
         {
             Layout.fillWidth: true
             Layout.fillHeight: false
-            visible: setupRoot.advancedOpen
+            visible: setupRoot.advShown
             columns: 14
             columnSpacing: 4
             rowSpacing: 4
@@ -1744,7 +2001,7 @@ Rectangle
         {
             objectName: "hazeLimitRow"
             Layout.fillWidth: true
-            visible: setupRoot.advancedOpen && trackEngine && trackEngine.hazeAvailable
+            visible: setupRoot.advShown && trackEngine && trackEngine.hazeAvailable
             Layout.preferredHeight: 48
             spacing: 10
             Text { text: qsTr("HAZE LIMIT"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4; Layout.preferredWidth: 165 }
@@ -1782,7 +2039,7 @@ Rectangle
             objectName: "atmosHand"
             Layout.fillWidth: true
             Layout.fillHeight: false
-            visible: setupRoot.advancedOpen && trackEngine && (trackEngine.atmosKnown === true || trackEngine.hazeAvailable === true)
+            visible: setupRoot.advShown && trackEngine && (trackEngine.atmosKnown === true || trackEngine.hazeAvailable === true)
             spacing: 6
             RowLayout
             {
@@ -1882,6 +2139,100 @@ Rectangle
                         MouseArea { objectName: "atmosH:" + index; x: 0; width: parent.width / 2; height: parent.height; onClicked: atmosPoint.tap(0) }
                         MouseArea { objectName: "atmosF:" + index; x: parent.width / 2; width: parent.width / 2; height: parent.height; onClicked: atmosPoint.tap(1) }
                     }
+                }
+            }
+        }
+
+        // ------------------------------------------------- TRACK_APP_READER_R557: CDJ READER
+        // Tobias 11-04 ("Kan vi ogsaa checke og opdatere blt-hjaelperen ligesom vi checker for track? ... under
+        // settings"; previews too, "en knap til at rulle tilbage til den sidst installerede"): the Beat Link Trigger
+        // jar TRACK's CDJ reader runs on - CHECK NOW, UPDATE (two taps, SHOW OFF), ROLL BACK (two taps, SHOW OFF)
+        RowLayout
+        {
+            id: readerRow
+            objectName: "readerRow"
+            readonly property var rd: setupRoot.trackApp && trackAppCtl && trackAppCtl.reader ? trackAppCtl.reader : null
+            readonly property bool showOn: trackManager ? trackManager.autoRun === true : false
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: 40
+            visible: setupRoot.advShown && rd !== null
+            spacing: 10
+            property bool armUpdate: false
+            property bool armBack: false
+            Timer { id: readerArm; interval: 4000; onTriggered: { readerRow.armUpdate = false; readerRow.armBack = false } }
+            Text { text: qsTr("CDJ READER"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+            Text
+            {
+                objectName: "readerText"
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+                color: setupRoot.cDim
+                font.pixelSize: 12
+                text:
+                {
+                    var r = readerRow.rd
+                    if (!r) return ""
+                    if (!r.available) return qsTr("beat-link from Beat Link Trigger %1 · updates only in an installed TRACK").arg(r.version || "?")
+                    var s = qsTr("beat-link from Beat Link Trigger %1").arg(r.version || "?") + (r.bundled ? " " + qsTr("(TRACK's own)") : "")
+                    if (r.step === 1 || r.step === 2 || r.step === 3 || r.step === 4 || r.step === 5 || r.step === 6)
+                        return s + "  ·  " + r.note
+                    if (r.candidate !== "" && r.candidateReady)
+                        s += "  ·  " + qsTr("%1%2 is out (%3) - downloaded and checked").arg(r.candidate).arg(r.candidatePreview ? " " + qsTr("PREVIEW") : "").arg(r.candidateDate)
+                    else if (r.checkedAt !== "")
+                        s += "  ·  " + qsTr("newest %1%2 - up to date · checked %3").arg(r.latestStable)
+                                 .arg(r.latestPreview !== "" ? " (" + qsTr("preview") + " " + r.latestPreview + ")" : "").arg(r.checkedAt)
+                    if (r.note !== "") s += "  ·  " + r.note
+                    return s + "  ·  " + qsTr("reads only, never sends to the CDJs")
+                }
+            }
+            TrackTile
+            {
+                objectName: "readerCheck"
+                visible: readerRow.rd && readerRow.rd.available
+                Layout.preferredWidth: 140
+                Layout.preferredHeight: 34
+                enabled: readerRow.rd && readerRow.rd.step !== 1 && readerRow.rd.step !== 4 && readerRow.rd.step !== 5
+                label: qsTr("CHECK NOW")
+                onTapped: if (readerRow.rd) readerRow.rd.checkNow()
+            }
+            TrackTile
+            {
+                objectName: "readerBack"
+                visible: readerRow.rd && readerRow.rd.available && readerRow.rd.previous !== ""
+                Layout.preferredWidth: 210
+                Layout.preferredHeight: 34
+                enabled: readerRow.rd && readerRow.rd.step !== 1
+                label: readerRow.armBack ? qsTr("SURE? - TAP AGAIN") : qsTr("ROLL BACK TO %1").arg(readerRow.rd ? readerRow.rd.previous : "")
+                active: readerRow.armBack
+                activeColor: "#E3B44F"
+                onTapped:
+                {
+                    if (!readerRow.rd) return
+                    if (readerRow.showOn) { readerRow.rd.rollback(true); return }
+                    if (readerRow.armBack === false) { readerRow.armBack = true; readerRow.armUpdate = false; readerArm.restart(); return }
+                    readerRow.armBack = false
+                    readerRow.rd.rollback(false)
+                }
+            }
+            TrackTile
+            {
+                objectName: "readerUpdate"
+                visible: readerRow.rd && readerRow.rd.available && readerRow.rd.candidateReady
+                Layout.preferredWidth: 230
+                Layout.preferredHeight: 34
+                enabled: readerRow.rd && readerRow.rd.step !== 1
+                label: readerRow.armUpdate ? qsTr("SURE? - TAP AGAIN")
+                       : qsTr("UPDATE TO %1").arg(readerRow.rd ? readerRow.rd.candidate : "")
+                active: true
+                activeColor: readerRow.armUpdate ? "#F0C870" : "#E3B44F"
+                onTapped:
+                {
+                    if (!readerRow.rd) return
+                    if (readerRow.showOn) { readerRow.rd.update(true); return }
+                    if (readerRow.armUpdate === false) { readerRow.armUpdate = true; readerRow.armBack = false; readerArm.restart(); return }
+                    readerRow.armUpdate = false
+                    readerRow.rd.update(false)
                 }
             }
         }
