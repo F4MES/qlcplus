@@ -26450,6 +26450,13 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
             if (QFileInfo::exists(rig + "/" + name))
                 out << rig + "/" + name;
         }
+        // TRACK_APP_LOGS_R551: the TRACK app's own logs (the start, the update, the CDJ reader)
+        const QString trackLogs = QString::fromLocal8Bit(qgetenv("LOCALAPPDATA")) + "/TRACK/logs";
+        foreach (const QString &name, QStringList() << "track.log" << "bridge.log" << "bridge-console.log")
+        {
+            if (QFileInfo::exists(trackLogs + "/" + name))
+                out << trackLogs + "/" + name;
+        }
     }
     else if (id == QStringLiteral("wer"))
     {
@@ -26463,7 +26470,7 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
         foreach (const QString &root, roots)
         {
             const QDir d(root);
-            foreach (const QFileInfo &sub, d.entryInfoList(QStringList() << "AppCrash_qlcplus*", QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time))
+            foreach (const QFileInfo &sub, d.entryInfoList(QStringList() << "AppCrash_qlcplus*" << "AppCrash_TRACK-engine*" /* TRACK_APP_LOGS_R551 */, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time))
             {
                 const QString wer = sub.absoluteFilePath() + "/Report.wer";
                 if (QFileInfo::exists(wer))
@@ -26476,7 +26483,7 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
     else if (id == QStringLiteral("dumps"))
     {
         const QDir d(QDir::homePath() + "/CrashDumps");
-        foreach (const QFileInfo &fi, d.entryInfoList(QStringList() << "qlcplus*.dmp", QDir::Files, QDir::Time))
+        foreach (const QFileInfo &fi, d.entryInfoList(QStringList() << "qlcplus*.dmp" << "TRACK-engine*.dmp" /* TRACK_APP_LOGS_R551 */, QDir::Files, QDir::Time))
         {
             out << fi.absoluteFilePath();
             if (out.count() >= 3)        // the newest three - a dump is tens of MB
