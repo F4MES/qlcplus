@@ -43,6 +43,7 @@ set(SRC_FILES
     inputprofileeditor.cpp inputprofileeditor.h
     listmodel.cpp listmodel.h
     main.cpp
+    trackbridge.cpp trackbridge.h
     mainview2d.cpp mainview2d.h
     mainview3d.cpp mainview3d.h
     mainviewdmx.cpp mainviewdmx.h

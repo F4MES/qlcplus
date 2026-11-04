@@ -1,0 +1,304 @@
+(ns qlc.bridge
+  "TRACK's beat-link helper (track-app branch, Tobias 11-04: \"byg de to vi lige har
+  lagt i backloggen\" - beat-link som hjaelpeproces).
+
+  QLC+ (TRACK.exe --track-app) starts this as a hidden Java process instead of
+  Beat Link Trigger. It runs our qlc_shared_functions.clj UNCHANGED on beat-link -
+  the same classes BLT runs it on, from BLT's own installed jar - and calls it the
+  way BLT's one trigger did:
+      Watch:            Master Player
+      Beat:             (qlc-beat! beat-number)
+      Tracked Update:   (qlc-tracked-update! device-number beat-number playing?)
+  and it goes online the way BLT does (the same finders, the same RGB waveforms,
+  no real player number, metadata passive when a player allows only three
+  database clients).
+
+  Only READS from the decks and the mixer: like BLT it announces itself as a
+  virtual player to get metadata, and it sends nothing that steers a deck - no
+  status packets, no sync, no master, no loads.
+
+  One beat-link program at a time: it takes BLT's own PC lock
+  (%ProgramData%\\qlc-rig\\blt-instance.lock, the startup guard's). While BLT
+  runs, this exits with code 3 and QLC+ tries again later; while this runs, a
+  guarded BLT says it is already running."
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [taoensso.timbre :as timbre]
+            [taoensso.timbre.appenders.community.rotor :as rotor])
+  (:import [java.nio.channels FileChannel]
+           [java.nio.file OpenOption StandardOpenOption]
+           [org.deepsymmetry.beatlink Beat BeatFinder BeatListener CdjStatus DeviceAnnouncementListener
+            DeviceFinder DeviceUpdateListener LifecycleListener VirtualCdj]
+           [org.deepsymmetry.beatlink.data AnalysisTagFinder BeatGridFinder CrateDigger MetadataFinder
+            TimeFinder WaveformFinder WaveformFinder$WaveformStyle]))
+
+(def bridge-version "1 (track-app 11-04)")
+
+;; ---------------------------------------------------------------- places
+
+(defn- windows? [] (str/starts-with? (str/lower-case (System/getProperty "os.name" "")) "windows"))
+
+(defn- log-dir
+  "Beside QLC+'s and the guard's startup.log on the lys-PC."
+  ^java.io.File []
+  (if-let [local (and (windows?) (System/getenv "LOCALAPPDATA"))]
+    (io/file local "qlc-rig-update")
+    (io/file (System/getProperty "user.home") ".qlc-rig-update")))
+
+(defn- lock-file
+  "The BLT startup guard's lock: one beat-link program on the PC at a time."
+  ^java.io.File []
+  (if-let [shared (and (windows?) (System/getenv "ProgramData"))]
+    (io/file shared "qlc-rig" "blt-instance.lock")
+    (io/file (System/getProperty "user.home") ".qlc-rig" "blt-instance.lock")))
+
+(defn- shared-file
+  "The functions BLT loads today: Downloads\\qlc-update\\qlc_shared_functions.clj
+  (UPDATE puts it there). -Dqlc.bridge.clj=<file> wins; nil = the copy in our jar."
+  []
+  (let [given (System/getProperty "qlc.bridge.clj")
+        dl    (io/file (System/getProperty "user.home") "Downloads" "qlc-update" "qlc_shared_functions.clj")]
+    (cond
+      (not (str/blank? given)) (io/file given)
+      (.isFile dl)             dl
+      :else                    nil)))
+
+;; ---------------------------------------------------------------- the log
+
+(defn- start-log! []
+  (let [dir (log-dir)]
+    (.mkdirs dir)
+    (Thread/setDefaultUncaughtExceptionHandler
+     (reify Thread$UncaughtExceptionHandler
+       (uncaughtException [_ thread e]
+         (timbre/error e "Uncaught exception on" (.getName thread)))))
+    (timbre/set-config!
+     {:min-level      :info
+      :ns-filter      #{"*"}
+      :middleware     []
+      :timestamp-opts {:pattern  "yyyy-MM-dd HH:mm:ss.SSS"
+                       :locale   :jvm-default
+                       :timezone (java.util.TimeZone/getDefault)}
+      :output-fn      timbre/default-output-fn
+      :appenders      {:rotor (rotor/rotor-appender {:path     (str (io/file dir "bridge.log"))
+                                                     :max-size 2000000
+                                                     :backlog  5})}})
+    (when (System/getProperty "qlc.bridge.console")
+      (timbre/merge-config! {:appenders {:println (timbre/println-appender {:stream :std-err})}}))
+    (timbre/info "TRACK beat-link helper" bridge-version "starting; Java" (System/getProperty "java.version")
+                 "; beat-link" (or (try (with-open [r (io/reader (io/resource "META-INF/maven/org.deepsymmetry/beat-link/pom.properties"))]
+                                          (some #(when (str/starts-with? % "version=") (subs % 8)) (doall (line-seq r))))
+                                        (catch Throwable _ nil))
+                                   "?"))))
+
+;; ---------------------------------------------------------------- one beat-link program at a time
+
+(defonce ^:private held-lock (atom nil))   ; kept for the JVM's whole life, never released by hand
+
+(defn- take-lock!
+  "True when we hold the PC's beat-link lock. Never deletes the file."
+  []
+  (try
+    (let [f (lock-file)]
+      (.mkdirs (.getParentFile f))
+      (let [ch (FileChannel/open (.toPath f) (into-array OpenOption [StandardOpenOption/CREATE StandardOpenOption/WRITE]))
+            lk (.tryLock ch)]
+        (if lk
+          (do (reset! held-lock [ch lk]) true)
+          (do (.close ch) false))))
+    (catch java.nio.channels.OverlappingFileLockException _ false)
+    (catch Throwable e
+      (timbre/error e "Could not take the beat-link lock")
+      false)))
+
+;; ---------------------------------------------------------------- the shared functions
+
+(defonce ^:private shared-ns (atom nil))
+
+(defn- load-shared!
+  "Our qlc_shared_functions.clj, in a namespace of its own with the two aliases it
+  uses (BLT's expression namespace has them: timbre and json)."
+  []
+  (let [target (create-ns 'qlc.shared)
+        f      (shared-file)]
+    (binding [*ns* target]
+      (clojure.core/refer 'clojure.core)
+      (require '[taoensso.timbre :as timbre] '[cheshire.core :as json] 'clojure.string)
+      (if f
+        (do (timbre/info "Loading the shared functions from" (str f))
+            (load-file (str f)))
+        (do (timbre/info "Loading the shared functions from the copy in trackbridge.jar")
+            (with-open [r (io/reader (io/resource "qlc_shared_functions.clj") :encoding "UTF-8")]
+              (clojure.lang.Compiler/load r "qlc_shared_functions.clj" "qlc_shared_functions.clj")))))
+    (reset! shared-ns target)
+    (timbre/info "Shared functions loaded:"
+                 (count (filter #(str/starts-with? (str %) "qlc-") (keys (ns-interns target)))) "qlc- names")))
+
+(defn- shared
+  "The shared function's var (so a reload is picked up), or nil."
+  [sym]
+  (some-> @shared-ns (ns-resolve sym)))
+
+;; ---------------------------------------------------------------- BLT's trigger, without BLT
+
+(defonce ^:private failures (atom {}))
+
+(defn- run-expression
+  "As BLT's run-trigger-function: an exception is logged, never thrown into beat-link
+  (each kind logged in full only the first times, then every 500th)."
+  [kind f & args]
+  (try
+    (when f (apply f args))
+    (catch Throwable t
+      (let [n (get (swap! failures update kind (fnil inc 0)) kind)]
+        (when (or (<= n 3) (zero? (mod n 500)))
+          (timbre/error t "Problem running the" kind "expression (" n "times so far)"))))))
+
+(defn- current-beat
+  "BLT's beat-number for a beat packet: the TimeFinder's position for that player, or nil."
+  [^Beat beat]
+  (let [tf (TimeFinder/getInstance)]
+    (when (.isRunning tf)
+      (when-let [pos (.getLatestPositionFor tf beat)]
+        (.-beatNumber pos)))))
+
+(def ^:private status-listener
+  (reify DeviceUpdateListener
+    (received [_ status]
+      ;; Watch: Master Player - a full status update from the tempo master
+      (when (and (instance? CdjStatus status) (.isTempoMaster ^CdjStatus status))
+        (let [^CdjStatus s status]
+          (run-expression :tracked (shared 'qlc-tracked-update!)
+                          (.getDeviceNumber s) (.getBeatNumber s) (.isPlaying s)))))))
+
+(def ^:private beat-listener
+  (reify BeatListener
+    (newBeat [_ beat]
+      (when (and (.isRunning (VirtualCdj/getInstance)) (.isTempoMaster ^Beat beat))
+        (run-expression :beat (shared 'qlc-beat!) (or (current-beat beat) -1))))))
+
+;; ---------------------------------------------------------------- online, as BLT goes online
+
+(defn- set-passive!
+  "BLT's rebuild-all-device-status: no dbserver queries when a player allows only three clients."
+  []
+  (try
+    (let [mf (MetadataFinder/getInstance)
+          limited (.isAnyDeviceLimitedToThreeDatabaseClients (DeviceFinder/getInstance))]
+      (when (not= limited (.isPassive mf))
+        (timbre/info "Metadata finder passive:" limited)
+        (.setPassive mf limited)))
+    (catch Throwable t (timbre/warn t "Problem setting metadata passive mode"))))
+
+(def ^:private device-listener
+  (reify DeviceAnnouncementListener
+    (deviceFound [_ a]
+      (timbre/info "DJ Link device found:" (.getDeviceName a) "number" (.getDeviceNumber a) "at" (.getHostAddress (.getAddress a)))
+      (set-passive!))
+    (deviceLost [_ a]
+      (timbre/info "DJ Link device lost:" (.getDeviceName a) "number" (.getDeviceNumber a))
+      (set-passive!))))
+
+(defn- start-finders!
+  "BLT's start-other-finders (and its beat finder), without the album art and
+  signatures nothing of ours reads."
+  []
+  (.setPreferredStyle (WaveformFinder/getInstance) WaveformFinder$WaveformStyle/RGB)
+  (.start (BeatFinder/getInstance))
+  (.start (MetadataFinder/getInstance))
+  (.start (CrateDigger/getInstance))
+  (.start (BeatGridFinder/getInstance))
+  (.start (TimeFinder/getInstance))
+  (.setFindDetails (WaveformFinder/getInstance) true)
+  (.start (WaveformFinder/getInstance))
+  (.start (AnalysisTagFinder/getInstance))
+  (set-passive!)
+  (timbre/info "Finders running: metadata, crate digger, beat grids, time, RGB waveforms, analysis tags"))
+
+(defn- go-online!
+  "One step of the online loop. BLT: start the DeviceFinder, wait until a DJ Link
+  device is seen, start the VirtualCdj with no real player number, then the
+  finders; lost the last device - offline, and look again."
+  [state]
+  (let [df   (DeviceFinder/getInstance)
+        vcdj (VirtualCdj/getInstance)]
+    (try
+      (when-not (.isRunning df)
+        (.start df))
+      (let [devices (seq (.getCurrentDevices df))]
+        (cond
+          (and (not (.isRunning vcdj)) devices)
+          (do (.setUseStandardPlayerNumber vcdj false)
+              (if (.start vcdj)
+                (do (timbre/info "Went online, using player number" (.getDeviceNumber vcdj))
+                    (start-finders!)
+                    :online)
+                (do (timbre/warn "Unable to create the virtual CDJ - trying again") :looking)))
+
+          (and (.isRunning vcdj) (not devices))
+          (do (timbre/info "Lost the last DJ Link device - offline, looking again")
+              (.stop vcdj)
+              :looking)
+
+          (.isRunning vcdj) :online
+
+          :else (do (when (not= state :looking) (timbre/info "Looking for DJ Link devices ..."))
+                    :looking)))
+      (catch java.net.BindException e
+        (when (not= state :port-busy)
+          (timbre/error e "The DJ Link port is in use - is rekordbox or another DJ Link program running? Trying again"))
+        :port-busy)
+      (catch Throwable t
+        (timbre/warn t "Problem going online - trying again")
+        :error))))
+
+(defn- watch-parent!
+  "--parent-pipe: QLC+ holds our stdin; when it closes (QLC+ quit or crashed) we stop."
+  []
+  (doto (Thread. ^Runnable
+         (fn []
+           (try
+             (let [in System/in]
+               (while (not= -1 (.read in))))
+             (catch Throwable _ nil))
+           (timbre/info "QLC+ closed our pipe - stopping")
+           (System/exit 0))
+         "qlc-parent-pipe")
+    (.setDaemon true)
+    (.start)))
+
+(defn- stop-beat-link!
+  "The virtual CDJ leaves the network (its finders stop with it). The DeviceFinder is
+  left to the JVM's exit: stopping it here raced beat-link's own lost-device delivery."
+  []
+  (try (when (.isRunning (VirtualCdj/getInstance)) (.stop (VirtualCdj/getInstance))) (catch Throwable _ nil)))
+
+(defn -main [& args]
+  (let [args (set args)]
+    (start-log!)
+    (when-not (take-lock!)
+      (timbre/warn "Beat Link Trigger (or another TRACK helper) is running - this helper is not needed now")
+      (shutdown-agents)
+      (System/exit 3))
+    (timbre/info "Holding the beat-link lock" (str (lock-file)))
+    (when (contains? args "--parent-pipe")
+      (watch-parent!))
+    (.addShutdownHook (Runtime/getRuntime)
+                      (Thread. ^Runnable (fn [] (timbre/info "Stopping beat-link") (stop-beat-link!))))
+    ;; the listeners first, as BLT registers its trigger listeners before it goes online
+    (.addDeviceAnnouncementListener (DeviceFinder/getInstance) device-listener)
+    (.addUpdateListener (VirtualCdj/getInstance) status-listener)
+    (.addBeatListener (BeatFinder/getInstance) beat-listener)
+    (.addLifecycleListener (VirtualCdj/getInstance)
+                           (reify LifecycleListener
+                             (started [_ _] nil)
+                             (stopped [_ _] (timbre/info "Virtual CDJ stopped"))))
+    (try
+      (load-shared!)
+      (catch Throwable t
+        (timbre/error t "The shared functions did not load - nothing to run")
+        (System/exit 4)))
+    (loop [state nil]
+      (let [state* (go-online! state)]
+        (Thread/sleep (if (= state* :online) 1000 500))
+        (recur state*)))))

@@ -21,6 +21,38 @@ jobs:
       - run: cmake --build guard-build --config Release
       - run: python startup_guard/test_guards.py --probe-dir guard-build
 
+  # TRACK_APP_SMOKE (track-app branch, Tobias 11-04): TRACK's beat-link helper on Beat Link
+  # Trigger's released jar - it loads our shared functions, says hello on 9998, respects
+  # the PC's beat-link lock and stops when QLC+ closes its pipe (no CDJs here)
+  trackbridge-smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Beat Link Trigger 8.0.0 jar (cached)
+        id: bltjar
+        uses: actions/cache@v4
+        with:
+          path: blt-jar
+          key: blt-jar-8.0.0
+      - name: Download it
+        if: steps.bltjar.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p blt-jar
+          curl -fsSL -o blt-jar/beat-link-trigger.jar https://github.com/Deep-Symmetry/beat-link-trigger/releases/download/v8.0.0/beat-link-trigger-8.0.0.jar
+      - run: python3 trackbridge/make_jar.py trackbridge.jar
+      - run: python3 trackbridge/smoke_test.py blt-jar/beat-link-trigger.jar trackbridge.jar
+      - name: get-track-app.cmd parses as PowerShell
+        shell: pwsh
+        run: |
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseInput([IO.File]::ReadAllText("tools/get-track-app.cmd"), [ref]$null, [ref]$errs)
+          if ($errs.Count -gt 0) { $errs | ForEach-Object { Write-Host $_.ToString() }; exit 1 }
+          Write-Host "tools/get-track-app.cmd: no parse errors"
+
   build-linux:
     #if: false
     runs-on: ubuntu-22.04
@@ -536,6 +568,23 @@ jobs:
           name: QLC+-${{matrix.task}}-${{env.APPVERSION}}-${{env.BUILD_DATE}}-${{env.GIT_REV}}.exe
           path: ${{matrix.task}}-${{env.OUTFILE}}
 
+      # TRACK_APP_PORTABLE (track-app branch): the same v5 build as a plain folder for the TRACK
+      # app - unzipped beside the rig's QLC+ by tools/get-track-app.cmd, never installed over it
+      # (no installer, no registry, no shortcuts of QLC+'s own)
+      - name: Portable folder for the TRACK app
+        if: ${{ matrix.task == 'build-v5' }}
+        shell: pwsh
+        run: |
+          7z a -tzip TRACK-app-base.zip C:\qlcplus\*
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Store the portable folder
+        if: ${{ matrix.task == 'build-v5' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: TRACK-app-base
+          path: TRACK-app-base.zip
+
   # runde 439 (N9): the rig's build as the GitHub release "rig-latest" -
   # tools/update-qlc.ps1 on the lys-pc fetches it (public repo, no login).
   # track-layout only: the rig runs the v2 page.
@@ -581,6 +630,57 @@ jobs:
             gh release create rig-latest --target "$GITHUB_SHA" --prerelease --title "Rig build (track-layout)" --notes "$NOTES"
           fi
           gh release upload rig-latest QLC-rig-setup.exe rig-build.txt tools/update-qlc.cmd tools/rollback-qlc.cmd qlc-blt-guard.jar tools/install-blt-guard.ps1 --clobber
+
+  # TRACK_APP_RELEASE (track-app branch, Tobias 11-04: "Lav en ny gren, og byg de to vi lige har
+  # lagt i backloggen paa den, saa kan jeg teste i weekenden"): the TRACK app as its own
+  # prerelease "track-app-latest" - TRACK.exe (QLC+'s engine, --track-app), trackbridge.jar (the
+  # beat-link helper) - and tools/get-track-app.cmd. rig-latest and update-qlc.cmd are never
+  # touched from this branch (release-rig runs only for track-layout).
+  release-track-app:
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/track-app' }}
+    needs: [build-windows, trackbridge-smoke]
+    runs-on: ubuntu-22.04
+    name: TRACK app release (track-app)
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download the portable folder
+        uses: actions/download-artifact@v4
+        with:
+          name: TRACK-app-base
+          path: dl
+
+      - name: Build TRACK-app.zip
+        run: |
+          set -e
+          REV=$(git rev-parse --short HEAD)
+          mkdir TRACK
+          (cd TRACK && unzip -q ../dl/TRACK-app-base.zip)
+          test -f TRACK/qlcplus-qml.exe
+          mv TRACK/qlcplus-qml.exe TRACK/TRACK.exe
+          python3 trackbridge/make_jar.py TRACK/trackbridge.jar
+          cp trackbridge/README.md TRACK/TRACK-README.md
+          echo "$REV" > TRACK/track-app-build.txt
+          echo "$REV" > track-app-build.txt
+          (cd TRACK && zip -qr ../TRACK-app.zip .)
+          ls -la TRACK-app.zip
+
+      - name: Publish track-app-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          REV=$(git rev-parse --short HEAD)
+          NOTES="track-app $REV, built $(date -u '+%Y-%m-%d %H:%M') UTC - $(git log -1 --format=%s)"
+          if gh release view track-app-latest > /dev/null 2>&1; then
+            gh release edit track-app-latest --prerelease --notes "$NOTES"
+          else
+            gh release create track-app-latest --target "$GITHUB_SHA" --prerelease --title "TRACK app test (track-app)" --notes "$NOTES"
+          fi
+          gh release upload track-app-latest TRACK-app.zip track-app-build.txt tools/get-track-app.cmd --clobber
 
   build-macos:
     runs-on: macos-15

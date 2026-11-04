@@ -26,6 +26,7 @@
 #include <QQmlApplicationEngine>
 
 #include "app.h"
+#include "trackbridge.h"          // TRACK_APP_BRIDGE (track-app branch)
 #include "networkmanager.h"
 #include "qlcconfig.h"
 #include "qlcfile.h"
@@ -104,6 +105,12 @@ int main(int argc, char *argv[])
     QCommandLineOption kioskOption(QStringList() << "k" << "kiosk",
                                       "Enable kiosk mode (only Virtual Console)");
     parser.addOption(kioskOption);
+
+    // TRACK_APP_OPTION (track-app branch, Tobias 11-04): the TRACK app - kiosk (the Track
+    // page only) and QLC+'s own beat-link helper instead of Beat Link Trigger
+    QCommandLineOption trackAppOption(QStringList() << "track-app",
+                                      "TRACK app: the Track page only, with its own beat-link helper (no Beat Link Trigger)");
+    parser.addOption(trackAppOption);
 
     QCommandLineOption localeOption(QStringList() << "l" << "locale",
                                       "Specify a language to use.",
@@ -212,8 +219,8 @@ int main(int argc, char *argv[])
     if (parser.isSet(threedSupportOption))
         qlcplusApp.set3dSupported(false);
 
-    // kiosk mode
-    if (parser.isSet(kioskOption))
+    // kiosk mode (TRACK_APP_OPTION: the TRACK app is always kiosk)
+    if (parser.isSet(kioskOption) || parser.isSet(trackAppOption))
         qlcplusApp.enableKioskMode();
 
     qlcplusApp.startup();
@@ -249,6 +256,12 @@ int main(int argc, char *argv[])
     // fullscreen mode
     if (parser.isSet(fullscreenOption))
         qlcplusApp.toggleFullscreen();
+
+    // TRACK_APP_BRIDGE: beat-link as QLC+'s own helper process, started here and
+    // stopped (its pipe closed) when QLC+ quits - before the App goes
+    TrackBridge trackBridge;
+    if (parser.isSet(trackAppOption))
+        trackBridge.start();
 
     return app.exec();
 }
