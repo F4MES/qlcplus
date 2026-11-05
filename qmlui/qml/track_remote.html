@@ -121,7 +121,12 @@ button{font-family:inherit;cursor:pointer}
 .tog.on i{background:var(--green)} .tog.on i:after{left:17px;background:#fff}
 .grp.off .fill{background:#33333B} .grp.off .name,.grp.off .val{color:var(--dim)}
 .switchonly .fill{display:none}.switchonly .grip{display:none}
-.tabs{display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--card);border-top:1px solid #1E1E24}
+.tabs{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;background:var(--card);border-top:1px solid #1E1E24}   /* TRACK_APP_UI_R560: 3 or 4 */
+.chip.link.dwarn{background:#D6962A;color:#140C02;font-size:10px;line-height:1.15;letter-spacing:.04em;white-space:normal;text-align:center} .chip.link.dwarn b{display:none}
+.b.dark{opacity:.38}
+#roomc{width:100%;display:block;border-radius:12px;background:#0E0E11}
+.rleg{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 2px 0;font-size:11px;font-weight:700;color:var(--mute)}
+.rleg i{display:inline-block;width:10px;height:10px;border-radius:50%;background:#5E5E68;margin-right:6px;vertical-align:-1px}
 .tabs button{height:56px;background:none;border:0;color:var(--mute);font-weight:800;font-size:12px;letter-spacing:.14em}
 .tabs button.on{color:var(--text);box-shadow:inset 0 3px 0 var(--gold)}
 .page{display:none}.page.on{display:block}
@@ -202,8 +207,15 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       <div class="grid g2" id="positions"></div>
       <div class="lbl" id="barsL" style="display:none">LASER BARS</div><!-- TRACK_APP_PHONE_R556 -->
       <div class="grid g3" id="barsG" style="display:none"></div>
-      <div class="lbl">SPEED</div>
+      <div class="lbl">FIGURE SPEED</div>
       <div class="grid g3" id="speeds"></div>
+    </div>
+
+    <div class="page" id="p-room"><!-- TRACK_APP_UI_R560 -->
+      <div class="lbl">ROOM <span style="font-weight:600;letter-spacing:.02em;color:var(--dim)">· seen from above, the DJ at the bottom</span></div>
+      <canvas id="roomc"></canvas>
+      <div class="rleg"><span><i></i>WASH</span><span><i style="border-radius:2px"></i>STROBE</span><span><i style="width:22px;height:6px;border-radius:3px"></i>LASER BAR</span><span><i style="border-radius:1px;transform:rotate(45deg);width:8px;height:8px"></i>ANIMATION LASER</span><span><i style="width:7px;height:7px"></i>MINI 4 EYES</span><span><i style="background:none;border:2px solid #8A8A94;width:8px;height:8px"></i>BALL</span></div>
+      <div class="note">Each lamp as QLC+ lights it now - dark is off. The laser bars by their depth, the animation lasers at the DJ.</div>
     </div>
 
     <div class="page" id="p-rig">
@@ -222,9 +234,10 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
   </div>
 
   <div class="tabs">
-    <button data-p="live" class="on">LIVE</button>
+    <button data-p="live" class="on">PLAY</button>
     <button data-p="look">LOOK</button>
     <button data-p="rig">RIG<span class="dot" style="display:none"></span></button>
+    <button data-p="room" id="roomTab" style="display:none">ROOM</button>
   </div>
 </div>
 <script>
@@ -308,6 +321,7 @@ setInterval(() => {
 function tab(p) {
   document.querySelectorAll('.page').forEach(e => e.classList.toggle('on', e.id === 'p-' + p));
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+  if (p === 'room' && S && Array.isArray(S.room)) drawRoom(S.room, S.colour);   // TRACK_APP_UI_R560
 }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => tab(b.dataset.p));
 
@@ -323,7 +337,7 @@ function sureTap(key, el, cmd) {
   if (!sure[key]) { sure[key] = setTimeout(() => { sure[key] = 0; render(); }, 4000); render(); return; }
   clearTimeout(sure[key]); sure[key] = 0; send(cmd); render();
 }
-$('show').onclick = () => { if (!S) return; if (!S.show) send('show|1'); else sureTap('show', $('show'), 'show|0'); };
+$('show').onclick = () => { if (!S) return; sureTap('show', $('show'), S.show ? 'show|0' : 'show|1'); };   // TRACK_APP_UI_R560: START SHOW asks SURE? too
 // R464_RM_LAST: what it wants, not a toggle - arm, or undo
 // R467_HAZE_NAG: HAZE = the slider (by hand, as always), LATER = quiet for 30 min
 $('hazego').onclick = () => { tab('rig'); const f = document.querySelector('[data-f="haze"]'); if (f) f.scrollIntoView({block: 'center'}); };
@@ -559,6 +573,26 @@ function sorted(m) { return (m || []).slice().sort((a, b) => a.b - b.b); }
 function sectionAt(mk, beat) { let t = 'normal'; for (const m of mk) if (m.b <= beat) t = m.t; return t; }
 function mmss(s) { return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
 function cls(el, c, on) { el.classList.toggle(c, !!on); }
+// TRACK_APP_UI_R560: the room from above - [x, y, kind, lit 0..1, colour or ""] per lamp; DJ at the bottom
+function drawRoom(room, roomColour) {
+  const cv = $('roomc'), w = cv.clientWidth || 340, h = Math.round(w * 0.9), dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px'; }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const pad = 22, px = x => pad + x * (w - 2 * pad), py = y => pad + (1 - y) * (h - 2 * pad);
+  const rc = (COLOUR[roomColour] || ['#F2F2F5'])[0];
+  room.forEach(L => {
+    const [x, y, k, lit, c] = L, X = px(x), Y = py(y), on = lit > 0.02;
+    g.globalAlpha = k === 'ball' || !on ? 1 : 0.25 + 0.75 * lit;
+    g.fillStyle = on ? (c || rc) : '#26262E'; g.strokeStyle = '#8A8A94'; g.lineWidth = 2;
+    g.beginPath();
+    if (k === 'bar') g.roundRect(X - 50, Y - 4, 100, 8, 4);
+    else if (k === 'strobe') g.roundRect(X - 7, Y - 7, 14, 14, 3);
+    else if (k === 'laser') { g.moveTo(X, Y - 7); g.lineTo(X + 7, Y); g.lineTo(X, Y + 7); g.lineTo(X - 7, Y); g.closePath(); }
+    else g.arc(X, Y, k === 'wash' ? 10 : (k === 'ball' ? 8 : 5), 0, Math.PI * 2);
+    if (k === 'ball') g.stroke(); else g.fill();
+  });
+  g.globalAlpha = 1; g.fillStyle = '#E3B44F'; g.font = '800 11px system-ui'; g.textAlign = 'center'; g.fillText('DJ', w / 2, h - 6);
+}
 let groupKeys = '', sectionsBuilt = false, colourKeys = '', lastStageSeen;
 
 function render() {
@@ -626,7 +660,18 @@ function render() {
   $('lastsub').textContent = sub;
   const link = $('link');
   link.querySelector('b').className = S.connected ? 'ok' : '';
-  link.querySelector('span').textContent = Math.round(S.bpm || 0) + ' BPM' + (S.tempo ? ' · ' + S.tempo : '');
+  link.querySelector('span').textContent = Math.round(S.bpm || 0) + ' BPM' + (S.tempo ? ' · ' + S.tempo : '')
+    + (S.decks && S.decks.f > 0 ? ' · D' + S.decks.f : '');   // TRACK_APP_UI_R560: the deck the lights follow
+  {   // TRACK_APP_UI_R560: amber - another deck plays while the followed one stands still (held 8 s by TRACK)
+    const dw = S.show && S.decks && S.decks.warn ? S.decks.warn : '';
+    link.classList.toggle('dwarn', !!dw);
+    if (dw) link.querySelector('span').textContent = dw;
+  }
+  {   // TRACK_APP_UI_R560: the ROOM tab - only when TRACK sends the room
+    const hasRoom = Array.isArray(S.room);
+    $('roomTab').style.display = hasRoom ? '' : 'none';
+    if (hasRoom && $('p-room').classList.contains('on')) drawRoom(S.room, S.colour);
+  }
   {   // TRACK_APP_PHONE_R556: the desk's warning - what is wrong with the CDJs, once it has held 5 s
     const w = S.warn || '', now = Date.now();
     if (w !== warnWhat) { warnWhat = w; warnSince = now; if (w) setTimeout(render, 5100); }
@@ -679,7 +724,8 @@ function render() {
   pal.forEach(c => { const b = $('col-' + c); if (!b) return; const on = ov.indexOf(c) >= 0, k = COLOUR[c] || ['#9AA0A6', '#C8C8D0'];
     b.style.background = on ? k[0] : ''; b.style.color = on ? (c === 'white' ? '#101010' : '#141005') : k[1];
     b.querySelector('.bar').style.display = on ? 'none' : '';
-    cls(b, 'ring', ov.length === 0 && S.colour === c); });
+    cls(b, 'ring', ov.length === 0 && S.colour === c);
+    cls(b, 'dark', !on && (S.cdark || []).indexOf(c) >= 0); });   // TRACK_APP_UI_R560: no lamp on stage can show it
   cls($('fade'), 'blue', S.colourMode === 1); cls($('chase'), 'blue', S.colourMode === 2);
   cls($('pos-auto'), 'on', !S.position);
   // TRACK_APP_PHONE_R556: the laser bars by hand - the desk's POSITION row, BARS page (TRACK only)

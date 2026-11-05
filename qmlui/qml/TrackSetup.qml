@@ -83,6 +83,7 @@ Rectangle
     // in ADVANCED, and a group switches on / off with two taps
     readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
     property bool cacheOpen: false
+    property bool roomOpen: false        // TRACK_APP_UI_R560: ROOM - the room map, over the lists
     // TRACK_APP_LIST_R557 (Tobias 11-04: "gemme listen over alle programmer under show all og maaske kun vise en
     // liste over sidste gemte og manuelt vaegtede looks/programmer"): in the TRACK app the list is SAVED LOOKS
     // + YOUR CHANGES; SHOW ALL shows every programme as before (HIDDEN: the hidden ones too)
@@ -415,7 +416,25 @@ Rectangle
                 onTapped:
                 {
                     setupRoot.cacheOpen = !setupRoot.cacheOpen
+                    if (setupRoot.cacheOpen) setupRoot.roomOpen = false      // TRACK_APP_UI_R560
                     if (setupRoot.cacheOpen && trackManager) trackManager.requestCache()
+                }
+            }
+
+            // TRACK_APP_UI_R560: ROOM - the room map with every lamp as it is lit now
+            TrackTile
+            {
+                objectName: "roomTile"
+                visible: setupRoot.trackApp
+                Layout.preferredWidth: 90
+                Layout.preferredHeight: 34
+                label: qsTr("ROOM")
+                active: setupRoot.roomOpen
+                activeColor: "#4FA3E3"
+                onTapped:
+                {
+                    setupRoot.roomOpen = !setupRoot.roomOpen
+                    if (setupRoot.roomOpen) setupRoot.cacheOpen = false
                 }
             }
 
@@ -2566,6 +2585,123 @@ Rectangle
                     if (ids.length > 0) trackEngine.sendMake(ids)
                 }
             }
+        }
+    }
+
+    // ------------------------------------------------- TRACK_APP_UI_R560: ROOM
+    // Tobias 11-05: "byg ogsaa rummet i miniformat" - "kun et tab paa telefonen og saa i settings paa rigget". The room
+    // map (rig_room.json) seen from above with the DJ at the bottom: every lamp lit as QLC+ sends it now
+    // (trackEngine.roomNow(), read 4 times a second while it is open). Only reads - nothing here sends anything.
+    Rectangle
+    {
+        id: roomPanel
+        objectName: "roomPanel"
+        visible: setupRoot.trackApp && setupRoot.roomOpen
+        x: 0; y: 56; width: parent.width; height: parent.height - 56
+        radius: setupRoot.radius
+        z: 40
+        color: setupRoot.color
+        property var lamps: []
+        function swatch(c)
+        {
+            switch (c)
+            {
+            case "white": return "#F2F2F5"
+            case "red": return "#E0555A"
+            case "blue": return "#3E6FE8"
+            case "cyan": return "#3CC8D8"
+            case "green": return "#30C050"
+            case "magenta": return "#D040C0"
+            case "yellow": return "#E0D030"
+            case "orange": return "#E08030"
+            }
+            return "#F2F2F5"
+        }
+        readonly property color roomColour: swatch(trackEngine ? trackEngine.currentColour : "")
+        Timer
+        {
+            interval: 250; repeat: true; triggeredOnStart: true
+            running: roomPanel.visible && !!trackEngine && trackEngine.roomNow !== undefined
+            onTriggered: roomPanel.lamps = trackEngine.roomNow()
+        }
+        Text
+        {
+            x: 12; y: 6
+            text: qsTr("ROOM")
+            color: "#8A8A94"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 1.6
+        }
+        Text
+        {
+            x: 76; y: 6
+            text: qsTr("seen from above, the DJ at the bottom - each lamp as QLC+ lights it now")
+            color: "#6E6E78"; font.pixelSize: 12
+        }
+        Rectangle
+        {
+            id: roomMap
+            objectName: "roomMap"
+            x: 12; y: 30; width: parent.width - 24; height: parent.height - 70
+            radius: 12
+            color: "#0E0E11"
+            readonly property real pad: 34
+            function px(v) { return pad + v * (width - 2 * pad) }
+            function py(v) { return pad + (1 - v) * (height - 2 * pad) }
+            Repeater
+            {
+                model: roomPanel.lamps
+                Item
+                {
+                    readonly property var lamp: modelData
+                    readonly property string k: lamp.k
+                    readonly property real l: lamp.l
+                    readonly property color c: lamp.c !== "" ? lamp.c : roomPanel.roomColour
+                    readonly property real w: k === "bar" ? 150 : (k === "wash" ? 34 : (k === "strobe" ? 26 : (k === "ball" ? 26 : 18)))
+                    readonly property real h: k === "bar" ? 12 : w
+                    x: roomMap.px(lamp.x) - w / 2
+                    y: roomMap.py(lamp.y) - h / 2
+                    width: w; height: h
+                    Rectangle
+                    {
+                        anchors.fill: parent
+                        radius: parent.k === "strobe" ? 4 : (parent.k === "bar" ? 6 : (parent.k === "laser" ? 2 : width / 2))
+                        rotation: parent.k === "laser" ? 45 : 0
+                        color: parent.k === "ball" ? "transparent" : (parent.l > 0.02 ? parent.c : "#26262E")
+                        opacity: parent.k === "ball" || parent.l <= 0.02 ? 1.0 : 0.25 + 0.75 * parent.l
+                        border.width: parent.k === "ball" ? 2 : 0
+                        border.color: "#8A8A94"
+                    }
+                }
+            }
+            Text
+            {
+                anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 6
+                text: "DJ"
+                color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 2
+            }
+        }
+        Row
+        {
+            x: 14; y: parent.height - 30; spacing: 22
+            Repeater
+            {
+                model: [ [qsTr("WASH"), 16, 8], [qsTr("STROBE"), 14, 3], [qsTr("LASER BAR"), 30, 4], [qsTr("ANIMATION LASER"), 11, 2], [qsTr("MINI 4 EYES"), 10, 5], [qsTr("DISCO BALL"), 14, 7] ]
+                Row
+                {
+                    spacing: 8
+                    Rectangle
+                    {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: modelData[1]; height: modelData[0] === qsTr("LASER BAR") ? 8 : modelData[1]
+                        radius: modelData[2]
+                        rotation: modelData[0] === qsTr("ANIMATION LASER") ? 45 : 0
+                        color: modelData[0] === qsTr("DISCO BALL") ? "transparent" : "#5E5E68"
+                        border.width: modelData[0] === qsTr("DISCO BALL") ? 2 : 0
+                        border.color: "#8A8A94"
+                    }
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; color: "#8A8A94"; font.pixelSize: 12; font.bold: true }
+                }
+            }
+            Text { text: qsTr("dark = off  ·  bright = full  ·  laser bars by their depth, the animation lasers at the DJ"); color: "#6E6E78"; font.pixelSize: 12 }
         }
     }
 }

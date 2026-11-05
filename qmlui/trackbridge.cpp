@@ -70,6 +70,11 @@ void TrackBridge::restart()
     slotLaunch();
 }
 
+int TrackBridge::deckMaster() const { return m_deckMaster; }
+int TrackBridge::deckFollowed() const { return m_deckFollowed; }
+QList<int> TrackBridge::decksHeard() const { return m_decksHeard; }
+QList<int> TrackBridge::decksPlaying() const { return m_decksPlaying; }
+
 int TrackBridge::cdjCount() const
 {
     return m_cdjCount;
@@ -109,6 +114,14 @@ void TrackBridge::stop()
     {
         m_cdjCount = 0;
         emit cdjCountChanged(0);
+    }
+    if (m_deckMaster != 0 || m_deckFollowed != 0 || m_decksHeard.isEmpty() == false || m_decksPlaying.isEmpty() == false)
+    {
+        m_deckMaster = 0;                // R560_DECKS: nothing known without the helper
+        m_deckFollowed = 0;
+        m_decksHeard.clear();
+        m_decksPlaying.clear();
+        emit decksChanged();
     }
 }
 
@@ -399,6 +412,41 @@ void TrackBridge::slotOutput()
             }
             if (ok)
                 emit statusSeen();       // R557_READER
+        }
+        else if (line.startsWith("DECKS "))
+        {
+            // R560_DECKS: "DECKS m=2 f=2 h=2,3 p=2,3" - the master, the deck the lights follow, the
+            // decks the room hears and those playing (0 / empty: none)
+            QHash<QString, QString> kv;
+            foreach (const QByteArray &part, line.mid(6).split(' '))
+            {
+                const int eq = part.indexOf('=');
+                if (eq > 0)
+                    kv.insert(QString::fromLatin1(part.left(eq)), QString::fromLatin1(part.mid(eq + 1)));
+            }
+            auto list = [](const QString &s) {
+                QList<int> out;
+                foreach (const QString &v, s.split(QLatin1Char(','), Qt::SkipEmptyParts))
+                {
+                    bool ok = false;
+                    const int n = v.toInt(&ok);
+                    if (ok && n >= 1 && n <= 6)
+                        out.append(n);
+                }
+                return out;
+            };
+            const int m = kv.value(QStringLiteral("m")).toInt();
+            const int f = kv.value(QStringLiteral("f")).toInt();
+            const QList<int> h = list(kv.value(QStringLiteral("h")));
+            const QList<int> pl = list(kv.value(QStringLiteral("p")));
+            if (m != m_deckMaster || f != m_deckFollowed || h != m_decksHeard || pl != m_decksPlaying)
+            {
+                m_deckMaster = m;
+                m_deckFollowed = f;
+                m_decksHeard = h;
+                m_decksPlaying = pl;
+                emit decksChanged();
+            }
         }
         else
             keep.append(raw);

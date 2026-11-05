@@ -29,6 +29,22 @@ Rectangle
     // mere", mockup approved): the TRACK app reads the CDJs itself - no Beat Link Trigger on its page,
     // and its update is its own (trackAppCtl, qmlui/trackapp.cpp). Without --track-app: as before
     readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
+    // TRACK_APP_UI_R560: the palette's colours no group on stage can show (their tiles toned down) and the
+    // clock's ENERGY now / in 15 min - read once a second, both only read
+    property var darkColours: []
+    property int clockNow: -1
+    property int clockSoon: -1
+    Timer
+    {
+        interval: 1000; repeat: true; triggeredOnStart: true
+        running: trackViewRoot.trackApp && !!trackEngine && trackEngine.coloursDark !== undefined
+        onTriggered:
+        {
+            trackViewRoot.darkColours = trackEngine.coloursDark()
+            trackViewRoot.clockNow = trackEngine.clockTargetAt(0)
+            trackViewRoot.clockSoon = trackEngine.clockTargetAt(15)
+        }
+    }
     readonly property int cdjCount: trackApp ? trackAppCtl.cdjCount : 0
     // TRACK_APP_BARS_R552: the POSITION row's page - "heads" (as before) or "bars"
     property string posPage: "heads"
@@ -1229,7 +1245,7 @@ Rectangle
                 {
                     id: updChip
                     objectName: "updateChip"
-                    visible: trackViewRoot.trackApp ? trackAppCtl.updateAvailable === true
+                    visible: trackViewRoot.trackApp ? trackAppCtl.updateAvailable === true && !(trackManager && trackManager.autoRun === true)   // TRACK_APP_UI_R560
                                                     : (trackManager ? trackManager.updateAvailable === true : false)
                     readonly property int st: trackViewRoot.trackApp ? trackAppCtl.updateStep
                                             : (trackManager && trackManager.updateStep !== undefined ? trackManager.updateStep : 0)
@@ -1375,13 +1391,13 @@ Rectangle
                     Text
                     {
                         anchors.right: parent.right
-                        visible: !appWarn.visible        // TRACK_APP_WARN_R556: the warning takes its place
+                        visible: !appWarn.visible && !appDeckWarn.visible   // TRACK_APP_WARN_R556 / TRACK_APP_UI_R560: a warning takes its place
                         // runde 308: the tempo the engine times on, and from where.
                         // Anything but LINK is amber
                         text: (trackManager && trackManager.playing ? qsTr("PLAYING") : qsTr("PAUSED"))
                               + "  ·  " + (trackManager && trackManager.engineTempo !== undefined ? trackManager.engineTempo.toFixed(1) : "0") + " BPM"
                               + (trackManager && trackManager.tempoSource ? "  ·  " + trackManager.tempoSource : "")
-                              + "  ·  " + (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? qsTr("CDJs ok") : qsTr("no CDJs"))
+                              + "  ·  " + (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? (trackAppCtl.deckText !== "" ? trackAppCtl.deckText : qsTr("CDJs ok")) : qsTr("no CDJs"))
                                            : (trackManager && trackManager.connected ? qsTr("BLT ok") : qsTr("no BLT")))
                               + (trackViewRoot.testOn ? "  ·  " + qsTr("TEST") : "")   // R450_TEST_TRACK
                         color: trackManager && trackManager.playing
@@ -1426,6 +1442,31 @@ Rectangle
                             font.letterSpacing: trackViewRoot.fs(12) * 0.08
                         }
                     }
+                    // TRACK_APP_UI_R560: amber - another deck the room hears has played for 8 s while the followed one
+                    // stands still (TrackApp::deckCheck); with SHOW ON, under the red one
+                    Rectangle
+                    {
+                        id: appDeckWarn
+                        objectName: "appDeckWarn"
+                        readonly property string shown: trackViewRoot.trackApp && trackManager && trackManager.autoRun === true
+                                                         && !appWarn.visible ? trackAppCtl.deckWarn : ""
+                        visible: shown !== ""
+                        anchors.right: parent.right
+                        width: appDeckWarnText.implicitWidth + Math.round(22 * trackViewRoot.ks)
+                        height: Math.round(22 * trackViewRoot.ks)
+                        radius: height / 2
+                        color: "#D6962A"
+                        Text
+                        {
+                            id: appDeckWarnText
+                            anchors.centerIn: parent
+                            text: appDeckWarn.shown
+                            color: "#140C02"
+                            font.bold: true
+                            font.pixelSize: trackViewRoot.fs(12)
+                            font.letterSpacing: trackViewRoot.fs(12) * 0.08
+                        }
+                    }
                 }
 
                 // R379_SHOW_SWITCH: one tap on, SURE? off - its off face reads START SHOW
@@ -1442,7 +1483,9 @@ Rectangle
                     property bool armOff: false
                     property string text: checked ? (armOff ? qsTr("SURE?") : qsTr("SHOW ON")) : qsTr("START SHOW")
                     Timer { id: showOffArm; interval: 4000; onTriggered: showSwitch.armOff = false }
-                    color: armOff ? "#E3B44F" : (checked ? "#3FBF3F" : "#4A1E1E")
+                    color: armOff ? "#E3B44F" : (checked ? "#3FBF3F" : (trackViewRoot.trackApp ? "#122814" : "#4A1E1E"))   // TRACK_APP_UI_R560: ready, not red
+                    border.width: !checked && !armOff && trackViewRoot.trackApp ? 2 : 0
+                    border.color: "#59C36A"
                     Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 150 } }     // R402_FADE
                     scale: showIn.down ? 0.965 : 1.0                                                         // R402_PRESS
                     Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
@@ -1458,12 +1501,12 @@ Rectangle
                         anchors.centerIn: parent
                         spacing: 10
                         ControlIcon { anchors.verticalCenter: parent.verticalCenter; width: Math.round(16 * trackViewRoot.ks); height: width
-                                      kind: "showSwitch"; ink: showSwitch.checked ? "#0A2A0A" : "#FFC8C8" }
+                                      kind: "showSwitch"; ink: showSwitch.checked ? "#0A2A0A" : (trackViewRoot.trackApp ? "#8CE696" : "#FFC8C8") }
                         Text
                         {
                             anchors.verticalCenter: parent.verticalCenter
                             text: showSwitch.text
-                            color: showSwitch.checked ? "#0A2A0A" : "#FFC8C8"
+                            color: showSwitch.checked ? "#0A2A0A" : (trackViewRoot.trackApp ? "#8CE696" : "#FFC8C8")
                             font.bold: true
                             font.pixelSize: trackViewRoot.fs(18)
                             font.letterSpacing: (trackViewRoot.fs(18)) * 0.1
@@ -1496,6 +1539,16 @@ Rectangle
                     icon: "setupSwitch"
                     text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
                     onTapped: { trackViewRoot.setupOpen = !trackViewRoot.setupOpen; trackViewRoot.helpOpen = false }
+                    // TRACK_APP_UI_R560: an update waits (its chip comes back with SHOW OFF)
+                    Rectangle
+                    {
+                        objectName: "setupUpdateDot"
+                        visible: trackViewRoot.trackApp && trackAppCtl.updateAvailable === true && !!trackManager && trackManager.autoRun === true
+                        anchors.right: parent.right; anchors.top: parent.top
+                        anchors.rightMargin: Math.round(7 * trackViewRoot.ks); anchors.topMargin: Math.round(7 * trackViewRoot.ks)
+                        width: Math.round(11 * trackViewRoot.ks); height: width; radius: width / 2
+                        color: trackViewRoot.cGold
+                    }
                 }
             }
         }
@@ -3018,7 +3071,7 @@ Rectangle
                     text: trackEngine && trackEngine.dropSet.length === 0
                           ? "·  " + qsTr("none picked - the engine chooses the NEXT") + " " + rigCard.planName
                           : "·  " + qsTr("tap a name = in / out of the NEXT") + " " + rigCard.planName
-                    color: "#F05050"
+                    color: trackViewRoot.trackApp ? trackViewRoot.cMute : "#F05050"   // TRACK_APP_UI_R560: grey
                     font.pixelSize: trackViewRoot.fs(12)
                 }
                 // MASTER DIMMER has the top row; five groups fill the other five,
@@ -3380,6 +3433,28 @@ Rectangle
                     // lands where the clock already put it
                     onPressed: if (trackEngine && trackEngine.roomAuto) trackEngine.roomAuto = false
                     onSetLevel: (v) => { if (trackManager) trackManager.energyTrim = Math.round(v * 100) }
+                    // TRACK_APP_UI_R560: the clock's ENERGY - a thin line (AUTO 72 / 15 MIN 78)
+                    Item
+                    {
+                        id: clockMark
+                        objectName: "energyClockMark"
+                        readonly property bool auto: trackEngine ? trackEngine.roomAuto === true : false
+                        readonly property int target: auto ? trackViewRoot.clockSoon : trackViewRoot.clockNow
+                        visible: trackViewRoot.trackApp && target >= 0
+                                 && (!auto || Math.abs(target - Math.round(energyFader.level * 100)) >= 2)
+                        x: Math.max(2, Math.min(parent.width - 4, parent.width * Math.min(100, target) / 100 - 1))
+                        y: 0; width: 2; height: parent.height
+                        Rectangle { anchors.fill: parent; color: "#FFFFFF"; opacity: 0.55 }
+                        Text
+                        {
+                            objectName: "energyClockText"
+                            x: clockMark.x > parent.parent.width - 120 ? -implicitWidth - 6 : 6
+                            y: Math.round(4 * trackViewRoot.ks)
+                            text: (clockMark.auto ? qsTr("15 MIN") : qsTr("AUTO")) + " " + clockMark.target
+                            color: "#FFFFFF"; opacity: 0.7
+                            font.bold: true; font.pixelSize: trackViewRoot.fs(10); font.letterSpacing: trackViewRoot.fs(10) * 0.08
+                        }
+                    }
                 }
 
                 // row 1: SECTION
@@ -3580,6 +3655,16 @@ Rectangle
                             border.width: 2
                             border.color: "#FFFFFF"
                         }
+                        // TRACK_APP_UI_R560: no group on stage can show it - toned down, under the blink
+                        Rectangle
+                        {
+                            objectName: chip.objectName + ":dark"
+                            anchors.fill: parent
+                            radius: chip.radius
+                            color: "#0A0A0D"
+                            opacity: 0.62
+                            visible: trackViewRoot.trackApp && !chip.active && trackViewRoot.darkColours.indexOf(modelData) >= 0
+                        }
                         // runde 313: a colour the engine cannot use blinks - the press
                         // arrived, it was refused
                         Rectangle
@@ -3646,7 +3731,7 @@ Rectangle
                     x: lookCard.cX + 3 * (lookCard.cell(7) + lookCard.cg)
                     y: deck.rowY(4); width: lookCard.cell(7) - Math.round(8 * trackViewRoot.ks); height: trackViewRoot.rowH
                     horizontalAlignment: Text.AlignRight
-                    text: "SPEED"
+                    text: trackViewRoot.trackApp ? "FIGURE SPEED" : "SPEED"   // TRACK_APP_UI_R560: the figures', not the colours'
                 }
                 // how fast the engine runs the figures
                 Repeater
@@ -3785,7 +3870,7 @@ Rectangle
                     x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(0)
                     width: liveCard.halfW; height: trackViewRoot.rowH
                     icon: "nextLook"
-                    text: qsTr("NEXT")
+                    text: trackViewRoot.trackApp ? qsTr("NEXT LOOK") : qsTr("NEXT")   // TRACK_APP_UI_R560
                     onTapped: if (trackEngine) trackEngine.next()
                 }
                 Btn

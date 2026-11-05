@@ -26,6 +26,7 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QList>
 #include <QObject>
 #include <QProcess>
 #include <QStringList>
@@ -54,6 +55,12 @@ public:
 
     /** R548_CDJS: the CDJs the helper sees (its "STATUS cdjs=N" lines); 0 while it does not run */
     int cdjCount() const;
+    /** R560_DECKS: the tempo master (1-4, 0 none), the deck the lights follow (0 none yet), the decks
+     *  the room hears (playing, fader up) and those playing - from the helper's "DECKS" lines */
+    int deckMaster() const;
+    int deckFollowed() const;
+    QList<int> decksHeard() const;
+    QList<int> decksPlaying() const;
 
     /** R557_READER: Beat Link Trigger's jar to run on instead of the runtime's ("" = the runtime's) */
     void setJarOverride(const QString &jar);
@@ -66,6 +73,7 @@ public:
 
 signals:
     void cdjCountChanged(int count);
+    void decksChanged();                 // R560_DECKS
     /** R557_READER: a "STATUS cdjs=N" line - the helper runs and sees the network */
     void statusSeen();
     /** R557_READER: the helper ended (its exit code; -1 a crash) */
@@ -97,6 +105,10 @@ private:
     QString m_jarOverride;       // R557_READER
     QByteArray m_outBuf;
     int m_cdjCount;
+    int m_deckMaster = 0;                // R560_DECKS
+    int m_deckFollowed = 0;
+    QList<int> m_decksHeard;
+    QList<int> m_decksPlaying;
 };
 
 #endif

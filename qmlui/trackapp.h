@@ -43,6 +43,7 @@
 #include <QObject>
 #include <QProcess>
 #include <QTimer>
+#include <QVariant>
 
 #include "trackbridge.h"
 #include "trackreader.h"
@@ -66,6 +67,15 @@ class TrackApp : public QObject
     Q_PROPERTY(QObject *show READ show CONSTANT)
     /** R558_SHOW: what UPDATE TRACK brings ("build 5e5581d is ready", "... + the rig's new show") */
     Q_PROPERTY(QString updateWhat READ updateWhat NOTIFY updateChanged)
+    /** R560_DECKS (Tobias 11-05: the light stood still while a deck played): which deck the lights follow */
+    Q_PROPERTY(int deckMaster READ deckMaster NOTIFY decksChanged)
+    Q_PROPERTY(int deckFollowed READ deckFollowed NOTIFY decksChanged)
+    Q_PROPERTY(QVariantList decksHeard READ decksHeard NOTIFY decksChanged)
+    Q_PROPERTY(QVariantList decksPlaying READ decksPlaying NOTIFY decksChanged)
+    /** "DECK 2 · MASTER" / "DECK 3 · HEARD" ("" none yet) */
+    Q_PROPERTY(QString deckText READ deckText NOTIFY decksChanged)
+    /** after 8 s: another deck plays while the followed one stands still ("" all well) */
+    Q_PROPERTY(QString deckWarn READ deckWarn NOTIFY decksChanged)
 
 public:
     /** beforeQuit: what the restart does just before QLC+ quits (main.cpp: no "save?" box) */
@@ -89,6 +99,12 @@ public:
     QObject *reader() const;
     QObject *show() const;
     QString updateWhat() const;
+    int deckMaster() const;
+    int deckFollowed() const;
+    QVariantList decksHeard() const;
+    QVariantList decksPlaying() const;
+    QString deckText() const;
+    QString deckWarn() const;
 
     /** R558_SHOW (main.cpp): the show to open now (given: the shortcut's file) and how to open
      *  one TRACK had to download first */
@@ -103,6 +119,7 @@ public:
 signals:
     void cdjCountChanged();
     void updateChanged();
+    void decksChanged();                 // R560_DECKS
 
 private slots:
     void slotCheck();
@@ -139,6 +156,12 @@ private:
     TrackBridge m_bridge;
     TrackReader *m_reader;      // R557_READER
     TrackShow *m_show;          // R558_SHOW
+    // R560_DECKS: the warning's candidate, how long it has held, and what is shown
+    QTimer m_deckTimer;
+    QString m_deckCand;
+    qint64 m_deckCandSince = 0;
+    QString m_deckWarn;
+    void deckCheck();
 
     // the installed layout
     bool m_installed;

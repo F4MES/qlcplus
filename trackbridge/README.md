@@ -76,6 +76,29 @@ the labs and SELF TEST work as before. The engine part is `r552_barshand.inc.cpp
 - **r556 ALL AUTO:** ALL AUTO also gives the laser bars back to the engine, on the desk, from MIDI and from
   the phone.
 
+## r560: the deck the lights follow, ROOM, the UI review (TRACK app only)
+
+- **The followed deck.** The helper prints `DECKS m=<master> f=<followed> h=<heard> p=<playing>`
+  on stdout (on change, else every 5 s); `trackbridge.cpp` reads it. `trackAppCtl.deckMaster`,
+  `deckFollowed`, `decksHeard`, `decksPlaying`, `deckText` (`DECK 2 · MASTER` / `DECK 2 · HEARD`)
+  and `deckWarn` (`decksChanged`). The status line on the page says the deck.
+- **The warning.** `TrackApp::deckCheck()` once a second: a heard deck plays while the followed one
+  stands still for 8 s -> `DECK 1 PLAYS · LIGHT ON DECK 2` (amber, with SHOW ON; logged `decks: ...`).
+  The phone's tempo chip says ` · D2` and turns amber the same way.
+- **No tempo master.** The shared functions' tracked update only ran on the tempo master's status:
+  with no SYNC/MASTER on any CDJ nothing followed at all. With no CDJ master the helper now runs it
+  for a stand-in deck - the followed deck, else the first heard (`R560_NO_MASTER`). With a master,
+  as before.
+- **ROOM.** SETUP's ROOM tile and the phone's ROOM tab: `rig_room.json` from above, each lamp as
+  QLC+ lights it now (`trackEngine.roomNow()`; the phone state's `room`). Laser bars by their depth
+  down the middle, the animation lasers at the DJ. Only reads.
+- **The page.** Update chip only with SHOW OFF (a dot on SETUP during the show), START SHOW green,
+  NEXT LOOK, FIGURE SPEED, RIG's hint grey, the clock's ENERGY on the fader (`AUTO 72` /
+  `15 MIN 78`, `trackEngine.clockTargetAt()`), colours no lamp on stage can show toned down
+  (`trackEngine.coloursDark()`; the phone state's `cdark`) - a tap still blinks.
+- **Phone.** LIVE is PLAY, START SHOW asks SURE? too.
+- **LASER LAB.** `‹ LAB` back to the lab menu, the board fits the screen again with ON TOP.
+
 ## On the PC: `%LOCALAPPDATA%\TRACK`
 
 | Path | What |

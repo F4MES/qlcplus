@@ -26,6 +26,7 @@
 */
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -97,6 +98,10 @@ TrackApp::TrackApp(bool active, std::function<void()> beforeQuit, QObject *paren
     m_show = new TrackShow(m_installed && m_active ? m_root : QString(), m_logDir, this);
     connect(m_show, &TrackShow::readyChanged, this, &TrackApp::updateChanged);
     connect(&m_bridge, &TrackBridge::cdjCountChanged, this, &TrackApp::cdjCountChanged);
+    // R560_DECKS: the deck the lights follow; the warning is checked every second
+    connect(&m_bridge, &TrackBridge::decksChanged, this, [this]() { deckCheck(); emit decksChanged(); });
+    m_deckTimer.setInterval(1000);
+    connect(&m_deckTimer, &QTimer::timeout, this, &TrackApp::deckCheck);
 
     m_checkTimer.setSingleShot(true);
     connect(&m_checkTimer, &QTimer::timeout, this, &TrackApp::slotCheck);
@@ -171,6 +176,80 @@ QString TrackApp::updateWhat() const
     return show ? tr("new show of %1").arg(m_show->rigDate()) : QString();
 }
 
+/*********************************************************************
+ * R560_DECKS: which deck the lights follow, and when that looks wrong
+ *********************************************************************/
+
+int TrackApp::deckMaster() const { return m_active ? m_bridge.deckMaster() : 0; }
+int TrackApp::deckFollowed() const { return m_active ? m_bridge.deckFollowed() : 0; }
+
+QVariantList TrackApp::decksHeard() const
+{
+    QVariantList out;
+    if (m_active)
+        for (int d : m_bridge.decksHeard())
+            out << d;
+    return out;
+}
+
+QVariantList TrackApp::decksPlaying() const
+{
+    QVariantList out;
+    if (m_active)
+        for (int d : m_bridge.decksPlaying())
+            out << d;
+    return out;
+}
+
+QString TrackApp::deckText() const
+{
+    const int f = deckFollowed();
+    if (f <= 0)
+        return QString();
+    return f == deckMaster() ? tr("DECK %1 · MASTER").arg(f) : tr("DECK %1 · HEARD").arg(f);
+}
+
+QString TrackApp::deckWarn() const { return m_deckWarn; }
+
+void TrackApp::deckCheck()
+{
+    // Another deck the room hears has played for 8 s while the followed one stands still (or none is
+    // followed yet): the lights are on the wrong deck. Only shown with SHOW ON (the page and the phone).
+    QString cand;
+    if (m_active && m_bridge.cdjCount() > 0)
+    {
+        const int f = m_bridge.deckFollowed();
+        const QList<int> heard = m_bridge.decksHeard();
+        const QList<int> playing = m_bridge.decksPlaying();
+        int other = 0;
+        for (int d : heard)
+        {
+            if (d != f)
+            {
+                other = d;
+                break;
+            }
+        }
+        if (other > 0 && (f <= 0 || playing.contains(f) == false))
+            cand = f > 0 ? tr("DECK %1 PLAYS · LIGHT ON DECK %2").arg(other).arg(f)
+                         : tr("DECK %1 PLAYS · NO DECK FOLLOWED").arg(other);
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (cand != m_deckCand)
+    {
+        m_deckCand = cand;
+        m_deckCandSince = now;
+    }
+    const QString shown = (cand.isEmpty() == false && now - m_deckCandSince >= 8000) ? cand : QString();
+    if (shown != m_deckWarn)
+    {
+        m_deckWarn = shown;
+        log(shown.isEmpty() ? QStringLiteral("decks: the lights follow the deck the room hears again")
+                            : QStringLiteral("decks: ") + shown);
+        emit decksChanged();
+    }
+}
+
 QString TrackApp::showAtStart(const QString &given)
 {
     return m_active ? m_show->atStart(given) : given;
@@ -188,6 +267,7 @@ void TrackApp::start()
     m_reader->start();                   // R557_READER: the jar, before the helper starts
     m_bridge.start();
     m_show->start();                     // R558_SHOW
+    m_deckTimer.start();                 // R560_DECKS
     if (m_installed == false)
     {
         log(QStringLiteral("not an installed TRACK (%1) - no self-update").arg(QDir::toNativeSeparators(m_appDir)));

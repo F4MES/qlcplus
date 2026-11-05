@@ -3800,6 +3800,12 @@ private:
     int m_r559Rot = 0;
     int m_r559Speed = 4;
     int m_r559H = 0;                     // CH14 from his height, a multiple of 16
+
+public:
+    // TRACK_APP_UI_R560: read only (r560_ui.inc.cpp)
+    Q_INVOKABLE QVariantList roomNow() const;        // the room map's lamps: x, y, k(ind), l(it), c(olour)
+    Q_INVOKABLE int clockTargetAt(int minutes) const; // the clock's ENERGY now (0) / later; -1 no curve
+    Q_INVOKABLE QStringList coloursDark() const;     // colours no group on stage can show
 };
 
 #endif // TRACKENGINE_H

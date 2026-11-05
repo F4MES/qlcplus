@@ -33,7 +33,7 @@
            [org.deepsymmetry.beatlink.data AnalysisTagFinder BeatGridFinder CrateDigger MetadataFinder
             TimeFinder WaveformFinder WaveformFinder$WaveformStyle]))
 
-(def bridge-version "2 (track-app r548)")
+(def bridge-version "3 (track-app r560)")
 
 ;; ---------------------------------------------------------------- places
 
@@ -164,14 +164,51 @@
       (when-let [pos (.getLatestPositionFor tf beat)]
         (.-beatNumber pos)))))
 
+(defn- shared-value
+  "The value of a shared atom (deref of its var's atom), or nil."
+  [sym]
+  (try (some-> (shared sym) deref deref) (catch Throwable _ nil)))
+
+(defn- cdj-master
+  "The tempo master when it is a player 1-4, else nil (none, or a mixer / BLT as master)."
+  []
+  (try
+    (let [vc (VirtualCdj/getInstance)]
+      (when (.isRunning vc)
+        (when-let [m (.getTempoMaster vc)]
+          (let [n (long (.getDeviceNumber m))]
+            (when (<= 1 n 4) n)))))
+    (catch Throwable _ nil)))
+
+(defn- heard-decks
+  "The shared functions' players the room hears (runde 203), as a sorted vector."
+  []
+  (try (vec (sort (or (some-> (shared 'qlc-heard-decks) (apply [])) #{}))) (catch Throwable _ [])))
+
 (def ^:private status-listener
   (reify DeviceUpdateListener
     (received [_ status]
-      ;; Watch: Master Player - a full status update from the tempo master
-      (when (and (instance? CdjStatus status) (.isTempoMaster ^CdjStatus status))
-        (let [^CdjStatus s status]
-          (run-expression :tracked (shared 'qlc-tracked-update!)
-                          (.getDeviceNumber s) (.getBeatNumber s) (.isPlaying s)))))))
+      (when (instance? CdjStatus status)
+        (let [^CdjStatus s status
+              dev (long (.getDeviceNumber s))]
+          (cond
+            ;; Watch: Master Player - a full status update from the tempo master
+            (.isTempoMaster s)
+            (run-expression :tracked (shared 'qlc-tracked-update!)
+                            (.getDeviceNumber s) (.getBeatNumber s) (.isPlaying s))
+            ;; R560_NO_MASTER (Tobias 11-05, the light stood still while a deck played): no player
+            ;; is the tempo master (the DJ never pressed SYNC / MASTER) - BLT's trigger, and so far
+            ;; this helper, then ran nothing at all. Now the deck the lights follow - or, with none,
+            ;; the first one the room hears - stands in for the master, so runde 203's choice of
+            ;; the heard deck still runs. One deck only, so the choice never flips between two.
+            (and (<= 1 dev 4) (nil? (cdj-master)))
+            (let [f (shared-value 'qlc-followed)
+                  vc (VirtualCdj/getInstance)
+                  f (when (and f (try (.getLatestStatusFor vc (int f)) (catch Throwable _ nil))) (long f))
+                  stand-in (or f (first (heard-decks)))]
+              (when (and stand-in (== dev stand-in))
+                (run-expression :tracked (shared 'qlc-tracked-update!)
+                                (.getDeviceNumber s) (.getBeatNumber s) (.isPlaying s))))))))))
 
 (def ^:private beat-listener
   (reify BeatListener
@@ -182,6 +219,32 @@
 ;; ---------------------------------------------------------------- R548_CDJS: what QLC+ shows
 
 (defonce ^:private last-status (atom [nil 0]))
+(defonce ^:private last-decks (atom [nil 0]))
+
+(defn- report-decks!
+  "R560_DECKS: \"DECKS m=<master> f=<followed> h=<heard> p=<playing>\" on stdout for QLC+ (trackbridge.cpp):
+  which deck the lights follow and why - when it changes, and every 5 s. 0 / empty = none."
+  []
+  (try
+    (let [vc (VirtualCdj/getInstance)
+          playing (if (.isRunning vc)
+                    (vec (for [p [1 2 3 4]
+                               :let [st (.getLatestStatusFor vc (int p))]
+                               :when (and (instance? CdjStatus st) (.isPlaying ^CdjStatus st))]
+                           p))
+                    [])
+          line (str "DECKS m=" (or (cdj-master) 0)
+                    " f=" (or (shared-value 'qlc-followed) 0)
+                    " h=" (str/join "," (heard-decks))
+                    " p=" (str/join "," playing))
+          now (System/currentTimeMillis)
+          [was at] @last-decks]
+      (when (or (not= line was) (> (- now (long at)) 5000))
+        (reset! last-decks [line now])
+        (locking last-status
+          (.println System/out line)
+          (.flush System/out))))
+    (catch Throwable _ nil)))
 
 (defn- report-cdjs!
   "\"STATUS cdjs=N\" on stdout for QLC+ (trackbridge.cpp reads it): the players (numbers 1-6)
@@ -328,5 +391,6 @@
     (loop [state nil]
       (let [state* (go-online! state)]
         (report-cdjs!)
+        (report-decks!)                  ; R560_DECKS
         (Thread/sleep (if (= state* :online) 1000 500))
         (recur state*)))))

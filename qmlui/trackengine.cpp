@@ -46507,3 +46507,197 @@ QString TrackEngine::r559LabRotChip() const
         return QString();
     return tr("TURNS %1 · SPEED %2").arg(rot > 0 ? tr("RIGHT") : tr("LEFT")).arg(qAbs(rot));
 }
+
+/* =====================================================================
+ *  TRACK_APP_UI_R560 - what the UI review asked of the engine (TRACK app only, runde 560).
+ *  Appended to trackengine.cpp by feature_track_app.py (qlcplus-pr), in the track-app tree only.
+ *
+ *  Tobias 11-05 (the UI review): "byg ogsaa rummet i miniformat" - only as a tab on the phone and in
+ *  SETUP on the rig - "AUTO-maalet paa energy-faderen", "nedton farve ingen lampe kan vise (men blink
+ *  stadig ved tryk)". All three only READ: nothing here changes what the engine sends.
+ *
+ *  - roomNow(): every lamp of the room map (rig_room.json: the washes, strobes and Mini 4 Eyes where
+ *    they hang, the laser bars by their depth down the middle, the animation lasers at the DJ, the disco
+ *    ball) with how lit it is and its colour, read off the DMX QLC+ sends now (after the Grand Master).
+ *  - clockTargetAt(minutes): the ENERGY the clock asks for now (0) or so many minutes from now (-1: no
+ *    clock curve).
+ *  - coloursDark(): the palette's colours no group on stage can show (none on stage: no group that is
+ *    switched on) - a tile for one is toned down; a tap still blinks it as it always did.
+ * ===================================================================== */
+
+#include <QColor>
+
+static QString r560Kind(const char *group)
+{
+    const QString g = QString::fromLatin1(group);
+    if (g == QLatin1String("Shark Zoom Wash")) return QStringLiteral("wash");
+    if (g == QLatin1String("Strobes All")) return QStringLiteral("strobe");
+    if (g == QLatin1String("Mini 4 Eyes")) return QStringLiteral("eyes");
+    if (g == QLatin1String("Animation Laser")) return QStringLiteral("laser");
+    if (g.compare(QLatin1String("LaserBars"), Qt::CaseInsensitive) == 0) return QStringLiteral("bar");
+    return QString();
+}
+
+QVariantList TrackEngine::roomNow() const
+{
+    QVariantList out;
+    if (m_doc == nullptr)
+        return out;
+    QHash<int, Fixture *> byDmx;
+    foreach (Fixture *fxi, m_doc->fixtures())
+    {
+        if (fxi != nullptr && fxi->universe() == 0)
+            byDmx.insert(int(fxi->address()) + 1, fxi);
+    }
+    QList<Universe *> ua = m_doc->inputOutputMap()->claimUniverses();
+    const QByteArray *dmx = ua.isEmpty() || ua.at(0) == nullptr ? nullptr : ua.at(0)->postGMValues();
+    auto lamp = [&](int address, qreal x, qreal y, const QString &kind) {
+        Fixture *fxi = byDmx.value(address, nullptr);
+        qreal dim = -1.0, r = 0.0, g = 0.0, b = 0.0, w = 0.0;
+        bool rgb = false;
+        if (fxi != nullptr && dmx != nullptr)
+        {
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                const int at = int(fxi->address() + ch);
+                if (qch == nullptr || at >= dmx->size() || qch->group() != QLCChannel::Intensity)
+                    continue;
+                const qreal v = qreal(uchar(dmx->at(at))) / 255.0;
+                switch (qch->colour())
+                {
+                    case QLCChannel::Red: r = qMax(r, v); rgb = true; break;
+                    case QLCChannel::Green: g = qMax(g, v); rgb = true; break;
+                    case QLCChannel::Blue: b = qMax(b, v); rgb = true; break;
+                    case QLCChannel::White: w = qMax(w, v); break;
+                    case QLCChannel::NoColour: dim = qMax(dim, v); break;
+                    default: break;
+                }
+            }
+        }
+        qreal lit = dim < 0.0 ? 1.0 : dim;
+        QString colour;
+        if (rgb || w > 0.0)
+        {
+            const qreal rr = qMin(1.0, r + w), gg = qMin(1.0, g + w), bb = qMin(1.0, b + w);
+            const qreal top = qMax(rr, qMax(gg, bb));
+            lit *= top;
+            if (top > 0.0)
+                colour = QColor::fromRgbF(float(rr / top), float(gg / top), float(bb / top)).name();
+        }
+        else if (fxi == nullptr || dmx == nullptr)
+            lit = 0.0;
+        QVariantMap m;
+        m.insert(QStringLiteral("x"), x);
+        m.insert(QStringLiteral("y"), y);
+        m.insert(QStringLiteral("k"), kind);
+        m.insert(QStringLiteral("l"), qBound(0.0, lit, 1.0));
+        m.insert(QStringLiteral("c"), colour);    // "" = the room's colour (a macro: lasers, bars)
+        out.append(m);
+    };
+    int lasers = 0;
+    for (int i = 0; i < r493RoomRowCount; i++)
+    {
+        const R493RoomRow &row = r493RoomRows[i];
+        const QString kind = r560Kind(row.group);
+        if (kind.isEmpty() || kind == QLatin1String("bar"))
+            continue;
+        if (kind == QLatin1String("laser"))
+        {
+            // no place on the map: at the DJ, one each side
+            lamp(row.dmx, lasers == 0 ? 0.42 : 0.58, 0.03, kind);
+            lasers++;
+            continue;
+        }
+        if (row.x < 0.0 || row.y < 0.0)
+            continue;
+        lamp(row.dmx, row.x, row.y, kind);
+    }
+    for (int i = 0; i < r509BarsRowCount; i++)
+        lamp(r509BarsDmx[i], 0.5, r509BarsY[i], QStringLiteral("bar"));   // down the middle, by depth
+    m_doc->inputOutputMap()->releaseUniverses(false);
+    if (r493RoomBallX >= 0.0 && r493RoomBallY >= 0.0)
+    {
+        QVariantMap m;
+        m.insert(QStringLiteral("x"), r493RoomBallX);
+        m.insert(QStringLiteral("y"), r493RoomBallY);
+        m.insert(QStringLiteral("k"), QStringLiteral("ball"));
+        m.insert(QStringLiteral("l"), 0.0);
+        m.insert(QStringLiteral("c"), QString());
+        out.append(m);
+    }
+    return out;
+}
+
+int TrackEngine::clockTargetAt(int minutes) const
+{
+    if (m_clockCurve.isEmpty())
+        return -1;
+    if (minutes <= 0)
+        return clockPercent();
+    // the curve itself, so many minutes on (the closing lid is clockPercent()'s, now only)
+    const QTime now = QTime::currentTime().addSecs(minutes * 60);
+    int m = now.hour() * 60 + now.minute() - 20 * 60;
+    if (m < 0)
+        m += 24 * 60;
+    if (m >= 540)
+        return 0;
+    const int last = int(m_clockCurve.count()) - 1;
+    const int q = m / 15;
+    if (q >= last)
+        return m_clockCurve.at(last);
+    const qreal f = qreal(m % 15) / 15.0;
+    return int(qRound(m_clockCurve.at(q) + f * (m_clockCurve.at(q + 1) - m_clockCurve.at(q))));
+}
+
+QStringList TrackEngine::coloursDark() const
+{
+    // the groups on stage now (a slot of the engine's running for them); none: every group switched on
+    QSet<QString> stage;
+    for (QMap<QString, quint32>::const_iterator it = m_active.constBegin(); it != m_active.constEnd(); ++it)
+    {
+        const int colon = it.key().indexOf(QLatin1Char(':'));
+        if (colon > 0 && m_groups.contains(it.key().mid(colon + 1)))
+            stage.insert(it.key().mid(colon + 1));
+    }
+    if (stage.isEmpty())
+    {
+        foreach (const QString &key, m_groupOrder)
+        {
+            if (m_groupOff.contains(key) == false)
+                stage.insert(key);
+        }
+    }
+    static const QStringList laserColours = { "white", "red", "blue", "cyan", "green" };   // the lab's (labScan)
+    QStringList out;
+    foreach (const QString &colour, m_palette)
+    {
+        bool can = engineBannedColour(colour) == false;
+        if (can)
+        {
+            can = false;
+            foreach (const QString &key, stage)
+            {
+                const auto gi = m_groups.constFind(key);
+                if (gi == m_groups.constEnd())
+                    continue;
+                const TrackGroup &g = gi.value();
+                if (g.rgb)
+                    can = true;
+                else if (g.patternDevice)
+                    can = (m_labColours.isEmpty() ? laserColours : m_labColours).contains(colour);
+                else
+                {
+                    for (auto f = g.colourValue.constBegin(); f != g.colourValue.constEnd() && can == false; ++f)
+                        for (auto c = f.value().constBegin(); c != f.value().constEnd() && can == false; ++c)
+                            can = c.value().contains(colour);
+                }
+                if (can)
+                    break;
+            }
+        }
+        if (can == false)
+            out.append(colour);
+    }
+    return out;
+}

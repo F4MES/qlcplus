@@ -3060,6 +3060,33 @@ QString TrackManager::remoteState()
         }
         o.insert(QStringLiteral("upd"), upd);
     }
+    // TRACK_APP_UI_R560: the deck the lights follow, the room, the dark colours (TRACK app only)
+    if (QObject *ta = trackAppObject())
+    {
+        QJsonObject dk;
+        dk.insert(QStringLiteral("m"), ta->property("deckMaster").toInt());
+        dk.insert(QStringLiteral("f"), ta->property("deckFollowed").toInt());
+        dk.insert(QStringLiteral("text"), ta->property("deckText").toString());
+        dk.insert(QStringLiteral("warn"), ta->property("deckWarn").toString());
+        o.insert(QStringLiteral("decks"), dk);
+        if (m_engine != nullptr)
+        {
+            QJsonArray room;
+            foreach (const QVariant &v, m_engine->roomNow())
+            {
+                const QVariantMap m = v.toMap();
+                QJsonArray lamp;
+                lamp.append(qRound(m.value(QStringLiteral("x")).toDouble() * 1000) / 1000.0);
+                lamp.append(qRound(m.value(QStringLiteral("y")).toDouble() * 1000) / 1000.0);
+                lamp.append(m.value(QStringLiteral("k")).toString());
+                lamp.append(qRound(m.value(QStringLiteral("l")).toDouble() * 100) / 100.0);
+                lamp.append(m.value(QStringLiteral("c")).toString());
+                room.append(lamp);
+            }
+            o.insert(QStringLiteral("room"), room);
+            o.insert(QStringLiteral("cdark"), QJsonArray::fromStringList(m_engine->coloursDark()));
+        }
+    }
     if (m_engine != nullptr)
     {
         TrackEngine *e = m_engine;           // (groups() and palette() are not const)

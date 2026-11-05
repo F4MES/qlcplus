@@ -116,7 +116,7 @@ Rectangle
     Item
     {
         id: board
-        width: 2048; height: labRoot.appTop ? 1322 : 1152      // TRACK_APP_LABTOP_R559: room for ON TOP
+        width: 2048; height: 1152      // TRACK_APP_LABS_R560: ON TOP fits in the board as it was
         readonly property real ks: Math.min(labRoot.width / 2048, labRoot.height / height)
         scale: ks
         transformOrigin: Item.TopLeft
@@ -132,9 +132,18 @@ Rectangle
                 width: 210; height: 56; radius: 10; color: labRoot.cGold
                 Text { anchors.centerIn: parent; text: "LASER LAB"; color: "#1A1205"; font.bold: true; font.pixelSize: 22; font.letterSpacing: 2 }
             }
+            LabTile
+            {
+                // TRACK_APP_LABS_R560: back to the lab menu, as STROBE / BARS LAB
+                objectName: "labBackToLab"
+                visible: labRoot.appTop
+                x: 226; width: 96; height: 40; anchors.verticalCenter: parent.verticalCenter
+                text: "‹ " + qsTr("LAB"); fontPx: 15
+                onTapped: if (eng) eng.labClose()
+            }
             Column
             {
-                x: 230; anchors.verticalCenter: parent.verticalCenter; spacing: 4
+                x: labRoot.appTop ? 340 : 230; anchors.verticalCenter: parent.verticalCenter; spacing: 4
                 Text
                 {
                     text: (eng ? eng.labGroup : "") + "  ·  " + (eng ? eng.labLampCount : 0) + ((eng && eng.labLampCount === 1) ? " lamp" : " lamps")
@@ -166,7 +175,7 @@ Rectangle
         {
             id: nowCard
             title: [qsTr("NOW PLAYING  ·  ATLAS"), qsTr("NOW PLAYING  ·  VARIANTS"), qsTr("NOW PLAYING  ·  APPROVED")][labRoot.pass]
-            x: 20; y: 100; width: 1240; height: 640
+            x: 20; y: 100; width: 1240; height: labRoot.appTop ? 620 : 640
 
             Text
             {
@@ -304,7 +313,7 @@ Rectangle
         {
             id: playCard
             title: qsTr("PLAY")
-            x: 1280; y: 100; width: parent.width - 1300; height: 640
+            x: 1280; y: 100; width: parent.width - 1300; height: labRoot.appTop ? 620 : 640
             readonly property real inX: 20
             readonly property real inW: width - 40
 
@@ -417,8 +426,8 @@ Rectangle
             objectName: "labTop"
             visible: labRoot.appTop
             title: labRoot.kept ? qsTr("ON TOP  ·  kept with %1 - a change is saved at once").arg(eng.labTagTitle)
-                                : qsTr("ON TOP  ·  on stage at once  ·  ✓ GOOD keeps it with the look")
-            x: 20; y: 760; width: parent.width - 40; height: 150
+                                : qsTr("ON TOP  ·  turns the picture / moves its height 16 a tap  ·  on stage at once  ·  ✓ GOOD keeps it with the look")
+            x: 20; y: 736; width: parent.width - 40; height: 120
             readonly property real cX: 180
             readonly property int rot: eng && labRoot.appTop ? eng.labRot : 0
             readonly property int speed: eng && labRoot.appTop ? eng.labRotSpeed : 4
@@ -431,10 +440,10 @@ Rectangle
                 enabled: labRoot.hasLook
                 opacity: enabled ? 1.0 : 0.4
 
-                Label { x: 32; y: 76; text: qsTr("ROTATION") }
+                Label { x: 32; y: 70; text: qsTr("ROTATION") }
                 Row
                 {
-                    x: topCard.cX; y: 56; spacing: 12
+                    x: topCard.cX; y: 48; spacing: 12
                     enabled: eng && labRoot.appTop ? eng.labCanRotate : false
                     opacity: enabled ? 1.0 : 0.4
                     LabTile
@@ -487,10 +496,10 @@ Rectangle
                     }
                 }
 
-                Label { x: 1190; y: 76; text: qsTr("HEIGHT") }
+                Label { x: 1190; y: 70; text: qsTr("HEIGHT") }
                 Row
                 {
-                    x: 1300; y: 56; spacing: 12
+                    x: 1300; y: 48; spacing: 12
                     enabled: topCard.home >= 0
                     opacity: enabled ? 1.0 : 0.4
                     LabTile
@@ -529,6 +538,7 @@ Rectangle
                 }
                 Text
                 {
+                    visible: false               // TRACK_APP_LABS_R560: said in the title
                     x: 32; y: 122; width: topCard.width - 64
                     elide: Text.ElideRight
                     text: qsTr("ROTATION turns the picture about its centre over what the look does itself. HEIGHT moves it 16 a tap from your own height - watch it: TOO LOW / AUDIENCE darkens at once.")
@@ -544,7 +554,9 @@ Rectangle
             objectName: "labTags"
             title: labRoot.kept ? qsTr("WHERE IT BELONGS  ·  for %1").arg(eng.labTagTitle)
                                 : qsTr("WHERE IT BELONGS  ·  keep a look first (✓ GOOD)")
-            x: 20; y: labRoot.appTop ? 930 : 760; width: parent.width - 40; height: 330
+            x: 20; y: labRoot.appTop ? 872 : 760; width: parent.width - 40; height: labRoot.appTop ? 266 : 330
+            readonly property real tY: labRoot.appTop ? -10 : 0          // TRACK_APP_LABS_R560: the rows closer
+            readonly property real tG: labRoot.appTop ? 64 : 70
             readonly property real cX: 180
 
             Item
@@ -553,10 +565,10 @@ Rectangle
                 enabled: labRoot.kept
                 opacity: enabled ? 1.0 : 0.4
 
-                Label { x: 32; y: 76; text: qsTr("SECTION") }
+                Label { x: 32; y: 76 + tagCard.tY; text: qsTr("SECTION") }
                 Row
                 {
-                    x: tagCard.cX; y: 56; spacing: 12
+                    x: tagCard.cX; y: 56 + tagCard.tY; spacing: 12
                     Repeater
                     {
                         model: [ ["BREAK", "break", "#4F8FE3"], ["GROOVE", "groove", "#9A9AA6"], ["BUILD", "build", "#E0921A"], ["DROP", "drop", "#E0555A"], ["ANYWHERE", "any", "#6ECD82"] ]
@@ -569,10 +581,10 @@ Rectangle
                         }
                     }
                 }
-                Label { x: 32; y: 146; text: qsTr("ENERGY") }
+                Label { x: 32; y: 76 + tagCard.tY + tagCard.tG; text: qsTr("ENERGY") }
                 Row
                 {
-                    x: tagCard.cX; y: 126; spacing: 12
+                    x: tagCard.cX; y: 56 + tagCard.tY + tagCard.tG; spacing: 12
                     Repeater
                     {
                         model: [ ["LOW · –80 %", "low"], ["MID · 75–90 %", "mid"], ["HIGH · 85 %+", "high"], ["TOP · 95 %+", "top"] ]
@@ -585,10 +597,10 @@ Rectangle
                         }
                     }
                 }
-                Label { x: 32; y: 216; text: qsTr("CHARACTER") }
+                Label { x: 32; y: 76 + tagCard.tY + 2 * tagCard.tG; text: qsTr("CHARACTER") }
                 Row
                 {
-                    x: tagCard.cX; y: 196; spacing: 12
+                    x: tagCard.cX; y: 56 + tagCard.tY + 2 * tagCard.tG; spacing: 12
                     Repeater
                     {
                         model: [ ["CALM", "calm"], ["BUSY", "busy"], ["HARD", "hard"], ["WIDE", "wide"], ["TIGHT", "tight"] ]
@@ -601,10 +613,10 @@ Rectangle
                         }
                     }
                 }
-                Label { x: tagCard.width - 560; y: 76; text: qsTr("HOW OFTEN") }
+                Label { x: tagCard.width - 560; y: 76 + tagCard.tY; text: qsTr("HOW OFTEN") }
                 Row
                 {
-                    x: tagCard.width - 560; y: 98; spacing: 12
+                    x: tagCard.width - 560; y: 98 + tagCard.tY; spacing: 12
                     Repeater
                     {
                         model: [ "★", "★★", "★★★" ]
@@ -617,10 +629,10 @@ Rectangle
                         }
                     }
                 }
-                Label { x: tagCard.width - 560; y: 176; text: qsTr("NOTE") }
+                Label { x: tagCard.width - 560; y: 176 + tagCard.tY - (labRoot.appTop ? 10 : 0); text: qsTr("NOTE") }
                 Rectangle
                 {
-                    x: tagCard.width - 560; y: 198; width: 528; height: 58; radius: 10; color: "#0A0A0D"
+                    x: tagCard.width - 560; y: 198 + tagCard.tY - (labRoot.appTop ? 10 : 0); width: 528; height: 58; radius: 10; color: "#0A0A0D"
                     TextInput
                     {
                         id: noteInput
@@ -649,7 +661,7 @@ Rectangle
             }
             Text
             {
-                x: 32; y: 282; width: tagCard.width - 64
+                x: 32; y: labRoot.appTop ? 240 : 282; width: tagCard.width - 64 - (labRoot.appTop ? 560 : 0)
                 elide: Text.ElideRight
                 text: qsTr("Tags are optional. A plain ✓ GOOD is a look for anywhere, one star. The engine uses ★ as it does for the show's other programmes.")
                 color: labRoot.cDim; font.pixelSize: 15
