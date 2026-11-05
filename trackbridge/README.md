@@ -155,6 +155,24 @@ Jars in `app\<build>\trackbridge-lib\` go first on the classpath, so a newer bea
 wins over the one in the runtime. The other way is a new runtime id with a newer jar, which
 `make_release.py` builds.
 
+## The show (runde 558)
+
+TRACK knows its show itself (`qmlui/trackshow.{h,cpp}`), so a shortcut to `TRACK.exe` needs no file:
+
+- `show.txt` in `%LOCALAPPDATA%\TRACK` is the show TRACK opens. Without one: the shortcut's file
+  (kept in show.txt), else `Documents\TRACK\PSMAIN.qxw`, else the rig's PSMAIN.qxw is downloaded
+  there and opened. `get-track-app.cmd` writes show.txt and makes the shortcut without arguments.
+- SETUP > ADVANCED > SHOW: CHANGE picks another .qxw, OPEN NOW (two taps, SHOW OFF) starts TRACK
+  on it, FOLLOW THE RIG on/off.
+- 45 s after the start, every 15 min and with a new TRACK build: the rig release's PSMAIN.qxw
+  (rig-latest, GitHub's SHA-256). A newer one is downloaded and checked (`show-next.qxw`) and comes
+  with UPDATE TRACK - the chip says "build X + show", or "new show of <date>" on its own. The old
+  file is kept beside it as `<name>.bak-<time>`.
+- Only a file called PSMAIN.qxw follows the rig. One saved since TRACK put the rig's there
+  (`show-rig.txt` holds that SHA-256) is never written over by itself: SETUP shows
+  TAKE THE RIG'S (two taps).
+- Test hooks: `QLC_TRACK_SHOW_API` (another release's API answer), `QLC_TRACK_SHOW_FIRST_MS`.
+
 ## CDJ READER in SETUP (runde 557)
 
 SETUP > ADVANCED > CDJ READER updates Beat Link Trigger's jar without a new TRACK release
@@ -186,6 +204,7 @@ SETUP > ADVANCED > CDJ READER updates Beat Link Trigger's jar without a new TRAC
 | `trackbridge/smoke_test.py` | CI: the helper on BLT 8.0.0's jar |
 | `qmlui/trackapp.{h,cpp}`, `qmlui/trackbridge.{h,cpp}` | TRACK's object (`trackAppCtl`): the helper, CDJ count, update, restart |
 | `qmlui/trackreader.{h,cpp}` | SETUP's CDJ READER: Beat Link Trigger's jar, update and roll back (`trackAppCtl.reader`) |
+| `qmlui/trackshow.{h,cpp}` | The show TRACK opens (show.txt) and the rig's PSMAIN.qxw with UPDATE TRACK (`trackAppCtl.show`) |
 | `tools/get-track-app.cmd` | First install |
 
 ## Limits

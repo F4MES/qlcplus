@@ -46,6 +46,9 @@
 
 #include "trackbridge.h"
 #include "trackreader.h"
+#include "trackshow.h"
+
+#include <functional>
 
 class TrackApp : public QObject
 {
@@ -59,6 +62,10 @@ class TrackApp : public QObject
     Q_PROPERTY(int updateStep READ updateStep NOTIFY updateChanged)
     /** R557_READER: the CDJ reader's own updates (Beat Link Trigger's jar) - SETUP, ADVANCED */
     Q_PROPERTY(QObject *reader READ reader CONSTANT)
+    /** R558_SHOW: the show TRACK opens and the rig's PSMAIN.qxw - SETUP, ADVANCED */
+    Q_PROPERTY(QObject *show READ show CONSTANT)
+    /** R558_SHOW: what UPDATE TRACK brings ("build 5e5581d is ready", "... + the rig's new show") */
+    Q_PROPERTY(QString updateWhat READ updateWhat NOTIFY updateChanged)
 
 public:
     /** beforeQuit: what the restart does just before QLC+ quits (main.cpp: no "save?" box) */
@@ -80,9 +87,18 @@ public:
     /** As TrackManager's (R474): 0, 1 started, 2 did not start, 3 SHOW OFF first */
     int updateStep() const;
     QObject *reader() const;
+    QObject *show() const;
+    QString updateWhat() const;
+
+    /** R558_SHOW (main.cpp): the show to open now (given: the shortcut's file) and how to open
+     *  one TRACK had to download first */
+    QString showAtStart(const QString &given);
+    void setShowLoader(std::function<bool(const QString &)> loader);
 
     /** Two taps on the chip: switch to the fetched build and start again (SHOW OFF only) */
     Q_INVOKABLE void startUpdate(bool showOn);
+    /** R558_SHOW: SETUP's OPEN NOW (another show chosen) - TRACK starts again (SHOW OFF only) */
+    Q_INVOKABLE void restartTrack(bool showOn);
 
 signals:
     void cdjCountChanged();
@@ -116,11 +132,13 @@ private:
     void extract();
     void cleanup();
     void ensureFixtures();
+    bool relaunch(const QString &why);
 
     std::function<void()> m_beforeQuit;
     bool m_active;
     TrackBridge m_bridge;
     TrackReader *m_reader;      // R557_READER
+    TrackShow *m_show;          // R558_SHOW
 
     // the installed layout
     bool m_installed;

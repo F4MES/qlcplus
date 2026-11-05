@@ -253,6 +253,15 @@ int main(int argc, char *argv[])
     if (!posArgs.isEmpty())
         filename = posArgs.first();
 
+    // R558_SHOW (Tobias 11-05: "Jeg lavede lige en ny genvej, og saa loadede den ikke projektet, fordi den er sat
+    // til at loade i genvejen"): the TRACK app opens its own show (show.txt - SETUP > ADVANCED > SHOW), a
+    // shortcut without a file too; without any, the rig's PSMAIN.qxw is downloaded and opened when it is here
+    if (parser.isSet(trackAppOption))
+    {
+        filename = trackApp.showAtStart(filename);
+        trackApp.setShowLoader([&qlcplusApp](const QString &show) { return qlcplusApp.loadWorkspace(show); });
+    }
+
     if (filename.isEmpty() == false)
     {
         if (filename.endsWith(KExtFixture))

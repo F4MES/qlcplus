@@ -14,6 +14,7 @@
 */
 
 import QtQuick
+import QtQuick.Dialogs          // TRACK_APP_SHOW_R558: CHANGE's file dialog
 import QtQuick.Layouts
 
 import org.qlcplus.classes 1.0
@@ -2140,6 +2141,121 @@ Rectangle
                         MouseArea { objectName: "atmosF:" + index; x: parent.width / 2; width: parent.width / 2; height: parent.height; onClicked: atmosPoint.tap(1) }
                     }
                 }
+            }
+        }
+
+        // ------------------------------------------------- TRACK_APP_SHOW_R558: SHOW
+        // Tobias 11-05 ("PSMAIN (showet) skal jo ogsaa hentes/aabnes ... naar man opdatere ... evt. ogsaa saa man kan
+        // aendre stien i advanced"): the show TRACK opens (show.txt - a shortcut needs no file) and the rig's
+        // PSMAIN.qxw, which comes with UPDATE TRACK. CHANGE picks another, OPEN NOW starts TRACK on it (two taps,
+        // SHOW OFF), FOLLOW THE RIG on/off, TAKE THE RIG'S when his PSMAIN was saved since (two taps)
+        RowLayout
+        {
+            id: showRow
+            objectName: "showRow"
+            readonly property var sh: setupRoot.trackApp && trackAppCtl && trackAppCtl.show ? trackAppCtl.show : null
+            readonly property bool showOn: trackManager ? trackManager.autoRun === true : false
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: 40
+            visible: setupRoot.advShown && sh !== null
+            spacing: 10
+            property bool armOpen: false
+            property bool armTake: false
+            Timer { id: showArm; interval: 4000; onTriggered: { showRow.armOpen = false; showRow.armTake = false } }
+            Text { text: qsTr("SHOW"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+            Text
+            {
+                objectName: "showText"
+                Layout.fillWidth: true
+                elide: Text.ElideMiddle
+                color: setupRoot.cDim
+                font.pixelSize: 12
+                text:
+                {
+                    var s = showRow.sh
+                    if (!s) return ""
+                    if (!s.available) return qsTr("the file the shortcut names · the show is chosen here only in an installed TRACK")
+                    var t = (s.fileName !== "" ? s.fileName + "  ·  " + s.folder : qsTr("no show yet"))
+                    var st = ""
+                    switch (s.state) {
+                    case 1: st = qsTr("the rig's newest (%1)").arg(s.rigDate); break
+                    case 2: st = qsTr("the rig's new PSMAIN (%1) is here - comes with UPDATE TRACK").arg(s.rigDate); break
+                    case 3: st = qsTr("saved since the rig's - yours stays (the rig's of %1: TAKE THE RIG'S)").arg(s.rigDate); break
+                    case 4: st = qsTr("your own show - the rig's PSMAIN is not followed"); break
+                    case 7: st = qsTr("FOLLOW THE RIG is off - the rig has another PSMAIN (%1)").arg(s.rigDate); break
+                    default: st = s.note; break
+                    }
+                    if (st !== "") t += "  ·  " + st
+                    if (s.restartNeeded) t += "  ·  " + qsTr("%1 is open - OPEN NOW switches").arg(s.opened.split(/[\\/]/).pop())
+                    return t
+                }
+            }
+            TrackTile
+            {
+                objectName: "showTake"
+                visible: showRow.sh && showRow.sh.available && showRow.sh.state === 3
+                Layout.preferredWidth: 190
+                Layout.preferredHeight: 34
+                label: showRow.armTake ? qsTr("SURE? - TAP AGAIN") : qsTr("TAKE THE RIG'S")
+                active: showRow.armTake
+                activeColor: "#E3B44F"
+                onTapped:
+                {
+                    if (!showRow.sh) return
+                    if (showRow.armTake === false) { showRow.armTake = true; showRow.armOpen = false; showArm.restart(); return }
+                    showRow.armTake = false
+                    showRow.sh.takeRig()
+                }
+            }
+            TrackTile
+            {
+                objectName: "showOpen"
+                visible: showRow.sh && showRow.sh.available && showRow.sh.restartNeeded
+                Layout.preferredWidth: 170
+                Layout.preferredHeight: 34
+                readonly property int st: showRow.sh ? trackAppCtl.updateStep : 0
+                enabled: st !== 1
+                label: st === 3 ? qsTr("SHOW OFF FIRST")
+                       : showRow.armOpen ? qsTr("SURE? - TAP AGAIN") : qsTr("OPEN NOW")
+                active: true
+                activeColor: showRow.armOpen ? "#F0C870" : "#E3B44F"
+                onTapped:
+                {
+                    if (showRow.showOn) { trackAppCtl.restartTrack(true); return }
+                    if (showRow.armOpen === false) { showRow.armOpen = true; showRow.armTake = false; showArm.restart(); return }
+                    showRow.armOpen = false
+                    trackAppCtl.restartTrack(false)
+                }
+            }
+            TrackTile
+            {
+                objectName: "showFollow"
+                visible: showRow.sh && showRow.sh.available
+                Layout.preferredWidth: 170
+                Layout.preferredHeight: 34
+                label: qsTr("FOLLOW THE RIG")
+                active: showRow.sh ? showRow.sh.follow === true : false
+                activeColor: "#4FA3E3"
+                onTapped: if (showRow.sh) showRow.sh.setFollow(!showRow.sh.follow)
+            }
+            TrackTile
+            {
+                objectName: "showChange"
+                visible: showRow.sh && showRow.sh.available
+                Layout.preferredWidth: 120
+                Layout.preferredHeight: 34
+                label: qsTr("CHANGE")
+                onTapped: showDialog.open()
+            }
+            FileDialog
+            {
+                id: showDialog
+                objectName: "showDialog"
+                title: qsTr("The show TRACK opens")
+                nameFilters: [ qsTr("QLC+ shows (*.qxw)") ]
+                currentFolder: showRow.sh ? showRow.sh.folderUrl : ""
+                onAccepted: if (showRow.sh) showRow.sh.setPath(selectedFile.toString())
             }
         }
 

@@ -710,10 +710,11 @@ function render() {
     $('updL').textContent = nm;
     $('offline').textContent = 'NO CONNECTION TO ' + nm + ' - TRYING AGAIN ...';
     if (isApp) {
-      $('updT').textContent = U.st === 1 ? 'UPDATE STARTED' : nb ? 'NEW BUILD ' + U.latest + ' READY' : 'TRACK' + (U.installed ? ' · build ' + U.installed : '');
+      // TRACK_APP_SHOW_R558: U.what - a build, the rig's new show, or both
+      $('updT').textContent = U.st === 1 ? 'UPDATE STARTED' : nb ? (U.latest === 'PSMAIN' ? 'NEW SHOW READY' : 'NEW BUILD ' + U.latest + (U.what && U.what.indexOf('+') >= 0 ? ' + SHOW' : '') + ' READY') : 'TRACK' + (U.installed ? ' · build ' + U.installed : '');
       $('updS').textContent = U.st === 1 ? 'TRACK restarts by itself - the light is out a few seconds'
         : S.show || U.st === 3 ? 'SHOW OFF first - not while the show runs'
-        : updSure ? 'tap again: TRACK switches to ' + U.latest + ' and starts again - the light is out about 10 s'
+        : updSure ? 'tap again: TRACK ' + (U.latest === 'PSMAIN' ? 'takes the rig\'s new show' : 'switches to ' + U.latest + (U.what && U.what.indexOf('+') >= 0 ? ' with the rig\'s new show' : '')) + ' and starts again - the light is out about 10 s'
         : U.st === 2 ? 'it did not switch - see TRACK\'s log'
         : nb ? 'fetched and checked - ready to switch' : 'TRACK fetches new builds by itself';
       cls($('updS'), 'gold', !!updSure);

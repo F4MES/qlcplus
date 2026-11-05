@@ -63,6 +63,7 @@ TrackApp::TrackApp(bool active, std::function<void()> beforeQuit, QObject *paren
     , m_active(active)
     , m_bridge(this)
     , m_reader(nullptr)
+    , m_show(nullptr)
     , m_installed(false)
     , m_proc(nullptr)
     , m_busy(false)
@@ -92,6 +93,9 @@ TrackApp::TrackApp(bool active, std::function<void()> beforeQuit, QObject *paren
     m_reader = new TrackReader(&m_bridge, m_installed && m_active ? m_root : QString(), m_logDir,
                                runtimeDir.isEmpty() ? QString() : QDir(runtimeDir).filePath(QStringLiteral("beat-link-trigger.jar")),
                                TrackReader::versionOfRuntime(m_runtimeId), this);
+    // R558_SHOW: the show TRACK opens (show.txt) and the rig's PSMAIN.qxw with UPDATE TRACK
+    m_show = new TrackShow(m_installed && m_active ? m_root : QString(), m_logDir, this);
+    connect(m_show, &TrackShow::readyChanged, this, &TrackApp::updateChanged);
     connect(&m_bridge, &TrackBridge::cdjCountChanged, this, &TrackApp::cdjCountChanged);
 
     m_checkTimer.setSingleShot(true);
@@ -153,10 +157,29 @@ void TrackApp::waitForPredecessor(int argc, char *argv[])
 bool TrackApp::active() const { return m_active; }
 QString TrackApp::build() const { return m_rev; }
 int TrackApp::cdjCount() const { return m_active ? m_bridge.cdjCount() : 0; }
-bool TrackApp::updateAvailable() const { return m_active && m_staged.isEmpty() == false; }
-QString TrackApp::updateLatest() const { return m_staged; }
+bool TrackApp::updateAvailable() const { return m_active && (m_staged.isEmpty() == false || m_show->ready()); }
+QString TrackApp::updateLatest() const { return m_staged.isEmpty() && m_show->ready() ? QStringLiteral("PSMAIN") : m_staged; }
 int TrackApp::updateStep() const { return m_step; }
 QObject *TrackApp::reader() const { return m_reader; }
+QObject *TrackApp::show() const { return m_show; }
+
+QString TrackApp::updateWhat() const
+{
+    const bool show = m_show->ready();
+    if (m_staged.isEmpty() == false)
+        return show ? tr("build %1 + show").arg(m_staged) : tr("build %1 is ready").arg(m_staged);
+    return show ? tr("new show of %1").arg(m_show->rigDate()) : QString();
+}
+
+QString TrackApp::showAtStart(const QString &given)
+{
+    return m_active ? m_show->atStart(given) : given;
+}
+
+void TrackApp::setShowLoader(std::function<bool(const QString &)> loader)
+{
+    m_show->setLoader(loader);
+}
 
 void TrackApp::start()
 {
@@ -164,6 +187,7 @@ void TrackApp::start()
         return;
     m_reader->start();                   // R557_READER: the jar, before the helper starts
     m_bridge.start();
+    m_show->start();                     // R558_SHOW
     if (m_installed == false)
     {
         log(QStringLiteral("not an installed TRACK (%1) - no self-update").arg(QDir::toNativeSeparators(m_appDir)));
@@ -325,6 +349,7 @@ void TrackApp::manifestRead(const QByteArray &json)
             return;
         }
     }
+    m_show->checkNow();                 // R558_SHOW: the rig's show comes with it, when it changed
     log(QStringLiteral("update: build %1 in the release - fetching it in the background (%2 file%3)")
             .arg(rev).arg(m_jobs.size()).arg(m_jobs.size() == 1 ? QString() : QStringLiteral("s")));
     m_job = Fetch();
@@ -507,13 +532,25 @@ void TrackApp::fetchDone(bool ok, const QString &why)
 
 void TrackApp::startUpdate(bool showOn)
 {
-    if (m_active == false || m_installed == false || m_staged.isEmpty() || m_step == 1)
+    const bool show = m_show->ready();  // R558_SHOW: the rig's new show - with a build or alone
+    if (m_active == false || m_installed == false || (m_staged.isEmpty() && show == false) || m_step == 1)
         return;
     if (showOn)
     {
         // SHOW OFF first - the restart takes the light with it for a few seconds
         setStep(3);
         QTimer::singleShot(4000, this, [this]() { if (m_step == 3) setStep(0); });
+        return;
+    }
+
+    if (m_staged.isEmpty())
+    {
+        // R558_SHOW: only the show - in place, and TRACK starts again on it
+        if (m_show->apply() == false || relaunch(QStringLiteral("update: the rig's show in place, TRACK starts again")) == false)
+        {
+            setStep(2);
+            QTimer::singleShot(8000, this, [this]() { if (m_step == 2) setStep(0); });
+        }
         return;
     }
 
@@ -552,26 +589,56 @@ void TrackApp::startUpdate(bool showOn)
         return;
     }
 
-    // the same start as this one (show file, -f), after this TRACK is gone
-    QStringList args = QCoreApplication::arguments().mid(1);
-    const int at = args.indexOf(QStringLiteral("--restart-after"));
-    if (at >= 0)
-        args.erase(args.begin() + at, args.begin() + qMin(at + 2, int(args.size())));
-    args << QStringLiteral("--restart-after") << QString::number(QCoreApplication::applicationPid());
-    if (QProcess::startDetached(launcher, args, m_root) == false)
+    // R558_SHOW: the rig's new show with it (one that cannot be written stays as it is - the build goes on)
+    if (show)
+        m_show->apply();
+
+    if (relaunch(QStringLiteral("update: %1 -> %2, TRACK starts again").arg(m_rev, m_staged)) == false)
     {
         writeLine(file(QStringLiteral("current.txt")), current.isEmpty() ? m_rev : current);
         QFile::remove(file(QStringLiteral("pending.txt")));
         log(QStringLiteral("update: the launcher would not start - stays on %1").arg(m_rev));
         setStep(2);
         QTimer::singleShot(8000, this, [this]() { if (m_step == 2) setStep(0); });
+    }
+}
+
+void TrackApp::restartTrack(bool showOn)
+{
+    // R558_SHOW: SETUP's OPEN NOW - the show chosen there, at once
+    if (m_active == false || m_installed == false || m_step == 1)
+        return;
+    if (showOn)
+    {
+        setStep(3);
+        QTimer::singleShot(4000, this, [this]() { if (m_step == 3) setStep(0); });
         return;
     }
-    log(QStringLiteral("update: %1 -> %2, TRACK starts again").arg(m_rev, m_staged));
+    if (relaunch(QStringLiteral("show: OPEN NOW - TRACK starts again on %1").arg(m_show->path())) == false)
+    {
+        log(QStringLiteral("show: the launcher would not start - TRACK stays as it is"));
+        setStep(2);
+        QTimer::singleShot(8000, this, [this]() { if (m_step == 2) setStep(0); });
+    }
+}
+
+bool TrackApp::relaunch(const QString &why)
+{
+    // the same start as this one (-f; the show is show.txt's), after this TRACK is gone
+    const QString launcher = file(QStringLiteral("TRACK.exe"));
+    QStringList args = QCoreApplication::arguments().mid(1);
+    const int at = args.indexOf(QStringLiteral("--restart-after"));
+    if (at >= 0)
+        args.erase(args.begin() + at, args.begin() + qMin(at + 2, int(args.size())));
+    args << QStringLiteral("--restart-after") << QString::number(QCoreApplication::applicationPid());
+    if (QProcess::startDetached(launcher, args, m_root) == false)
+        return false;
+    log(why);
     setStep(1);
     if (m_beforeQuit)
         m_beforeQuit();
     QTimer::singleShot(400, qApp, &QCoreApplication::quit);
+    return true;
 }
 
 /*********************************************************************

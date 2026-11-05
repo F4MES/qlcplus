@@ -1284,7 +1284,9 @@ Rectangle
                                 : updChip.arm ? (trackViewRoot.trackApp ? qsTr("light out about 10 s") : qsTr("light out about 1 min"))
                                 : updChip.st === 2 ? (trackViewRoot.trackApp ? qsTr("did not install - see the log") : qsTr("update-qlc.cmd not found"))
                                 : updChip.st === 3 ? qsTr("SHOW OFF first")
-                                : qsTr("build %1 is ready").arg(updChip.latest)
+                                : trackViewRoot.trackApp && trackAppCtl.updateWhat !== ""
+                                  ? trackAppCtl.updateWhat      // TRACK_APP_SHOW_R558
+                                  : qsTr("build %1 is ready").arg(updChip.latest)
                             color: updChip.arm ? "#3C2D0A" : trackViewRoot.cMute
                             font.pixelSize: trackViewRoot.fs(12)
                         }

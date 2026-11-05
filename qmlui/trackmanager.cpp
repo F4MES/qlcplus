@@ -3044,6 +3044,7 @@ QString TrackManager::remoteState()
         {
             upd.insert(QStringLiteral("app"), QStringLiteral("TRACK"));
             upd.insert(QStringLiteral("latest"), ta->property("updateLatest").toString());
+            upd.insert(QStringLiteral("what"), ta->property("updateWhat").toString());   // TRACK_APP_SHOW_R558
             upd.insert(QStringLiteral("installed"), ta->property("build").toString());
             upd.insert(QStringLiteral("avail"), ta->property("updateAvailable").toBool());
             upd.insert(QStringLiteral("found"), true);

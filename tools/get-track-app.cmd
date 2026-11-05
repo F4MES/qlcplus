@@ -20,8 +20,10 @@ exit /b
   3. puts everything in %LOCALAPPDATA%\TRACK:
         TRACK.exe (the launcher), app\<build>\, runtime\<id>\, logs\, current.txt
      Nothing of the rig's QLC+ is touched: not its folder, registry or shortcuts.
-  4. the show: the PSMAIN.qxw your QLC+ shortcut opens; on a PC without one, Documents\TRACK\
-     PSMAIN.qxw (downloaded from the rig release once, never written over)
+  4. the show: the one TRACK opened last (show.txt); else the PSMAIN.qxw your QLC+ shortcut opens;
+     on a PC without one, Documents\TRACK\PSMAIN.qxw (downloaded from the rig release). It is kept
+     in show.txt - TRACK opens it by itself, from any shortcut (r558), and it can be changed in
+     SETUP > ADVANCED > SHOW. The rig's newer PSMAIN.qxw comes with UPDATE TRACK (the old one kept)
   5. the desktop shortcut "TRACK" (it replaces this script's earlier "TRACK (test)")
   Options (after the file name in a cmd window):
       -ShowPath X  the show file to open
@@ -153,7 +155,12 @@ if ($old -and $old -ne $rev) { Set-Content -LiteralPath (Join-Path $root "previo
 Set-Content -LiteralPath $curFile -Value $rev -Encoding ASCII
 Log "installed $rev (runtime $rid)"
 
-# the show
+# the show - R558_SHOW: the one TRACK opens (show.txt) first, when it is still there
+$showTxt = Join-Path $root "show.txt"
+if (-not $ShowPath -and (Test-Path -LiteralPath $showTxt)) {
+    $known = ([IO.File]::ReadAllText($showTxt)).Trim().TrimStart([char]0xFEFF).Trim()
+    if ($known -and (Test-Path -LiteralPath $known)) { $ShowPath = $known; Say "  show: $ShowPath (the one TRACK opens - SETUP > ADVANCED > SHOW)" }
+}
 $sc = Find-Shortcut
 if (-not $ShowPath -and $sc) { $ShowPath = $sc.Show; Say ("  your QLC+ shortcut {0} opens {1}" -f (Split-Path $sc.Link -Leaf), $ShowPath) }
 if (-not $ShowPath) {
@@ -174,7 +181,10 @@ if (-not $ShowPath) {
     }
 }
 if (-not (Test-Path -LiteralPath $ShowPath)) { Say "No show file at '$ShowPath' - run again with -ShowPath" "Red"; exit 2 }
-$args2 = '-o "{0}"' -f $ShowPath        # TRACK starts in full screen by itself (r549)
+$ShowPath = (Resolve-Path -LiteralPath $ShowPath).Path
+# R558_SHOW: TRACK opens show.txt's show by itself - the shortcut needs no file (any shortcut to TRACK.exe works)
+[IO.File]::WriteAllText($showTxt, $ShowPath + "`r`n")
+$args2 = ""                              # TRACK starts in full screen by itself (r549)
 
 # the shortcut (and away with this script's own earlier one, which pointed at TRACK-test)
 $desktop = [Environment]::GetFolderPath("Desktop")
@@ -191,7 +201,7 @@ Copy-Item -LiteralPath (Join-Path $app "track.ico") -Destination (Join-Path $roo
 $s.IconLocation = (Join-Path $root "TRACK.exe") + ",0"
 $s.Description = "TRACK - QLC+'s engine with its own beat-link (updates itself)"
 $s.Save()
-Say "Desktop shortcut: TRACK -> TRACK.exe $args2" "Green"
+Say "Desktop shortcut: TRACK -> TRACK.exe (it opens $ShowPath)" "Green"
 
 # R549 (Tobias 11-04: "check defender og virus checks at den ikke bliver blokeret"): what Windows
 # Defender did to TRACK's files - only read, nothing changed in Defender
