@@ -49,6 +49,9 @@ Rectangle
     readonly property color cBlue: "#4FA3E3"
     readonly property color cCyan: "#3CC8D8"
     readonly property real pad: 18
+    // TRACK_APP_LABTOP_R559: the ON TOP card (rotation, height) - the TRACK app's engine only
+    readonly property bool appTop: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
+                                   && !!eng && eng.labCanRotate !== undefined
 
     function swatch(c)
     {
@@ -113,12 +116,12 @@ Rectangle
     Item
     {
         id: board
-        width: 2048; height: 1152
-        readonly property real ks: Math.min(labRoot.width / 2048, labRoot.height / 1152)
+        width: 2048; height: labRoot.appTop ? 1322 : 1152      // TRACK_APP_LABTOP_R559: room for ON TOP
+        readonly property real ks: Math.min(labRoot.width / 2048, labRoot.height / height)
         scale: ks
         transformOrigin: Item.TopLeft
         x: Math.round((labRoot.width - 2048 * ks) / 2)
-        y: Math.round((labRoot.height - 1152 * ks) / 2)
+        y: Math.round((labRoot.height - height * ks) / 2)
 
         // ---------------- top bar ----------------
         Item
@@ -404,6 +407,136 @@ Rectangle
             }
         }
 
+
+        // ---------------- TRACK_APP_LABTOP_R559: on top of the look ----------------
+        // Tobias 11-05: "ligge en rotation (samt fart paa rotation) oven paa et program, samt at vi kan vaelge
+        // hoejden op/ned paa programmet. Du bestemmer hvordan det skal laves UI maessigt." TRACK app only
+        Card
+        {
+            id: topCard
+            objectName: "labTop"
+            visible: labRoot.appTop
+            title: labRoot.kept ? qsTr("ON TOP  ·  kept with %1 - a change is saved at once").arg(eng.labTagTitle)
+                                : qsTr("ON TOP  ·  on stage at once  ·  ✓ GOOD keeps it with the look")
+            x: 20; y: 760; width: parent.width - 40; height: 150
+            readonly property real cX: 180
+            readonly property int rot: eng && labRoot.appTop ? eng.labRot : 0
+            readonly property int speed: eng && labRoot.appTop ? eng.labRotSpeed : 4
+            readonly property int height_: eng && labRoot.appTop ? eng.labHeight : -1
+            readonly property int home: eng && labRoot.appTop ? eng.labHome : -1
+
+            Item
+            {
+                anchors.fill: parent
+                enabled: labRoot.hasLook
+                opacity: enabled ? 1.0 : 0.4
+
+                Label { x: 32; y: 76; text: qsTr("ROTATION") }
+                Row
+                {
+                    x: topCard.cX; y: 56; spacing: 12
+                    enabled: eng && labRoot.appTop ? eng.labCanRotate : false
+                    opacity: enabled ? 1.0 : 0.4
+                    LabTile
+                    {
+                        objectName: "labRot:off"
+                        width: 150; height: 58; text: qsTr("OFF"); tone: labRoot.cBlue; fontPx: 15
+                        on: topCard.rot === 0
+                        onTapped: if (eng) eng.labSetRotation(0)
+                    }
+                    LabTile
+                    {
+                        objectName: "labRot:left"
+                        width: 180; height: 58; text: "⟲  " + qsTr("LEFT"); tone: labRoot.cCyan; fontPx: 15
+                        on: topCard.rot < 0
+                        onTapped: if (eng) eng.labSetRotation(-1)
+                    }
+                    LabTile
+                    {
+                        objectName: "labRot:right"
+                        width: 180; height: 58; text: qsTr("RIGHT") + "  ⟳"; tone: labRoot.cCyan; fontPx: 15
+                        on: topCard.rot > 0
+                        onTapped: if (eng) eng.labSetRotation(1)
+                    }
+                    Item { width: 24; height: 1 }
+                    Label { anchors.verticalCenter: parent.verticalCenter; text: qsTr("SPEED") }
+                    LabTile
+                    {
+                        objectName: "labSpeed:down"
+                        width: 70; height: 58; text: "−"; fontPx: 26
+                        enabled: topCard.speed > 1
+                        onTapped: if (eng) eng.labRotationSpeed(-1)
+                    }
+                    Rectangle
+                    {
+                        width: 120; height: 58; radius: 10; color: "#0A0A0D"
+                        Text
+                        {
+                            objectName: "labSpeedText"
+                            anchors.centerIn: parent
+                            text: topCard.speed + " / 8"
+                            color: topCard.rot !== 0 ? labRoot.cCyan : labRoot.cMute; font.bold: true; font.pixelSize: 22
+                        }
+                    }
+                    LabTile
+                    {
+                        objectName: "labSpeed:up"
+                        width: 70; height: 58; text: "+"; fontPx: 26
+                        enabled: topCard.speed < 8
+                        onTapped: if (eng) eng.labRotationSpeed(1)
+                    }
+                }
+
+                Label { x: 1190; y: 76; text: qsTr("HEIGHT") }
+                Row
+                {
+                    x: 1300; y: 56; spacing: 12
+                    enabled: topCard.home >= 0
+                    opacity: enabled ? 1.0 : 0.4
+                    LabTile
+                    {
+                        objectName: "labHeight:down"
+                        width: 130; height: 58; text: "− 16"; fontPx: 18
+                        enabled: topCard.height_ - 16 >= 0
+                        onTapped: if (eng) eng.labHeightStep(-1)
+                    }
+                    Rectangle
+                    {
+                        width: 230; height: 58; radius: 10; color: "#0A0A0D"
+                        Text
+                        {
+                            objectName: "labHeightText"
+                            anchors.centerIn: parent
+                            text: topCard.home < 0 ? "–" : topCard.height_ === topCard.home ? topCard.height_ + "  ·  " + qsTr("HOME")
+                                  : topCard.height_ + "  (" + (topCard.height_ > topCard.home ? "+" : "−") + Math.abs(topCard.height_ - topCard.home) + ")"
+                            color: topCard.height_ === topCard.home ? labRoot.cMute : labRoot.cGold; font.bold: true; font.pixelSize: 22
+                        }
+                    }
+                    LabTile
+                    {
+                        objectName: "labHeight:up"
+                        width: 130; height: 58; text: "+ 16"; fontPx: 18
+                        enabled: topCard.height_ + 16 <= 255
+                        onTapped: if (eng) eng.labHeightStep(1)
+                    }
+                    LabTile
+                    {
+                        objectName: "labHeight:home"
+                        width: 130; height: 58; text: qsTr("HOME"); fontPx: 15; tone: labRoot.cGold
+                        enabled: topCard.height_ !== topCard.home
+                        onTapped: if (eng) eng.labHeightHome()
+                    }
+                }
+                Text
+                {
+                    x: 32; y: 122; width: topCard.width - 64
+                    elide: Text.ElideRight
+                    text: qsTr("ROTATION turns the picture about its centre over what the look does itself. HEIGHT moves it 16 a tap from your own height - watch it: TOO LOW / AUDIENCE darkens at once.")
+                    color: labRoot.cDim; font.pixelSize: 15
+                }
+            }
+        }
+
         // ---------------- bottom: where it belongs ----------------
         Card
         {
@@ -411,7 +544,7 @@ Rectangle
             objectName: "labTags"
             title: labRoot.kept ? qsTr("WHERE IT BELONGS  ·  for %1").arg(eng.labTagTitle)
                                 : qsTr("WHERE IT BELONGS  ·  keep a look first (✓ GOOD)")
-            x: 20; y: 760; width: parent.width - 40; height: 330
+            x: 20; y: labRoot.appTop ? 930 : 760; width: parent.width - 40; height: 330
             readonly property real cX: 180
 
             Item

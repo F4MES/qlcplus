@@ -3768,6 +3768,38 @@ private:
     void r557HandStamp();
     QHash<quint32, QPair<qint64, QString> > m_r557Hand;   // fid -> when (s), what of it is his
     bool m_r557HandLoaded = false;
+
+    // TRACK_APP_LABTOP_R559: LASER LAB - his rotation and height on top of a look (r559_labtop.inc.cpp)
+    Q_PROPERTY(int labRot READ labRot NOTIFY labChanged)
+    Q_PROPERTY(int labRotSpeed READ labRotSpeed NOTIFY labChanged)
+    Q_PROPERTY(int labHeight READ labHeight NOTIFY labChanged)
+    Q_PROPERTY(int labHome READ labHome NOTIFY labChanged)
+    Q_PROPERTY(bool labCanRotate READ labCanRotate NOTIFY labChanged)
+public:
+    int labRot() const;                  // -8..8: counter-clockwise .. clockwise speed, 0 off
+    int labRotSpeed() const;             // 1..8, the speed LEFT / RIGHT take
+    int labHeight() const;               // CH14 now (-1: no height of his)
+    int labHome() const;                 // his own height
+    bool labCanRotate() const;
+    Q_INVOKABLE void labSetRotation(int dir);
+    Q_INVOKABLE void labRotationSpeed(int delta);
+    Q_INVOKABLE void labHeightStep(int dir);
+    Q_INVOKABLE void labHeightHome();
+private:
+    int r559RotOf(const QString &key) const;
+    int r559HeightOf(const QString &key) const;
+    bool r559LabHasTop(const QString &key) const;
+    void r559LabTop(const QString &key, QHash<QString, int> &v) const;
+    void r559LabSync();
+    void r559LabKeep(QJsonObject &o, const QString &key) const;
+    void r559LabChanged(const QString &why);
+    QString r559LabDetail(const QString &key) const;
+    QString r559LabHeightChip() const;
+    QString r559LabRotChip() const;
+    QString m_r559Key;                   // the look the values below belong to
+    int m_r559Rot = 0;
+    int m_r559Speed = 4;
+    int m_r559H = 0;                     // CH14 from his height, a multiple of 16
 };
 
 #endif // TRACKENGINE_H

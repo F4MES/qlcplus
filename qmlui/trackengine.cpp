@@ -23856,6 +23856,7 @@ QHash<QString, int> TrackEngine::labValues(const QString &key, int step) const
     }
     foreach (const QString &r, engineLabLocked())
         v.insert(r, m_labBase.value(r, 0));
+    r559LabTop(key, v);                  // TRACK_APP_LABTOP_R559: his rotation and height on top
     return v;
 }
 
@@ -24081,6 +24082,7 @@ QString TrackEngine::labDetailOf(const QString &key) const
         d += tr("  ·  one lamp a beat");
     if (m_labStore.value(key).toObject().value(QStringLiteral("slow")).toBool())
         d += tr("  ·  half pace");
+    d += r559LabDetail(key);             // TRACK_APP_LABTOP_R559
     return d;
 }
 
@@ -24247,6 +24249,7 @@ void TrackEngine::labShow()
 
 void TrackEngine::labShowCandidate()
 {
+    r559LabSync();                       // TRACK_APP_LABTOP_R559: another look - its own rotation / height
     m_labBeat = 0;
     m_labBeatsShown = 0;
     labRestartTimers();
@@ -24521,6 +24524,7 @@ void TrackEngine::labDecide(int verdict)
     if (verdict == 1)
     {
         o.remove(QStringLiteral("ban"));
+        r559LabKeep(o, key);             // TRACK_APP_LABTOP_R559: his rotation / height go with the look
         if (m_labTrySlow && engineLabSteps(k.kind) > 1)
             o.insert(QStringLiteral("slow"), true);
         m_labLastGood = key;
@@ -24757,9 +24761,11 @@ QStringList TrackEngine::labLocked() const
     QStringList out;
     out.append(m_labColour.toUpper());
     if (m_labBase.contains(QStringLiteral("vpos")))
-        out.append(tr("HEIGHT %1 · LOCKED").arg(m_labBase.value(QStringLiteral("vpos"))));
+        out.append(r559LabHeightChip()); // TRACK_APP_LABTOP_R559: home, or his
     out.append(tr("NO X/Y TILT"));
-    if (k.kind == QStringLiteral("spin") || k.kind == QStringLiteral("turn"))
+    if (r559LabRotChip().isEmpty() == false)
+        out.append(r559LabRotChip());
+    else if (k.kind == QStringLiteral("spin") || k.kind == QStringLiteral("turn"))
         out.append(tr("TURNS IN PLACE"));
     else
         out.append(tr("NO ROTATION"));
@@ -44511,6 +44517,8 @@ int TrackEngine::r514AniApproval(const QString &key, QString &look, QHash<quint3
     };
     if (first.isEmpty() || kept(first) == false)
         return 0;
+    if (r559LabHasTop(first))
+        return 0;                        // TRACK_APP_LABTOP_R559: his rotation / height - his movement, not moved
     look = first;
     int ok = 0;
     if (kept(first + QStringLiteral("/spin")))
@@ -46278,4 +46286,224 @@ void TrackEngine::handReset(quint32 fid)
         ensureTable();
     }
     emit tableChanged();
+}
+
+/* =====================================================================
+ *  TRACK_APP_LABTOP_R559 - LASER LAB: his rotation and height on top of a look
+ *  (TRACK app only, runde 559). Appended to trackengine.cpp by feature_track_app.py
+ *  (qlcplus-pr), in the track-app tree only.
+ *
+ *  Tobias 11-05: "Laser lab skal udvides med at vi kan ligge en rotation (samt fart paa rotation)
+ *  oven paa et program, samt at vi kan vaelge hoejden op/ned paa programmet. Du bestemmer hvordan
+ *  det skal laves UI maessigt." Height (asked 11-05): "+-16, men spaend hele vejen (start fra hjem
+ *  position). Der er nogle lasereffekter der gerne maa ramme publikum fordi de er saa milde."
+ *
+ *  - ROTATION: CH10 (rotation about the centre) OFF / LEFT (192-255 counter-clockwise) / RIGHT
+ *    (128-191 clockwise) at SPEED 1-8 (the bottom to the top of its range) - over whatever the look
+ *    writes there itself (its own SPIN / TURN too).
+ *  - HEIGHT: CH14 in steps of 16 from his own height (HOME, the most common value in his scenes -
+ *    118 on this rig), as far as the channel goes (6 .. 246), back with HOME. Only ever what he
+ *    taps while he watches it; TOO LOW / AUDIENCE stays in his hand and darkens at once.
+ *  - It belongs to the look on stage. ✓ GOOD keeps it with the look (laser-lab.json: "rot", "h");
+ *    on a look already kept a change is saved at once. Another look starts from its own (a kept
+ *    one's, else OFF / HOME). The AUTO programmes of a kept look play it as he kept it.
+ *  - A look with his rotation or height is his movement: the engine's own turning and size (r514)
+ *    never move it.
+ * ===================================================================== */
+
+#define R559_HEIGHT_STEP 16
+#define R559_SPEED_MAX   8
+
+int TrackEngine::r559RotOf(const QString &key) const
+{
+    if (key == m_r559Key)
+        return m_r559Rot;
+    return qBound(-R559_SPEED_MAX, m_labStore.value(key).toObject().value(QStringLiteral("rot")).toInt(0), R559_SPEED_MAX);
+}
+
+int TrackEngine::r559HeightOf(const QString &key) const
+{
+    if (key == m_r559Key)
+        return m_r559H;
+    return m_labStore.value(key).toObject().value(QStringLiteral("h")).toInt(0);
+}
+
+bool TrackEngine::r559LabHasTop(const QString &key) const
+{
+    const QJsonObject o = m_labStore.value(key).toObject();
+    return o.value(QStringLiteral("rot")).toInt(0) != 0 || o.value(QStringLiteral("h")).toInt(0) != 0;
+}
+
+void TrackEngine::r559LabTop(const QString &key, QHash<QString, int> &v) const
+{
+    // his rotation and height over the look's own values (labValues: after the locked four)
+    const int rot = r559RotOf(key);
+    if (rot != 0)
+    {
+        const int s = qBound(1, qAbs(rot), R559_SPEED_MAX);
+        const int base = rot > 0 ? 128 : 192;                     // CH10: 128-191 clockwise, 192-255 counter
+        v.insert(QStringLiteral("spin"), base + qRound((s - 1) * 63.0 / (R559_SPEED_MAX - 1)));
+    }
+    const int h = r559HeightOf(key);
+    if (h != 0 && m_labBase.contains(QStringLiteral("vpos")))
+        v.insert(QStringLiteral("vpos"), qBound(0, m_labBase.value(QStringLiteral("vpos")) + h, 255));
+}
+
+void TrackEngine::r559LabSync()
+{
+    // the look on stage changed: its own rotation / height (a kept look's), else OFF / HOME
+    const QString key = labCurrentKey();
+    if (key == m_r559Key)
+        return;
+    m_r559Key.clear();                   // read the store, not the live values
+    m_r559Rot = r559RotOf(key);
+    m_r559H = r559HeightOf(key);
+    if (m_r559Rot != 0)
+        m_r559Speed = qAbs(m_r559Rot);
+    m_r559Key = key;
+}
+
+void TrackEngine::r559LabKeep(QJsonObject &o, const QString &key) const
+{
+    // ✓ GOOD (labDecide) and a change on a kept look: what is on top goes with the look
+    if (key != m_r559Key)
+        return;
+    if (m_r559Rot != 0)
+        o.insert(QStringLiteral("rot"), m_r559Rot);
+    else
+        o.remove(QStringLiteral("rot"));
+    if (m_r559H != 0)
+        o.insert(QStringLiteral("h"), m_r559H);
+    else
+        o.remove(QStringLiteral("h"));
+}
+
+void TrackEngine::r559LabChanged(const QString &why)
+{
+    // on stage at once; a kept look keeps it at once (its AUTO programmes are rebuilt when the lab closes)
+    const QString key = labCurrentKey();
+    if (key.isEmpty() == false && labVerdictOf(key) == 1)
+    {
+        QJsonObject o = m_labStore.value(key).toObject();
+        const QJsonObject before = o;
+        r559LabKeep(o, key);
+        if (o != before)
+        {
+            m_labStore.insert(key, o);
+            m_labShowDirty = true;
+            labSave();
+        }
+    }
+    logSignal(QStringLiteral("sig:lab-top:%1:%2:rot=%3:h=%4").arg(why, key).arg(m_r559Rot).arg(m_r559H));
+    labShow();
+    emit labChanged();
+}
+
+int TrackEngine::labRot() const { return m_r559Key == labCurrentKey() ? m_r559Rot : r559RotOf(labCurrentKey()); }
+int TrackEngine::labRotSpeed() const { return m_r559Speed; }
+int TrackEngine::labHeight() const
+{
+    if (m_labBase.contains(QStringLiteral("vpos")) == false)
+        return -1;
+    return qBound(0, m_labBase.value(QStringLiteral("vpos")) + (m_r559Key == labCurrentKey() ? m_r559H : r559HeightOf(labCurrentKey())), 255);
+}
+int TrackEngine::labHome() const { return m_labBase.value(QStringLiteral("vpos"), -1); }
+bool TrackEngine::labCanRotate() const
+{
+    foreach (quint32 fx, m_labFixtures)
+    {
+        if (m_labChan.value(fx).contains(QStringLiteral("spin")))
+            return true;
+    }
+    return false;
+}
+
+void TrackEngine::labSetRotation(int dir)
+{
+    // OFF (0) / LEFT (-1, counter-clockwise) / RIGHT (1, clockwise), at the speed shown
+    if (m_labActive == false || labCurrentKey().isEmpty() || labCanRotate() == false)
+        return;
+    r559LabSync();
+    const int want = dir == 0 ? 0 : (dir < 0 ? -m_r559Speed : m_r559Speed);
+    if (want == m_r559Rot)
+        return;
+    m_r559Rot = want;
+    r559LabChanged(QStringLiteral("rotation"));
+}
+
+void TrackEngine::labRotationSpeed(int delta)
+{
+    if (m_labActive == false || labCurrentKey().isEmpty())
+        return;
+    r559LabSync();
+    const int s = qBound(1, m_r559Speed + (delta < 0 ? -1 : 1), R559_SPEED_MAX);
+    if (s == m_r559Speed)
+        return;
+    m_r559Speed = s;
+    if (m_r559Rot != 0)
+    {
+        m_r559Rot = m_r559Rot > 0 ? s : -s;
+        r559LabChanged(QStringLiteral("speed"));
+        return;
+    }
+    emit labChanged();                   // only the number: nothing turns yet
+}
+
+void TrackEngine::labHeightStep(int dir)
+{
+    // 16 a tap from his height, as far as the channel goes
+    if (m_labActive == false || labCurrentKey().isEmpty() || m_labBase.contains(QStringLiteral("vpos")) == false)
+        return;
+    r559LabSync();
+    const int home = m_labBase.value(QStringLiteral("vpos"));
+    const int h = m_r559H + (dir < 0 ? -R559_HEIGHT_STEP : R559_HEIGHT_STEP);
+    if (home + h < 0 || home + h > 255)
+    {
+        m_labMessage = tr("Height %1 is as far as the laser goes").arg(qBound(0, home + m_r559H, 255));
+        emit labChanged();
+        return;
+    }
+    m_r559H = h;
+    r559LabChanged(QStringLiteral("height"));
+}
+
+void TrackEngine::labHeightHome()
+{
+    if (m_labActive == false || labCurrentKey().isEmpty())
+        return;
+    r559LabSync();
+    if (m_r559H == 0)
+        return;
+    m_r559H = 0;
+    r559LabChanged(QStringLiteral("home"));
+}
+
+QString TrackEngine::r559LabDetail(const QString &key) const
+{
+    QString d;
+    const int rot = r559RotOf(key);
+    if (rot != 0)
+        d += tr("  ·  your rotation %1 speed %2").arg(rot > 0 ? tr("right") : tr("left")).arg(qAbs(rot));
+    const int h = r559HeightOf(key);
+    if (h != 0 && m_labBase.contains(QStringLiteral("vpos")))
+        d += tr("  ·  height %1 (home %2)").arg(qBound(0, m_labBase.value(QStringLiteral("vpos")) + h, 255))
+                 .arg(m_labBase.value(QStringLiteral("vpos")));
+    return d;
+}
+
+QString TrackEngine::r559LabHeightChip() const
+{
+    const int home = m_labBase.value(QStringLiteral("vpos"));
+    const int h = r559HeightOf(labCurrentKey());
+    if (h == 0)
+        return tr("HEIGHT %1 · HOME").arg(home);
+    return tr("HEIGHT %1 · YOURS (HOME %2)").arg(qBound(0, home + h, 255)).arg(home);
+}
+
+QString TrackEngine::r559LabRotChip() const
+{
+    const int rot = r559RotOf(labCurrentKey());
+    if (rot == 0)
+        return QString();
+    return tr("TURNS %1 · SPEED %2").arg(rot > 0 ? tr("RIGHT") : tr("LEFT")).arg(qAbs(rot));
 }
