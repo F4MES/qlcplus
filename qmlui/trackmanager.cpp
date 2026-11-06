@@ -2230,6 +2230,11 @@ void TrackManager::midiInput(quint32 universe, quint32 channel, uchar value, con
     Q_UNUSED(key)
     if (m_engine == nullptr)
         return;
+    if (m_midiFromRaw == false && m_midiPatchWorks == false && trackAppObject() != nullptr)
+    {
+        m_midiPatchWorks = true;         // TRACK_APP_MIDI_R571D: QLC+'s patch delivers - the plugin's own stand down
+        m_engine->noteMidi(QStringLiteral("patch-first:u%1:%2").arg(universe + 1).arg(channel));
+    }
     const quint32 c = channel & 0x0FFF;
     if (c >= 529 && c <= 531)
         return;                          // a MIDI clock's beat / start / stop is no control
@@ -2795,6 +2800,26 @@ void TrackManager::midiAutoPatch()
     QLCIOPlugin *midi = m_doc->ioPluginCache()->plugin(QStringLiteral("MIDI"));
     if (midi == nullptr)
         return;
+    if (m_midiRawHooked == false)
+    {
+        // TRACK_APP_MIDI_R571D: the plugin's own values, for the line TRACK patched
+        m_midiRawHooked = true;
+        connect(midi, &QLCIOPlugin::valueChanged, this,
+                [this, midi](quint32, quint32 input, quint32 channel, uchar value, const QString &key) {
+            if (m_midiOwnU < 0 || m_doc == nullptr || m_doc->inputOutputMap() == nullptr)
+                return;
+            InputPatch *ip = m_doc->inputOutputMap()->inputPatch(quint32(m_midiOwnU));
+            if (ip == nullptr || ip->plugin() != midi || ip->input() != input)
+                return;
+            if (m_midiRawCount++ == 0 && m_engine != nullptr)
+                m_engine->noteMidi(QStringLiteral("raw-first:%1:%2").arg(m_midiOwnName).arg(channel));
+            if (m_midiPatchWorks)
+                return;                  // the patch delivers: QLC+'s own path
+            m_midiFromRaw = true;
+            midiInput(quint32(m_midiOwnU), channel, value, key);
+            m_midiFromRaw = false;
+        }, Qt::QueuedConnection);
+    }
     const QStringList ins = midi->inputs();
     InputOutputMap *io = m_doc->inputOutputMap();
     int midiU = -1, freeU = -1;

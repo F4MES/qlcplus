@@ -629,6 +629,10 @@ private:
     QString m_midiOwnName;               // ... and the device
     QString m_midiFailName;              // the device that would not open (logged once)
     QString m_midiSeenList;              // TRACK_APP_MIDI_R571C: the MIDI inputs last logged
+    bool m_midiRawHooked = false;        // TRACK_APP_MIDI_R571D: TRACK hears the MIDI plugin itself
+    bool m_midiFromRaw = false;          // ... this midiInput() is the plugin's own (not the patch's)
+    bool m_midiPatchWorks = false;       // ... the patch delivered a value: the plugin's are not needed
+    qint64 m_midiRawCount = 0;           // ... values the plugin heard
     bool m_midiLearn = false;
     bool m_midiCanUndo = false;
     bool m_midiDirty = false;
