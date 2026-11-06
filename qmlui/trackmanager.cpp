@@ -35,6 +35,8 @@ static QObject *trackAppObject();          // TRACK_APP_PHONE_R549 (with the upd
 #include "trackengine.h"
 #include "inputoutputmap.h"          // R486_MI_INC: MIDI LEARN hears the inputs
 #include "inputpatch.h"
+#include "ioplugincache.h"           // TRACK_APP_MIDI_R571
+#include "qlcioplugin.h"
 #include "qlcinputprofile.h"
 #include "qlcinputchannel.h"
 #include <QQmlContext>
@@ -1896,6 +1898,9 @@ void TrackManager::midiInit()
     });
     m_midiTimer.setInterval(100);
     connect(&m_midiTimer, &QTimer::timeout, this, &TrackManager::midiTick);
+    m_midiPatchTimer.setInterval(5000);  // TRACK_APP_MIDI_R571: the controller, also plugged in later
+    connect(&m_midiPatchTimer, &QTimer::timeout, this, &TrackManager::midiAutoPatch);
+    m_midiPatchTimer.start();
     // R486_MI_QUEUED: the universe's thread and the MIDI plugin's emit this - the work
     // is done here, on the GUI thread, after the event loop has it
     connect(m_doc->inputOutputMap(), &InputOutputMap::inputValueChanged,
@@ -2735,6 +2740,87 @@ void TrackManager::midiClearAll()
         m_engine->noteMidi(QStringLiteral("clear-all"));
 }
 
+void TrackManager::midiAutoPatch()
+{
+    // TRACK_APP_MIDI_R571: the TRACK app only - QLC+ keeps its own patching
+    if (trackAppObject() == nullptr || m_doc == nullptr || m_doc->inputOutputMap() == nullptr
+        || m_doc->ioPluginCache() == nullptr)
+        return;
+    QLCIOPlugin *midi = m_doc->ioPluginCache()->plugin(QStringLiteral("MIDI"));
+    if (midi == nullptr)
+        return;
+    const QStringList ins = midi->inputs();
+    InputOutputMap *io = m_doc->inputOutputMap();
+    int dead = -1, freeU = -1, revive = -1;
+    bool live = false;
+    for (quint32 u = 0; u < io->universesCount(); u++)
+    {
+        InputPatch *ip = io->inputPatch(u);
+        if (ip == nullptr || ip->plugin() == nullptr)
+        {
+            if (freeU < 0)
+                freeU = int(u);
+            continue;
+        }
+        if (ip->plugin() != midi)
+            continue;                    // another plugin's input: his
+        if (ip->input() < quint32(ins.count()))
+        {
+            // QLC+ reopens a patch whose device comes back (a rescan), but a patch that could not open when
+            // the show loaded was never wired to the input map - it opens and hears nothing. Patch it again
+            if (m_midiDeadSeen.contains(u))
+            {
+                if (revive < 0)
+                    revive = int(u);
+            }
+            else
+                live = true;             // a MIDI input that is there: listening already
+            continue;
+        }
+        m_midiDeadSeen.insert(u);
+        if (dead < 0)
+            dead = int(u);
+    }
+    if (revive >= 0)
+    {
+        InputPatch *ip = io->inputPatch(quint32(revive));
+        const quint32 line = ip->input();
+        const QString profile = ip->profileName();
+        m_midiDeadSeen.remove(quint32(revive));
+        if (io->setInputPatch(quint32(revive), QStringLiteral("MIDI"), ins.at(int(line)), line, profile))
+        {
+            if (m_engine != nullptr)
+                m_engine->noteMidi(QStringLiteral("patched:%1:u%2").arg(ins.at(int(line))).arg(revive + 1));
+            midiRefresh();
+        }
+        return;
+    }
+    if (live)
+        return;
+    const int target = dead >= 0 ? dead : freeU;
+    if (ins.isEmpty() || target < 0)
+        return;
+    int pick = 0;
+    for (int i = 0; i < ins.count(); i++)
+    {
+        const QString n = ins.at(i).toLower();
+        if (n.contains(QStringLiteral("midimix")) || n.contains(QStringLiteral("midi mix")))
+        {
+            pick = i;
+            break;
+        }
+    }
+    InputPatch *was = io->inputPatch(quint32(target));
+    const QString profile = was != nullptr ? was->profileName() : QString();
+    if (io->setInputPatch(quint32(target), QStringLiteral("MIDI"), ins.at(pick), quint32(pick), profile))
+    {
+        m_midiDeadSeen.remove(quint32(target));
+        if (m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("patched:%1:u%2").arg(ins.at(pick)).arg(target + 1));
+        midiRefresh();
+    }
+}
+
 void TrackManager::midiRefresh()
 {
     midiInit();
@@ -2748,6 +2834,8 @@ void TrackManager::midiRefresh()
             InputPatch *ip = io->inputPatch(u);
             if (ip == nullptr || ip->plugin() == nullptr)
                 continue;
+            if (trackAppObject() != nullptr && ip->input() >= quint32(ip->plugin()->inputs().count()))
+                continue;                // TRACK_APP_MIDI_R571: a patch on a device that is not there hears nothing
             QString line = QStringLiteral("universe %1 - %2 input \"%3\"").arg(u + 1).arg(ip->pluginName(), ip->inputName());
             if (ip->pluginName() == QLatin1String("MIDI"))
             {

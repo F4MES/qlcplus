@@ -617,6 +617,9 @@ private:
     QList<MidiMap> m_midiMaps;
     QList<MidiMap> m_midiUndo;
     bool m_midiInit = false;
+    QTimer m_midiPatchTimer;             // TRACK_APP_MIDI_R571: no live MIDI input - look for the controller
+    void midiAutoPatch();                // TRACK_APP_MIDI_R571
+    QSet<quint32> m_midiDeadSeen;        // TRACK_APP_MIDI_R571: universes whose MIDI patch pointed at nothing
     bool m_midiLearn = false;
     bool m_midiCanUndo = false;
     bool m_midiDirty = false;
