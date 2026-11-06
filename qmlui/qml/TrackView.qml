@@ -1253,7 +1253,7 @@ Rectangle
                 {
                     id: updChip
                     objectName: "updateChip"
-                    visible: trackViewRoot.trackApp ? trackAppCtl.updateAvailable === true && !(trackManager && trackManager.autoRun === true)   // TRACK_APP_UI_R560
+                    visible: trackViewRoot.trackApp ? trackAppCtl.updateAvailable === true   // TRACK_APP_UPD_R571: during the show too
                                                     : (trackManager ? trackManager.updateAvailable === true : false)
                     readonly property int st: trackViewRoot.trackApp ? trackAppCtl.updateStep
                                             : (trackManager && trackManager.updateStep !== undefined ? trackManager.updateStep : 0)
@@ -1547,16 +1547,6 @@ Rectangle
                     icon: "setupSwitch"
                     text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
                     onTapped: { trackViewRoot.setupOpen = !trackViewRoot.setupOpen; trackViewRoot.helpOpen = false }
-                    // TRACK_APP_UI_R560: an update waits (its chip comes back with SHOW OFF)
-                    Rectangle
-                    {
-                        objectName: "setupUpdateDot"
-                        visible: trackViewRoot.trackApp && trackAppCtl.updateAvailable === true && !!trackManager && trackManager.autoRun === true
-                        anchors.right: parent.right; anchors.top: parent.top
-                        anchors.rightMargin: Math.round(7 * trackViewRoot.ks); anchors.topMargin: Math.round(7 * trackViewRoot.ks)
-                        width: Math.round(11 * trackViewRoot.ks); height: width; radius: width / 2
-                        color: trackViewRoot.cGold
-                    }
                 }
             }
         }
