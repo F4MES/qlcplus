@@ -2857,7 +2857,7 @@ Rectangle
         Text
         {
             x: 14; y: parent.height - 26
-            text: qsTr("dark = off  ·  bright = full  ·  tap an address or a lamp to find it  ·  AL1 by the DJ, AL2 at the back: which is 203 and which 219 is not known")
+            text: qsTr("dark = off  ·  bright = full  ·  tap an address or a lamp to find it  ·  AL1 = 203 down left by the DJ, AL2 = 219 up right at the back")   // TRACK_APP_ROOM_R564
             color: "#6E6E78"; font.pixelSize: 12
         }
     }

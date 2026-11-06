@@ -47102,7 +47102,8 @@ void TrackEngine::aniAuto()
  *    x 0 left .. 1 right seen from the DJ, y 0 at the DJ .. 1 the back wall): the washes, strobes and Mini 4
  *    Eyes from the room table, the laser bars on the right wall and the wine shelf (rig_room.json
  *    "unplaced"), the two animation lasers in their corners (AL1 by the DJ on the left, AL2 at the back on
- *    the right - which is 203 and which 219 is not known), the disco ball and the haze machine - each with
+ *    the right - TRACK_APP_ROOM_R564, Tobias 11-06: 203 is AL1 down left, 219 is AL2 up right), the disco ball
+ *    and the haze machine - each with
  *    its DMX address and how lit it is now (as roomNow).
  *  - roomShape(): the room itself - its proportions (the drawing: 560 x 896), the wine shelf, the four
  *    pillars and the DJ booth.
