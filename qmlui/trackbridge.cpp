@@ -445,8 +445,13 @@ void TrackBridge::slotOutput()
                 }
                 return out;
             };
-            const int m = kv.value(QStringLiteral("m")).toInt();
-            const int f = kv.value(QStringLiteral("f")).toInt();
+            // R566_FIX: a deck is 1-6 or none, as h= and p= are read
+            int m = kv.value(QStringLiteral("m")).toInt();
+            int f = kv.value(QStringLiteral("f")).toInt();
+            if (m < 0 || m > 6)
+                m = 0;
+            if (f < 0 || f > 6)
+                f = 0;
             const QList<int> h = list(kv.value(QStringLiteral("h")));
             const QList<int> pl = list(kv.value(QStringLiteral("p")));
             if (m != m_deckMaster || f != m_deckFollowed || h != m_decksHeard || pl != m_decksPlaying)
@@ -595,6 +600,13 @@ void TrackBridge::writeLog(const QString &logDir, const QString &what)
     }
     QDir().mkpath(dir);
     QFile f(QDir(dir).filePath(name));
+    // R566_FIX (bug round 566): track.log grew for as long as TRACK was installed (bridge.log and
+    // bridge-console.log stop at 2 MB) - past 2 MB it becomes track.log.old (one kept) and starts again
+    if (f.size() > 2000000)
+    {
+        QFile::remove(f.fileName() + QStringLiteral(".old"));
+        QFile::rename(f.fileName(), f.fileName() + QStringLiteral(".old"));
+    }
     if (f.open(QIODevice::Append | QIODevice::Text) == false)
         return;
     QTextStream out(&f);

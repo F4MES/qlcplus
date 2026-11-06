@@ -76,6 +76,19 @@ the labs and SELF TEST work as before. The engine part is `r552_barshand.inc.cpp
 - **r556 ALL AUTO:** ALL AUTO also gives the laser bars back to the engine, on the desk, from MIDI and from
   the phone.
 
+## r566: ROOM with the bars' eyes, a quieter page tile, bug round (TRACK app only)
+
+- ROOM (SETUP and the phone): each laser bar shows its 8 eyes ("Laser Color 1..8", eye 1 at
+  the top) in the colour each channel holds now - the value -> colour his colour scenes taught
+  the engine, else the show's bar values (22 red, 58 green, 85 blue, 137 magenta, 176 cyan,
+  220 white). No eye written: the whole bar in its Color channel's colour. Strobes are drawn
+  as rectangles (82 and 111 upright); 82, 111 and AL2 (219) sit where Tobias put them on the
+  map - the engine's room table is not changed. The phone's room lamp gets an 8th field: the
+  eyes (bars) or "h"/"v" (strobes).
+- The HEADS / BARS / LASER tile is dark like the row's other tiles; the shown page's dot gold.
+- The footer's NEXT TRACK title ends with "..." before the middle of the line.
+- `track.log` past 2 MB becomes `track.log.old` (one kept); DECKS m=/f= only 1-6.
+
 ## r562-r563: NEXT on LASER, ROOM as the drawing, SPEED 1/4 (TRACK app only)
 
 - LASER's last tile is NEXT (the next look on the list); AUTO gives the lasers back. The clock's mark on

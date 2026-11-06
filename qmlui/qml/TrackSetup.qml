@@ -2668,6 +2668,53 @@ Rectangle
                 }
                 return k.toUpperCase()
             }
+            // TRACK_APP_ROOM_R566: a lamp's size; its address goes right (left by the right wall) - or the other
+            // side, or below, where another lamp sits in the way
+            function lampW(L)
+            {
+                var k = L.k
+                if (k === "strobe")
+                    return L.r === "v" ? 26 : 44         // a strobe is long: across, or upright (82, 111)
+                return k === "bar" ? 14 : (k === "wash" ? 28 : (k === "ball" ? 20 : (k === "laser" ? 18 : (k === "haze" ? 16 : 14))))
+            }
+            function lampH(L)
+            {
+                if (L.k === "strobe")
+                    return L.r === "v" ? 44 : 26
+                return L.k === "bar" ? Math.max(48, Math.min(roomH * 0.085, 96)) : lampW(L)
+            }
+            function belowX(lamp, tw)
+            {
+                // under the lamp, kept inside the walls
+                return Math.max(ox + 3, Math.min(px(lamp.x) - tw / 2, ox + roomW - 3 - tw))
+            }
+            function labelSide(lamp, tw, th)
+            {
+                var X = px(lamp.x), Y = py(lamp.y), w = lampW(lamp), h = lampH(lamp)
+                var tries = lamp.x > 0.80 ? [1, 2, 0] : [0, 1, 2]
+                var all = roomPanel.lamps
+                for (var t = 0; t < tries.length; t++)
+                {
+                    var s = tries[t]
+                    var x0 = s === 0 ? X + w / 2 + 5 : (s === 1 ? X - w / 2 - 5 - tw : belowX(lamp, tw))
+                    var y0 = s === 2 ? Y + h / 2 + 2 : Y - th / 2
+                    if (x0 < ox + 2 || x0 + tw > ox + roomW - 2)
+                        continue
+                    var clash = false
+                    for (var i = 0; i < all.length && !clash; i++)
+                    {
+                        var o = all[i]
+                        if (o.dmx === lamp.dmx && o.x === lamp.x && o.y === lamp.y)
+                            continue
+                        var ow = lampW(o), oh = lampH(o), lx = px(o.x) - ow / 2, ly = py(o.y) - oh / 2
+                        if (x0 < lx + ow && x0 + tw > lx && y0 < ly + oh && y0 + th > ly)
+                            clash = true
+                    }
+                    if (!clash)
+                        return s
+                }
+                return tries[0]
+            }
             // the walls
             Rectangle
             {
@@ -2731,8 +2778,9 @@ Rectangle
                     readonly property int dmx: lamp.dmx !== undefined ? lamp.dmx : 0
                     readonly property bool picked: dmx > 0 && roomMap.pick === dmx
                     readonly property color c: lamp.c !== "" ? lamp.c : roomPanel.roomColour
-                    readonly property real w: k === "bar" ? 9 : (k === "wash" ? 28 : (k === "strobe" ? 22 : (k === "ball" ? 20 : (k === "laser" ? 18 : (k === "haze" ? 16 : 14)))))
-                    readonly property real h: k === "bar" ? Math.max(26, roomMap.roomH * 0.054) : w
+                    readonly property real w: roomMap.lampW(lamp)   // TRACK_APP_ROOM_R566
+                    readonly property real h: roomMap.lampH(lamp)
+                    readonly property var eyes: lamp.e !== undefined ? lamp.e : []
                     objectName: "roomLamp:" + dmx
                     x: roomMap.px(lamp.x) - w / 2
                     y: roomMap.py(lamp.y) - h / 2
@@ -2743,10 +2791,33 @@ Rectangle
                         anchors.fill: parent
                         radius: parent.k === "strobe" || parent.k === "haze" ? 4 : (parent.k === "bar" ? 3 : (parent.k === "laser" ? 2 : width / 2))
                         rotation: parent.k === "laser" ? 45 : 0
-                        color: parent.k === "ball" ? "transparent" : (parent.k === "haze" ? "#2A2C33" : (parent.l > 0.02 ? parent.c : "#2C2C35"))
-                        opacity: parent.k === "ball" || parent.l <= 0.02 ? 1.0 : 0.25 + 0.75 * parent.l
-                        border.width: parent.k === "ball" ? 2 : (parent.k === "haze" ? 1 : 0)
-                        border.color: "#8A8A94"
+                        color: parent.eyes.length > 0 ? "#1A1A20" : (parent.k === "ball" ? "transparent" : (parent.k === "haze" ? "#2A2C33" : (parent.l > 0.02 ? parent.c : "#2C2C35")))
+                        opacity: parent.eyes.length > 0 || parent.k === "ball" || parent.l <= 0.02 ? 1.0 : 0.25 + 0.75 * parent.l
+                        border.width: parent.eyes.length > 0 ? 1 : (parent.k === "ball" ? 2 : (parent.k === "haze" ? 1 : 0))
+                        border.color: parent.eyes.length > 0 ? "#4A4A54" : "#8A8A94"
+                    }
+                    Column
+                    {
+                        // TRACK_APP_ROOM_R566: the bar's eight eyes ("Laser Color 1" at the top), each as it lights
+                        id: eyeCol
+                        objectName: "roomEyes:" + parent.dmx
+                        visible: parent.eyes.length > 0
+                        readonly property real lit: parent.l
+                        x: 3; y: 3; width: parent.width - 6
+                        spacing: 2
+                        Repeater
+                        {
+                            model: eyeCol.visible ? eyeCol.parent.eyes : []
+                            Rectangle
+                            {
+                                readonly property bool on: modelData !== "" && eyeCol.lit > 0.02
+                                width: eyeCol.width
+                                height: Math.max(2, (eyeCol.parent.height - 6 - 2 * 7) / 8)
+                                radius: 1.5
+                                color: on ? (modelData === "*" ? roomPanel.roomColour : swatch(modelData)) : "#2C2C35"
+                                opacity: on ? 0.35 + 0.65 * eyeCol.lit : 1.0
+                            }
+                        }
                     }
                     Rectangle
                     {
@@ -2759,9 +2830,9 @@ Rectangle
                     Text
                     {
                         visible: parent.dmx > 0
-                        readonly property bool flip: lamp.x > 0.80   // ("left" is an Item's anchor line)
-                        x: flip ? -implicitWidth - 5 : parent.width + 5
-                        y: (parent.height - implicitHeight) / 2
+                        readonly property int side: roomMap.labelSide(lamp, implicitWidth, implicitHeight)   // TRACK_APP_ROOM_R566
+                        x: side === 1 ? -implicitWidth - 5 : (side === 0 ? parent.width + 5 : roomMap.belowX(lamp, implicitWidth) - parent.x)
+                        y: side === 2 ? parent.height + 2 : (parent.height - implicitHeight) / 2
                         text: parent.dmx + (lamp.t !== undefined && lamp.t !== "" ? " · " + lamp.t : "")
                         color: parent.picked ? "#FFFFFF" : (parent.l > 0.02 ? "#C8C8D0" : "#7A7A84")
                         font.bold: parent.picked || parent.l > 0.02; font.pixelSize: 12

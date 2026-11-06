@@ -3143,6 +3143,10 @@ QString TrackManager::remoteState()
                     lamp.append(m.value(QStringLiteral("c")).toString());
                     lamp.append(m.value(QStringLiteral("dmx")).toInt());
                     lamp.append(m.value(QStringLiteral("t")).toString());
+                    if (m.contains(QStringLiteral("e")))   // TRACK_APP_ROOM_R566: a bar's eight eyes
+                        lamp.append(QJsonArray::fromStringList(m.value(QStringLiteral("e")).toStringList()));
+                    else if (m.contains(QStringLiteral("r")))   // a strobe: "h" across, "v" upright
+                        lamp.append(m.value(QStringLiteral("r")).toString());
                     room563.append(lamp);
                 }
                 o.insert(QStringLiteral("room"), room563);

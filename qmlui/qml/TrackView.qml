@@ -3521,7 +3521,7 @@ Rectangle
                                 text: modelData.label
                                 fontPx: trackViewRoot.fs(12)
                                 tone: trackViewRoot.cGold
-                                active: trackViewRoot.posPage === modelData.key
+                                active: false                     // TRACK_APP_UI_R566: a page, not a function that is on
                                 // the bars under his hand while HEADS shows: a gold foot on BARS
                                 touchInputEnabled: false          // the pair's own input below takes every tap
                             }
@@ -3541,8 +3541,8 @@ Rectangle
                                     readonly property bool hand: (modelData === "bars" && trackViewRoot.barsHand) || (modelData === "laser" && trackViewRoot.aniHand)
                                     width: Math.round(6 * trackViewRoot.ks); height: width; radius: width / 2
                                     // on the gold tile: the page shown dark, the others faint, a page in his hand white
-                                    color: trackViewRoot.posPage === modelData ? "#1A1205" : (hand ? "#FFFFFF" : "#9C7A32")
-                                    border.width: trackViewRoot.posPage === modelData && hand ? 2 : 0
+                                    color: trackViewRoot.posPage === modelData ? trackViewRoot.cGold : (hand ? "#FFFFFF" : "#4A4A54")
+                                    border.width: trackViewRoot.posPage === modelData && hand ? 2 : 0   // TRACK_APP_UI_R566
                                     border.color: "#FFFFFF"
                                 }
                             }
@@ -4367,10 +4367,11 @@ Rectangle
                 // ANALYSING until the lights have its sections (NEXT goes to QLC+ only then)
                 readonly property bool appNext: trackViewRoot.trackApp && trackAppCtl.nextDeck > 0 && trackAppCtl.nextState !== ""
                 visible: appNext || (trackManager && trackManager.nextTitle !== undefined && trackManager.nextTitle !== "")
-                Text { text: qsTr("NEXT TRACK"); color: trackViewRoot.cMute; font.bold: true; font.pixelSize: trackViewRoot.fs(11); font.letterSpacing: (trackViewRoot.fs(11)) * 0.15
+                Text { id: nextLabelText; text: qsTr("NEXT TRACK"); color: trackViewRoot.cMute; font.bold: true; font.pixelSize: trackViewRoot.fs(11); font.letterSpacing: (trackViewRoot.fs(11)) * 0.15
                        anchors.verticalCenter: parent.verticalCenter }
                 Text
                 {
+                    id: nextDeckLabel
                     objectName: "nextDeckText"
                     visible: parent.appNext
                     anchors.verticalCenter: parent.verticalCenter
@@ -4379,6 +4380,7 @@ Rectangle
                 }
                 Rectangle
                 {
+                    id: nextStateBox
                     objectName: "nextStateChip"
                     visible: parent.appNext
                     anchors.verticalCenter: parent.verticalCenter
@@ -4403,6 +4405,13 @@ Rectangle
                     textFormat: Text.StyledText
                     font.pixelSize: trackViewRoot.fs(13)
                     color: trackViewRoot.cMute
+                    objectName: "nextTitleText"
+                    // TRACK_APP_FIX_R566: never past the middle of the line (ON STAGE has the left half)
+                    readonly property real room: parent.parent.width / 2 - 16 - nextLabelText.width - 12
+                                                 - (nextDeckLabel.visible ? nextDeckLabel.width + 12 : 0)
+                                                 - (nextStateBox.visible ? nextStateBox.width + 12 : 0)
+                    width: Math.max(40, Math.min(implicitWidth, room))
+                    elide: Text.ElideRight
                     // TRACK_APP_UI_R561: before NEXT has gone to QLC+, the title the deck has
                     text: !trackManager ? ""
                           : (trackManager.nextTitle !== "" || !trackViewRoot.trackApp

@@ -47200,6 +47200,75 @@ QVariantList TrackEngine::roomMap() const
         m.insert(QStringLiteral("dmx"), address);
         m.insert(QStringLiteral("t"), label);     // a name beside the address ("BAR 3", "AL1", "")
         m.insert(QStringLiteral("on"), fxi != nullptr);
+        if (kind == QLatin1String("bar") && fxi != nullptr && dmx != nullptr)
+        {
+            // TRACK_APP_ROOM_R566: the bar's eight eyes, as they are lit now
+            static const QRegularExpression eyeName(QStringLiteral("(colou?r|eye)\\s*\\d+"),
+                                                    QRegularExpression::CaseInsensitiveOption);
+            QList<quint32> eyeCh;
+            quint32 whole = QLCChannel::invalid();
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                if (qch == nullptr)
+                    continue;
+                if (qch->name().contains(eyeName))
+                    eyeCh.append(ch);
+                else if (qch->group() == QLCChannel::Colour && whole == QLCChannel::invalid())
+                    whole = ch;
+            }
+            const auto val = [&](quint32 ch) {
+                const int at = int(fxi->address() + ch);
+                return at >= 0 && at < dmx->size() ? int(uchar(dmx->at(at))) : 0;
+            };
+            const auto nameOf = [&](quint32 ch, int v) {
+                int best = 256;
+                QString col;
+                foreach (const TrackGroup &tg, m_groups)
+                {
+                    const QMap<QString, uchar> vals = tg.colourValue.value(fxi->id()).value(ch);
+                    for (QMap<QString, uchar>::const_iterator it = vals.constBegin(); it != vals.constEnd(); ++it)
+                    {
+                        const int d = qAbs(int(it.value()) - v);
+                        if (it.value() > 0 && d < best)
+                        {
+                            best = d;
+                            col = it.key();
+                        }
+                    }
+                }
+                if (best > 12)
+                {
+                    static const int known[] = { 22, 58, 85, 137, 176, 220 };
+                    static const char *const names[] = { "red", "green", "blue", "magenta", "cyan", "white" };
+                    for (int i = 0; i < 6; i++)
+                    {
+                        const int d = qAbs(known[i] - v);
+                        if (d < best)
+                        {
+                            best = d;
+                            col = QString::fromLatin1(names[i]);
+                        }
+                    }
+                }
+                return best <= 20 ? col : QStringLiteral("*");
+            };
+            if (eyeCh.count() >= 4)
+            {
+                bool written = false;
+                foreach (quint32 ch, eyeCh)
+                {
+                    if (val(ch) > 0)
+                        written = true;
+                }
+                const QString all = whole != QLCChannel::invalid() && val(whole) > 0 ? nameOf(whole, val(whole))
+                                                                                     : QStringLiteral("*");
+                QStringList eyes;
+                foreach (quint32 ch, eyeCh)
+                    eyes << (written ? (val(ch) > 0 ? nameOf(ch, val(ch)) : QString()) : all);
+                m.insert(QStringLiteral("e"), eyes);
+            }
+        }
         out.append(m);
     };
     for (int i = 0; i < r493RoomRowCount; i++)
@@ -47214,6 +47283,27 @@ QVariantList TrackEngine::roomMap() const
     {
         const R563Place &pl = r563Unplaced[i];
         lamp(pl.dmx, pl.x, pl.y, QString::fromLatin1(pl.kind), QString::fromLatin1(pl.label));
+    }
+    for (int i = 0; i < out.count(); i++)
+    {
+        // TRACK_APP_ROOM_R566: the strobes' shape, and three lamps where his drawing has them now
+        QVariantMap m = out.at(i).toMap();
+        const int at = m.value(QStringLiteral("dmx")).toInt();
+        const bool strobe = m.value(QStringLiteral("k")).toString() == QLatin1String("strobe");
+        if (strobe)
+            m.insert(QStringLiteral("r"), at == 82 || at == 111 ? QStringLiteral("v") : QStringLiteral("h"));
+        if (at == 82)
+            m.insert(QStringLiteral("y"), 0.635);                // under wash 1, where it was across
+        else if (at == 111)
+            m.insert(QStringLiteral("x"), 0.65);                 // to the right, under 82
+        else if (at == 219)
+        {
+            m.insert(QStringLiteral("x"), 0.91);                 // AL2: just above strobe 74
+            m.insert(QStringLiteral("y"), 0.80);
+        }
+        else if (strobe == false)
+            continue;
+        out[i] = m;
     }
     m_doc->inputOutputMap()->releaseUniverses(false);
     if (r493RoomBallX >= 0.0 && r493RoomBallY >= 0.0)
