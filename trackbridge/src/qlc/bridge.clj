@@ -33,7 +33,7 @@
            [org.deepsymmetry.beatlink.data AnalysisTagFinder BeatGridFinder CrateDigger MetadataFinder
             TimeFinder WaveformFinder WaveformFinder$WaveformStyle]))
 
-(def bridge-version "3 (track-app r560)")
+(def bridge-version "3 (track-app r561)")
 
 ;; ---------------------------------------------------------------- places
 
@@ -201,7 +201,9 @@
             ;; this helper, then ran nothing at all. Now the deck the lights follow - or, with none,
             ;; the first one the room hears - stands in for the master, so runde 203's choice of
             ;; the heard deck still runs. One deck only, so the choice never flips between two.
-            (and (<= 1 dev 4) (nil? (cdj-master)))
+            ;; R561: the shared functions stand in themselves now (qlc-standin-status!, also in the
+            ;; rig's BLT) - this only runs with an older shared-functions file
+            (and (<= 1 dev 4) (nil? (cdj-master)) (nil? (shared 'qlc-standin-status!)))
             (let [f (shared-value 'qlc-followed)
                   vc (VirtualCdj/getInstance)
                   f (when (and f (try (.getLatestStatusFor vc (int f)) (catch Throwable _ nil))) (long f))

@@ -4330,6 +4330,83 @@
                (= (qlc-title f) (second @qlc-sent-track)))
       (qlc-send-position! beat true))))
 
+;; ---------------------------------------------------------------- R561_NO_MASTER: no tempo master
+;;
+;; Tobias 11-05 ("hullet burde da vaere lukket fra tidligere runde?"): the light
+;; stood still for minutes while a deck played. Runde 203/205/360 chose the deck
+;; the room hears - but only inside qlc-tracked-update!, and BLT's trigger runs
+;; that only for the TEMPO MASTER's status. With no master at all (nobody pressed
+;; SYNC or MASTER on a CDJ) the trigger had no player and nothing ran: no track,
+;; no beats, no follow. Now this listener stands in, only while there is no CDJ
+;; master: the deck the lights follow (while it is on the network), else the
+;; lowest deck the room hears - one deck only, so the choice never flips between
+;; two. qlc-follow! then hands the lights to the heard deck as always (the 2 s
+;; hold, the drop take). With a master everything is as before: the trigger runs
+;; it and this listener does nothing. Only read from the decks - nothing goes back.
+
+(defonce qlc-standin-logged (atom nil))   ; the stand-in last written to the log
+
+(defn qlc-cdj-master
+  "The tempo master when it is a player 1-6 (a CDJ that sends status), else nil."
+  []
+  (let [m (qlc-tempo-master)]
+    (when (and m (<= 1 m 6)) m)))
+
+(defn qlc-standin-choice
+  "Pure: the player that stands in for a missing tempo master, or nil.
+   The followed deck while it is on the network, else the lowest heard deck."
+  [followed followed-there? heard]
+  (cond
+    (and followed followed-there?) (long followed)
+    (seq heard)                    (long (apply min heard))
+    :else                          nil))
+
+(defn qlc-deck-there?
+  "Does VirtualCdj have a status for this player now?"
+  [p]
+  (try (instance? org.deepsymmetry.beatlink.CdjStatus
+                  (.getLatestStatusFor (org.deepsymmetry.beatlink.VirtualCdj/getInstance) (int p)))
+       (catch Throwable _ false)))
+
+(defn qlc-standin-status!
+  "A status update from any device: runs the tracked update for the stand-in
+   deck while no CDJ is tempo master. Never throws."
+  [status]
+  (try
+    (when (instance? org.deepsymmetry.beatlink.CdjStatus status)
+      (let [^org.deepsymmetry.beatlink.CdjStatus s status
+            dev (long (.getDeviceNumber s))]
+        (when (<= 1 dev 4)
+          (if (qlc-cdj-master)
+            (reset! qlc-standin-logged nil)          ; a master again: the trigger has it
+            (let [f        @qlc-followed
+                  there?   (boolean (and f (qlc-deck-there? f)))
+                  stand-in (qlc-standin-choice f there? (when-not there? (qlc-heard-decks)))]
+              (when (and stand-in (== dev stand-in))
+                (when (not= stand-in @qlc-standin-logged)
+                  (reset! qlc-standin-logged stand-in)
+                  (try (timbre/info "QLC+: no tempo master - deck" stand-in
+                                    "stands in so the lights still follow the room")
+                       (catch Throwable _ nil)))
+                (qlc-tracked-update! dev (.getBeatNumber s) (.isPlaying s))))))))
+    (catch Throwable e
+      (try (timbre/warn "QLC+ stand-in for the tempo master failed:" (.getMessage e))
+           (catch Throwable _ nil)))))
+
+;; defonce: re-evaluating the shared functions (BLT's Update) must not add a
+;; second listener. The reify calls qlc-standin-status! through its var, so a new
+;; definition is used. VirtualCdj takes listeners before it is running.
+(defonce qlc-standin-listener
+  (try
+    (let [l (reify org.deepsymmetry.beatlink.DeviceUpdateListener
+              (received [_ status] (qlc-standin-status! status)))]
+      (.addUpdateListener (org.deepsymmetry.beatlink.VirtualCdj/getInstance) l)
+      l)
+    (catch Throwable e
+      (try (timbre/warn "QLC+ could not listen for players without a tempo master:" (.getMessage e))
+           (catch Throwable _ nil))
+      nil)))
+
 ;; ---------------------------------------------------------------- vaerktoej
 
 (defn qlc-explain! [player]
