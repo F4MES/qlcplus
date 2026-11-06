@@ -3720,10 +3720,11 @@ Rectangle
                     }
                     Btn
                     {
-                        objectName: "ani:engine"
+                        // TRACK_APP_UI_R562: NEXT - the next look on the list (AUTO gives the lasers back)
+                        objectName: "ani:next"
                         x: lookCard.cX + 4 * (parent.cw + lookCard.cg); y: deck.rowY(2); width: parent.cw; height: trackViewRoot.rowH
-                        text: qsTr("ENGINE'S"); tone: trackViewRoot.cGold
-                        onTapped: trackEngine.aniPick(-1)
+                        text: qsTr("NEXT") + "  ▶"; tone: trackViewRoot.cGold
+                        onTapped: trackEngine.aniStep(1)
                     }
                 }
 

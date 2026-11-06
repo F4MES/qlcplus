@@ -772,7 +772,7 @@ function render() {
     if (has && !$('ani-auto')) {
       $('aniG').innerHTML = '<button class="b sm" data-c="aniAuto" id="ani-auto">AUTO</button>' +
         '<button class="b sm" data-c="ani|on" id="ani-on">ON</button>' +
-        '<button class="b sm" data-c="ani|engine" id="ani-engine">ENGINE\'S</button>';
+        '<button class="b sm" data-c="ani|next" id="ani-next">NEXT ▶</button>';   // TRACK_APP_UI_R562
       $('ani-name').onclick = () => { aniOpen = !aniOpen; render(); };
     }
     if (has) {
