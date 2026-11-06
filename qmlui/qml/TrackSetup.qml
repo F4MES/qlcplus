@@ -1094,6 +1094,8 @@ Rectangle
                         Text
                         {
                             anchors.horizontalCenter: parent.horizontalCenter
+                            width: Math.min(implicitWidth, groupTile.width - 10)   // TRACK_APP_FIX_R568: inside the tile
+                            fontSizeMode: Text.HorizontalFit; minimumPixelSize: 9; horizontalAlignment: Text.AlignHCenter
                             text: groupTile.armed ? (groupTile.g.enabled ? qsTr("SURE? - TAP AGAIN TO SWITCH OFF") : qsTr("SURE? - TAP AGAIN TO SWITCH ON"))
                                   : groupTile.g.key
                                   + (groupTile.g.base ? "  · BASE" : (groupTile.g.enabled ? "" : "  · OFF"))
