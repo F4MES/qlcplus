@@ -3696,7 +3696,7 @@ Rectangle
                                 objectName: "aniSubText"
                                 width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                                 text: !trackEngine ? ""
-                                      : (parent.parent.waits ? qsTr("YOUR PICK · NEXT %1").arg(trackEngine.aniSection.toUpperCase())
+                                      : (parent.parent.waits ? qsTr("YOUR PICK · NEXT %1").arg(trackEngine.aniSection !== "" ? trackEngine.aniSection.toUpperCase() : qsTr("SECTION"))
                                          : (parent.parent.mine ? qsTr("YOUR PICK · THIS %1").arg(trackEngine.aniSection.toUpperCase())
                                             : qsTr("ENGINE'S PICK")))
                                 color: parent.parent.waits ? trackViewRoot.cGold : (parent.parent.mine ? "#3A2A08" : "#8A8A94")
@@ -4374,7 +4374,7 @@ Rectangle
                     objectName: "nextDeckText"
                     visible: parent.appNext
                     anchors.verticalCenter: parent.verticalCenter
-                    text: qsTr("DECK %1").arg(trackAppCtl.nextDeck)
+                    text: trackViewRoot.trackApp ? qsTr("DECK %1").arg(trackAppCtl.nextDeck) : ""   // TRACK_APP_FIX_R565
                     color: "#CFCFD6"; font.bold: true; font.pixelSize: trackViewRoot.fs(11); font.letterSpacing: trackViewRoot.fs(11) * 0.12
                 }
                 Rectangle

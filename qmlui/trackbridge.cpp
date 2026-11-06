@@ -520,6 +520,20 @@ void TrackBridge::slotFinished(int exitCode, QProcess::ExitStatus status)
         m_cdjCount = 0;
         emit cdjCountChanged(0);
     }
+    // R565_FIX: the helper is gone - what it said about the decks and the next track goes with it (a crash
+    // left the page on the last DECKS / NEXT until a new helper said otherwise)
+    if (m_deckMaster != 0 || m_deckFollowed != 0 || m_decksHeard.isEmpty() == false || m_decksPlaying.isEmpty() == false
+        || m_nextDeck != 0 || m_nextState.isEmpty() == false || m_nextTrack.isEmpty() == false)
+    {
+        m_deckMaster = 0;
+        m_deckFollowed = 0;
+        m_decksHeard.clear();
+        m_decksPlaying.clear();
+        m_nextDeck = 0;
+        m_nextState.clear();
+        m_nextTrack.clear();
+        emit decksChanged();
+    }
     emit helperExited(status == QProcess::NormalExit ? exitCode : -1);   // R557_READER
     if (m_wanted == false)
         return;

@@ -3118,7 +3118,7 @@ QString TrackManager::remoteState()
         if (m_engine != nullptr)
         {
             QJsonArray room;
-            foreach (const QVariant &v, m_engine->roomNow())
+            foreach (const QVariant &v, QVariantList())   // TRACK_APP_FIX_R565: r563's roomMap() below is the room
             {
                 const QVariantMap m = v.toMap();
                 QJsonArray lamp;

@@ -47043,6 +47043,13 @@ void TrackEngine::aniPick(int index)
         r561Changed(QStringLiteral("engine"));
         return;
     }
+    if (key.isEmpty())
+    {
+        m_r561Note = tr("No animation laser on tonight (RIG)");   // TRACK_APP_FIX_R565: nothing to pick for
+        m_report = m_r561Note;
+        emit aniHandChanged();
+        return;
+    }
     const QList<QPair<QString, quint32> > menu = r561Figures();
     if (index >= menu.count())
     {

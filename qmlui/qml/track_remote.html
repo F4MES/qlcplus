@@ -828,7 +828,7 @@ function render() {
       const nm = $('ani-name'), waits = !!(A.picked && A.queued);
       cls(nm, 'mine', !!A.picked && !waits); cls(nm, 'waits', waits);
       nm.querySelector('b').textContent = A.prog ? A.prog.toUpperCase() : 'NOT ON STAGE';
-      nm.querySelector('small').textContent = waits ? 'YOUR PICK · NEXT ' + String(A.sec || '').toUpperCase()
+      nm.querySelector('small').textContent = waits ? 'YOUR PICK · NEXT ' + String(A.sec || 'section').toUpperCase()   // TRACK_APP_FIX_R565
         : (A.picked ? 'YOUR PICK · THIS ' + String(A.sec || '').toUpperCase() : 'ENGINE\'S PICK · TAP FOR THE LIST');
       const list = $('ani-list'), menu = A.menu || [];
       list.style.display = aniOpen ? '' : 'none';
