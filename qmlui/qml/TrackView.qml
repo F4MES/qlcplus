@@ -3451,6 +3451,7 @@ Rectangle
                         Text
                         {
                             objectName: "energyClockText"
+                            visible: false               // TRACK_APP_CLOCK_R562: the line alone, no text
                             x: clockMark.x > parent.parent.width - 120 ? -implicitWidth - 6 : 6
                             y: Math.round(4 * trackViewRoot.ks)
                             text: (clockMark.auto ? qsTr("15 MIN") : qsTr("AUTO")) + " " + clockMark.target
