@@ -293,7 +293,9 @@ void TrackReader::slotCheck()
 void TrackReader::releasesRead(const QByteArray &json)
 {
     const QJsonArray list = QJsonDocument::fromJson(json).array();
-    static const QRegularExpression jarName(QStringLiteral("^beat-link-trigger-([A-Za-z0-9._-]{1,48})\\.jar$"));
+    // R569_FIX: the version names a folder (cdjreader\<version>) - it starts with a digit and has no "..", so a
+    // release's name can never point the jar anywhere else
+    static const QRegularExpression jarName(QStringLiteral("^beat-link-trigger-([0-9][A-Za-z0-9._-]{0,47})\\.jar$"));
     Release stable, preview;
     for (const QJsonValue &v : list)
     {
@@ -308,7 +310,7 @@ void TrackReader::releasesRead(const QByteArray &json)
             const QJsonObject a = av.toObject();
             const QRegularExpressionMatch m = jarName.match(a.value(QStringLiteral("name")).toString());
             const QString digest = a.value(QStringLiteral("digest")).toString();
-            if (m.hasMatch() == false || digest.startsWith(QStringLiteral("sha256:")) == false)
+            if (m.hasMatch() == false || m.captured(1).contains(QStringLiteral("..")) || digest.startsWith(QStringLiteral("sha256:")) == false)
                 continue;              // no jar, or no SHA-256 to check it against: not offered
             Release r;
             r.version = m.captured(1);
