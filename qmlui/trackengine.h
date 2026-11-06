@@ -3836,6 +3836,9 @@ public:
     Q_INVOKABLE void aniPick(int index); // from the list; -1 = ENGINE'S
     Q_INVOKABLE void aniStep(int dir);   // -1 / +1 through the list, 0 = ENGINE'S
     Q_INVOKABLE void aniAuto();
+    // TRACK_APP_ROOM_R563: ROOM as his drawing, with the DMX addresses (r563_room.inc.cpp) - only read
+    Q_INVOKABLE QVariantList roomMap() const;      // x, y, k, l, c, dmx, t (a name), on (in the show)
+    Q_INVOKABLE QVariantMap roomShape() const;     // aspect, shelf, pillars, dj
 private:
     QString r561AniKey() const;
     bool r561Picked() const;

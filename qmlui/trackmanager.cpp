@@ -3130,6 +3130,24 @@ QString TrackManager::remoteState()
                 room.append(lamp);
             }
             o.insert(QStringLiteral("room"), room);
+            {   // TRACK_APP_ROOM_R563: as the drawing, with the DMX addresses (in place of r560's)
+                QJsonArray room563;
+                foreach (const QVariant &v, m_engine->roomMap())
+                {
+                    const QVariantMap m = v.toMap();
+                    QJsonArray lamp;
+                    lamp.append(qRound(m.value(QStringLiteral("x")).toDouble() * 1000) / 1000.0);
+                    lamp.append(qRound(m.value(QStringLiteral("y")).toDouble() * 1000) / 1000.0);
+                    lamp.append(m.value(QStringLiteral("k")).toString());
+                    lamp.append(qRound(m.value(QStringLiteral("l")).toDouble() * 100) / 100.0);
+                    lamp.append(m.value(QStringLiteral("c")).toString());
+                    lamp.append(m.value(QStringLiteral("dmx")).toInt());
+                    lamp.append(m.value(QStringLiteral("t")).toString());
+                    room563.append(lamp);
+                }
+                o.insert(QStringLiteral("room"), room563);
+                o.insert(QStringLiteral("roomShape"), QJsonObject::fromVariantMap(m_engine->roomShape()));
+            }
             o.insert(QStringLiteral("cdark"), QJsonArray::fromStringList(m_engine->coloursDark()));
         }
     }
@@ -3362,7 +3380,7 @@ QString TrackManager::remoteCommand(const QString &line)
     {
         if (remoteArg(a, 1, &n) == false)
             return bad;
-        e->setSpeed(qBound(-1, n, 1));
+        e->setSpeed(qBound(-2, n, 1));     // TRACK_APP_SPEED_R563: -2 = 1/4
     }
     // ---- RIG
     else if (cmd == QStringLiteral("master"))

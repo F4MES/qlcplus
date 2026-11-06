@@ -2621,8 +2621,8 @@ Rectangle
         Timer
         {
             interval: 250; repeat: true; triggeredOnStart: true
-            running: roomPanel.visible && !!trackEngine && trackEngine.roomNow !== undefined
-            onTriggered: roomPanel.lamps = trackEngine.roomNow()
+            running: roomPanel.visible && !!trackEngine && (trackEngine.roomMap !== undefined || trackEngine.roomNow !== undefined)
+            onTriggered: roomPanel.lamps = trackEngine.roomMap !== undefined ? trackEngine.roomMap() : trackEngine.roomNow()   // TRACK_APP_ROOM_R563
         }
         Text
         {
@@ -2633,19 +2633,93 @@ Rectangle
         Text
         {
             x: 76; y: 6
-            text: qsTr("seen from above, the DJ at the bottom - each lamp as QLC+ lights it now")
+            text: qsTr("seen from above, as the drawing - the DJ at the bottom, each lamp with its DMX address, lit as QLC+ lights it now")
             color: "#6E6E78"; font.pixelSize: 12
         }
-        Rectangle
+        // TRACK_APP_ROOM_R563 (Tobias 11-06: "lav det efter tegningen vi har, og tilfoej gerne DMX adresser paa dem,
+        // saa vi hurtigt kan slaa dem op"): the room as his drawing (its proportions, the wine shelf, the pillars,
+        // the DJ booth), every lamp where it hangs with its DMX address; the list on the right finds one - a tap
+        // on a row (or a lamp) rings it on the map
+        Item
         {
             id: roomMap
             objectName: "roomMap"
-            x: 12; y: 30; width: parent.width - 24; height: parent.height - 70
-            radius: 12
-            color: "#0E0E11"
-            readonly property real pad: 34
-            function px(v) { return pad + v * (width - 2 * pad) }
-            function py(v) { return pad + (1 - v) * (height - 2 * pad) }
+            x: 12; y: 30; width: parent.width - 24; height: parent.height - 62
+            property int pick: -1                         // the DMX address ringed (-1 none)
+            readonly property var shape: roomPanel.visible && !!trackEngine && trackEngine.roomShape !== undefined ? trackEngine.roomShape() : ({})
+            readonly property real aspect: shape.aspect !== undefined ? shape.aspect : 0.625
+            readonly property real listW: Math.min(560, width * 0.36)
+            readonly property real roomH: height - 24
+            readonly property real roomW: Math.min(roomH * aspect, width - listW - 60)
+            readonly property real ox: Math.max(10, (width - listW - 30 - roomW) / 2)
+            readonly property real oy: 12
+            function px(v) { return ox + v * roomW }
+            function py(v) { return oy + (1 - v) * roomH }
+            function kindName(k)
+            {
+                switch (k)
+                {
+                case "wash": return qsTr("WASH")
+                case "strobe": return qsTr("STROBE")
+                case "eyes": return qsTr("MINI 4 EYES")
+                case "bar": return qsTr("LASER BAR")
+                case "laser": return qsTr("ANIMATION LASER")
+                case "haze": return qsTr("HAZE")
+                }
+                return k.toUpperCase()
+            }
+            // the walls
+            Rectangle
+            {
+                objectName: "roomWalls"
+                x: roomMap.ox; y: roomMap.oy; width: roomMap.roomW; height: roomMap.roomH
+                radius: 6; color: "#16171B"
+                border.width: 2; border.color: "#4A4A54"
+            }
+            // the wine shelf and the pillars
+            Rectangle
+            {
+                readonly property var b: roomMap.shape.shelf !== undefined ? roomMap.shape.shelf : [0, 0, 0, 0]
+                x: roomMap.px(b[0]); y: roomMap.py(b[3]); width: (b[1] - b[0]) * roomMap.roomW; height: (b[3] - b[2]) * roomMap.roomH
+                color: "#24262B"; border.width: 1; border.color: "#3A3C44"
+                Text
+                {
+                    anchors.centerIn: parent; rotation: -90
+                    text: qsTr("WINE SHELF"); color: "#5E606A"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 2
+                }
+            }
+            Repeater
+            {
+                model: roomMap.shape.pillars !== undefined ? roomMap.shape.pillars : []
+                Rectangle
+                {
+                    readonly property var b: modelData
+                    x: roomMap.px(b[0]); y: roomMap.py(b[3]); width: (b[1] - b[0]) * roomMap.roomW; height: (b[3] - b[2]) * roomMap.roomH
+                    color: "#0A0A0C"; border.width: 1; border.color: "#33343A"
+                }
+            }
+            // the DJ booth, against the front wall
+            Item
+            {
+                // a dome on the front wall, as the drawing's arc
+                readonly property var b: roomMap.shape.dj !== undefined ? roomMap.shape.dj : [0.236, 0.771, 0, 0.067]
+                x: roomMap.px(b[0]); width: (b[1] - b[0]) * roomMap.roomW
+                height: Math.max(24, (b[3] - b[2]) * roomMap.roomH)
+                y: roomMap.py(0) - height
+                clip: true
+                Rectangle
+                {
+                    width: parent.width; height: 2 * parent.height
+                    radius: Math.min(width, height) / 2
+                    color: "#3A2F16"; border.width: 2; border.color: "#C9A24A"
+                }
+                Text
+                {
+                    anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 4
+                    text: "DJ"; color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 2
+                }
+            }
+            // the lamps, each with its DMX address
             Repeater
             {
                 model: roomPanel.lamps
@@ -2654,54 +2728,137 @@ Rectangle
                     readonly property var lamp: modelData
                     readonly property string k: lamp.k
                     readonly property real l: lamp.l
+                    readonly property int dmx: lamp.dmx !== undefined ? lamp.dmx : 0
+                    readonly property bool picked: dmx > 0 && roomMap.pick === dmx
                     readonly property color c: lamp.c !== "" ? lamp.c : roomPanel.roomColour
-                    readonly property real w: k === "bar" ? 150 : (k === "wash" ? 34 : (k === "strobe" ? 26 : (k === "ball" ? 26 : 18)))
-                    readonly property real h: k === "bar" ? 12 : w
+                    readonly property real w: k === "bar" ? 9 : (k === "wash" ? 28 : (k === "strobe" ? 22 : (k === "ball" ? 20 : (k === "laser" ? 18 : (k === "haze" ? 16 : 14)))))
+                    readonly property real h: k === "bar" ? Math.max(26, roomMap.roomH * 0.054) : w
+                    objectName: "roomLamp:" + dmx
                     x: roomMap.px(lamp.x) - w / 2
                     y: roomMap.py(lamp.y) - h / 2
                     width: w; height: h
+                    z: picked ? 3 : 1
                     Rectangle
                     {
                         anchors.fill: parent
-                        radius: parent.k === "strobe" ? 4 : (parent.k === "bar" ? 6 : (parent.k === "laser" ? 2 : width / 2))
+                        radius: parent.k === "strobe" || parent.k === "haze" ? 4 : (parent.k === "bar" ? 3 : (parent.k === "laser" ? 2 : width / 2))
                         rotation: parent.k === "laser" ? 45 : 0
-                        color: parent.k === "ball" ? "transparent" : (parent.l > 0.02 ? parent.c : "#26262E")
+                        color: parent.k === "ball" ? "transparent" : (parent.k === "haze" ? "#2A2C33" : (parent.l > 0.02 ? parent.c : "#2C2C35"))
                         opacity: parent.k === "ball" || parent.l <= 0.02 ? 1.0 : 0.25 + 0.75 * parent.l
-                        border.width: parent.k === "ball" ? 2 : 0
+                        border.width: parent.k === "ball" ? 2 : (parent.k === "haze" ? 1 : 0)
                         border.color: "#8A8A94"
                     }
-                }
-            }
-            Text
-            {
-                anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 6
-                text: "DJ"
-                color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 2
-            }
-        }
-        Row
-        {
-            x: 14; y: parent.height - 30; spacing: 22
-            Repeater
-            {
-                model: [ [qsTr("WASH"), 16, 8], [qsTr("STROBE"), 14, 3], [qsTr("LASER BAR"), 30, 4], [qsTr("ANIMATION LASER"), 11, 2], [qsTr("MINI 4 EYES"), 10, 5], [qsTr("DISCO BALL"), 14, 7] ]
-                Row
-                {
-                    spacing: 8
                     Rectangle
                     {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: modelData[1]; height: modelData[0] === qsTr("LASER BAR") ? 8 : modelData[1]
-                        radius: modelData[2]
-                        rotation: modelData[0] === qsTr("ANIMATION LASER") ? 45 : 0
-                        color: modelData[0] === qsTr("DISCO BALL") ? "transparent" : "#5E5E68"
-                        border.width: modelData[0] === qsTr("DISCO BALL") ? 2 : 0
-                        border.color: "#8A8A94"
+                        // found: a white ring
+                        visible: parent.picked
+                        anchors.centerIn: parent
+                        width: Math.max(parent.w, parent.h) + 16; height: width; radius: width / 2
+                        color: "transparent"; border.width: 3; border.color: "#FFFFFF"
                     }
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; color: "#8A8A94"; font.pixelSize: 12; font.bold: true }
+                    Text
+                    {
+                        visible: parent.dmx > 0
+                        readonly property bool flip: lamp.x > 0.80   // ("left" is an Item's anchor line)
+                        x: flip ? -implicitWidth - 5 : parent.width + 5
+                        y: (parent.height - implicitHeight) / 2
+                        text: parent.dmx + (lamp.t !== undefined && lamp.t !== "" ? " · " + lamp.t : "")
+                        color: parent.picked ? "#FFFFFF" : (parent.l > 0.02 ? "#C8C8D0" : "#7A7A84")
+                        font.bold: parent.picked || parent.l > 0.02; font.pixelSize: 12
+                    }
+                    MouseArea
+                    {
+                        anchors.fill: parent; anchors.margins: -8
+                        onClicked: roomMap.pick = (roomMap.pick === parent.dmx ? -1 : parent.dmx)
+                    }
                 }
             }
-            Text { text: qsTr("dark = off  ·  bright = full  ·  laser bars by their depth, the animation lasers at the DJ"); color: "#6E6E78"; font.pixelSize: 12 }
+            // the list: every address, what it is, how lit now - a tap finds it on the map
+            Rectangle
+            {
+                id: roomList
+                objectName: "roomList"
+                x: roomMap.width - roomMap.listW; y: 0; width: roomMap.listW; height: roomMap.height
+                radius: 12; color: "#121216"
+                readonly property var rows:
+                {
+                    var r = []
+                    for (var i = 0; i < roomPanel.lamps.length; i++)
+                        if (roomPanel.lamps[i].dmx > 0)
+                            r.push(roomPanel.lamps[i])
+                    r.sort(function(a, b) { return a.dmx - b.dmx })
+                    return r
+                }
+                Text
+                {
+                    x: 16; y: 10
+                    text: qsTr("DMX") + "      " + qsTr("LAMP") ; color: "#8A8A94"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 1.4
+                }
+                Text
+                {
+                    anchors.right: parent.right; anchors.rightMargin: 16; y: 10
+                    text: qsTr("NOW"); color: "#8A8A94"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 1.4
+                }
+                Flickable
+                {
+                    x: 8; y: 34; width: parent.width - 16; height: parent.height - 42
+                    contentHeight: listCol.implicitHeight; clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    Column
+                    {
+                        id: listCol
+                        width: parent.width
+                        spacing: 2
+                        Repeater
+                        {
+                            model: roomList.rows
+                            Rectangle
+                            {
+                                objectName: "roomRow:" + modelData.dmx
+                                readonly property bool picked: roomMap.pick === modelData.dmx
+                                width: listCol.width; height: Math.max(26, Math.min(34, (roomList.height - 50) / Math.max(1, roomList.rows.length) - 2))
+                                radius: 6
+                                color: picked ? "#2E3A52" : (index % 2 ? "#17171C" : "transparent")
+                                Text
+                                {
+                                    x: 8; anchors.verticalCenter: parent.verticalCenter; width: 56
+                                    text: modelData.dmx; color: "#E6E6EA"; font.bold: true; font.pixelSize: 14
+                                }
+                                Text
+                                {
+                                    x: 66; anchors.verticalCenter: parent.verticalCenter
+                                    text: roomMap.kindName(modelData.k) + (modelData.t !== "" && modelData.k !== "haze" ? "  ·  " + modelData.t : "")
+                                          + (modelData.on === false ? "  ·  " + qsTr("not in the show") : "")
+                                    color: modelData.on === false ? "#C07A5A" : "#A8A8B2"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 0.6
+                                }
+                                Rectangle
+                                {
+                                    // how lit now (the lamp's colour)
+                                    anchors.right: parent.right; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter
+                                    width: 64; height: 8; radius: 4; color: "#24242C"
+                                    visible: modelData.k !== "haze"
+                                    Rectangle
+                                    {
+                                        width: parent.width * Math.max(0, Math.min(1, modelData.l)); height: parent.height; radius: 4
+                                        color: modelData.c !== "" ? modelData.c : roomPanel.roomColour
+                                    }
+                                }
+                                MouseArea
+                                {
+                                    anchors.fill: parent
+                                    onClicked: roomMap.pick = (roomMap.pick === modelData.dmx ? -1 : modelData.dmx)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Text
+        {
+            x: 14; y: parent.height - 26
+            text: qsTr("dark = off  ·  bright = full  ·  tap an address or a lamp to find it  ·  AL1 by the DJ, AL2 at the back: which is 203 and which 219 is not known")
+            color: "#6E6E78"; font.pixelSize: 12
         }
     }
 }

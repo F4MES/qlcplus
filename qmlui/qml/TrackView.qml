@@ -3846,24 +3846,29 @@ Rectangle
                 }
                 RowLabel
                 {
-                    x: lookCard.cX + 3 * (lookCard.cell(7) + lookCard.cg)
+                    // TRACK_APP_SPEED_R563 (Tobias 11-06: "aendre navnet tilbage til bare at vaere speed" - it is everything
+                    // that steps: chases, the engine's figures, FADE / CHASE, the heads' sweeps; with 1/4 in the TRACK app)
+                    x: lookCard.cX + (trackViewRoot.trackApp ? 2 : 3) * (lookCard.cell(7) + lookCard.cg)
                     y: deck.rowY(4); width: lookCard.cell(7) - Math.round(8 * trackViewRoot.ks); height: trackViewRoot.rowH
                     horizontalAlignment: Text.AlignRight
-                    text: trackViewRoot.trackApp ? "FIGURE SPEED" : "SPEED"   // TRACK_APP_UI_R560: the figures', not the colours'
+                    text: "SPEED"
                 }
-                // how fast the engine runs the figures
+                // how fast the engine runs everything that steps
                 Repeater
                 {
-                    model: [ "½×", "1×", "2×" ]
+                    model: trackViewRoot.trackApp ? [ { t: "¼×", v: -2, n: "speedQuarter", c: "#9AA8C0" }, { t: "½×", v: -1, n: "speed0", c: "#7A9ABA" },
+                                                      { t: "1×", v: 0, n: "speed1", c: "#4FA3E3" }, { t: "2×", v: 1, n: "speed2", c: "#E3B44F" } ]
+                                                  : [ { t: "½×", v: -1, n: "speed0", c: "#7A9ABA" }, { t: "1×", v: 0, n: "speed1", c: "#4FA3E3" },
+                                                      { t: "2×", v: 1, n: "speed2", c: "#E3B44F" } ]
                     Btn
                     {
-                        objectName: "speed" + index
-                        x: lookCard.cX + (4 + index) * (lookCard.cell(7) + lookCard.cg)
+                        objectName: modelData.n
+                        x: lookCard.cX + ((trackViewRoot.trackApp ? 3 : 4) + index) * (lookCard.cell(7) + lookCard.cg)
                         y: deck.rowY(4); width: lookCard.cell(7); height: trackViewRoot.rowH
-                        text: modelData
-                        tone: [ "#7A9ABA", "#4FA3E3", "#E3B44F" ][index]
-                        active: trackEngine ? trackEngine.speed === index - 1 : index === 1
-                        onTapped: trackEngine.speed = index - 1
+                        text: modelData.t
+                        tone: modelData.c
+                        active: trackEngine ? trackEngine.speed === modelData.v : modelData.v === 0
+                        onTapped: trackEngine.speed = modelData.v
                     }
                 }
 

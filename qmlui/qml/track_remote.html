@@ -138,6 +138,9 @@ button{font-family:inherit;cursor:pointer}
 .aniname.mine{background:var(--gold,#E3B44F)} .aniname.mine b{color:#1A1205} .aniname.mine small{color:#3A2A08}
 .aniname.waits{box-shadow:inset 0 0 0 2px var(--gold)} .aniname.waits small{color:var(--gold)}
 #roomc{width:100%;display:block;border-radius:12px;background:#0E0E11}
+.rrow{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;font-size:12px;font-weight:700;color:#A8A8B2}
+.rrow:nth-child(even){background:#141418} .rrow.on{background:#2E3A52;color:#fff}
+.rrow b{width:34px;color:#E6E6EA;font-size:13px} .rrow span{flex:1} .rrow i{width:56px;height:7px;border-radius:4px;background:#24242C;overflow:hidden} .rrow i u{display:block;height:100%}
 .rleg{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 2px 0;font-size:11px;font-weight:700;color:var(--mute)}
 .rleg i{display:inline-block;width:10px;height:10px;border-radius:50%;background:#5E5E68;margin-right:6px;vertical-align:-1px}
 .tabs button{height:56px;background:none;border:0;color:var(--mute);font-weight:800;font-size:12px;letter-spacing:.14em}
@@ -227,15 +230,17 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
         <div class="aniname" id="ani-name"><b></b><small></small></div>
         <div id="ani-list" style="display:none;margin-top:8px"><div class="note" id="ani-hint" style="margin:0 2px 8px"></div><div class="grid g2" id="ani-items"></div></div>
       </div>
-      <div class="lbl">FIGURE SPEED</div>
-      <div class="grid g3" id="speeds"></div>
+      <div class="lbl">SPEED</div><!-- TRACK_APP_SPEED_R563: everything that steps -->
+      <div class="grid g4" id="speeds"></div>
     </div>
 
     <div class="page" id="p-room"><!-- TRACK_APP_UI_R560 -->
-      <div class="lbl">ROOM <span style="font-weight:600;letter-spacing:.02em;color:var(--dim)">· seen from above, the DJ at the bottom</span></div>
+      <div class="lbl">ROOM <span style="font-weight:600;letter-spacing:.02em;color:var(--dim)">· as the drawing, the DJ at the bottom</span></div>
       <canvas id="roomc"></canvas>
       <div class="rleg"><span><i></i>WASH</span><span><i style="border-radius:2px"></i>STROBE</span><span><i style="width:22px;height:6px;border-radius:3px"></i>LASER BAR</span><span><i style="border-radius:1px;transform:rotate(45deg);width:8px;height:8px"></i>ANIMATION LASER</span><span><i style="width:7px;height:7px"></i>MINI 4 EYES</span><span><i style="background:none;border:2px solid #8A8A94;width:8px;height:8px"></i>BALL</span></div>
-      <div class="note">Each lamp as QLC+ lights it now - dark is off. The laser bars by their depth, the animation lasers at the DJ.</div>
+      <div class="note">Each lamp with its DMX address, lit as QLC+ lights it now - dark is off. Tap a lamp or an address to find it. AL1 by the DJ, AL2 at the back: which is 203 and which 219 is not known.</div>
+      <div class="lbl">DMX</div>
+      <div id="roomlist"></div><!-- TRACK_APP_ROOM_R563 -->
     </div>
 
     <div class="page" id="p-rig">
@@ -594,25 +599,67 @@ function sectionAt(mk, beat) { let t = 'normal'; for (const m of mk) if (m.b <= 
 function mmss(s) { return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
 function cls(el, c, on) { el.classList.toggle(c, !!on); }
 let aniOpen = false;   // TRACK_APP_UI_R561: LASER's list on the phone
-// TRACK_APP_UI_R560: the room from above - [x, y, kind, lit 0..1, colour or ""] per lamp; DJ at the bottom
+// TRACK_APP_ROOM_R563: the room as his drawing - [x, y, kind, lit 0..1, colour or "", dmx, name] per lamp and
+// S.roomShape (proportions, the wine shelf, the pillars, the DJ booth); each lamp with its DMX address; a tap on
+// the map or the list rings one
+let roomPick = 0;
 function drawRoom(room, roomColour) {
-  const cv = $('roomc'), w = cv.clientWidth || 340, h = Math.round(w * 0.9), dpr = window.devicePixelRatio || 1;
-  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px'; }
+  const S2 = (typeof S !== 'undefined' && S && S.roomShape) || {}, asp = S2.aspect || 0.625;
+  const cv = $('roomc'), w = cv.clientWidth || 340, pad = 14, rw = w - 2 * pad - 34, rh = rw / asp, h = Math.round(rh + 2 * pad);
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px'; }
   const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
-  const pad = 22, px = x => pad + x * (w - 2 * pad), py = y => pad + (1 - y) * (h - 2 * pad);
+  const ox = (w - rw) / 2, oy = pad, px = x => ox + x * rw, py = y => oy + (1 - y) * rh;
+  const box = (b, fill, stroke) => { g.beginPath(); g.rect(px(b[0]), py(b[3]), (b[1] - b[0]) * rw, (b[3] - b[2]) * rh); g.fillStyle = fill; g.fill(); if (stroke) { g.strokeStyle = stroke; g.lineWidth = 1; g.stroke(); } };
+  // the walls, the wine shelf, the pillars, the DJ booth
+  g.beginPath(); g.roundRect(ox, oy, rw, rh, 6); g.fillStyle = '#16171B'; g.fill(); g.strokeStyle = '#4A4A54'; g.lineWidth = 2; g.stroke();
+  if (S2.shelf) { box(S2.shelf, '#24262B', '#3A3C44');
+    g.save(); g.translate(px((S2.shelf[0] + S2.shelf[1]) / 2), py((S2.shelf[2] + S2.shelf[3]) / 2)); g.rotate(-Math.PI / 2);
+    g.fillStyle = '#5E606A'; g.font = '700 9px system-ui'; g.textAlign = 'center'; g.fillText('WINE SHELF', 0, 3); g.restore(); }
+  (S2.pillars || []).forEach(b => box(b, '#0A0A0C', '#33343A'));
+  const dj = S2.dj || [0.236, 0.771, 0, 0.067];
+  g.beginPath(); g.ellipse(px((dj[0] + dj[1]) / 2), py(0), (dj[1] - dj[0]) * rw / 2, Math.max(14, (dj[3] - dj[2]) * rh), 0, Math.PI, 2 * Math.PI);
+  g.fillStyle = '#3A2F16'; g.fill(); g.strokeStyle = '#C9A24A'; g.lineWidth = 2; g.stroke();
+  g.fillStyle = '#E3B44F'; g.font = '800 11px system-ui'; g.textAlign = 'center'; g.fillText('DJ', px((dj[0] + dj[1]) / 2), py(0) - 4);
   const rc = (COLOUR[roomColour] || ['#F2F2F5'])[0];
   room.forEach(L => {
-    const [x, y, k, lit, c] = L, X = px(x), Y = py(y), on = lit > 0.02;
-    g.globalAlpha = k === 'ball' || !on ? 1 : 0.25 + 0.75 * lit;
-    g.fillStyle = on ? (c || rc) : '#26262E'; g.strokeStyle = '#8A8A94'; g.lineWidth = 2;
+    const [x, y, k, lit, c, dmx, t] = L, X = px(x), Y = py(y), on = lit > 0.02, picked = dmx && dmx === roomPick;
+    g.globalAlpha = k === 'ball' || k === 'haze' || !on ? 1 : 0.25 + 0.75 * lit;
+    g.fillStyle = k === 'haze' ? '#2A2C33' : (on ? (c || rc) : '#2C2C35'); g.strokeStyle = '#8A8A94'; g.lineWidth = 2;
     g.beginPath();
-    if (k === 'bar') g.roundRect(X - 50, Y - 4, 100, 8, 4);
-    else if (k === 'strobe') g.roundRect(X - 7, Y - 7, 14, 14, 3);
+    const bh = Math.max(16, rh * 0.054);
+    if (k === 'bar') g.roundRect(X - 3, Y - bh / 2, 6, bh, 2);
+    else if (k === 'strobe' || k === 'haze') g.roundRect(X - 6, Y - 6, 12, 12, 3);
     else if (k === 'laser') { g.moveTo(X, Y - 7); g.lineTo(X + 7, Y); g.lineTo(X, Y + 7); g.lineTo(X - 7, Y); g.closePath(); }
-    else g.arc(X, Y, k === 'wash' ? 10 : (k === 'ball' ? 8 : 5), 0, Math.PI * 2);
+    else g.arc(X, Y, k === 'wash' ? 9 : (k === 'ball' ? 7 : 5), 0, Math.PI * 2);
     if (k === 'ball') g.stroke(); else g.fill();
+    g.globalAlpha = 1;
+    if (picked) { g.beginPath(); g.arc(X, Y, k === 'bar' ? bh / 2 + 6 : 15, 0, Math.PI * 2); g.strokeStyle = '#FFFFFF'; g.lineWidth = 2.5; g.stroke(); }
+    if (dmx) {
+      g.font = (picked || on ? '800 ' : '600 ') + '9px system-ui'; g.fillStyle = picked ? '#FFFFFF' : (on ? '#C8C8D0' : '#7A7A84');
+      const left = x > 0.80; g.textAlign = left ? 'right' : 'left';
+      g.fillText(String(dmx), left ? X - (k === 'bar' ? 6 : 11) : X + (k === 'bar' ? 6 : 11), Y + 3);
+    }
   });
-  g.globalAlpha = 1; g.fillStyle = '#E3B44F'; g.font = '800 11px system-ui'; g.textAlign = 'center'; g.fillText('DJ', w / 2, h - 6);
+  cv.onclick = (ev) => {
+    const r = cv.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    let best = 0, bd = 26 * 26;
+    room.forEach(L => { if (!L[5]) return; const d = (px(L[0]) - mx) ** 2 + (py(L[1]) - my) ** 2; if (d < bd) { bd = d; best = L[5]; } });
+    roomPick = best === roomPick ? 0 : best; drawRoom(room, roomColour); roomList(room, roomColour);
+  };
+  roomList(room, roomColour);
+}
+const ROOM_KIND = {wash: 'WASH', strobe: 'STROBE', eyes: 'MINI 4 EYES', bar: 'LASER BAR', laser: 'ANIMATION LASER', haze: 'HAZE'};
+function roomList(room, roomColour) {
+  const el = $('roomlist'); if (!el) return;
+  const rc = (COLOUR[roomColour] || ['#F2F2F5'])[0];
+  const rows = room.filter(L => L[5]).sort((a, b) => a[5] - b[5]);
+  const sig = JSON.stringify(rows) + '|' + roomPick + '|' + rc;
+  if (el.dataset.sig === sig) return; el.dataset.sig = sig;
+  el.innerHTML = rows.map(L => '<div class="rrow' + (L[5] === roomPick ? ' on' : '') + '" data-dmx="' + L[5] + '"><b>' + L[5] + '</b><span>'
+    + (ROOM_KIND[L[2]] || L[2]) + (L[6] && L[2] !== 'haze' ? ' · ' + esc(L[6]) : '') + '</span>'
+    + (L[2] === 'haze' ? '' : '<i><u style="width:' + Math.round(100 * Math.max(0, Math.min(1, L[3]))) + '%;background:' + (L[4] || rc) + '"></u></i>') + '</div>').join('');
+  el.querySelectorAll('.rrow').forEach(d => d.onclick = () => { const n = +d.dataset.dmx; roomPick = roomPick === n ? 0 : n; drawRoom(room, roomColour); });
 }
 let groupKeys = '', sectionsBuilt = false, colourKeys = '', lastStageSeen;
 
@@ -739,7 +786,7 @@ function render() {
     $('positions').innerHTML = '<button class="b sm" data-c="position|" id="pos-auto">AUTO</button>' +
       [['start', 'START POSITION'], ['column', 'CENTER COLUMN'], ['down', 'STRAIGHT DOWN']].map(p =>
         '<button class="b sm" data-c="position|' + p[0] + '" id="pos-' + p[0] + '">' + p[1] + '</button>').join('');
-    $('speeds').innerHTML = [[-1, '½×'], [0, '1×'], [1, '2×']].map(p => '<button class="b sm" data-c="speed|' + p[0] + '" id="spd' + p[0] + '">' + p[1] + '</button>').join('');
+    $('speeds').innerHTML = [[-2, '¼×'], [-1, '½×'], [0, '1×'], [1, '2×']].map(p => '<button class="b sm" data-c="speed|' + p[0] + '" id="spd' + p[0] + '">' + p[1] + '</button>').join('');
     sectionsBuilt = true;
   }
   cls($('sec-auto'), 'on', !S.override);
@@ -814,7 +861,7 @@ function render() {
     }
   }
   ['start', 'column', 'down'].forEach(p => cls($('pos-' + p), 'blue', S.position === p));
-  [-1, 0, 1].forEach(v => cls($('spd' + v), 'blue', S.speed === v));
+  [-2, -1, 0, 1].forEach(v => cls($('spd' + v), 'blue', S.speed === v));
 
   // --- R474_UPDATE: QLC+ at the bottom of RIG
   {

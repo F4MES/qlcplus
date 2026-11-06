@@ -76,6 +76,16 @@ the labs and SELF TEST work as before. The engine part is `r552_barshand.inc.cpp
 - **r556 ALL AUTO:** ALL AUTO also gives the laser bars back to the engine, on the desk, from MIDI and from
   the phone.
 
+## r562-r563: NEXT on LASER, ROOM as the drawing, SPEED 1/4 (TRACK app only)
+
+- LASER's last tile is NEXT (the next look on the list); AUTO gives the lasers back. The clock's mark on
+  ENERGY is the line alone.
+- ROOM (SETUP and the phone) as Tobias' drawing (`analysis_eval/r498/rummet-samlet.svg` = `rig_room.json`):
+  `trackEngine.roomMap()` (x, y, kind, lit, colour, dmx, name) and `roomShape()` (aspect, wine shelf,
+  pillars, DJ booth), `track_app/r563_room.inc.cpp`. Each lamp with its DMX address; a list finds one.
+  AL1 / AL2: which animation laser is 203 and which 219 is not known.
+- SPEED again (not FIGURE SPEED): it changes everything that steps. 1/4 = `speed` -2 (`TRACK_APP_SPEED_R563`).
+
 ## r561: the animation lasers by hand, NEXT TRACK ready, no tempo master (TRACK app only)
 
 - **No tempo master** (also the rig's BLT): the shared functions stand in themselves now

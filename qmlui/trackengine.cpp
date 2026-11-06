@@ -2233,7 +2233,7 @@ int TrackEngine::divisionFor(const TrackFuncInfo &info, qreal bpm, int division)
         }
     }
     if (m_speed < 0)
-        best *= 2.0;
+        best *= m_speed < -1 ? 4.0 : 2.0;   // TRACK_APP_SPEED_R563: 1/4
     else if (m_speed > 0)
         best = qMax(0.125, best / 2.0);
     // The quiet hour: under ENGINE_DROP_SHOW every programme walks at half
@@ -7833,7 +7833,7 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
     // allerede har"): 1/2x a step takes twice as long, 2x half - a chase
     // never faster than the beat
     if (m_speed < 0)
-        stepBeats *= 2.0;
+        stepBeats *= m_speed < -1 ? 4.0 : 2.0;   // TRACK_APP_SPEED_R563: 1/4
     else if (m_speed > 0)
         stepBeats = style == 2 ? qMax(1.0, stepBeats / 2.0) : stepBeats / 2.0;
     // R374_CHASE_KICK: from 60 % a chase steps on the kick - a beat with no
@@ -8172,7 +8172,7 @@ void TrackEngine::slotLayerTimer()
         const qint64 now = m_clock.elapsed();
         qreal per = m_layerStyle == 1 ? 32000.0 : 8000.0;
         if (m_speed < 0)
-            per *= 2.0;
+            per *= m_speed < -1 ? 4.0 : 2.0;   // TRACK_APP_SPEED_R563: 1/4
         else if (m_speed > 0)
             per /= 2.0;
         // R419_FIRST_STEP: a FADE press glides into the next colour in 4 s
@@ -8567,7 +8567,7 @@ int TrackEngine::speed() const { return m_speed; }
 
 void TrackEngine::setSpeed(int speed)
 {
-    speed = qBound(-1, speed, 1);
+    speed = qBound(-2, speed, 1);         // TRACK_APP_SPEED_R563: -2 = 1/4
     if (speed == m_speed)
         return;
     m_speed = speed;
@@ -13419,7 +13419,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     ? 4.0 * (fader < 0.30 ? 16 : fader < 0.60 ? 8 : fader < 0.85 ? 4 : 2)
                     : qreal(fader < 0.30 ? 16 : fader < 0.60 ? 4 : fader < 0.75 ? 2 : 1);
                 if (m_speed < 0)             // R375_DROP_SPEED: as updateColourLayer
-                    sb *= 2.0;
+                    sb *= m_speed < -1 ? 4.0 : 2.0;   // TRACK_APP_SPEED_R563: 1/4
                 else if (m_speed > 0)
                     sb = dropWay == 2 ? qMax(1.0, sb / 2.0) : sb / 2.0;
                 m_layerRate = 1.0 / sb;
@@ -14117,7 +14117,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         int walkBase = isDrop ? qMax(1, int(qRound(4.0 - 3.0 * eWalk)))
                      : isDrive ? qMax(1, int(qRound(6.0 - 4.5 * eWalk)))
                               : qMax(2, int(qRound(8.0 - 6.0 * eWalk)));
-        int walkBars = qMax(1, walkBase * (m_speed < 0 ? 2 : 1) / (m_speed > 0 ? 2 : 1));
+        int walkBars = qMax(1, walkBase * (m_speed < -1 ? 4 : (m_speed < 0 ? 2 : 1)) / (m_speed > 0 ? 2 : 1));   // TRACK_APP_SPEED_R563
         // A position FIGURE (a chaser of aims, runde 254) finishes its loop
         // before the walk takes the next aim: at a high fader a drop walks
         // every bar or two, which cut an 8-16 beat figure off half way.
@@ -15512,8 +15512,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // the DJ's SPEED: half or double everything that steps
         if (m_speed < 0)
         {
-            if (mv.subSteps > 1) mv.subSteps /= 2;
-            else mv.stepBeats *= 2;
+            for (int q = m_speed < -1 ? 2 : 1; q > 0; q--)   // TRACK_APP_SPEED_R563: 1/4 = the half twice
+            {
+                if (mv.subSteps > 1) mv.subSteps /= 2;
+                else mv.stepBeats *= 2;
+            }
         }
         // R358_HALFTIME: a half-time groove halves what steps, as SPEED's half
         // does - the generated patterns as well as the programmes (divisionFor)
@@ -19093,7 +19096,7 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     // past 6 m/s across the ceiling: a whip, not a sweep. The SPEED tile may
     // make them SLOWER (1/2x still applies); faster is not on offer.
     if (m_speed < 0)
-        beats *= 2;
+        beats *= m_speed < -1 ? 4 : 2;     // TRACK_APP_SPEED_R563: 1/4
     else if (m_speed > 0 && laser == false)
         beats = qMin(beats, qMax(4, beats / 2));       // 2x: never under a bar, never slower (runde 199, 201)
     uint ms = uint(qMax(250.0, beats * beatMs));
@@ -28683,10 +28686,13 @@ void TrackEngine::dropFormMove(const QString &key, TrackMove &mv, int dropBar, q
     {
         if (m_speed < 0)
         {
-            if (mv.subSteps > 1)
-                mv.subSteps /= 2;
-            else
-                mv.stepBeats *= 2;
+            for (int q = m_speed < -1 ? 2 : 1; q > 0; q--)   // TRACK_APP_SPEED_R563: the form at 1/4 too
+            {
+                if (mv.subSteps > 1)
+                    mv.subSteps /= 2;
+                else
+                    mv.stepBeats *= 2;
+            }
         }
         else if (m_speed > 0)
         {
@@ -47083,4 +47089,153 @@ void TrackEngine::aniAuto()
     if (key.isEmpty() == false)
         m_sectionMotion.remove(key);
     r561Changed(QStringLiteral("auto"));
+}
+
+/* =====================================================================
+ *  TRACK_APP_ROOM_R563 - ROOM as the drawing (TRACK app only, runde 563).
+ *  Appended to trackengine.cpp by feature_track_app.py (qlcplus-pr), in the track-app tree only.
+ *
+ *  Tobias 11-06: "rummet ser helt forkert ud i ROOM paa rigget: lav det efter tegningen vi har, og tilfoej
+ *  gerne DMX adresser paa dem, saa vi hurtigt kan slaa dem op ved at bruge ROOM funktionen."
+ *
+ *  - roomMap(): every lamp where his drawing has it (analysis_eval/r498/rummet-samlet.svg = rig_room.json,
+ *    x 0 left .. 1 right seen from the DJ, y 0 at the DJ .. 1 the back wall): the washes, strobes and Mini 4
+ *    Eyes from the room table, the laser bars on the right wall and the wine shelf (rig_room.json
+ *    "unplaced"), the two animation lasers in their corners (AL1 by the DJ on the left, AL2 at the back on
+ *    the right - which is 203 and which 219 is not known), the disco ball and the haze machine - each with
+ *    its DMX address and how lit it is now (as roomNow).
+ *  - roomShape(): the room itself - its proportions (the drawing: 560 x 896), the wine shelf, the four
+ *    pillars and the DJ booth.
+ *  Only reads: nothing here changes what the engine sends.
+ * ===================================================================== */
+
+struct R563Place { int dmx; const char *kind; qreal x; qreal y; const char *label; };
+
+// the drawing's places for what the engine's room table leaves unplaced (rig_room.json "unplaced")
+static const R563Place r563Unplaced[] = {
+    { 300, "bar", 0.978, 0.133, "BAR 1" },
+    { 319, "bar", 0.978, 0.236, "BAR 2" },
+    { 338, "bar", 0.978, 0.421, "BAR 3" },
+    { 357, "bar", 0.435, 0.511, "BAR 4" },
+    { 376, "bar", 0.978, 0.641, "BAR 5" },
+    { 395, "bar", 0.430, 0.745, "BAR 6" },
+    { 203, "laser", 0.010, 0.012, "AL1" },
+    { 219, "laser", 0.990, 0.988, "AL2" },
+};
+static const int r563UnplacedCount = 8;
+
+static QString r563Kind(const char *group)
+{
+    const QString g = QString::fromLatin1(group);
+    if (g == QLatin1String("Shark Zoom Wash")) return QStringLiteral("wash");
+    if (g == QLatin1String("Strobes All")) return QStringLiteral("strobe");
+    if (g == QLatin1String("Mini 4 Eyes")) return QStringLiteral("eyes");
+    if (g == QLatin1String("Haze")) return QStringLiteral("haze");
+    return QString();
+}
+
+QVariantList TrackEngine::roomMap() const
+{
+    QVariantList out;
+    if (m_doc == nullptr)
+        return out;
+    QHash<int, Fixture *> byDmx;
+    foreach (Fixture *fxi, m_doc->fixtures())
+    {
+        if (fxi != nullptr && fxi->universe() == 0)
+            byDmx.insert(int(fxi->address()) + 1, fxi);
+    }
+    QList<Universe *> ua = m_doc->inputOutputMap()->claimUniverses();
+    const QByteArray *dmx = ua.isEmpty() || ua.at(0) == nullptr ? nullptr : ua.at(0)->postGMValues();
+    auto lamp = [&](int address, qreal x, qreal y, const QString &kind, const QString &label) {
+        Fixture *fxi = byDmx.value(address, nullptr);
+        qreal dim = -1.0, r = 0.0, g = 0.0, b = 0.0, w = 0.0;
+        bool rgb = false;
+        if (fxi != nullptr && dmx != nullptr && kind != QLatin1String("haze"))
+        {
+            for (quint32 ch = 0; ch < fxi->channels(); ch++)
+            {
+                const QLCChannel *qch = fxi->channel(ch);
+                const int at = int(fxi->address() + ch);
+                if (qch == nullptr || at >= dmx->size() || qch->group() != QLCChannel::Intensity)
+                    continue;
+                const qreal v = qreal(uchar(dmx->at(at))) / 255.0;
+                switch (qch->colour())
+                {
+                    case QLCChannel::Red: r = qMax(r, v); rgb = true; break;
+                    case QLCChannel::Green: g = qMax(g, v); rgb = true; break;
+                    case QLCChannel::Blue: b = qMax(b, v); rgb = true; break;
+                    case QLCChannel::White: w = qMax(w, v); break;
+                    case QLCChannel::NoColour: dim = qMax(dim, v); break;
+                    default: break;
+                }
+            }
+        }
+        qreal lit = dim < 0.0 ? 1.0 : dim;
+        QString colour;
+        if (rgb || w > 0.0)
+        {
+            const qreal rr = qMin(1.0, r + w), gg = qMin(1.0, g + w), bb = qMin(1.0, b + w);
+            const qreal top = qMax(rr, qMax(gg, bb));
+            lit *= top;
+            if (top > 0.0)
+                colour = QColor::fromRgbF(float(rr / top), float(gg / top), float(bb / top)).name();
+        }
+        else if (fxi == nullptr || dmx == nullptr || kind == QLatin1String("haze"))
+            lit = 0.0;
+        QVariantMap m;
+        m.insert(QStringLiteral("x"), x);
+        m.insert(QStringLiteral("y"), y);
+        m.insert(QStringLiteral("k"), kind);
+        m.insert(QStringLiteral("l"), qBound(0.0, lit, 1.0));
+        m.insert(QStringLiteral("c"), colour);    // "" = the room's colour (a macro: lasers, bars)
+        m.insert(QStringLiteral("dmx"), address);
+        m.insert(QStringLiteral("t"), label);     // a name beside the address ("BAR 3", "AL1", "")
+        m.insert(QStringLiteral("on"), fxi != nullptr);
+        out.append(m);
+    };
+    for (int i = 0; i < r493RoomRowCount; i++)
+    {
+        const R493RoomRow &row = r493RoomRows[i];
+        const QString kind = r563Kind(row.group);
+        if (kind.isEmpty() || row.x < 0.0 || row.y < 0.0)
+            continue;
+        lamp(row.dmx, row.x, row.y, kind, kind == QLatin1String("haze") ? QStringLiteral("HAZE") : QString());
+    }
+    for (int i = 0; i < r563UnplacedCount; i++)
+    {
+        const R563Place &pl = r563Unplaced[i];
+        lamp(pl.dmx, pl.x, pl.y, QString::fromLatin1(pl.kind), QString::fromLatin1(pl.label));
+    }
+    m_doc->inputOutputMap()->releaseUniverses(false);
+    if (r493RoomBallX >= 0.0 && r493RoomBallY >= 0.0)
+    {
+        QVariantMap m;
+        m.insert(QStringLiteral("x"), r493RoomBallX);
+        m.insert(QStringLiteral("y"), r493RoomBallY);
+        m.insert(QStringLiteral("k"), QStringLiteral("ball"));
+        m.insert(QStringLiteral("l"), 0.0);
+        m.insert(QStringLiteral("c"), QString());
+        m.insert(QStringLiteral("dmx"), 0);
+        m.insert(QStringLiteral("t"), QString());
+        m.insert(QStringLiteral("on"), true);
+        out.append(m);
+    }
+    return out;
+}
+
+QVariantMap TrackEngine::roomShape() const
+{
+    // his drawing (rig_room.json "unplaced.drawing"): x0, x1, y0, y1 in the room's 0..1
+    auto box = [](qreal x0, qreal x1, qreal y0, qreal y1) {
+        return QVariantList() << x0 << x1 << y0 << y1;
+    };
+    QVariantMap s;
+    s.insert(QStringLiteral("aspect"), 560.0 / 896.0);     // width / depth, as the drawing
+    s.insert(QStringLiteral("shelf"), box(0.230, 0.417, 0.352, 0.799));
+    s.insert(QStringLiteral("pillars"), QVariantList()
+             << QVariant(box(0.296, 0.404, 0.280, 0.353)) << QVariant(box(0.291, 0.513, 0.799, 0.875))
+             << QVariant(box(0.757, 0.878, 0.280, 0.364)) << QVariant(box(0.696, 0.887, 0.793, 0.872)));
+    s.insert(QStringLiteral("dj"), box(0.236, 0.771, 0.0, 0.067));          // the booth's arc
+    return s;
 }
