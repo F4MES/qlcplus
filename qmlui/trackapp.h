@@ -76,6 +76,10 @@ class TrackApp : public QObject
     Q_PROPERTY(QString deckText READ deckText NOTIFY decksChanged)
     /** after 8 s: another deck plays while the followed one stands still ("" all well) */
     Q_PROPERTY(QString deckWarn READ deckWarn NOTIFY decksChanged)
+    /** R561_NEXT: the next track - its deck (0 none), "ready" / "analysing" / "failed", its title */
+    Q_PROPERTY(int nextDeck READ nextDeck NOTIFY decksChanged)
+    Q_PROPERTY(QString nextState READ nextState NOTIFY decksChanged)
+    Q_PROPERTY(QString nextTrack READ nextTrack NOTIFY decksChanged)
 
 public:
     /** beforeQuit: what the restart does just before QLC+ quits (main.cpp: no "save?" box) */
@@ -105,6 +109,9 @@ public:
     QVariantList decksPlaying() const;
     QString deckText() const;
     QString deckWarn() const;
+    int nextDeck() const;
+    QString nextState() const;
+    QString nextTrack() const;
 
     /** R558_SHOW (main.cpp): the show to open now (given: the shortcut's file) and how to open
      *  one TRACK had to download first */

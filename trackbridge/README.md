@@ -76,6 +76,23 @@ the labs and SELF TEST work as before. The engine part is `r552_barshand.inc.cpp
 - **r556 ALL AUTO:** ALL AUTO also gives the laser bars back to the engine, on the desk, from MIDI and from
   the phone.
 
+## r561: the animation lasers by hand, NEXT TRACK ready, no tempo master (TRACK app only)
+
+- **No tempo master** (also the rig's BLT): the shared functions stand in themselves now
+  (`qlc-standin-status!`, `R561_NO_MASTER`): while no CDJ is tempo master the followed deck (else the
+  lowest heard) runs the tracked update. The helper's r560 stand-in only runs with an older file.
+- **LASER** (the POSITION row's third page; one tile, a tap goes HEADS > BARS > LASER, dots under it):
+  AUTO / ON (on stage until AUTO - under 70 % and with the bars too) / the programme - a tap opens the
+  list of the rig's laser programmes (his LAB looks first, each figure once, in the room's colour). With ON
+  the pick plays now for this section; without ON it waits and lights the lasers in the next section.
+  ENGINE'S gives it back. `trackEngine.aniOn/aniPick/aniMenu/aniAuto` (`track_app/r561_ani.inc.cpp`);
+  the phone's LOOK tab under POSITION (`ani`, `ani|pick|N`).
+- **NEXT TRACK**: the helper prints `NEXT d=<deck> s=<ready|analysing|failed> t=<title>` (UTF-8);
+  `trackAppCtl.nextDeck/nextState/nextTrack`; the page's NEXT TRACK row and the phone show the deck and
+  READY / ANALYSING.
+- **MIDI BLACKOUT pad**: a pad whose release got lost forgets its hold when BLACKOUT is let go elsewhere
+  (`TRACK_APP_PAD_R561`).
+
 ## r560: the deck the lights follow, ROOM, the UI review (TRACK app only)
 
 - **The followed deck.** The helper prints `DECKS m=<master> f=<followed> h=<heard> p=<playing>`

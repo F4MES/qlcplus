@@ -124,6 +124,19 @@ button{font-family:inherit;cursor:pointer}
 .tabs{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;background:var(--card);border-top:1px solid #1E1E24}   /* TRACK_APP_UI_R560: 3 or 4 */
 .chip.link.dwarn{background:#D6962A;color:#140C02;font-size:10px;line-height:1.15;letter-spacing:.04em;white-space:normal;text-align:center} .chip.link.dwarn b{display:none}
 .b.dark{opacity:.38}
+.nxt{display:flex;align-items:center;gap:8px;margin:10px 2px 0;font-size:12px;color:var(--mute);min-height:18px}
+.nxt b{font-size:10px;letter-spacing:.12em;color:var(--dim)}
+.nxt .d{font-weight:800;font-size:11px;letter-spacing:.08em;color:#CFCFD6}
+.nxt .s{font-weight:800;font-size:10px;letter-spacing:.08em;padding:2px 8px;border-radius:9px;border:1px solid}
+.nxt .s.ready{color:#8CE696;background:#16301A;border-color:#3E6B44}
+.nxt .s.analysing{color:#E8B85A;background:#33270F;border-color:#7A5E25}
+.nxt .s.failed{color:#F07A7A;background:#3A1616;border-color:#7A3333}
+.nxt .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aniname{display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:12px;background:#1C1C21;min-height:52px;padding:4px 6px;text-align:center}
+.aniname b{font-size:12px;letter-spacing:.04em;color:#E6E6EA;line-height:1.15}
+.aniname small{font-size:9px;font-weight:700;letter-spacing:.08em;color:#8A8A94;margin-top:2px}
+.aniname.mine{background:var(--gold,#E3B44F)} .aniname.mine b{color:#1A1205} .aniname.mine small{color:#3A2A08}
+.aniname.waits{box-shadow:inset 0 0 0 2px var(--gold)} .aniname.waits small{color:var(--gold)}
 #roomc{width:100%;display:block;border-radius:12px;background:#0E0E11}
 .rleg{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 2px 0;font-size:11px;font-weight:700;color:var(--mute)}
 .rleg i{display:inline-block;width:10px;height:10px;border-radius:50%;background:#5E5E68;margin-right:6px;vertical-align:-1px}
@@ -154,6 +167,7 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       <div class="dots" id="dots"><i></i><i></i><i></i><i></i></div>
     </div>
     <div class="strip" id="strip"></div>
+    <div class="nxt" id="nxt" style="display:none"><b>NEXT</b><span class="d"></span><span class="s"></span><span class="t"></span></div><!-- TRACK_APP_UI_R561 -->
     <div class="row2">
       <button class="chip show" id="show">START SHOW</button>
       <button class="chip last" id="last"><span class="moon"></span><span><span id="lasttitle">LAST TRACK</span><small id="lastsub"></small></span></button>
@@ -207,6 +221,12 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       <div class="grid g2" id="positions"></div>
       <div class="lbl" id="barsL" style="display:none">LASER BARS</div><!-- TRACK_APP_PHONE_R556 -->
       <div class="grid g3" id="barsG" style="display:none"></div>
+      <div class="lbl" id="aniL" style="display:none">ANIMATION LASER</div><!-- TRACK_APP_UI_R561 -->
+      <div class="grid g3" id="aniG" style="display:none"></div>
+      <div id="aniW" style="display:none;margin-top:8px">
+        <div class="aniname" id="ani-name"><b></b><small></small></div>
+        <div id="ani-list" style="display:none;margin-top:8px"><div class="note" id="ani-hint" style="margin:0 2px 8px"></div><div class="grid g2" id="ani-items"></div></div>
+      </div>
       <div class="lbl">FIGURE SPEED</div>
       <div class="grid g3" id="speeds"></div>
     </div>
@@ -573,6 +593,7 @@ function sorted(m) { return (m || []).slice().sort((a, b) => a.b - b.b); }
 function sectionAt(mk, beat) { let t = 'normal'; for (const m of mk) if (m.b <= beat) t = m.t; return t; }
 function mmss(s) { return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
 function cls(el, c, on) { el.classList.toggle(c, !!on); }
+let aniOpen = false;   // TRACK_APP_UI_R561: LASER's list on the phone
 // TRACK_APP_UI_R560: the room from above - [x, y, kind, lit 0..1, colour or ""] per lamp; DJ at the bottom
 function drawRoom(room, roomColour) {
   const cv = $('roomc'), w = cv.clientWidth || 340, h = Math.round(w * 0.9), dpr = window.devicePixelRatio || 1;
@@ -609,6 +630,19 @@ function render() {
   const nEl = $('next');
   if (n > 0 && nx) { const bars = Math.ceil((nx.b - beat) / 4); nEl.textContent = nx.t.toUpperCase() + ' in ' + bars + (bars === 1 ? ' bar' : ' bars'); nEl.style.color = SECTION_COL[nx.t] || SECTION_COL.normal; }
   else { nEl.textContent = n > 0 ? 'No further points' : ''; nEl.style.color = 'var(--dim)'; }
+  {   // TRACK_APP_UI_R561: NEXT TRACK - its deck and whether the lights have it yet
+    const N = S.nexttrack, el = $('nxt');
+    if (el) {
+      const on = !!(N && N.d > 0 && N.s);
+      el.style.display = on ? '' : 'none';
+      if (on) {
+        el.querySelector('.d').textContent = 'DECK ' + N.d;
+        const s = el.querySelector('.s'); s.className = 's ' + N.s;
+        s.textContent = N.s === 'ready' ? '✓ READY' : (N.s === 'failed' ? 'NOT ANALYSED' : 'ANALYSING…');
+        el.querySelector('.t').textContent = N.t || '';
+      }
+    }
+  }
   const dots = $('dots').children, inBar = S.playing && beat > 0 ? (beat - 1) % 4 : -1;
   for (let i = 0; i < 4; i++) { dots[i].className = i === inBar ? (i === 0 ? 'one' : 'on') : ''; }
   // the track's sections and where it is
@@ -728,6 +762,41 @@ function render() {
     cls(b, 'dark', !on && (S.cdark || []).indexOf(c) >= 0); });   // TRACK_APP_UI_R560: no lamp on stage can show it
   cls($('fade'), 'blue', S.colourMode === 1); cls($('chase'), 'blue', S.colourMode === 2);
   cls($('pos-auto'), 'on', !S.position);
+  // TRACK_APP_UI_R561: the animation lasers by hand - the desk's POSITION row, LASER page (TRACK only): ON, and a
+  // programme from the list (with ON: now, for this section; without: the next section)
+  {
+    const A = S.ani, has = !!A;
+    $('aniL').style.display = has ? '' : 'none';
+    $('aniG').style.display = has ? '' : 'none';
+    $('aniW').style.display = has ? '' : 'none';
+    if (has && !$('ani-auto')) {
+      $('aniG').innerHTML = '<button class="b sm" data-c="aniAuto" id="ani-auto">AUTO</button>' +
+        '<button class="b sm" data-c="ani|on" id="ani-on">ON</button>' +
+        '<button class="b sm" data-c="ani|engine" id="ani-engine">ENGINE\'S</button>';
+      $('ani-name').onclick = () => { aniOpen = !aniOpen; render(); };
+    }
+    if (has) {
+      cls($('ani-auto'), 'on', !A.hand);
+      cls($('ani-on'), 'gold', !!A.on);
+      const nm = $('ani-name'), waits = !!(A.picked && A.queued);
+      cls(nm, 'mine', !!A.picked && !waits); cls(nm, 'waits', waits);
+      nm.querySelector('b').textContent = A.prog ? A.prog.toUpperCase() : 'NOT ON STAGE';
+      nm.querySelector('small').textContent = waits ? 'YOUR PICK · NEXT ' + String(A.sec || '').toUpperCase()
+        : (A.picked ? 'YOUR PICK · THIS ' + String(A.sec || '').toUpperCase() : 'ENGINE\'S PICK · TAP FOR THE LIST');
+      const list = $('ani-list'), menu = A.menu || [];
+      list.style.display = aniOpen ? '' : 'none';
+      if (aniOpen) {
+        $('ani-hint').textContent = A.on ? 'ON - your pick plays now, for this section' : 'Your pick lights the lasers in the NEXT section';
+        const sig = JSON.stringify(menu) + '|' + A.i;
+        if (list.dataset.sig !== sig) {
+          list.dataset.sig = sig;
+          $('ani-items').innerHTML = menu.map((m, k) =>
+            '<button class="b sm' + (k + 1 === A.i ? ' gold' : '') + '" data-c="ani|pick|' + k + '">' + (m[1] ? 'LAB · ' : '') + esc(String(m[0]).toUpperCase()) + '</button>').join('');
+          $('ani-items').querySelectorAll('button').forEach(bt => bt.addEventListener('click', () => { aniOpen = false; setTimeout(render, 0); }));
+        }
+      }
+    }
+  }
   // TRACK_APP_PHONE_R556: the laser bars by hand - the desk's POSITION row, BARS page (TRACK only)
   {
     const B = S.bars, has = !!B;

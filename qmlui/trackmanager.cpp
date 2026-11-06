@@ -166,6 +166,14 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
         if (m_startAuto && m_engine->startScene() == false && m_engine->hitZero() == false)
             m_startAuto = false;   // R513_LIVE_HIT_ZERO_AUTO: DROP HIT has the room from ENERGY 0
     });
+    // TRACK_APP_PAD_R561: count BLACKOUT being let go (the screen, the phone, a pad) - a MIDI pad whose release
+    // got lost forgets its hold by it (midiButton). Only counts: the MIDI list is never touched from here
+    connect(m_engine, &TrackEngine::liveChanged, this, [this]() {
+        const bool b = m_engine->blackout();
+        if (m_r561BoWas && b == false)
+            m_r561BoOff++;
+        m_r561BoWas = b;
+    });
     m_engine->announceRoom();
     if (m_view != nullptr)
         m_view->rootContext()->setContextProperty("trackEngine", m_engine);
@@ -2317,6 +2325,14 @@ void TrackManager::midiFader(int idx, int raw, qint64 now)
 void TrackManager::midiButton(int idx, int raw, qint64 now)
 {
     MidiMap &m = m_midiMaps[idx];
+    // TRACK_APP_PAD_R561 (BACKLOG r491 point 4, Tobias 11-06 "Kun BLACKOUT-pad"): the pad armed BLACKOUT, its
+    // release got lost, and BLACKOUT was let go elsewhere since - the pad's hold is forgotten: the next press
+    // is a press again (it was ignored), and a late release no longer lets go a BLACKOUT locked on the screen
+    if (m.kind == MidiHold && m.armed && m.target == QLatin1String("blackout") && m.boGen != m_r561BoOff)
+    {
+        m.armed = false;
+        m.lastRaw = 0;
+    }
     // R511_REMOTE_PC_PRESS (r511 bug round): a Program Change has no release - the MIDI plugin hands QLC+
     // 127 every time, never 0 - so a button learned on one acted on the first press and never again
     // ("was" stayed down): every one is a press
@@ -2359,6 +2375,7 @@ void TrackManager::midiButton(int idx, int raw, qint64 now)
                 {
                     m_engine->setBlackout(true);
                     m.armed = true;
+                    m.boGen = m_r561BoOff;       // TRACK_APP_PAD_R561
                 }
             }
             else if (target == QLatin1String("stutter"))
@@ -3069,6 +3086,35 @@ QString TrackManager::remoteState()
         dk.insert(QStringLiteral("text"), ta->property("deckText").toString());
         dk.insert(QStringLiteral("warn"), ta->property("deckWarn").toString());
         o.insert(QStringLiteral("decks"), dk);
+        // TRACK_APP_UI_R561: the next track's deck and whether the lights have it; the animation lasers by hand
+        QJsonObject nt;
+        nt.insert(QStringLiteral("d"), ta->property("nextDeck").toInt());
+        nt.insert(QStringLiteral("s"), ta->property("nextState").toString());
+        nt.insert(QStringLiteral("t"), ta->property("nextTrack").toString());
+        o.insert(QStringLiteral("nexttrack"), nt);
+        if (m_engine != nullptr)
+        {
+            QJsonObject ani;
+            ani.insert(QStringLiteral("hand"), m_engine->aniHand());
+            ani.insert(QStringLiteral("on"), m_engine->aniOn());
+            ani.insert(QStringLiteral("prog"), m_engine->aniProgram());
+            ani.insert(QStringLiteral("picked"), m_engine->aniPicked());
+            ani.insert(QStringLiteral("queued"), m_engine->aniQueued());
+            QJsonArray menu;
+            foreach (const QVariant &v, m_engine->aniMenu())
+            {
+                const QVariantMap m = v.toMap();
+                QJsonArray item;
+                item.append(m.value(QStringLiteral("name")).toString());
+                item.append(m.value(QStringLiteral("lab")).toBool() ? 1 : 0);
+                menu.append(item);
+            }
+            ani.insert(QStringLiteral("menu"), menu);
+            ani.insert(QStringLiteral("sec"), m_engine->aniSection());
+            ani.insert(QStringLiteral("i"), m_engine->aniIndex());
+            ani.insert(QStringLiteral("n"), m_engine->aniCount());
+            o.insert(QStringLiteral("ani"), ani);
+        }
         if (m_engine != nullptr)
         {
             QJsonArray room;
@@ -3282,6 +3328,24 @@ QString TrackManager::remoteCommand(const QString &line)
         e->setPositionMode(a.value(1) == e->positionMode() ? QString() : a.value(1));
     else if (cmd == QStringLiteral("barsAuto") && trackAppObject() != nullptr)   // TRACK_APP_PHONE_R556
         e->barsAuto();
+    else if (cmd == QStringLiteral("aniAuto") && trackAppObject() != nullptr)    // TRACK_APP_UI_R561
+        e->aniAuto();
+    else if (cmd == QStringLiteral("ani") && trackAppObject() != nullptr)
+    {
+        const QString k = a.value(1);
+        if (k == QStringLiteral("on"))
+            e->setAniOn(!e->aniOn());
+        else if (k == QStringLiteral("prev"))
+            e->aniStep(-1);
+        else if (k == QStringLiteral("next"))
+            e->aniStep(1);
+        else if (k == QStringLiteral("engine"))
+            e->aniPick(-1);
+        else if (k == QStringLiteral("pick") && remoteArg(a, 2, &n) && n >= 0)
+            e->aniPick(n);
+        else
+            return bad;
+    }
     else if (cmd == QStringLiteral("bars") && trackAppObject() != nullptr)
     {
         const QString k = a.value(1);

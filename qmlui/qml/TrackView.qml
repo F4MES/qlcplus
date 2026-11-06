@@ -48,6 +48,9 @@ Rectangle
     readonly property int cdjCount: trackApp ? trackAppCtl.cdjCount : 0
     // TRACK_APP_BARS_R552: the POSITION row's page - "heads" (as before) or "bars"
     property string posPage: "heads"
+    // TRACK_APP_UI_R561: the animation lasers in his hand (the LASER page) - ON, a side or a size
+    readonly property bool aniHand: trackApp && !!trackEngine && trackEngine.aniHand === true
+    property bool aniListOpen: false
     readonly property bool barsHand: trackApp && !!trackEngine && (trackEngine.barsOn || trackEngine.barsAim !== "")
     // TRACK_APP_SETUP_R550 (Tobias 11-04: "FULL AUTO (skal altid vaere paa, saa unoedvendig)"): kept on
     Timer
@@ -3507,21 +3510,40 @@ Rectangle
                         scale: posPageInput.down ? 0.965 : 1.0
                         Repeater
                         {
-                            model: [ { key: "heads", label: qsTr("HEADS") }, { key: "bars", label: qsTr("BARS") } ]
+                            model: [ { key: trackViewRoot.posPage, label: trackViewRoot.posPage === "bars" ? qsTr("BARS") : (trackViewRoot.posPage === "laser" ? qsTr("LASER") : qsTr("HEADS")) } ]
                             Btn
                             {
-                                objectName: "posPage:" + modelData.key
-                                readonly property real half: (trackViewRoot.rowH - Math.round(4 * trackViewRoot.ks)) / 2
-                                y: index * (half + Math.round(4 * trackViewRoot.ks))
-                                width: parent.width; height: half
+                                objectName: "posPage:shown"
+                                // TRACK_APP_UI_R561: one tile - the page shown; a tap goes HEADS > BARS > LASER
+                                width: parent.width; height: parent.height
                                 radius: Math.round(6 * trackViewRoot.ks)
                                 text: modelData.label
-                                fontPx: trackViewRoot.fs(11)
+                                fontPx: trackViewRoot.fs(12)
                                 tone: trackViewRoot.cGold
                                 active: trackViewRoot.posPage === modelData.key
                                 // the bars under his hand while HEADS shows: a gold foot on BARS
-                                idleTint: modelData.key === "bars" && trackViewRoot.barsHand
                                 touchInputEnabled: false          // the pair's own input below takes every tap
+                            }
+                        }
+                        Row
+                        {
+                            // TRACK_APP_UI_R561: HEADS · BARS · LASER - the one shown dark; white = in his hand
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.bottom: parent.bottom; anchors.bottomMargin: Math.round(6 * trackViewRoot.ks)
+                            spacing: Math.round(5 * trackViewRoot.ks)
+                            Repeater
+                            {
+                                model: [ "heads", "bars", "laser" ]
+                                Rectangle
+                                {
+                                    objectName: "posDot:" + modelData
+                                    readonly property bool hand: (modelData === "bars" && trackViewRoot.barsHand) || (modelData === "laser" && trackViewRoot.aniHand)
+                                    width: Math.round(6 * trackViewRoot.ks); height: width; radius: width / 2
+                                    // on the gold tile: the page shown dark, the others faint, a page in his hand white
+                                    color: trackViewRoot.posPage === modelData ? "#1A1205" : (hand ? "#FFFFFF" : "#9C7A32")
+                                    border.width: trackViewRoot.posPage === modelData && hand ? 2 : 0
+                                    border.color: "#FFFFFF"
+                                }
                             }
                         }
                         TouchInput
@@ -3530,7 +3552,8 @@ Rectangle
                             z: 2
                             onReleasedAt: (x, y, inside) => {
                                 if (inside)
-                                    trackViewRoot.posPage = (trackViewRoot.posPage === "bars") ? "heads" : "bars"
+                                    trackViewRoot.posPage = trackViewRoot.posPage === "heads" ? "bars"
+                                                            : (trackViewRoot.posPage === "bars" ? "laser" : "heads")   // TRACK_APP_UI_R561
                             }
                         }
                     }
@@ -3608,6 +3631,99 @@ Rectangle
                                     trackEngine.barsAim = (trackEngine.barsAim === modelData.key) ? "" : modelData.key
                             }
                         }
+                    }
+                }
+
+                // TRACK_APP_UI_R561 (Tobias 11-06, "Lav 3", "skal vaere manuelt at man kan taende laseren paa et
+                // program ..." and "trykke og vaelge fra en liste ... Hvis der er manuelt valgt et, og der ikke er sat
+                // on skal looket ramme den naeste sektion"): the POSITION row's LASER page - the animation lasers by
+                // hand. AUTO = the engine; ON = on stage in every look (his pick: under 70 % ENERGY and with the bars
+                // too) until AUTO; the name = the list of the rig's laser programmes (with ON: plays now, for this
+                // section; without: lights the lasers in the next section); ENGINE'S = the engine's programme again.
+                Item
+                {
+                    objectName: "aniPanel"
+                    anchors.fill: parent
+                    visible: trackViewRoot.trackApp && trackViewRoot.posPage === "laser"
+                             && !!trackManager && !!trackEngine && trackManager.roleMode
+                    readonly property real cw: lookCard.cell(5)
+                    Btn
+                    {
+                        objectName: "aniAuto"
+                        x: lookCard.autoX; y: deck.rowY(2); width: lookCard.autoW; height: trackViewRoot.rowH
+                        text: qsTr("AUTO"); icon: "revert"; autoKind: true
+                        active: !trackViewRoot.aniHand
+                        onTapped: trackEngine.aniAuto()
+                    }
+                    Btn
+                    {
+                        objectName: "ani:on"
+                        x: lookCard.cX; y: deck.rowY(2); width: parent.cw; height: trackViewRoot.rowH
+                        text: qsTr("ON"); tone: trackViewRoot.cGold
+                        active: !!trackEngine && trackEngine.aniOn
+                        onTapped: trackEngine.aniOn = !trackEngine.aniOn
+                    }
+                    Rectangle
+                    {
+                        // the programme: his pick (gold; waiting for the next section: a gold frame) or the
+                        // engine's - a tap opens the list
+                        objectName: "ani:name"
+                        readonly property bool mine: !!trackEngine && trackEngine.aniPicked
+                        readonly property bool waits: mine && trackEngine.aniQueued
+                        x: lookCard.cX + (parent.cw + lookCard.cg); y: deck.rowY(2)
+                        width: 3 * parent.cw + 2 * lookCard.cg; height: trackViewRoot.rowH
+                        radius: Math.round(10 * trackViewRoot.ks)
+                        color: mine && !waits ? trackViewRoot.cGold : "#1C1C21"
+                        border.width: waits ? 2 : 0
+                        border.color: trackViewRoot.cGold
+                        scale: aniNameInput.down ? 0.97 : 1.0
+                        Column
+                        {
+                            anchors.centerIn: parent
+                            width: parent.width - Math.round(48 * trackViewRoot.ks)
+                            spacing: Math.round(2 * trackViewRoot.ks)
+                            Text
+                            {
+                                objectName: "aniNameText"
+                                width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                                text: !trackEngine || trackEngine.aniProgram === "" ? qsTr("NOT ON STAGE") : trackEngine.aniProgram.toUpperCase()
+                                color: parent.parent.mine && !parent.parent.waits ? "#1A1205" : "#E6E6EA"
+                                font.bold: true; font.pixelSize: trackViewRoot.fs(13); font.letterSpacing: trackViewRoot.fs(13) * 0.06
+                            }
+                            Text
+                            {
+                                objectName: "aniSubText"
+                                width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                                text: !trackEngine ? ""
+                                      : (parent.parent.waits ? qsTr("YOUR PICK · NEXT %1").arg(trackEngine.aniSection.toUpperCase())
+                                         : (parent.parent.mine ? qsTr("YOUR PICK · THIS %1").arg(trackEngine.aniSection.toUpperCase())
+                                            : qsTr("ENGINE'S PICK")))
+                                color: parent.parent.waits ? trackViewRoot.cGold : (parent.parent.mine ? "#3A2A08" : "#8A8A94")
+                                font.bold: true; font.pixelSize: trackViewRoot.fs(10); font.letterSpacing: trackViewRoot.fs(10) * 0.1
+                            }
+                        }
+                        Text
+                        {
+                            // the list opens from here
+                            anchors.right: parent.right; anchors.rightMargin: Math.round(14 * trackViewRoot.ks)
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "☰"
+                            color: parent.mine && !parent.waits ? "#1A1205" : "#8A8A94"
+                            font.pixelSize: trackViewRoot.fs(16)
+                        }
+                        TouchInput
+                        {
+                            id: aniNameInput
+                            anchors.fill: parent
+                            onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.aniListOpen = true }
+                        }
+                    }
+                    Btn
+                    {
+                        objectName: "ani:engine"
+                        x: lookCard.cX + 4 * (parent.cw + lookCard.cg); y: deck.rowY(2); width: parent.cw; height: trackViewRoot.rowH
+                        text: qsTr("ENGINE'S"); tone: trackViewRoot.cGold
+                        onTapped: trackEngine.aniPick(-1)
                     }
                 }
 
@@ -4240,17 +4356,125 @@ Rectangle
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.verticalCenterOffset: -2
                 spacing: 12
-                visible: trackManager && trackManager.nextTitle !== undefined && trackManager.nextTitle !== ""
+                // TRACK_APP_UI_R561: the TRACK app shows it from the moment a deck is loaded - its deck, and
+                // ANALYSING until the lights have its sections (NEXT goes to QLC+ only then)
+                readonly property bool appNext: trackViewRoot.trackApp && trackAppCtl.nextDeck > 0 && trackAppCtl.nextState !== ""
+                visible: appNext || (trackManager && trackManager.nextTitle !== undefined && trackManager.nextTitle !== "")
                 Text { text: qsTr("NEXT TRACK"); color: trackViewRoot.cMute; font.bold: true; font.pixelSize: trackViewRoot.fs(11); font.letterSpacing: (trackViewRoot.fs(11)) * 0.15
                        anchors.verticalCenter: parent.verticalCenter }
+                Text
+                {
+                    objectName: "nextDeckText"
+                    visible: parent.appNext
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("DECK %1").arg(trackAppCtl.nextDeck)
+                    color: "#CFCFD6"; font.bold: true; font.pixelSize: trackViewRoot.fs(11); font.letterSpacing: trackViewRoot.fs(11) * 0.12
+                }
+                Rectangle
+                {
+                    objectName: "nextStateChip"
+                    visible: parent.appNext
+                    anchors.verticalCenter: parent.verticalCenter
+                    readonly property string st: trackViewRoot.trackApp ? trackAppCtl.nextState : ""
+                    readonly property color ink: st === "ready" ? "#8CE696" : (st === "failed" ? "#F07A7A" : "#E8B85A")
+                    width: nextStateText.implicitWidth + Math.round(16 * trackViewRoot.ks)
+                    height: Math.round(18 * trackViewRoot.ks); radius: height / 2
+                    color: st === "ready" ? "#16301A" : (st === "failed" ? "#3A1616" : "#33270F")
+                    border.width: 1; border.color: Qt.darker(ink, 1.6)
+                    Text
+                    {
+                        id: nextStateText
+                        objectName: "nextStateText"
+                        anchors.centerIn: parent
+                        text: parent.st === "ready" ? "✓ " + qsTr("READY") : (parent.st === "failed" ? qsTr("NOT ANALYSED - TRYING AGAIN") : qsTr("ANALYSING…"))
+                        color: parent.ink; font.bold: true; font.pixelSize: trackViewRoot.fs(10); font.letterSpacing: trackViewRoot.fs(10) * 0.1
+                    }
+                }
                 Text
                 {
                     anchors.verticalCenter: parent.verticalCenter
                     textFormat: Text.StyledText
                     font.pixelSize: trackViewRoot.fs(13)
                     color: trackViewRoot.cMute
-                    text: trackManager ? "<font color='#CFCFD6'>" + trackManager.nextTitle + "</font>"
-                                         + (trackManager.nextFirstDrop > 0 ? "  ·  " + qsTr("first drop bar") + " " + trackManager.nextFirstDrop : "") : ""
+                    // TRACK_APP_UI_R561: before NEXT has gone to QLC+, the title the deck has
+                    text: !trackManager ? ""
+                          : (trackManager.nextTitle !== "" || !trackViewRoot.trackApp
+                             ? "<font color='#CFCFD6'>" + trackManager.nextTitle + "</font>"
+                               + (trackManager.nextFirstDrop > 0 ? "  ·  " + qsTr("first drop bar") + " " + trackManager.nextFirstDrop : "")
+                             : "<font color='#9A9AA4'>" + trackAppCtl.nextTrack + "</font>")
+                }
+            }
+        }
+    }
+
+
+    // TRACK_APP_UI_R561: LASER's list - the rig's laser programmes, his lab looks first; a tap picks one (with ON:
+    // now, for this section; without: the next section) and closes it; a press anywhere else closes it
+    Item
+    {
+        objectName: "aniListCloser"
+        anchors.fill: parent
+        z: 59
+        visible: aniList.visible
+        Rectangle { anchors.fill: parent; color: "#000000"; opacity: 0.45 }
+        TouchInput { anchors.fill: parent; onPressedAt: (x, y) => trackViewRoot.aniListOpen = false }
+    }
+    Rectangle
+    {
+        id: aniList
+        objectName: "aniList"
+        visible: trackViewRoot.aniListOpen && trackViewRoot.trackApp && !!trackEngine
+        z: 60
+        readonly property real pad: Math.round(18 * trackViewRoot.ks)
+        readonly property var items: visible ? trackEngine.aniMenu() : []
+        readonly property int cols: 4
+        readonly property real cellW: (width - 2 * pad - (cols - 1) * Math.round(10 * trackViewRoot.ks)) / cols
+        readonly property real cellH: Math.round(54 * trackViewRoot.ks)
+        width: Math.min(trackViewRoot.width - 2 * pad, Math.round(980 * trackViewRoot.ks))
+        height: Math.min(trackViewRoot.height - 2 * pad, listHead.height + aniFlow.implicitHeight + 3 * pad)
+        anchors.centerIn: parent
+        radius: Math.round(16 * trackViewRoot.ks)
+        color: "#16161A"
+        border.width: 1; border.color: "#2A2A32"
+        Column
+        {
+            id: listHead
+            x: aniList.pad; y: aniList.pad; width: aniList.width - 2 * aniList.pad
+            spacing: Math.round(4 * trackViewRoot.ks)
+            Text { text: qsTr("LASER LOOKS"); color: trackViewRoot.cGold; font.bold: true; font.pixelSize: trackViewRoot.fs(14); font.letterSpacing: trackViewRoot.fs(14) * 0.12 }
+            Text
+            {
+                objectName: "aniListHint"
+                text: trackEngine && trackEngine.aniOn ? qsTr("ON - your pick plays now, for the rest of this section")
+                                                       : qsTr("Your pick lights the animation lasers in the NEXT section - with ON it plays now")
+                color: "#8A8A94"; font.pixelSize: trackViewRoot.fs(12)
+            }
+        }
+        Flickable
+        {
+            x: aniList.pad; y: listHead.y + listHead.height + aniList.pad
+            width: aniList.width - 2 * aniList.pad; height: aniList.height - y - aniList.pad
+            contentHeight: aniFlow.implicitHeight; clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            Flow
+            {
+                id: aniFlow
+                width: parent.width
+                spacing: Math.round(10 * trackViewRoot.ks)
+                Repeater
+                {
+                    model: aniList.items
+                    Btn
+                    {
+                        objectName: "aniItem:" + index
+                        width: aniList.cellW; height: aniList.cellH
+                        text: (modelData.lab ? "LAB · " : "") + String(modelData.name).toUpperCase()
+                        tone: trackViewRoot.cGold
+                        active: modelData.now === true
+                        ring: modelData.now === true && !!trackEngine && trackEngine.aniPicked
+                        fontPx: trackViewRoot.fs(12)
+                        onTapped: { trackEngine.aniPick(index); trackViewRoot.aniListOpen = false }
+                    }
                 }
             }
         }

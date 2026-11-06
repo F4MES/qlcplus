@@ -610,6 +610,7 @@ private:
         bool taken = false;              // a fader that has picked the control up
         qreal lastSet = -1.0;            // what it set
         bool armed = false;              // a held pad that holds
+        int boGen = 0;                   // TRACK_APP_PAD_R561: BLACKOUT's let-go count when the pad armed it
         qint64 pressMs = 0;
         QString warn;                    // a VC widget on the same channel
     };
@@ -626,6 +627,8 @@ private:
     qint64 m_midiLearnMs = 0;
     qint64 m_midiHazeMoveMs = 0;         // the haze burst's last move
     QTimer m_midiTimer;
+    int m_r561BoOff = 0;                 // TRACK_APP_PAD_R561: how often BLACKOUT was let go
+    bool m_r561BoWas = false;
     void midiInit();
     void midiLoad();
     void midiRelease(MidiMap &m);       // MIDI_EDIT_RELEASE_API

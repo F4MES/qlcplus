@@ -211,6 +211,11 @@ QString TrackApp::deckText() const
 
 QString TrackApp::deckWarn() const { return m_deckWarn; }
 
+// R561_NEXT: the next track, as the helper sees it (nothing while TRACK is not the app)
+int TrackApp::nextDeck() const { return m_active ? m_bridge.nextDeck() : 0; }
+QString TrackApp::nextState() const { return m_active ? m_bridge.nextState() : QString(); }
+QString TrackApp::nextTrack() const { return m_active ? m_bridge.nextTrack() : QString(); }
+
 void TrackApp::deckCheck()
 {
     // Another deck the room hears has played for 8 s while the followed one stands still (or none is

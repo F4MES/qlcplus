@@ -699,6 +699,18 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool barsOn READ barsOn WRITE setBarsOn NOTIFY barsHandChanged)
     Q_PROPERTY(bool barsChase READ barsChase WRITE setBarsChase NOTIFY barsHandChanged)
     Q_PROPERTY(QString barsNote READ barsNote NOTIFY barsHandChanged)
+    /** TRACK_APP_ANI_R561: the animation lasers by hand (the TRACK app's POSITION row, LASER page) -
+     *  ON (on stage until AUTO), a programme from the list (with ON: now, for this section; without: the
+     *  next section), ENGINE'S */
+    Q_PROPERTY(bool aniHand READ aniHand NOTIFY aniHandChanged)
+    Q_PROPERTY(bool aniOn READ aniOn WRITE setAniOn NOTIFY aniHandChanged)
+    Q_PROPERTY(QString aniProgram READ aniProgram NOTIFY aniHandChanged)
+    Q_PROPERTY(bool aniPicked READ aniPicked NOTIFY aniHandChanged)
+    Q_PROPERTY(bool aniQueued READ aniQueued NOTIFY aniHandChanged)
+    Q_PROPERTY(QString aniSection READ aniSection NOTIFY aniHandChanged)
+    Q_PROPERTY(int aniIndex READ aniIndex NOTIFY aniHandChanged)
+    Q_PROPERTY(int aniCount READ aniCount NOTIFY aniHandChanged)
+    Q_PROPERTY(QString aniNote READ aniNote NOTIFY aniHandChanged)
 
     /** Freeze the look: no colour, cast or move changes until released. */
     Q_PROPERTY(bool hold READ hold WRITE setHold NOTIFY liveChanged)
@@ -1380,6 +1392,7 @@ signals:
     void flashGroupsChanged();           // R469_GROUP_FLASH
     void syncChanged();                  // R470_SYNC
     void barsHandChanged();              // TRACK_APP_BARS_R552
+    void aniHandChanged();               // TRACK_APP_ANI_R561
     void clockHandChanged();             // R470_CLOCK_HAND
     void atmosChanged();                 // R473_ATMOS
     void micChanged();                   // R467_MIC_CHECK
@@ -3806,6 +3819,46 @@ public:
     Q_INVOKABLE QVariantList roomNow() const;        // the room map's lamps: x, y, k(ind), l(it), c(olour)
     Q_INVOKABLE int clockTargetAt(int minutes) const; // the clock's ENERGY now (0) / later; -1 no curve
     Q_INVOKABLE QStringList coloursDark() const;     // colours no group on stage can show
+
+public:
+    // TRACK_APP_ANI_R561: the animation lasers by hand (r561_ani.inc.cpp)
+    bool aniHand() const;
+    bool aniOn() const;
+    void setAniOn(bool on);
+    QString aniProgram() const;
+    bool aniPicked() const;
+    bool aniQueued() const;              // his pick waits for the next section
+    QString aniSection() const;
+    int aniIndex() const;
+    int aniCount() const;
+    QString aniNote() const;
+    Q_INVOKABLE QVariantList aniMenu() const;   // the list: name, lab, now
+    Q_INVOKABLE void aniPick(int index); // from the list; -1 = ENGINE'S
+    Q_INVOKABLE void aniStep(int dir);   // -1 / +1 through the list, 0 = ENGINE'S
+    Q_INVOKABLE void aniAuto();
+private:
+    QString r561AniKey() const;
+    bool r561Picked() const;
+    QString r561FigureKey(const TrackFuncInfo &info) const;
+    QList<QPair<QString, quint32> > r561Figures() const;
+    quint32 r561FigureIn(const QString &fk, const QString &colour) const;
+    int r561IndexNow(const QList<QPair<QString, quint32> > &menu) const;
+    void r561AniCast(QSet<QString> &castSet, const QString &state, int secStart, const QString &nextState);
+    void r561AniMotionIn(const QString &key, const QString &colour, quint32 &mf, bool still);
+    void r561Changed(const QString &why);
+    bool m_r561On = false;               // ON: on stage until AUTO
+    QString m_r561Fig;                   // his figure for this section ("kind|figure"), "" = the engine's
+    quint32 m_r561FigFid = UINT_MAX;     // the programme he stepped to
+    int m_r561PickSec = -1;              // the section it holds for (its first beat)
+    QString m_r561PickState;
+    bool m_r561Queued = false;           // without ON: his pick waits for the next section
+    QString m_r561NextState;
+    int m_r561Sec = -1;                  // the section now
+    QString m_r561State;
+    QString m_r561Shown;                 // what the page shows (told when it changes)
+    QString m_r561Note;
+    mutable QHash<quint32, QString> m_r561FigOf;
+    mutable int m_r561FigStamp = -1;
 };
 
 #endif // TRACKENGINE_H

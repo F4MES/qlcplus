@@ -61,6 +61,11 @@ public:
     int deckFollowed() const;
     QList<int> decksHeard() const;
     QList<int> decksPlaying() const;
+    /** R561_NEXT: the deck the next track is probably on (0 none), "ready" (the lights have its sections),
+     *  "analysing" or "failed", and its title - from the helper's "NEXT" lines (decksChanged) */
+    int nextDeck() const;
+    QString nextState() const;
+    QString nextTrack() const;
 
     /** R557_READER: Beat Link Trigger's jar to run on instead of the runtime's ("" = the runtime's) */
     void setJarOverride(const QString &jar);
@@ -109,6 +114,9 @@ private:
     int m_deckFollowed = 0;
     QList<int> m_decksHeard;
     QList<int> m_decksPlaying;
+    int m_nextDeck = 0;                  // R561_NEXT
+    QString m_nextState;
+    QString m_nextTrack;
 };
 
 #endif

@@ -13006,6 +13006,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         r515MelbarsBeat(castSet, state, beat, secStart, fader, hold, isCalm, still, forceNext);
         // TRACK_APP_BARS_R552: his ON - the bars on stage, after everything else cast them or not
         r552BarsCast(castSet);
+        // TRACK_APP_ANI_R561: his ON / his pick - the animation lasers on stage (after his bars)
+        r561AniCast(castSet, state, secStart, nextState);
         // the plan for the next section
         const int boundary = (nextState.isEmpty() || beatsToNext <= 0) ? -1 : beat + beatsToNext;
         if (boundary < 0)
@@ -16099,6 +16101,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         const quint32 kickMf = (isDrop && dropBar >= 0) ? dropFormKick(key, colour, kick, beat, dropBar) : Function::invalidId();
         if (kickMf != Function::invalidId())
             mf = kickMf;
+        // TRACK_APP_ANI_R561: his programme on the animation lasers for this section (nothing while the engine's)
+        r561AniMotionIn(key, colour, mf, still);
         // The foundation uses generated intensity masks, whose minimum is
         // known. An opaque dimmer chase cannot promise a continuous floor.
         // Position-only programmes and all effect-group programmes stay intact.
@@ -46700,4 +46704,383 @@ QStringList TrackEngine::coloursDark() const
             out.append(colour);
     }
     return out;
+}
+/* =====================================================================
+ *  TRACK_APP_ANI_R561 - the animation lasers by hand (TRACK app only, runde 561).
+ *  Appended to trackengine.cpp by feature_track_app.py (qlcplus-pr), in the
+ *  track-app tree only.
+ *
+ *  Tobias 11-06: "Lav 3" (BACKLOG: "Animationslaseren i haanden ... som BARS-siden") and, on the
+ *  mockup: "skal ikke vaere position paa laseren, skal vaere manuelt at man kan taende laseren paa et
+ *  program, hvor man kan skifte imellem dem (i den paagaeldende sektion)". v2 approved: "Ja, byg den".
+ *
+ *  - ON: the animation lasers are on stage in every look until AUTO - his pick, so under 70 % ENERGY
+ *    too, and with the bars (the engine's bars step aside, as the lasers do for his bars; his own
+ *    bars - BARS ON, RIG/PLAN - stay).
+ *  - The programme: a list of the rig's own laser programmes, each figure once (his LASER LAB looks
+ *    first, then the show's; its colour comes from the room as a saved look's does). Tobias 11-06: "trykke
+ *    og vaelge fra en liste ... Hvis der er manuelt valgt et, og der ikke er sat on skal looket ramme den
+ *    naeste sektion". With ON it plays from the next beat and holds for the rest of this section; without
+ *    ON it waits for the next section and lights the lasers for it. Then the engine picks again (ON
+ *    stays). ENGINE'S gives the programme back at once.
+ *  - AUTO: both off - the engine as before. Every hook returns at its first line while nothing is
+ *    picked. Not remembered across a restart. LAST TRACK, SHOW OFF, the labs and SELF TEST keep the
+ *    stage as before. TOO LOW / AUDIENCE, the laser's master and the safety gates are untouched.
+ * ===================================================================== */
+
+QString TrackEngine::r561AniKey() const
+{
+    // the animation lasers: the pattern-device group on tonight
+    foreach (const QString &key, m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.patternDevice && m_groupOff.contains(key) == false)
+            return key;
+    }
+    return QString();
+}
+
+bool TrackEngine::r561Picked() const
+{
+    return m_r561Fig.isEmpty() == false;
+}
+
+QString TrackEngine::r561FigureKey(const TrackFuncInfo &info) const
+{
+    // one figure, every colour of it: "kind|figure" (a colourless programme is its own figure)
+    if (m_r561FigStamp != int(m_funcs.count()))
+    {
+        m_r561FigOf.clear();
+        m_r561FigStamp = int(m_funcs.count());
+    }
+    const auto cached = m_r561FigOf.constFind(info.id);
+    if (cached != m_r561FigOf.constEnd())
+        return cached.value();
+    QString fig = savedRecipeOf(info, true);
+    if (fig.isEmpty())
+        fig = info.name;
+    const QString k = QString::number(savedFigureKind(info)) + QLatin1Char('|') + fig;
+    m_r561FigOf.insert(info.id, k);
+    return k;
+}
+
+static QString r561Show(const QString &figure)
+{
+    // what the page says: the figure without "AUTO", "ANI" and the like
+    QString s = figure;
+    if (s.startsWith(QStringLiteral("AUTO "), Qt::CaseInsensitive))
+        s = s.mid(5);
+    QStringList out;
+    foreach (const QString &w, s.split(QLatin1Char(' '), Qt::SkipEmptyParts))
+    {
+        const QString l = w.toLower();
+        if (l == QStringLiteral("ani") || l == QStringLiteral("animation") || l == QStringLiteral("laser"))
+            continue;
+        out.append(w);
+    }
+    // ... and a last "W" (his white copies: "Fingre Boelger ANI W" is "Fingre Boelger")
+    if (out.count() > 1 && out.last().compare(QStringLiteral("w"), Qt::CaseInsensitive) == 0)
+        out.removeLast();
+    s = out.join(QLatin1Char(' ')).simplified();
+    return s.isEmpty() ? figure.simplified() : s;
+}
+
+QList<QPair<QString, quint32> > TrackEngine::r561Figures() const
+{
+    // the menu: each figure once (with a programme of it), his lab looks first, then by name
+    QList<QPair<QString, quint32> > lab, own;
+    const QString key = r561AniKey();
+    if (key.isEmpty())
+        return lab;
+    QSet<QString> seen;
+    foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_MOTION, key))
+    {
+        if (info == nullptr || info->junk || info->groups.contains(key) == false)
+            continue;
+        if (info->type != int(Function::SceneType) && info->litShare <= 0.0)
+            continue;
+        if (m_doc == nullptr || m_doc->function(info->id) == nullptr)
+            continue;
+        const QString fk = r561FigureKey(*info);
+        // each figure once on the list: by what the page calls it ("Single Kanon Ani " and "... Ani  Red",
+        // the white copy "... W", are one figure)
+        const QString shown = r561Show(fk.section(QLatin1Char('|'), 1)).toLower();
+        if (seen.contains(shown))
+            continue;
+        seen.insert(shown);
+        (info->lab ? lab : own).append(qMakePair(fk, info->id));
+    }
+    auto byName = [](const QPair<QString, quint32> &a, const QPair<QString, quint32> &b) {
+        return QString::localeAwareCompare(r561Show(a.first.section(QLatin1Char('|'), 1)),
+                                           r561Show(b.first.section(QLatin1Char('|'), 1))) < 0;
+    };
+    std::sort(lab.begin(), lab.end(), byName);
+    std::sort(own.begin(), own.end(), byName);
+    return lab + own;
+}
+
+quint32 TrackEngine::r561FigureIn(const QString &fk, const QString &colour) const
+{
+    // his figure in the colour the lasers wear now (as a saved look's): this colour, else white, else
+    // the programme he stepped to
+    const QString key = r561AniKey();
+    const int kind = fk.section(QLatin1Char('|'), 0, 0).toInt();
+    const QString figure = fk.section(QLatin1Char('|'), 1);
+    quint32 fid = Function::invalidId();
+    if (colour.isEmpty() == false)
+        fid = savedAutoFind(figure, key, colour, kind);
+    if (fid == Function::invalidId())
+        fid = savedAutoFind(figure, key, QStringLiteral("white"), kind);
+    if (fid == Function::invalidId() && key.isEmpty() == false)
+    {
+        // the same figure by name: in this colour, else his white copy ("... W") in a white room
+        const QString shown = r561Show(figure).toLower();
+        foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_MOTION, key))
+        {
+            if (info == nullptr || info->groups.contains(key) == false || m_doc == nullptr || m_doc->function(info->id) == nullptr
+                || r561Show(r561FigureKey(*info).section(QLatin1Char('|'), 1)).toLower() != shown)
+                continue;
+            if (info->colour == colour && colour.isEmpty() == false)
+                return info->id;
+            if (colour == QStringLiteral("white") && info->colour.isEmpty() && fid == Function::invalidId())
+                fid = info->id;
+        }
+    }
+    if (fid == Function::invalidId() && m_funcs.contains(m_r561FigFid) && m_doc && m_doc->function(m_r561FigFid))
+        fid = m_r561FigFid;
+    return fid;
+}
+
+void TrackEngine::r561AniCast(QSet<QString> &castSet, const QString &state, int secStart, const QString &nextState)
+{
+    // his ON / his pick: the lasers on stage, after everything else cast this beat; the engine's bars
+    // step aside (the engine never lights both) - his own bars stay
+    if (r561Picked() && m_r561PickSec != secStart)
+    {
+        if (m_r561Queued && m_r561Sec >= 0 && secStart != m_r561Sec)
+        {
+            m_r561Queued = false;        // the section he picked it for: it plays now, held for this one
+            m_r561PickSec = secStart;
+            m_r561PickState = state;
+            m_sectionMotion.remove(r561AniKey());
+            m_r561Sec = secStart;
+            r561Changed(QStringLiteral("lands"));
+        }
+        else if (m_r561Queued == false && m_r561PickSec < 0)
+            m_r561PickSec = secStart;    // picked before the first beat: this section
+        else if (m_r561Queued == false)
+        {
+            m_r561Fig.clear();           // the section is over: the engine picks again
+            m_r561FigFid = Function::invalidId();
+            m_r561PickSec = -1;
+            m_r561PickState.clear();
+            r561Changed(QStringLiteral("section-end"));
+        }
+    }
+    m_r561Sec = secStart;
+    m_r561State = state;
+    m_r561NextState = nextState;
+    if (m_r561Queued && nextState.isEmpty() == false && nextState != m_r561PickState)
+    {
+        m_r561PickState = nextState;     // the section it waits for (a flag moved or was retyped)
+        emit aniHandChanged();
+    }
+    const QString key = r561AniKey();
+    if ((m_r561On || (r561Picked() && m_r561Queued == false)) && m_lastStage == 0 && key.isEmpty() == false)
+    {
+        castSet.insert(key);
+        foreach (const QString &other, castSet.values())
+        {
+            const TrackGroup &g = m_groups.value(other);
+            if (g.lasers && g.patternDevice == false && m_forceSet.contains(other) == false && m_r552On == false)
+                castSet.remove(other);
+        }
+    }
+    // the page's name of what plays: read once a beat, told only when it changes
+    const QString shown = aniProgram();
+    if (shown != m_r561Shown)
+    {
+        m_r561Shown = shown;
+        emit aniHandChanged();
+    }
+}
+
+void TrackEngine::r561AniMotionIn(const QString &key, const QString &colour, quint32 &mf, bool still)
+{
+    // the group's programme this beat: his figure, in the room's colour, held for the section
+    if (r561Picked() == false || m_r561Queued || still || key.isEmpty() || key != r561AniKey())
+        return;
+    const quint32 fid = r561FigureIn(m_r561Fig, colour);
+    if (fid == Function::invalidId())
+        return;
+    mf = fid;
+    m_sectionMotion.insert(key, fid);
+}
+
+void TrackEngine::r561Changed(const QString &why)
+{
+    QString note;
+    if ((m_r561On || r561Picked()) && r561AniKey().isEmpty())
+        note = tr("No animation laser on tonight (RIG)");
+    m_r561Note = note;
+    if (note.isEmpty() == false)
+        m_report = note;
+    m_r561Shown = aniProgram();
+    logSignal(QStringLiteral("sig:ani-hand:") + why);
+    emit aniHandChanged();
+    emit liveChanged();
+}
+
+bool TrackEngine::aniHand() const { return m_r561On || r561Picked(); }
+bool TrackEngine::aniOn() const { return m_r561On; }
+bool TrackEngine::aniPicked() const { return r561Picked(); }
+bool TrackEngine::aniQueued() const { return r561Picked() && m_r561Queued; }
+QString TrackEngine::aniSection() const { return m_r561PickState.isEmpty() ? m_r561State : m_r561PickState; }
+QString TrackEngine::aniNote() const { return m_r561Note; }
+
+QString TrackEngine::aniProgram() const
+{
+    // his pick, else the programme on the lasers now ("" none)
+    if (r561Picked())
+        return r561Show(m_r561Fig.section(QLatin1Char('|'), 1));
+    const QString key = r561AniKey();
+    if (key.isEmpty() || m_cast.contains(key) == false)
+        return QString();
+    const quint32 fid = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+    if (fid == Function::invalidId() || m_funcs.contains(fid) == false)
+        return QString();
+    return r561Show(r561FigureKey(m_funcs.value(fid)).section(QLatin1Char('|'), 1));
+}
+
+int TrackEngine::r561IndexNow(const QList<QPair<QString, quint32> > &menu) const
+{
+    // where the page stands in the menu: his pick, else the figure on the lasers now (-1 none)
+    QString fk = m_r561Fig;
+    if (fk.isEmpty())
+    {
+        const QString key = r561AniKey();
+        const quint32 fid = key.isEmpty() || m_cast.contains(key) == false
+                            ? Function::invalidId() : m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        if (fid != Function::invalidId() && m_funcs.contains(fid))
+            fk = r561FigureKey(m_funcs.value(fid));
+    }
+    const QString shown = r561Show(fk.section(QLatin1Char('|'), 1)).toLower();
+    for (int i = 0; i < menu.count(); i++)
+        if (menu.at(i).first == fk || r561Show(menu.at(i).first.section(QLatin1Char('|'), 1)).toLower() == shown)
+            return i;
+    return -1;
+}
+
+int TrackEngine::aniIndex() const
+{
+    const int i = r561IndexNow(r561Figures());
+    return i < 0 ? 0 : i + 1;
+}
+
+int TrackEngine::aniCount() const
+{
+    return r561Figures().count();
+}
+
+void TrackEngine::setAniOn(bool on)
+{
+    if (on == m_r561On)
+        return;
+    ensureTable();
+    m_r561On = on;
+    if (on == false)
+        m_sectionMotion.remove(r561AniKey());     // the engine decides again from the next beat
+    else if (r561Picked() && m_r561Queued)
+    {
+        m_r561Queued = false;            // ON with a pick waiting: it plays now, for this section
+        m_r561PickSec = m_r561Sec;
+        m_r561PickState = m_r561State;
+        m_sectionMotion.remove(r561AniKey());
+    }
+    r561Changed(on ? QStringLiteral("on") : QStringLiteral("off"));
+}
+
+QVariantList TrackEngine::aniMenu() const
+{
+    // the list the page opens: name, his lab look or the show's, and which one is his pick / on now
+    QVariantList out;
+    const QList<QPair<QString, quint32> > menu = r561Figures();
+    const int now = r561IndexNow(menu);
+    for (int i = 0; i < menu.count(); i++)
+    {
+        QVariantMap m;
+        m.insert(QStringLiteral("name"), r561Show(menu.at(i).first.section(QLatin1Char('|'), 1)));
+        m.insert(QStringLiteral("lab"), m_funcs.value(menu.at(i).second).lab);
+        m.insert(QStringLiteral("now"), i == now);
+        out.append(m);
+    }
+    return out;
+}
+
+void TrackEngine::aniPick(int index)
+{
+    // a programme from the list (-1: ENGINE'S). With ON it plays now, for this section; without ON it
+    // waits for the next section and lights the lasers for it
+    ensureTable();
+    const QString key = r561AniKey();
+    if (index < 0)
+    {
+        if (r561Picked() == false)
+            return;
+        m_r561Fig.clear();
+        m_r561FigFid = Function::invalidId();
+        m_r561PickSec = -1;
+        m_r561PickState.clear();
+        m_r561Queued = false;
+        if (key.isEmpty() == false)
+            m_sectionMotion.remove(key);
+        r561Changed(QStringLiteral("engine"));
+        return;
+    }
+    const QList<QPair<QString, quint32> > menu = r561Figures();
+    if (index >= menu.count())
+    {
+        r561Changed(QStringLiteral("gone"));
+        return;
+    }
+    m_r561Fig = menu.at(index).first;
+    m_r561FigFid = menu.at(index).second;
+    m_r561Queued = m_r561On == false;
+    m_r561PickSec = m_r561Queued ? -1 : m_r561Sec;   // now: this section (-1 before the first beat: the next one seen)
+    m_r561PickState = m_r561Queued ? m_r561NextState : m_r561State;
+    if (key.isEmpty() == false && m_r561Queued == false)
+        m_sectionMotion.remove(key);      // drawn again from his figure on the next beat
+    r561Changed((m_r561Queued ? QStringLiteral("queue:") : QStringLiteral("pick:")) + m_r561Fig);
+}
+
+void TrackEngine::aniStep(int dir)
+{
+    // the next / the one before in the list (MIDI or a phone of before; 0 = ENGINE'S)
+    if (dir == 0)
+    {
+        aniPick(-1);
+        return;
+    }
+    const QList<QPair<QString, quint32> > menu = r561Figures();
+    if (menu.isEmpty())
+        return;
+    const int n = menu.count();
+    const int cur = r561IndexNow(menu);
+    aniPick(cur < 0 ? (dir > 0 ? 0 : n - 1) : (((cur + (dir > 0 ? 1 : -1)) % n) + n) % n);
+}
+
+void TrackEngine::aniAuto()
+{
+    if (aniHand() == false)
+        return;
+    m_r561On = false;
+    m_r561Fig.clear();
+    m_r561FigFid = Function::invalidId();
+    m_r561PickSec = -1;
+    m_r561PickState.clear();
+    m_r561Queued = false;
+    const QString key = r561AniKey();
+    if (key.isEmpty() == false)
+        m_sectionMotion.remove(key);
+    r561Changed(QStringLiteral("auto"));
 }

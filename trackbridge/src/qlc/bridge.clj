@@ -222,6 +222,7 @@
 
 (defonce ^:private last-status (atom [nil 0]))
 (defonce ^:private last-decks (atom [nil 0]))
+(defonce ^:private last-next (atom [nil 0]))
 
 (defn- report-decks!
   "R560_DECKS: \"DECKS m=<master> f=<followed> h=<heard> p=<playing>\" on stdout for QLC+ (trackbridge.cpp):
@@ -246,6 +247,35 @@
         (locking last-status
           (.println System/out line)
           (.flush System/out))))
+    (catch Throwable _ nil)))
+
+(defn- report-next!
+  "R561_NEXT: \"NEXT d=<deck> s=<ready|analysing|failed> t=<title>\" on stdout for QLC+ (trackbridge.cpp): the
+  deck the next track is probably on (the shared functions' guess), and whether the lights have its sections
+  yet - READY once NEXT went to QLC+. When it changes, and every 5 s. d=0: none."
+  []
+  (try
+    (let [f      (shared-value 'qlc-followed)
+          guess  (when f (some-> (shared 'qlc-guess-next) (apply [f])))
+          [p title] guess
+          sent   (shared-value 'qlc-next-sent)
+          failed (get (or (shared-value 'qlc-failed-at) {}) title)
+          now    (System/currentTimeMillis)
+          st     (cond (nil? title)                                "none"
+                       (= title sent)                              "ready"
+                       (and failed (< (- now (long failed)) 60000)) "failed"
+                       :else                                       "analysing")
+          line   (if (= st "none")
+                   "NEXT d=0 s=none t="
+                   (str "NEXT d=" p " s=" st " t=" (str/replace (str title) #"[\r\n]+" " ")))
+          [was at] @last-next]
+      (when (or (not= line was) (> (- now (long at)) 5000))
+        (reset! last-next [line now])
+        ;; the title as UTF-8 bytes whatever Windows' console code page is (trackbridge.cpp reads UTF-8)
+        (let [b (.getBytes (str line "\n") "UTF-8")]
+          (locking last-status
+            (.write System/out b 0 (alength b))
+            (.flush System/out)))))
     (catch Throwable _ nil)))
 
 (defn- report-cdjs!
@@ -394,5 +424,6 @@
       (let [state* (go-online! state)]
         (report-cdjs!)
         (report-decks!)                  ; R560_DECKS
+        (report-next!)                   ; R561_NEXT
         (Thread/sleep (if (= state* :online) 1000 500))
         (recur state*)))))

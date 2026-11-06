@@ -74,6 +74,9 @@ int TrackBridge::deckMaster() const { return m_deckMaster; }
 int TrackBridge::deckFollowed() const { return m_deckFollowed; }
 QList<int> TrackBridge::decksHeard() const { return m_decksHeard; }
 QList<int> TrackBridge::decksPlaying() const { return m_decksPlaying; }
+int TrackBridge::nextDeck() const { return m_nextDeck; }
+QString TrackBridge::nextState() const { return m_nextState; }
+QString TrackBridge::nextTrack() const { return m_nextTrack; }
 
 int TrackBridge::cdjCount() const
 {
@@ -121,6 +124,13 @@ void TrackBridge::stop()
         m_deckFollowed = 0;
         m_decksHeard.clear();
         m_decksPlaying.clear();
+        emit decksChanged();
+    }
+    if (m_nextDeck != 0 || m_nextState.isEmpty() == false || m_nextTrack.isEmpty() == false)
+    {
+        m_nextDeck = 0;                  // R561_NEXT: nor the next track
+        m_nextState.clear();
+        m_nextTrack.clear();
         emit decksChanged();
     }
 }
@@ -445,6 +455,35 @@ void TrackBridge::slotOutput()
                 m_deckFollowed = f;
                 m_decksHeard = h;
                 m_decksPlaying = pl;
+                emit decksChanged();
+            }
+        }
+        else if (line.startsWith("NEXT "))
+        {
+            // R561_NEXT: "NEXT d=1 s=analysing t=<title>" - the deck the next track is probably on (0 none),
+            // whether the lights have its sections yet, and its title (the rest of the line, UTF-8)
+            const int ti = line.indexOf(" t=");
+            const QByteArray head = ti >= 0 ? line.mid(5, ti - 5) : line.mid(5);
+            int d = 0;
+            QString st;
+            foreach (const QByteArray &part, head.split(' '))
+            {
+                if (part.startsWith("d="))
+                    d = part.mid(2).toInt();
+                else if (part.startsWith("s="))
+                    st = QString::fromLatin1(part.mid(2));
+            }
+            if (d < 0 || d > 6 || (st != QLatin1String("ready") && st != QLatin1String("analysing") && st != QLatin1String("failed")))
+            {
+                d = 0;
+                st.clear();
+            }
+            const QString t = d > 0 && ti >= 0 ? QString::fromUtf8(line.mid(ti + 3)).trimmed() : QString();
+            if (d != m_nextDeck || st != m_nextState || t != m_nextTrack)
+            {
+                m_nextDeck = d;
+                m_nextState = st;
+                m_nextTrack = t;
                 emit decksChanged();
             }
         }
