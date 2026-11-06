@@ -633,6 +633,8 @@ private:
     bool m_midiFromRaw = false;          // ... this midiInput() is the plugin's own (not the patch's)
     bool m_midiPatchWorks = false;       // ... the patch delivered a value: the plugin's are not needed
     qint64 m_midiRawCount = 0;           // ... values the plugin heard
+    int m_midiOpenTries = 0;             // TRACK_APP_MIDI_R571F: asked the plugin to open the controller
+    void midiOpenIfDeaf(class QLCIOPlugin *midi, quint32 line);
     bool m_midiLearn = false;
     bool m_midiCanUndo = false;
     bool m_midiDirty = false;

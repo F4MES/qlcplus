@@ -2866,7 +2866,10 @@ void TrackManager::midiAutoPatch()
     {
         InputPatch *ip = io->inputPatch(quint32(m_midiOwnU));
         if (ip != nullptr && ip->plugin() == midi && int(ip->input()) == pick && m_midiOwnName == ins.at(pick))
+        {
+            midiOpenIfDeaf(midi, quint32(pick));   // TRACK_APP_MIDI_R571F
             return;
+        }
     }
     // TRACK_APP_MIDI_R571E: the show's patch has the controller already - take it as it is (never close and
     // reopen an open device: Windows may refuse the reopen, and QLC+ has let go of the patch by then)
@@ -2880,6 +2883,7 @@ void TrackManager::midiAutoPatch()
                 m_engine->noteMidi(QStringLiteral("kept:%1:u%2").arg(ins.at(pick)).arg(midiU + 1));
             midiRefresh();
         }
+        midiOpenIfDeaf(midi, quint32(pick));   // TRACK_APP_MIDI_R571F
         return;
     }
     const int target = midiU >= 0 ? midiU : freeU;
@@ -2904,6 +2908,19 @@ void TrackManager::midiAutoPatch()
         m_midiFailName = ins.at(pick);
     }
     midiRefresh();
+}
+
+void TrackManager::midiOpenIfDeaf(QLCIOPlugin *midi, quint32 line)
+{
+    // TRACK_APP_MIDI_R571F: nothing heard yet - is the device open at all? The plugin opens a closed one and
+    // answers no for an open one (or one Windows refuses)
+    if (midi == nullptr || m_midiOwnU < 0 || m_midiRawCount > 0 || m_midiPatchWorks)
+        return;
+    const bool opened = midi->openInput(line, quint32(m_midiOwnU));
+    m_midiOpenTries++;
+    if (m_engine != nullptr && (opened || m_midiOpenTries == 1 || m_midiOpenTries % 60 == 0))
+        m_engine->noteMidi(opened ? QStringLiteral("opened:%1").arg(m_midiOwnName)
+                                  : QStringLiteral("open-tries:%1:%2").arg(m_midiOwnName).arg(m_midiOpenTries));
 }
 
 void TrackManager::midiRefresh()
