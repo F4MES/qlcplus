@@ -3542,7 +3542,7 @@ Rectangle
                                     width: Math.round(6 * trackViewRoot.ks); height: width; radius: width / 2
                                     // on the gold tile: the page shown dark, the others faint, a page in his hand white
                                     color: trackViewRoot.posPage === modelData ? trackViewRoot.cGold : (hand ? "#FFFFFF" : "#4A4A54")
-                                    border.width: trackViewRoot.posPage === modelData && hand ? 2 : 0   // TRACK_APP_UI_R566
+                                    border.width: trackViewRoot.posPage === modelData && hand ? 1 : 0   // TRACK_APP_UI_R566 (R567: 1 px)
                                     border.color: "#FFFFFF"
                                 }
                             }
@@ -3681,7 +3681,7 @@ Rectangle
                         Column
                         {
                             anchors.centerIn: parent
-                            width: parent.width - Math.round(48 * trackViewRoot.ks)
+                            width: parent.width - 2 * Math.round(40 * trackViewRoot.ks)   // TRACK_APP_FIX_R567: clear of the list sign
                             spacing: Math.round(2 * trackViewRoot.ks)
                             Text
                             {
@@ -3697,7 +3697,7 @@ Rectangle
                                 width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                                 text: !trackEngine ? ""
                                       : (parent.parent.waits ? qsTr("YOUR PICK · NEXT %1").arg(trackEngine.aniSection !== "" ? trackEngine.aniSection.toUpperCase() : qsTr("SECTION"))
-                                         : (parent.parent.mine ? qsTr("YOUR PICK · THIS %1").arg(trackEngine.aniSection.toUpperCase())
+                                         : (parent.parent.mine ? qsTr("YOUR PICK · THIS %1").arg(trackEngine.aniSection !== "" ? trackEngine.aniSection.toUpperCase() : qsTr("SECTION"))
                                             : qsTr("ENGINE'S PICK")))
                                 color: parent.parent.waits ? trackViewRoot.cGold : (parent.parent.mine ? "#3A2A08" : "#8A8A94")
                                 font.bold: true; font.pixelSize: trackViewRoot.fs(10); font.letterSpacing: trackViewRoot.fs(10) * 0.1

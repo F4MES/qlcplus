@@ -2614,6 +2614,10 @@ Rectangle
             case "magenta": return "#D040C0"
             case "yellow": return "#E0D030"
             case "orange": return "#E08030"
+            case "purple": return "#8A4BE0"       // TRACK_APP_FIX_R567
+            case "pink": return "#E0609A"
+            case "uv": return "#7030C0"
+            case "amber": return "#E0A040"
             }
             return "#F2F2F5"
         }
@@ -2769,10 +2773,10 @@ Rectangle
             // the lamps, each with its DMX address
             Repeater
             {
-                model: roomPanel.lamps
+                model: roomPanel.lamps.length                    // TRACK_APP_FIX_R567: a count - the items stay
                 Item
                 {
-                    readonly property var lamp: modelData
+                    readonly property var lamp: roomPanel.lamps[index] || ({})
                     readonly property string k: lamp.k
                     readonly property real l: lamp.l
                     readonly property int dmx: lamp.dmx !== undefined ? lamp.dmx : 0
@@ -2807,14 +2811,15 @@ Rectangle
                         spacing: 2
                         Repeater
                         {
-                            model: eyeCol.visible ? eyeCol.parent.eyes : []
+                            model: eyeCol.visible ? eyeCol.parent.eyes.length : 0    // TRACK_APP_FIX_R567
                             Rectangle
                             {
-                                readonly property bool on: modelData !== "" && eyeCol.lit > 0.02
+                                readonly property string eye: eyeCol.parent.eyes[index] !== undefined ? eyeCol.parent.eyes[index] : ""
+                                readonly property bool on: eye !== "" && eyeCol.lit > 0.02
                                 width: eyeCol.width
                                 height: Math.max(2, (eyeCol.parent.height - 6 - 2 * 7) / 8)
                                 radius: 1.5
-                                color: on ? (modelData === "*" ? roomPanel.roomColour : swatch(modelData)) : "#2C2C35"
+                                color: on ? (eye === "*" ? roomPanel.roomColour : swatch(eye)) : "#2C2C35"
                                 opacity: on ? 0.35 + 0.65 * eyeCol.lit : 1.0
                             }
                         }
@@ -2882,42 +2887,43 @@ Rectangle
                         spacing: 2
                         Repeater
                         {
-                            model: roomList.rows
+                            model: roomList.rows.length                    // TRACK_APP_FIX_R567: a count - the rows stay
                             Rectangle
                             {
-                                objectName: "roomRow:" + modelData.dmx
-                                readonly property bool picked: roomMap.pick === modelData.dmx
+                                readonly property var rowData: roomList.rows[index] || ({})
+                                objectName: "roomRow:" + rowData.dmx
+                                readonly property bool picked: roomMap.pick === rowData.dmx
                                 width: listCol.width; height: Math.max(26, Math.min(34, (roomList.height - 50) / Math.max(1, roomList.rows.length) - 2))
                                 radius: 6
                                 color: picked ? "#2E3A52" : (index % 2 ? "#17171C" : "transparent")
                                 Text
                                 {
                                     x: 8; anchors.verticalCenter: parent.verticalCenter; width: 56
-                                    text: modelData.dmx; color: "#E6E6EA"; font.bold: true; font.pixelSize: 14
+                                    text: rowData.dmx; color: "#E6E6EA"; font.bold: true; font.pixelSize: 14
                                 }
                                 Text
                                 {
                                     x: 66; anchors.verticalCenter: parent.verticalCenter
-                                    text: roomMap.kindName(modelData.k) + (modelData.t !== "" && modelData.k !== "haze" ? "  ·  " + modelData.t : "")
-                                          + (modelData.on === false ? "  ·  " + qsTr("not in the show") : "")
-                                    color: modelData.on === false ? "#C07A5A" : "#A8A8B2"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 0.6
+                                    text: roomMap.kindName(rowData.k) + (rowData.t !== "" && rowData.k !== "haze" ? "  ·  " + rowData.t : "")
+                                          + (rowData.on === false ? "  ·  " + qsTr("not in the show") : "")
+                                    color: rowData.on === false ? "#C07A5A" : "#A8A8B2"; font.bold: true; font.pixelSize: 12; font.letterSpacing: 0.6
                                 }
                                 Rectangle
                                 {
                                     // how lit now (the lamp's colour)
                                     anchors.right: parent.right; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter
                                     width: 64; height: 8; radius: 4; color: "#24242C"
-                                    visible: modelData.k !== "haze"
+                                    visible: rowData.k !== "haze"
                                     Rectangle
                                     {
-                                        width: parent.width * Math.max(0, Math.min(1, modelData.l)); height: parent.height; radius: 4
-                                        color: modelData.c !== "" ? modelData.c : roomPanel.roomColour
+                                        width: parent.width * Math.max(0, Math.min(1, rowData.l)); height: parent.height; radius: 4
+                                        color: rowData.c !== "" ? rowData.c : roomPanel.roomColour
                                     }
                                 }
                                 MouseArea
                                 {
                                     anchors.fill: parent
-                                    onClicked: roomMap.pick = (roomMap.pick === modelData.dmx ? -1 : modelData.dmx)
+                                    onClicked: roomMap.pick = (roomMap.pick === rowData.dmx ? -1 : rowData.dmx)
                                 }
                             }
                         }
