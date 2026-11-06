@@ -2868,6 +2868,20 @@ void TrackManager::midiAutoPatch()
         if (ip != nullptr && ip->plugin() == midi && int(ip->input()) == pick && m_midiOwnName == ins.at(pick))
             return;
     }
+    // TRACK_APP_MIDI_R571E: the show's patch has the controller already - take it as it is (never close and
+    // reopen an open device: Windows may refuse the reopen, and QLC+ has let go of the patch by then)
+    if (midiU >= 0 && int(io->inputPatch(quint32(midiU))->input()) == pick)
+    {
+        if (m_midiOwnU != midiU || m_midiOwnName != ins.at(pick))
+        {
+            m_midiOwnU = midiU;
+            m_midiOwnName = ins.at(pick);
+            if (m_engine != nullptr)
+                m_engine->noteMidi(QStringLiteral("kept:%1:u%2").arg(ins.at(pick)).arg(midiU + 1));
+            midiRefresh();
+        }
+        return;
+    }
     const int target = midiU >= 0 ? midiU : freeU;
     if (target < 0)
         return;
