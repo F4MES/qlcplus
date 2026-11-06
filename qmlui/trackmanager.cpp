@@ -127,6 +127,17 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_lastPosMs = 0;
     m_linkStale = false;
     m_engine = new TrackEngine(m_doc, this);
+    m_phantomTimer.setSingleShot(true);  // TRACK_APP_LOOP_R571
+    m_phantomTimer.setInterval(70);
+    connect(&m_phantomTimer, &QTimer::timeout, this, [this]() {
+        if (m_phantomObj.isEmpty())
+            return;
+        const QJsonObject o = m_phantomObj;
+        m_phantomObj = QJsonObject();
+        m_phantomPass = true;            // nothing said it never was: it plays, late
+        handlePosition(o);
+        m_phantomPass = false;
+    });
     // R459_RM_REG: QLC's web server finds the phone remote's door here (it
     // does not link to the Track code)
     if (QCoreApplication::instance() != nullptr)
@@ -547,6 +558,9 @@ void TrackManager::handleTrack(const QJsonObject &obj)
         m_lastSecEnd = -1;
         m_loopTop = -1;                   // R235_DJ_LOOP_RESET
         m_jumpFrom = m_jumpTo = -100;
+        m_phantomTimer.stop();            // TRACK_APP_LOOP_R571: the old track's held beat
+        m_phantomObj = QJsonObject();
+        m_lastJumpMs = 0;
         m_syncRealBeat = m_syncAhead = m_syncEarlyFor = -1;   // R472_SYNC_TRACK: the old track's beats
         m_syncLateSection = false;
         m_syncEarly.stop();
@@ -629,6 +643,33 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         syncSawBeat(beat);               // R470_SYNC_SEEN: a beat run early - BLT says it now
         return;
     }
+    // TRACK_APP_LOOP_R571: a held beat past the loop's top - the jump (or a stop) drops it, anything
+    // forward plays it first
+    if (m_phantomPass == false && m_phantomObj.isEmpty() == false)
+    {
+        const int held = m_phantomObj.value(QStringLiteral("beat")).toInt();
+        m_phantomTimer.stop();
+        if (playing && beat >= held)
+        {
+            const QJsonObject o = m_phantomObj;
+            m_phantomObj = QJsonObject();
+            m_phantomPass = true;
+            handlePosition(o);
+            m_phantomPass = false;
+            if (beat == held)
+                return;                  // said again: played just now
+        }
+        else
+            m_phantomObj = QJsonObject();   // the loop jumped (or the deck stopped): it never was
+    }
+    if (m_phantomPass == false && playing && m_playing && m_jumpFrom > 0 && (beat == m_jumpFrom + 1 || beat == m_jumpFrom)
+        && beat == m_currentBeat + 1 && m_lastJumpMs > 0 && now - m_lastJumpMs < 24000)   // (the top: the first pass's
+                                                                                             // phantom was the top)
+    {
+        m_phantomObj = obj;              // TRACK_APP_LOOP_R571: one past the loop's top - wait for its jump
+        m_phantomTimer.start();
+        return;
+    }
 
     // R472_SYNC_UNSAID: a jump while a beat ran early that BLT never said (a DJ loop's end) -
     // the jump is from the beat BLT said, as the loop's checks read it
@@ -646,6 +687,7 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     if (playing && m_playing && beat > 0 && beat < m_currentBeat && m_currentBeat - beat <= 32)
     {
         const bool again = qAbs(beat - m_jumpTo) <= 1 && qAbs(m_currentBeat - m_jumpFrom) <= 1;
+        m_lastJumpMs = now;              // TRACK_APP_LOOP_R571
         m_jumpTo = beat;
         m_jumpFrom = m_currentBeat;
         // R358_LOOP_FIRST: the first step back holds the section as well,
@@ -2742,7 +2784,11 @@ void TrackManager::midiClearAll()
 
 void TrackManager::midiAutoPatch()
 {
-    // TRACK_APP_MIDI_R571: the TRACK app only - QLC+ keeps its own patching
+    // TRACK_APP_MIDI_R571B (Tobias 11-06, again: "MIDI virker stadig ikke!!"): TRACK owns the MIDI input in the
+    // TRACK app (it has no Inputs/Outputs page). Every 5 s: the controller - an Akai MIDImix when one is there,
+    // else the input the show's MIDI patch names, else the first - is patched by TRACK itself once, so the patch
+    // is wired to the input map whatever happened when the show loaded (a device missing, busy or at another
+    // number), and again when the devices change. A failure (another program holds the device) is tried again
     if (trackAppObject() == nullptr || m_doc == nullptr || m_doc->inputOutputMap() == nullptr
         || m_doc->ioPluginCache() == nullptr)
         return;
@@ -2751,8 +2797,7 @@ void TrackManager::midiAutoPatch()
         return;
     const QStringList ins = midi->inputs();
     InputOutputMap *io = m_doc->inputOutputMap();
-    int dead = -1, freeU = -1, revive = -1;
-    bool live = false;
+    int midiU = -1, freeU = -1;
     for (quint32 u = 0; u < io->universesCount(); u++)
     {
         InputPatch *ip = io->inputPatch(u);
@@ -2760,65 +2805,57 @@ void TrackManager::midiAutoPatch()
         {
             if (freeU < 0)
                 freeU = int(u);
-            continue;
         }
-        if (ip->plugin() != midi)
-            continue;                    // another plugin's input: his
-        if (ip->input() < quint32(ins.count()))
-        {
-            // QLC+ reopens a patch whose device comes back (a rescan), but a patch that could not open when
-            // the show loaded was never wired to the input map - it opens and hears nothing. Patch it again
-            if (m_midiDeadSeen.contains(u))
-            {
-                if (revive < 0)
-                    revive = int(u);
-            }
-            else
-                live = true;             // a MIDI input that is there: listening already
-            continue;
-        }
-        m_midiDeadSeen.insert(u);
-        if (dead < 0)
-            dead = int(u);
+        else if (ip->plugin() == midi && midiU < 0)
+            midiU = int(u);
     }
-    if (revive >= 0)
+    if (ins.isEmpty())
     {
-        InputPatch *ip = io->inputPatch(quint32(revive));
-        const quint32 line = ip->input();
-        const QString profile = ip->profileName();
-        m_midiDeadSeen.remove(quint32(revive));
-        if (io->setInputPatch(quint32(revive), QStringLiteral("MIDI"), ins.at(int(line)), line, profile))
-        {
-            if (m_engine != nullptr)
-                m_engine->noteMidi(QStringLiteral("patched:%1:u%2").arg(ins.at(int(line))).arg(revive + 1));
-            midiRefresh();
-        }
+        if (m_midiOwnU >= 0 && m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("gone:%1").arg(m_midiOwnName));
+        m_midiOwnU = -1;                 // nothing to hear - the next device is patched when it comes
         return;
     }
-    if (live)
-        return;
-    const int target = dead >= 0 ? dead : freeU;
-    if (ins.isEmpty() || target < 0)
-        return;
-    int pick = 0;
-    for (int i = 0; i < ins.count(); i++)
+    int pick = -1;
+    for (int i = 0; i < ins.count() && pick < 0; i++)
     {
         const QString n = ins.at(i).toLower();
         if (n.contains(QStringLiteral("midimix")) || n.contains(QStringLiteral("midi mix")))
-        {
             pick = i;
-            break;
-        }
     }
+    if (pick < 0 && midiU >= 0 && io->inputPatch(quint32(midiU))->input() < quint32(ins.count()))
+        pick = int(io->inputPatch(quint32(midiU))->input());
+    if (pick < 0)
+        pick = 0;
+    // ours already, and still that device on that number: nothing to do
+    if (m_midiOwnU >= 0)
+    {
+        InputPatch *ip = io->inputPatch(quint32(m_midiOwnU));
+        if (ip != nullptr && ip->plugin() == midi && int(ip->input()) == pick && m_midiOwnName == ins.at(pick))
+            return;
+    }
+    const int target = midiU >= 0 ? midiU : freeU;
+    if (target < 0)
+        return;
     InputPatch *was = io->inputPatch(quint32(target));
     const QString profile = was != nullptr ? was->profileName() : QString();
-    if (io->setInputPatch(quint32(target), QStringLiteral("MIDI"), ins.at(pick), quint32(pick), profile))
+    const bool ok = io->setInputPatch(quint32(target), QStringLiteral("MIDI"), ins.at(pick), quint32(pick), profile);
+    if (ok)
     {
-        m_midiDeadSeen.remove(quint32(target));
+        m_midiOwnU = target;
+        m_midiOwnName = ins.at(pick);
+        m_midiFailName.clear();
         if (m_engine != nullptr)
             m_engine->noteMidi(QStringLiteral("patched:%1:u%2").arg(ins.at(pick)).arg(target + 1));
-        midiRefresh();
     }
+    else
+    {
+        m_midiOwnU = -1;
+        if (m_midiFailName != ins.at(pick) && m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("open-failed:%1").arg(ins.at(pick)));   // once per device
+        m_midiFailName = ins.at(pick);
+    }
+    midiRefresh();
 }
 
 void TrackManager::midiRefresh()
@@ -4051,6 +4088,9 @@ void TrackManager::clear()
     m_analysedState = QStringLiteral("normal");
     m_loopTop = -1;                       // R236_LOOP_CLEAR
     m_jumpFrom = m_jumpTo = -100;
+    m_phantomTimer.stop();                // TRACK_APP_LOOP_R571
+    m_phantomObj = QJsonObject();
+    m_lastJumpMs = 0;
 
     emit trackChanged();
     emit markersChanged();

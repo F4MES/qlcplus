@@ -527,6 +527,11 @@ private:
     int m_loopTop = -1;                   // R235_DJ_LOOP: the top of a running DJ loop, -1 none
     int m_jumpFrom = -100;                // the last short step back: from
     int m_jumpTo = -100;                  // ... and to
+    // TRACK_APP_LOOP_R571: BLT's beat one past a DJ loop's top, held until the loop's jump says it never was
+    QJsonObject m_phantomObj;
+    QTimer m_phantomTimer;
+    bool m_phantomPass = false;
+    qint64 m_lastJumpMs = 0;
 
     /* The movement pick is sticky: it only changes when a break starts,
      * inside a one-beat dark gap. Never at a drop, never mid-section. */
@@ -620,6 +625,9 @@ private:
     QTimer m_midiPatchTimer;             // TRACK_APP_MIDI_R571: no live MIDI input - look for the controller
     void midiAutoPatch();                // TRACK_APP_MIDI_R571
     QSet<quint32> m_midiDeadSeen;        // TRACK_APP_MIDI_R571: universes whose MIDI patch pointed at nothing
+    int m_midiOwnU = -1;                 // TRACK_APP_MIDI_R571B: the universe TRACK patched the controller on
+    QString m_midiOwnName;               // ... and the device
+    QString m_midiFailName;              // the device that would not open (logged once)
     bool m_midiLearn = false;
     bool m_midiCanUndo = false;
     bool m_midiDirty = false;
