@@ -167,7 +167,13 @@ Rectangle
     function reloadRows()
     {
         allRows = trackEngine ? trackEngine.table() : []
+        rowsDirty = false                // TRACK_APP_SPEED_R571
     }
+    // TRACK_APP_SPEED_R571: the full list only while it is on screen (SHOW ALL); a change while it is not
+    // marks it, and showing it fetches it
+    property bool rowsDirty: true
+    readonly property bool rowsShown: !trackApp || (!cacheFull && !listMine)
+    onRowsShownChanged: if (rowsShown && rowsDirty) reloadRows()
 
     Component.onCompleted:
     {
@@ -175,7 +181,8 @@ Rectangle
         // has never seen
         if (trackEngine)
             trackEngine.autoAssign(false)
-        reloadRows()
+        if (rowsShown)                   // TRACK_APP_SPEED_R571
+            reloadRows()
         reloadHand()                     // TRACK_APP_LIST_R557
     }
 
@@ -187,7 +194,10 @@ Rectangle
             // a rebuilt model puts the ListView back at the top, so remember
             // where the finger was
             var y = funcList.contentY
-            setupRoot.reloadRows()
+            if (setupRoot.rowsShown)     // TRACK_APP_SPEED_R571
+                setupRoot.reloadRows()
+            else
+                setupRoot.rowsDirty = true
             setupRoot.reloadHand()       // TRACK_APP_LIST_R557
             Qt.callLater(function() { funcList.contentY = Math.min(y, Math.max(0, funcList.contentHeight - funcList.height)) })
         }
@@ -927,7 +937,7 @@ Rectangle
                     clip: true
                     spacing: 2
                     boundsBehavior: Flickable.StopAtBounds
-                    model: trackManager ? trackManager.cacheList : []
+                    model: (trackManager && setupRoot.cacheOpen) ? trackManager.cacheList : []   // TRACK_APP_SPEED_R571
 
                     // A date line above the first row of each day. cacheList is
                     // a plain list, not a model with roles, so ListView's own

@@ -5278,7 +5278,8 @@ void TrackEngine::setAutoDark(bool on)
         if (df == nullptr)
             continue;
         // R513_LIVE_PAD_AUTODARK: not the dark mask of a group his pad holds (lightsOutFor)
-        if (on && m_blackout == false && m_padFlash.contains(m_darkScenes.key(dfid)) == false)
+        if (on && m_blackout == false && m_padFlash.contains(m_darkScenes.key(dfid)) == false
+            && r571StabThrough(m_darkScenes.key(dfid)) == false)   // TRACK_APP_STAB_R571
             df->flash(m_doc->masterTimer(), true, true);
         else
             df->unFlash(m_doc->masterTimer());
@@ -5310,7 +5311,27 @@ void TrackEngine::clearMusicDark()
     m_chopTimer.stop();
     m_silenceDark = false;
     m_musicDarkEvent.clear();
+    m_r571ChopOnly = false;              // TRACK_APP_STAB_R571
     setAutoDark(false);
+    m_r571ThroughKey.clear();
+}
+
+void TrackEngine::r571StabMask(bool darkSame)
+{
+    // TRACK_APP_STAB_R571: the group the chop lets through (r571StabThrough) changed while the dark stayed -
+    // its dark mask and every level follow; when the dark itself came or went, setAutoDark() did it already
+    const QString thr = r571StabThrough(m_r536Key) ? m_r536Key : QString();
+    if (thr == m_r571ThroughKey)
+        return;
+    const QString was = m_r571ThroughKey;
+    m_r571ThroughKey = thr;
+    if (darkSame == false || m_autoDark == false)
+        return;
+    if (was.isEmpty() == false)
+        padDarkMask(was);
+    if (thr.isEmpty() == false)
+        padDarkMask(thr);
+    reapplyLevels();
 }
 
 void TrackEngine::slotChopTimer()
@@ -5332,19 +5353,25 @@ void TrackEngine::slotChopTimer()
             next = w.second;
     }
     // R420_STUTTER: the operator's stabs, as the chop's
+    bool hisStab = false;                // TRACK_APP_STAB_R571: his, not the engine's
     for (const QPair<qint64, qint64> &w : std::as_const(m_stutterPlan))
     {
         if (now >= w.first && now < w.second)
-            inStab = true;
+            hisStab = true;
         if (w.first > now && (next < 0 || w.first < next))
             next = w.first;
         if (w.second > now && (next < 0 || w.second < next))
             next = w.second;
     }
     r497TapChop(now, inStab, next);     // R497_A3_TAPS_CHOP: the ghost holes, as the chop's stabs
+    const bool engineStab = inStab;      // TRACK_APP_STAB_R571
+    inStab = inStab || hisStab;
     if (m_flash)
         inStab = false;
+    m_r571ChopOnly = inStab && engineStab && hisStab == false && m_silenceDark == false;   // TRACK_APP_STAB_R571
+    const bool darkWas = m_autoDark;
     setAutoDark(m_silenceDark || inStab);
+    r571StabMask(darkWas == m_autoDark); // TRACK_APP_STAB_R571: the stabs' strobes, when only the dark's cause moved
     if (next > now)
         m_chopTimer.start(int(qMax(qint64(1), next - now)));
     else
@@ -6837,16 +6864,12 @@ QVariantList TrackEngine::table()
     // its function whatever this decides. Busking cannot notice it.
     // SHOW ALL brings the rows back, and a row that already has a role is
     // never hidden by any of this.
-    VirtualConsole *vc = (m_doc != nullptr && m_doc->parent() != nullptr)
-                         ? m_doc->parent()->findChild<VirtualConsole *>()
-                         : nullptr;
-    if (vc != nullptr && vc->widgetsList().isEmpty())
-        vc = nullptr;
+    // TRACK_APP_SPEED_R571: usageList() is never empty (its "<None>" row), so the console test hid nothing -
+    // the rows are the same without it, and SETUP opens without walking every widget for every function
 
     foreach (const TrackFuncInfo &info, rows)
     {
-        bool hidden = info.junk || info.step || info.groups.isEmpty() || info.generated
-                      || (vc != nullptr && vc->usageList(info.id).isEmpty());
+        bool hidden = info.junk || info.step || info.groups.isEmpty() || info.generated;   // TRACK_APP_SPEED_R571
         // "A row that has been given a role is never hidden" - given by the
         // OPERATOR, which is role != guess, the same test saveRoles() uses to
         // decide what is his. The first version tested role < 0, and every
@@ -31664,7 +31687,8 @@ void TrackEngine::padDarkMask(const QString &key)
     Function *df = m_doc->function(m_darkScenes.value(key));
     if (df == nullptr)
         return;
-    const bool want = m_autoDark && m_blackout == false && m_padFlash.contains(key) == false;
+    const bool want = m_autoDark && m_blackout == false && m_padFlash.contains(key) == false
+                   && r571StabThrough(key) == false;   // TRACK_APP_STAB_R571
     if (want && df->flashing() == false)
         df->flash(m_doc->masterTimer(), true, true);
     else if (want == false && df->flashing())

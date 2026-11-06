@@ -2496,7 +2496,16 @@ private:
     // music's dark on every group but one his finger holds on its pad, for as long as it is held. BLACKOUT
     // still wins. A slot with no group (the FLASH button's own "flash") reads lightsOut() as before.
     bool lightsOutFor(const QString &group) const
-    { return m_blackout || (m_autoDark && (group.isEmpty() || m_padFlash.contains(group) == false)); }
+    { return m_blackout || (m_autoDark && (group.isEmpty() || (m_padFlash.contains(group) == false
+                                                              && r571StabThrough(group) == false))); }
+    // TRACK_APP_STAB_R571 (Tobias 11-06, "Stab i moerket"): the strobes under a quiet break's stabs are lit
+    // through the engine's own chop (only the chop: not a silent beat, the black beat before a drop, his
+    // STUTTER, FLASH or BLACKOUT). Outside a stab their heads are dark anyway (r536PartOut)
+    bool r571StabThrough(const QString &group) const
+    { return m_r571ChopOnly && m_r536Live && group.isEmpty() == false && group == m_r536Key; }
+    void r571StabMask(bool darkSame);
+    bool m_r571ChopOnly = false;         // TRACK_APP_STAB_R571: the dark now is the engine's chop alone
+    QString m_r571ThroughKey;            // TRACK_APP_STAB_R571: the strobe group the dark lets through now
     void padDarkMask(const QString &key);
     void setAutoDark(bool on);
     void clearMusicDark();
