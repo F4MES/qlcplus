@@ -165,6 +165,7 @@ private:
     QTimer m_checkTimer;
     QProcess *m_proc;
     bool m_busy;
+    int m_gen = 0;                  // R570_SHOW: bumped by CHANGE / FOLLOW THE RIG - a download or hash for the old choice is dropped
     QString m_fetchTarget;
     QString m_lastWhy;
     std::function<bool(const QString &)> m_loader;

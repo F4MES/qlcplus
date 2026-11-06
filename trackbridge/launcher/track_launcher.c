@@ -7,9 +7,14 @@
   never changes under a running TRACK.
 
   A build started for the first time (pending.txt = current.txt) that stops with an
-  error within 20 s is not kept: current.txt goes back to previous.txt and that build
+  error within 65 s is not kept: current.txt goes back to previous.txt and that build
   starts instead. Exit code 0 (QLC+'s "already running" guard, or a quick quit) is not
-  an error. After 20 s alive the build is no longer pending.
+  an error. R570_LAUNCH (bug round 570): it waited 20 s and then took pending.txt away, so a
+  build that died between 20 s and a minute stayed for good (the engine's own "a minute
+  alive" rule never came into play). Now it waits past that minute - the engine clears
+  pending.txt itself after 60 s (qmlui/trackapp.cpp) - and a build sent back is named in
+  bad-build.txt, so the update check does not fetch it again. Windows' error boxes (a
+  missing DLL) are off: such a build ends with an error code instead of waiting for a click.
 
   Licensed under the Apache License, Version 2.0.
 
@@ -175,6 +180,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdLine, int show)
     if (slash)
         *slash = 0;
 
+    /* R570_LAUNCH: a loader error (a missing DLL) ends the build instead of a box no one clicks */
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+
     readRev(L"current.txt", current);
     readRev(L"previous.txt", previous);
     readRev(L"pending.txt", pending);
@@ -206,7 +214,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdLine, int show)
     if (pending[0] != 0 && wcscmp(pending, current) == 0)
     {
         DWORD code = 0;
-        if (WaitForSingleObject(pi.hProcess, 20000) == WAIT_OBJECT_0 && GetExitCodeProcess(pi.hProcess, &code)
+        if (WaitForSingleObject(pi.hProcess, 65000) == WAIT_OBJECT_0 && GetExitCodeProcess(pi.hProcess, &code)   /* R570_LAUNCH */
             && code != 0 && previous[0] != 0 && wcscmp(previous, current) != 0)
         {
             engineOf(previous, exe, dir);
@@ -216,6 +224,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdLine, int show)
                            current, (unsigned long)code, previous);
                 msg[PATHLEN - 1] = 0;
                 logLine(msg);
+                writeRev(L"bad-build.txt", current);          /* R570_LAUNCH: not fetched again */
                 writeRev(L"current.txt", previous);
                 {
                     wchar_t p[PATHLEN];
@@ -230,6 +239,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdLine, int show)
         }
         else
         {
+            /* a clean quit, a minute alive, or nothing to go back to: not pending any more */
             wchar_t p[PATHLEN];
             join(p, g_root, L"pending.txt");
             DeleteFileW(p);

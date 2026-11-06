@@ -266,6 +266,10 @@ bool TrackShow::setPath(const QString &pathOrUrl)
     m_path = fi.absoluteFilePath();
     writeLine(file(QStringLiteral("show.txt")), QDir::toNativeSeparators(m_path));
     log(QStringLiteral("show: SETUP chose %1 - opened at the next start").arg(QDir::toNativeSeparators(m_path)));
+    // R570_SHOW (bug round 570): his own file now - nothing is "missing" any more (the rig's download went
+    // straight onto the path he chose), and a download or hash still running is for the old choice
+    m_missing = false;
+    m_gen++;
     // another file: what was known of the old one is not this one's
     m_localKey.clear();
     m_accepted = false;
@@ -286,6 +290,7 @@ void TrackShow::setFollow(bool on)
     if (m_available == false || on == m_follow)
         return;
     m_follow = on;
+    m_gen++;                            // R570_SHOW: a download still running is for the old choice
     writeLine(file(QStringLiteral("show-follow.txt")), on ? QStringLiteral("on") : QStringLiteral("off"));
     log(QStringLiteral("show: FOLLOW THE RIG %1").arg(on ? QStringLiteral("on") : QStringLiteral("off")));
     if (on == false && m_ready)
@@ -407,8 +412,14 @@ void TrackShow::releaseRead(const QByteArray &json)
         return;
     }
     m_busy = true;                      // one hash at a time
-    hash(m_path, [this, key](const QByteArray &sha) {
+    const int gen = m_gen;
+    hash(m_path, [this, key, gen](const QByteArray &sha) {
         m_busy = false;
+        if (gen != m_gen)
+        {
+            checkNow();                 // R570_SHOW: his choice changed under the hash - check the new one
+            return;
+        }
         m_localKey = sha.isEmpty() ? QString() : key;
         m_localSha = sha;
         decide(sha);
@@ -451,7 +462,9 @@ void TrackShow::decide(const QByteArray &localSha)
         return;
     }
     // saved since TRACK put the rig's there (a change of his) - only with TAKE THE RIG'S
-    if (put.isEmpty() == false && localSha != put && m_accepted == false)
+    // R570_SHOW: no record of TRACK putting the rig's there (a first install over his own PSMAIN.qxw) is his
+    // file too - it was fetched over and came with the next update as "build X + show"
+    if ((put.isEmpty() || localSha != put) && m_accepted == false)
     {
         drop();
         setState(Changed, QString());
@@ -467,8 +480,14 @@ void TrackShow::decide(const QByteArray &localSha)
     if (QFileInfo(next).size() == m_rig.size)
     {
         m_busy = true;
-        hash(next, [this, next](const QByteArray &sha) {
+        const int gen = m_gen;
+        hash(next, [this, next, gen](const QByteArray &sha) {
             m_busy = false;
+            if (gen != m_gen)
+            {
+                checkNow();             // R570_SHOW: not for this choice any more
+                return;
+            }
             if (sha == m_rig.sha256)
             {
                 m_ready = true;
@@ -498,10 +517,20 @@ void TrackShow::fetch(const QString &target)
     QFile::remove(part);
     QProcess *p = new QProcess(this);
     m_proc = p;
-    connect(p, &QProcess::finished, this, [this, p, part](int code, QProcess::ExitStatus status) {
+    const int gen = m_gen;
+    connect(p, &QProcess::finished, this, [this, p, part, gen](int code, QProcess::ExitStatus status) {
         if (m_proc == p)
             m_proc = nullptr;
         p->deleteLater();
+        if (gen != m_gen)
+        {
+            // R570_SHOW (bug round 570): CHANGE or FOLLOW THE RIG while it downloaded - not put anywhere, not
+            // offered; the check runs again for what he chose
+            QFile::remove(part);
+            m_busy = false;
+            checkNow();
+            return;
+        }
         if (status != QProcess::NormalExit || code != 0)
         {
             QFile::remove(part);
@@ -514,11 +543,28 @@ void TrackShow::fetch(const QString &target)
             fetchDone(false, QStringLiteral("show: PSMAIN.qxw is not whole (%1 of %2 bytes)").arg(QFileInfo(part).size()).arg(m_rig.size));
             return;
         }
-        hash(part, [this, part](const QByteArray &sha) {
+        hash(part, [this, part, gen](const QByteArray &sha) {
+            if (gen != m_gen)
+            {
+                QFile::remove(part);    // R570_SHOW: as above
+                m_busy = false;
+                checkNow();
+                return;
+            }
             if (sha != m_rig.sha256)
             {
                 QFile::remove(part);
                 fetchDone(false, QStringLiteral("show: PSMAIN.qxw does not match the release's SHA-256 - not used"));
+                return;
+            }
+            if (m_missing && QFileInfo::exists(m_fetchTarget))
+            {
+                // R570_SHOW: "missing" downloads onto a path that had nothing - something is there now: never over it
+                QFile::remove(part);
+                m_missing = false;
+                fetchDone(false, QStringLiteral("show: %1 is there now - the rig's PSMAIN.qxw is not put over it")
+                                     .arg(QDir::toNativeSeparators(m_fetchTarget)));
+                checkNow();
                 return;
             }
             QFile::remove(m_fetchTarget);
@@ -595,6 +641,19 @@ bool TrackShow::apply()
 {
     if (m_available == false || m_ready == false)
         return false;
+    // R570_SHOW (bug round 570): only his PSMAIN.qxw that follows the rig, and only as it was when it was
+    // checked - saved since (tonight's edits) or another choice: nothing is written, it is checked again
+    const QFileInfo now(m_path);
+    const QString key = QStringLiteral("%1|%2|%3").arg(now.absoluteFilePath()).arg(now.size()).arg(now.lastModified().toMSecsSinceEpoch());
+    if (follows() == false || key != m_localKey)
+    {
+        log(QStringLiteral("show: %1 changed since it was checked - not written over, checked again").arg(fileName()));
+        m_ready = false;
+        m_localKey.clear();
+        emit readyChanged();
+        checkNow();
+        return false;
+    }
     const QString next = file(QStringLiteral("show-next.qxw"));
     if (QFileInfo(next).size() != m_rig.size || QFileInfo(m_path).isFile() == false)
     {

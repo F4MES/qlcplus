@@ -76,6 +76,16 @@ the labs and SELF TEST work as before. The engine part is `r552_barshand.inc.cpp
 - **r556 ALL AUTO:** ALL AUTO also gives the laser bars back to the engine, on the desk, from MIDI and from
   the phone.
 
+## r570: a bug round with six reviewers (TRACK app only)
+
+- The show (trackshow.cpp R570_SHOW): CHANGE during the first download of the rig's show no longer
+  puts the rig's over the file he chose; a download or hash for an old choice (CHANGE / FOLLOW THE
+  RIG off meanwhile) is dropped; UPDATE TRACK writes over PSMAIN.qxw only as it was checked (saved
+  since = checked again); no show-rig.txt counts as his own file (TAKE THE RIG'S asks).
+- The launcher (R570_LAUNCH) waits 65 s for a first start (the engine clears pending.txt at 60 s);
+  a build sent back goes in `bad-build.txt` and is not fetched again; Windows' error boxes are off.
+- Engine/manager/pages: TRACK_APP_FIX_R570 (feature_track_app.py) - see HANDOVER runde 570.
+
 ## r566: ROOM with the bars' eyes, a quieter page tile, bug round (TRACK app only)
 
 - ROOM (SETUP and the phone): each laser bar shows its 8 eyes ("Laser Color 1..8", eye 1 at

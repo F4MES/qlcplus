@@ -3856,7 +3856,9 @@ private:
     QString m_r561PickState;
     bool m_r561Queued = false;           // without ON: his pick waits for the next section
     QString m_r561NextState;
-    int m_r561Sec = -1;                  // the section now
+    int m_r561Sec = -1;
+    qint64 m_r561CastMs = 0;             // TRACK_APP_FIX_R570: the last beat's cast (a pause = none for 2 s)
+    qint64 m_r561PickMs = 0;             // TRACK_APP_FIX_R570: when he picked                  // the section now
     QString m_r561State;
     QString m_r561Shown;                 // what the page shows (told when it changes)
     QString m_r561Note;

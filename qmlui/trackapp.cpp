@@ -279,7 +279,7 @@ void TrackApp::start()
         return;
     }
     log(QStringLiteral("TRACK %1 started (runtime %2)").arg(m_rev, m_runtimeId.isEmpty() ? QStringLiteral("-") : m_runtimeId));
-    // a build that runs a minute is no longer "pending" (the launcher clears it after 15 s too)
+    // a build that runs a minute is no longer "pending" (R570_LAUNCH: the launcher waits 65 s for it)
     QTimer::singleShot(60000, this, [this]() {
         const QString pending = file(QStringLiteral("pending.txt"));
         if (readLine(pending) == m_rev)
@@ -402,6 +402,15 @@ void TrackApp::manifestRead(const QByteArray &json)
     }
     if (rev == m_rev || rev == m_staged)
         return;                         // nothing new, or already waiting for his two taps
+    // R570_LAUNCH (bug round 570): a build the launcher sent back (it stopped at its first start) is not
+    // fetched and offered again - every start downloaded it, every UPDATE went dark and back
+    if (rev == readLine(file(QStringLiteral("bad-build.txt"))))
+    {
+        if (m_lastWhy != QStringLiteral("bad:") + rev)
+            log(QStringLiteral("update: build %1 stopped at its first start here - not offered again").arg(rev));
+        m_lastWhy = QStringLiteral("bad:") + rev;
+        return;
+    }
 
     const QString engine = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
     m_jobs.clear();
@@ -439,7 +448,10 @@ void TrackApp::manifestRead(const QByteArray &json)
             .arg(rev).arg(m_jobs.size()).arg(m_jobs.size() == 1 ? QString() : QStringLiteral("s")));
     m_job = Fetch();
     m_job.target = rev;                 // remembered for when the jobs are done
+    const bool hadStaged = m_staged.isEmpty() == false;
     m_staged.clear();
+    if (hadStaged)
+        emit updateChanged();           // R570_FIX: the chip for the older build goes (it did nothing when tapped)
     m_jobs << m_job;                    // the last entry: "ready" (no asset)
     nextFetch();
 }

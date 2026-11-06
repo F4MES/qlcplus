@@ -18977,7 +18977,10 @@ bool TrackEngine::headsRoundDone(const QString &key, int beat) const
     if (drawn < 0 || beat < drawn)
         return true;
     const TrackSweep sw = m_sweep.value(key);
-    return beat - drawn >= qMax(sweepFloor(sw), sw.beats);
+    int need = qMax(sweepFloor(sw), sw.beats);
+    if (m_speed < 0)
+        need *= m_speed < -1 ? 4 : 2;        // TRACK_APP_FIX_R570: as applySweep stretches it
+    return beat - drawn >= need;
 }
 
 int TrackEngine::sweepFloor(const TrackSweep &sw) const
@@ -26482,7 +26485,8 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
         }
         // TRACK_APP_LOGS_R551: the TRACK app's own logs (the start, the update, the CDJ reader)
         const QString trackLogs = QString::fromLocal8Bit(qgetenv("LOCALAPPDATA")) + "/TRACK/logs";
-        foreach (const QString &name, QStringList() << "track.log" << "bridge.log" << "bridge-console.log")
+        foreach (const QString &name, QStringList() << "track.log" << "track.log.old" << "bridge.log" << "bridge.log.1"
+                                                    << "bridge-console.log")   // TRACK_APP_FIX_R570: the rotated ones
         {
             if (QFileInfo::exists(trackLogs + "/" + name))
                 out << trackLogs + "/" + name;
@@ -46005,7 +46009,7 @@ void TrackEngine::r552Aim(bool restart)
     const quint32 aim = homePosition(key);
     if (aim == Function::invalidId())
         return;
-    if (m_cast.contains(key) || m_r552On)
+    if (m_cast.contains(key) || (m_r552On && m_cast.isEmpty() == false))   // TRACK_APP_FIX_R570: not with the show off
     {
         if (m_active.value(QStringLiteral("pos:") + key, Function::invalidId()) != aim)
             r552TravelDark(key);
@@ -46650,8 +46654,8 @@ int TrackEngine::clockTargetAt(int minutes) const
     int m = now.hour() * 60 + now.minute() - 20 * 60;
     if (m < 0)
         m += 24 * 60;
-    if (m >= 540)
-        return 0;
+    if (m >= (m_closingOn ? closingMinutes() : 540) && lastTrackHolds() == false)
+        return 0;                            // TRACK_APP_FIX_R570: closed, as clockPercent()
     const int last = int(m_clockCurve.count()) - 1;
     const int q = m / 15;
     if (q >= last)
@@ -46861,6 +46865,18 @@ void TrackEngine::r561AniCast(QSet<QString> &castSet, const QString &state, int 
 {
     // his ON / his pick: the lasers on stage, after everything else cast this beat; the engine's bars
     // step aside (the engine never lights both) - his own bars stay
+    {
+        // TRACK_APP_FIX_R570: back after a pause (no beat for 2 s): not a section change; his pick from the pause
+        // is this section's
+        const qint64 castNow = m_clock.elapsed();
+        if (m_r561CastMs > 0 && castNow - m_r561CastMs > 2000)
+        {
+            if (r561Picked() && m_r561Queued == false && m_r561PickMs >= m_r561CastMs)
+                m_r561PickSec = secStart;
+            m_r561Sec = secStart;
+        }
+        m_r561CastMs = castNow;
+    }
     if (r561Picked() && m_r561PickSec != secStart)
     {
         if (m_r561Queued && m_r561Sec >= 0 && secStart != m_r561Sec)
@@ -47000,6 +47016,7 @@ void TrackEngine::setAniOn(bool on)
     {
         m_r561Queued = false;            // ON with a pick waiting: it plays now, for this section
         m_r561PickSec = m_r561Sec;
+        m_r561PickMs = m_clock.elapsed();   // TRACK_APP_FIX_R570
         m_r561PickState = m_r561State;
         m_sectionMotion.remove(r561AniKey());
     }
@@ -47060,6 +47077,7 @@ void TrackEngine::aniPick(int index)
     m_r561FigFid = menu.at(index).second;
     m_r561Queued = m_r561On == false;
     m_r561PickSec = m_r561Queued ? -1 : m_r561Sec;   // now: this section (-1 before the first beat: the next one seen)
+    m_r561PickMs = m_clock.elapsed();    // TRACK_APP_FIX_R570: when - a pick made in a pause is the next section's
     m_r561PickState = m_r561Queued ? m_r561NextState : m_r561State;
     if (key.isEmpty() == false && m_r561Queued == false)
         m_sectionMotion.remove(key);      // drawn again from his figure on the next beat

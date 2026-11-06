@@ -154,6 +154,7 @@ Rectangle
         && trackManager.overrideState === ""
         && trackEngine.positionMode === ""
         && !trackViewRoot.barsHand                 // TRACK_APP_ALLAUTO_R556: the laser bars by hand
+        && !trackViewRoot.aniHand                  // TRACK_APP_FIX_R570: and the animation lasers
         && trackEngine.colourMode === 0 && (trackEngine.colourOverride === "" || trackEngine.colourOverrides.length > 1)
     function allAuto()
     {
@@ -164,6 +165,7 @@ Rectangle
         trackEngine.positionMode = ""
         trackEngine.colourOverride = ""        // AUTO colour - and FADE / CHASE off with it
         if (trackViewRoot.trackApp && trackViewRoot.barsHand) trackEngine.barsAuto()   // TRACK_APP_ALLAUTO_R556
+        if (trackViewRoot.trackApp && trackViewRoot.aniHand) trackEngine.aniAuto()     // TRACK_APP_FIX_R570
     }             // runde 393: the guide over the page
     // the pencil: the flag tools stay out until it is tapped again (Tobias 10-07)
     property bool markerEdit: false
@@ -621,6 +623,7 @@ Rectangle
         property bool idleTint: false         // its tone shows when off too, as a bar along the foot (sections, colours)
         property bool ring: false             // a white frame: pinned by hand
         property real fontPx: trackViewRoot.fs(14)
+        property bool fit: false              // TRACK_APP_FIX_R570: the text ends with "..." inside the tile
         property alias input: btnInput
         property bool touchInputEnabled: true
         signal tapped()
@@ -667,6 +670,8 @@ Rectangle
             {
                 id: label
                 anchors.verticalCenter: parent.verticalCenter
+                width: btn.fit ? Math.min(implicitWidth, btn.width - Math.round(16 * trackViewRoot.ks)) : implicitWidth
+                elide: btn.fit ? Text.ElideRight : Text.ElideNone
                 text: btn.text
                 color: btn.full ? (btn.lightFill ? "#101010" : "#FFFFFF")
                        : ((btn.active || btn.idleTint) ? Qt.lighter(btn.tone, 1.45) : "#D6D6DC")
@@ -4414,7 +4419,7 @@ Rectangle
                     elide: Text.ElideRight
                     // TRACK_APP_UI_R561: before NEXT has gone to QLC+, the title the deck has
                     text: !trackManager ? ""
-                          : (trackManager.nextTitle !== "" || !trackViewRoot.trackApp
+                          : ((trackManager.nextTitle !== "" && !(parent.appNext && trackAppCtl.nextState !== "ready")) || !trackViewRoot.trackApp   // TRACK_APP_FIX_R570
                              ? "<font color='#CFCFD6'>" + trackManager.nextTitle + "</font>"
                                + (trackManager.nextFirstDrop > 0 ? "  ·  " + qsTr("first drop bar") + " " + trackManager.nextFirstDrop : "")
                              : "<font color='#9A9AA4'>" + trackAppCtl.nextTrack + "</font>")
@@ -4485,6 +4490,7 @@ Rectangle
                         objectName: "aniItem:" + index
                         width: aniList.cellW; height: aniList.cellH
                         text: (modelData.lab ? "LAB · " : "") + String(modelData.name).toUpperCase()
+                        fit: true                             // TRACK_APP_FIX_R570
                         tone: trackViewRoot.cGold
                         active: modelData.now === true
                         ring: modelData.now === true && !!trackEngine && trackEngine.aniPicked

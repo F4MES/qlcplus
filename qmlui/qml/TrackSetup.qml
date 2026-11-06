@@ -84,6 +84,13 @@ Rectangle
     readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
     property bool cacheOpen: false
     property bool roomOpen: false        // TRACK_APP_UI_R560: ROOM - the room map, over the lists
+    // TRACK_APP_FIX_R570: what opens under ROOM closes it
+    onLabMenuOpenChanged: if (labMenuOpen) roomOpen = false
+    onLearnedOpenChanged: if (learnedOpen) roomOpen = false
+    onMidiOpenChanged: if (midiOpen) roomOpen = false
+    onAdvancedOpenChanged: if (advancedOpen) roomOpen = false
+    onFullListChanged: if (fullList) roomOpen = false
+    onFilterChanged: if (filter !== "") roomOpen = false
     // TRACK_APP_LIST_R557 (Tobias 11-04: "gemme listen over alle programmer under show all og maaske kun vise en
     // liste over sidste gemte og manuelt vaegtede looks/programmer"): in the TRACK app the list is SAVED LOOKS
     // + YOUR CHANGES; SHOW ALL shows every programme as before (HIDDEN: the hidden ones too)
@@ -101,6 +108,8 @@ Rectangle
     function editProgramme(name)
     {
         fullList = true
+        if (trackEngine && trackEngine.showAll === false)
+            trackEngine.showAll = true           // TRACK_APP_FIX_R570: the hidden ones too
         filterInput.text = name
     }
     property bool learnedOpen: false     // R436_LEARNED
@@ -1668,7 +1677,7 @@ Rectangle
                 model: [ 8, 16, 32, 64 ]
                 TrackTile
                 {
-                    Layout.preferredWidth: 80
+                    Layout.preferredWidth: 66   // TRACK_APP_FIX_R570
                     Layout.preferredHeight: 34
                     label: modelData + qsTr(" bars")
                     active: trackEngine ? (trackEngine.holdAuto === false && trackEngine.holdBars === modelData) : false
@@ -1689,7 +1698,7 @@ Rectangle
             // width at all and "Colour holds for" drew over the ENERGY tile)
             TrackTile
             {
-                Layout.preferredWidth: 170
+                Layout.preferredWidth: 150
                 Layout.preferredHeight: 34
                 label: qsTr("Accent colour in drops")
                 active: trackEngine ? trackEngine.accent : false
@@ -1701,7 +1710,7 @@ Rectangle
             // hand on the slider turns it off, this turns it back on
             TrackTile
             {
-                Layout.preferredWidth: 130
+                Layout.preferredWidth: 118
                 Layout.preferredHeight: 34
                 label: qsTr("ENERGY by clock")
                 active: trackEngine ? trackEngine.roomAuto : false
@@ -1714,7 +1723,7 @@ Rectangle
             // switched on since R458_CLOSING_OFF - LAST TRACK is the DJ's end
             TrackTile
             {
-                Layout.preferredWidth: 130
+                Layout.preferredWidth: 118
                 Layout.preferredHeight: 34
                 label: qsTr("Closing sequence")
                 active: trackEngine ? trackEngine.closingSequence : false
@@ -1728,7 +1737,7 @@ Rectangle
             TrackTile
             {
                 objectName: "sendOpen"
-                Layout.preferredWidth: 150
+                Layout.preferredWidth: 132
                 Layout.preferredHeight: 34
                 label: qsTr("SEND TO CLAUDE")
                 active: true
@@ -1743,7 +1752,7 @@ Rectangle
             {
                 id: exportTile
                 property bool armed: false
-                Layout.preferredWidth: 84
+                Layout.preferredWidth: 76
                 Layout.preferredHeight: 34
                 label: armed ? qsTr("SURE?") : qsTr("EXPORT")
                 active: armed
@@ -1760,7 +1769,7 @@ Rectangle
             {
                 id: importTile
                 property bool armed: false
-                Layout.preferredWidth: 84
+                Layout.preferredWidth: 76
                 Layout.preferredHeight: 34
                 label: armed ? qsTr("SURE?") : qsTr("IMPORT")
                 active: armed
@@ -2238,6 +2247,7 @@ Rectangle
                 readonly property int st: showRow.sh ? trackAppCtl.updateStep : 0
                 enabled: st !== 1
                 label: st === 3 ? qsTr("SHOW OFF FIRST")
+                       : st === 2 ? qsTr("DID NOT START - SEE THE LOG")   // TRACK_APP_FIX_R570
                        : showRow.armOpen ? qsTr("SURE? - TAP AGAIN") : qsTr("OPEN NOW")
                 active: true
                 activeColor: showRow.armOpen ? "#F0C870" : "#E3B44F"

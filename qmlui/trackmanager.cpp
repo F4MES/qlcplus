@@ -2472,7 +2472,11 @@ void TrackManager::allAuto()
     m_engine->setPositionMode(QString());
     m_engine->setColourOverride(QString());
     if (trackAppObject() != nullptr)             // TRACK_APP_ALLAUTO_R556: the laser bars too
+    {
         m_engine->barsAuto();
+        if (m_engine->aniHand())
+            m_engine->aniAuto();                  // TRACK_APP_FIX_R570: and the animation lasers
+    }
 }
 
 /* ---------------------------------------------------------------- LEARN */
@@ -2689,7 +2693,10 @@ void TrackManager::midiRelease(MidiMap &m)
         if (m.target == QLatin1String("flash"))
             m_engine->setFlash(false);
         else if (m.target == QLatin1String("blackout"))
-            m_engine->setBlackout(false);
+        {
+            if (m.boGen == m_r561BoOff)          // TRACK_APP_FIX_R570: a stale hold lets nothing go
+                m_engine->setBlackout(false);
+        }
         else if (m.target == QLatin1String("stutter"))
             m_engine->setStutter(false);
     }
@@ -3384,7 +3391,7 @@ QString TrackManager::remoteCommand(const QString &line)
     {
         if (remoteArg(a, 1, &n) == false)
             return bad;
-        e->setSpeed(qBound(-2, n, 1));     // TRACK_APP_SPEED_R563: -2 = 1/4
+        e->setSpeed(qBound(trackAppObject() != nullptr ? -2 : -1, n, 1));     // TRACK_APP_SPEED_R563: -2 = 1/4 (TRACK_APP_FIX_R570: the TRACK app's)
     }
     // ---- RIG
     else if (cmd == QStringLiteral("master"))
