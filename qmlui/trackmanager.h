@@ -628,6 +628,7 @@ private:
     int m_midiOwnU = -1;                 // TRACK_APP_MIDI_R571B: the universe TRACK patched the controller on
     QString m_midiOwnName;               // ... and the device
     QString m_midiFailName;              // the device that would not open (logged once)
+    QString m_midiSeenList;              // TRACK_APP_MIDI_R571C: the MIDI inputs last logged
     bool m_midiLearn = false;
     bool m_midiCanUndo = false;
     bool m_midiDirty = false;

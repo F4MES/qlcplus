@@ -2823,6 +2823,15 @@ void TrackManager::midiAutoPatch()
         if (n.contains(QStringLiteral("midimix")) || n.contains(QStringLiteral("midi mix")))
             pick = i;
     }
+    // TRACK_APP_MIDI_R571C: else a real controller - a virtual port (LoopBe, loopMIDI ...) only when nothing else
+    auto virtualPort = [](const QString &n) {
+        const QString l = n.toLower();
+        return l.contains(QStringLiteral("loopbe")) || l.contains(QStringLiteral("loopmidi")) || l.contains(QStringLiteral("virtual"))
+            || l.contains(QStringLiteral("microsoft")) || l.contains(QStringLiteral("rtpmidi")) || l.contains(QStringLiteral("network"));
+    };
+    for (int i = 0; i < ins.count() && pick < 0; i++)
+        if (virtualPort(ins.at(i)) == false)
+            pick = i;
     if (pick < 0 && midiU >= 0 && io->inputPatch(quint32(midiU))->input() < quint32(ins.count()))
         pick = int(io->inputPatch(quint32(midiU))->input());
     if (pick < 0)
@@ -2886,6 +2895,21 @@ void TrackManager::midiRefresh()
         }
     }
     m_midiListen = where.isEmpty() ? QString() : QStringLiteral("Listening on ") + where.join(QStringLiteral(", "));
+    // TRACK_APP_MIDI_R571C: in the TRACK app the panel says what TRACK sees
+    if (trackAppObject() != nullptr && m_doc != nullptr && m_doc->ioPluginCache() != nullptr)
+    {
+        QLCIOPlugin *midi = m_doc->ioPluginCache()->plugin(QStringLiteral("MIDI"));
+        const QStringList ins = midi != nullptr ? midi->inputs() : QStringList();
+        const QString seen = midi == nullptr ? QStringLiteral("no MIDI plugin loaded")
+                           : ins.isEmpty() ? QStringLiteral("no MIDI device seen - is the controller plugged in?")
+                           : QStringLiteral("MIDI devices: ") + ins.join(QStringLiteral(", "));
+        if (seen != m_midiSeenList && m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("seen:") + seen);
+        m_midiSeenList = seen;
+        m_midiListen = m_midiListen.isEmpty()
+                     ? (midi != nullptr && ins.isEmpty() == false ? QStringLiteral("Could not open %1 (another program using it?) - ").arg(ins.join(QStringLiteral(" / "))) + seen : seen)
+                     : m_midiListen + midiDot() + seen;
+    }
     midiScanVc();
     emit midiChanged();
 }
