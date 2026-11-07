@@ -3423,6 +3423,9 @@ private:
     QHash<QString, QString> m_r572SecLook;
     qint64 m_r572AniSeq = 0;
     QString r572AniLook(const TrackFuncInfo &info) const;
+    // TRACK_APP_HEADS80_R572 (Tobias 11-07: "for lidt bevaegelse paa movingheads efter 80% energi helt generelt"):
+    // 0 under 80 % on the slider, 1 at 100 % - how much more the heads move up there
+    qreal r572HeadsHot() const { return qBound(0.0, (m_faderNow - 0.80) / 0.20, 1.0); }
     void r572AniRotate(const QString &group, QList<TrackFuncInfo *> &ok) const;
     void r572AniSeen(const QString &group, quint32 fid);
     QTimer m_testTimer;                    // SELF TEST: one colour scene every 2 s

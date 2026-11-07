@@ -18810,6 +18810,8 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // the fader could come out SMALLER than one at the bottom, and the fader
     // was not readable through it.
     sw.tier = build ? 1 : tier;
+    if (laser == false)
+        sw.drawnF = m_faderNow;          // TRACK_APP_HEADS80_R572: the slider this figure was drawn at
     sw.drawnE = e;
     sw.drive = drive && sw.tier == 1;
     qreal reach = sweepReach(sw.tier, e, sw.drive);
@@ -19162,8 +19164,11 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         grow *= m_mixMotionScale;
         pace /= m_mixMotionScale;
         pace *= r493GenrePace();         // R493_A2_G_PACE: melodic/minimal a little slower (heads only)
-        width = qBound(6, int(qRound(sw.width * grow)), 127);
-        height = qBound(4, int(qRound(sw.height * grow)), 28);
+        // TRACK_APP_HEADS80_R572: from 80 % the figure grows and quickens with the slider (not a break's)
+        const qreal hot = (sw.tier >= 1 && sw.drawnF >= 0.0) ? qBound(0.0, (sw.drawnF - 0.80) / 0.20, 1.0) : 0.0;
+        const int hotTilt = 28 + int(qRound(12.0 * hot));
+        width = qBound(6, int(qRound(sw.width * grow * (1.0 + 0.30 * hot))), 127);
+        height = qBound(4, int(qRound(sw.height * grow * (1.0 + 0.35 * hot))), hotTilt);
         // R497_A4_HOOK_SHAPE (runde 497, A4): in a kickless break the wash figure's size and centre
         // follow the melody (r497_melodyheads.inc.cpp); the lift counts in the reach below and can
         // never loosen it. Nothing of it outside such a break: the values pass through as they are
@@ -19197,14 +19202,18 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
             // sideways sweep (review, runde 211)
             const qreal k = allow / reach;
             width = qBound(6, int(qRound(width * (1.0 - (1.0 - k) * qAbs(std::sin(rad))))), 127);
-            height = qBound(4, int(qRound(height * k)), 28);
+            height = qBound(4, int(qRound(height * k)), hotTilt);   // TRACK_APP_HEADS80_R572
         }
         // the live rescale may quicken a figure by a quarter at most: it
         // scaled the draw's floor down with it, and a drop figure pushed from
         // 80 to 99 % halved its beats - 2x on top made it frantic (runde 199)
         // ... and the draw's floor goes under the scaled CURVE, never into
         // it (runde 271: see TrackSweep::minBeats)
-        beats = qMax(floorBeats, qMax(3, qMax(int(qRound(sw.beats * pace)), sw.beats * 3 / 4)));
+        // TRACK_APP_HEADS80_R572: from 80 % up to a quarter quicker, and the drop character's floor (heavy 16,
+        // wide/hard/tight/nervous 8 beats) a third lower at 100 %
+        const qreal quick = 1.0 + 0.25 * hot;
+        const int hotFloor = qMax(3, int(qRound(floorBeats * (1.0 - 0.35 * hot))));
+        beats = qMax(hotFloor, qMax(3, qMax(int(qRound(sw.beats * pace / quick)), int(qRound(sw.beats * 0.75 / quick)))));
     }
     // Not for the lasers. drawSweep() fixes their pace - "nothing here is ever
     // allowed to hurry" - and then this halved it whenever the DJ hit 2x. The
@@ -22862,7 +22871,9 @@ int TrackEngine::figureBeats(quint32 fid) const
     if (info.name.contains(QStringLiteral("climb"), Qt::CaseInsensitive))
         return 0;
     const qreal k = 1.5 - 0.75 * qBound(0.0, (m_faderNow - 0.30) / 0.70, 1.0);
-    return qMax(2, int(qRound(info.beats * k)));
+    // TRACK_APP_HEADS80_R572: from 80 % quicker still - half the step at 100 %, and from 90 % a step may be one beat
+    const qreal hot = r572HeadsHot();
+    return qMax(m_faderNow >= 0.90 - 1e-9 ? 1 : 2, int(qRound(info.beats * k * (1.0 - 0.5 * hot))));
 }
 
 void TrackEngine::startFunction(Function *func, int division, bool glide)
