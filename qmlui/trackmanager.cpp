@@ -3327,6 +3327,7 @@ QString TrackManager::remoteState()
     // TRACK_APP_UI_R560: the deck the lights follow, the room, the dark colours (TRACK app only)
     if (QObject *ta = trackAppObject())
     {
+        o.insert(QStringLiteral("cacheV"), m_cacheSerial);   // TRACK_APP_CACHE_PHONE_R572: the CACHE tab, and when to fetch
         QJsonObject dk;
         dk.insert(QStringLiteral("m"), ta->property("deckMaster").toInt());
         dk.insert(QStringLiteral("f"), ta->property("deckFollowed").toInt());
@@ -3499,6 +3500,27 @@ QString TrackManager::remoteState()
     return QStringLiteral("TRACKSTATE|") + QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
+// TRACK_APP_CACHE_PHONE_R572: the cache list for one phone - newest first, as the reader sends it
+QString TrackManager::remoteCacheLine() const
+{
+    QJsonArray rows;
+    for (const QVariant &v : m_cacheList)
+    {
+        const QVariantMap r = v.toMap();
+        QJsonObject j;
+        j.insert(QStringLiteral("t"), r.value(QStringLiteral("title")).toString());
+        j.insert(QStringLiteral("f"), r.value(QStringLiteral("flags")).toInt());
+        j.insert(QStringLiteral("m"), r.value(QStringLiteral("manual")).toBool());
+        j.insert(QStringLiteral("at"), double(r.value(QStringLiteral("playedAt")).toLongLong()));   // epoch ms: a double holds it
+        rows.append(j);
+    }
+    QJsonObject o;
+    o.insert(QStringLiteral("v"), m_cacheSerial);
+    o.insert(QStringLiteral("ok"), connected());
+    o.insert(QStringLiteral("tracks"), rows);
+    return QStringLiteral("TRACKCACHE|") + QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
 QString TrackManager::remoteCommand(const QString &line)
 {
     m_remoteSeenMs = QDateTime::currentMSecsSinceEpoch();
@@ -3513,6 +3535,31 @@ QString TrackManager::remoteCommand(const QString &line)
             if (m_remoteHeld.contains(what))
                 m_remoteHeldMs.insert(what, m_remoteSeenMs);
         }
+        return remoteState();
+    }
+    // TRACK_APP_CACHE_PHONE_R572 (Tobias 11-08, mockup approved): the desk's CACHE on the phone - the same
+    // doors as SETUP's tiles (REFRESH, FORGET, FORGET ALL AUTOMATIC). The list is the reader's: it answers
+    // with or without CDJs, as long as TRACK's CDJ reader runs. Not in the 4-a-second state (200+ titles):
+    // the state carries cacheV, and the phone fetches with cacheGet when it moves. TRACK app only.
+    if (cmd.startsWith(QLatin1String("cache")) && trackAppObject() != nullptr)
+    {
+        if (cmd == QLatin1String("cacheGet"))
+            return remoteCacheLine();
+        if (cmd == QLatin1String("cache"))
+            requestCache();
+        else if (cmd == QLatin1String("cacheForget"))
+        {
+            const QString t = line.section(QLatin1Char('|'), 1);     // the whole rest: a title may hold a |
+            if (t.isEmpty())
+                return QStringLiteral("TRACKERR|no title");
+            forgetTrack(t);
+        }
+        else if (cmd == QLatin1String("cacheForgetAuto"))
+            forgetAutomatic();
+        else
+            return QStringLiteral("TRACKERR|unknown command ") + cmd;
+        if (m_engine != nullptr && cmd != QLatin1String("cache"))
+            m_engine->noteRemote(cmd, line.section(QLatin1Char('|'), 1, 1));   // as R482: a trace in the log
         return remoteState();
     }
     TrackEngine *e = m_engine;
@@ -6046,6 +6093,7 @@ void TrackManager::handleExtra(const QString &evt, const QJsonObject &obj)
                        qint64(t.value(QStringLiteral("played-at")).toDouble(0.0)));
             m_cacheList.append(row);
         }
+        m_cacheSerial++;                 // TRACK_APP_CACHE_PHONE_R572
         emit cacheChanged();
     }
 }

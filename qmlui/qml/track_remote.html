@@ -158,6 +158,19 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
 .upd button.new{color:var(--gold);border-color:var(--gold)}
 .upd button.sure{background:var(--gold);color:#1A1408;border-color:var(--gold)}
 .upd button.off{opacity:.4}
+/* TRACK_APP_CACHE_PHONE_R572: the desk's CACHE - newest first, a gold line per day, two taps to forget */
+.cinfo{font-size:12px;color:var(--mute);margin:0 2px 8px;line-height:1.35}.cinfo b{color:var(--text)}
+.ctop{display:grid;grid-template-columns:1fr 1.5fr;gap:8px;margin-bottom:6px}
+.ctop .b.red{color:#F09090}.b.sure,.cf.sure{background:#E36B6B;color:#280808}
+.cday{font-size:11px;font-weight:800;letter-spacing:.12em;color:var(--gold);margin:12px 4px 6px}
+.crow{display:flex;align-items:center;gap:8px;padding:7px 6px 7px 10px;border-radius:8px;background:var(--btn);margin-bottom:4px}
+.crow.now{box-shadow:inset 3px 0 0 var(--green)}
+.crow .tx{flex:1;min-width:0}.crow .nm{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crow .meta{font-size:11px;color:var(--mute);margin-top:2px}
+.ctag{font-size:10px;font-weight:800;letter-spacing:.06em;padding:4px 8px;border-radius:11px;background:#2C2C34;color:#AAAAAA;flex:none}
+.ctag.man{background:var(--gold);color:#101010}
+.cf{width:70px;height:36px;border-radius:8px;border:0;background:#2A2A32;color:var(--text);font-weight:800;font-size:11px;letter-spacing:.06em;flex:none}
+.cempty{margin:40px 10px;text-align:center;color:var(--mute);font-size:13px;line-height:1.5}.cempty b{display:block;color:#F07A7A;letter-spacing:.1em;font-size:12px;margin-bottom:6px}
 .tabs button .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gold);margin-left:6px;vertical-align:2px}
 </style>
 </head>
@@ -243,6 +256,13 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       <div id="roomlist"></div><!-- TRACK_APP_ROOM_R563 -->
     </div>
 
+    <div class="page" id="p-cache"><!-- TRACK_APP_CACHE_PHONE_R572 -->
+      <div class="lbl">CACHE</div>
+      <div class="cinfo" id="cinfo"></div>
+      <div class="ctop" id="ctop"><button class="b sm" id="crefresh">REFRESH</button><button class="b sm red" id="cforgetall">FORGET ALL AUTOMATIC</button></div>
+      <div id="clist"></div>
+    </div>
+
     <div class="page" id="p-rig">
       <div class="lbl">MASTER</div>
       <div class="fader" data-f="master" style="--c:#4FA3E3"><div class="fill" style="background:#4FA3E3"></div><div class="grip"></div><div class="name" style="color:#06182A">MASTER DIMMER</div><div class="val"></div></div>
@@ -263,6 +283,7 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
     <button data-p="look">LOOK</button>
     <button data-p="rig">RIG<span class="dot" style="display:none"></span></button>
     <button data-p="room" id="roomTab" style="display:none">ROOM</button>
+    <button data-p="cache" id="cacheTab" style="display:none">CACHE</button><!-- TRACK_APP_CACHE_PHONE_R572 -->
   </div>
 </div>
 <script>
@@ -293,6 +314,10 @@ function send(cmd) {
   if (ws && ws.readyState === 1 && (cmd.indexOf('state') === 0 || live())) ws.send('TRACK|' + cmd);
 }
 function onLine(data) {
+  if (typeof data === 'string' && data.indexOf('TRACKCACHE|') === 0) {   // TRACK_APP_CACHE_PHONE_R572
+    try { const c = JSON.parse(data.slice(11)); C = c; cacheHave = c.v; drawCache(); } catch (e) {}
+    return;
+  }
   if (typeof data !== 'string' || data.indexOf('TRACKSTATE|') !== 0) return;
   lastState = Date.now();
   $('offline').classList.remove('on');
@@ -347,6 +372,7 @@ function tab(p) {
   document.querySelectorAll('.page').forEach(e => e.classList.toggle('on', e.id === 'p-' + p));
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
   if (p === 'room' && S && Array.isArray(S.room)) drawRoom(S.room, S.colour);   // TRACK_APP_UI_R560
+  if (p === 'cache') { send('cache'); send('cacheGet'); drawCache(); }        // TRACK_APP_CACHE_PHONE_R572: fresh from the reader
 }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => tab(b.dataset.p));
 
@@ -792,6 +818,14 @@ function render() {
     $('roomTab').style.display = hasRoom ? '' : 'none';
     if (hasRoom && $('p-room').classList.contains('on')) drawRoom(S.room, S.colour);
   }
+  {   // TRACK_APP_CACHE_PHONE_R572: the CACHE tab - only when TRACK sends cacheV; a new list: fetch it if open
+    const has = S.cacheV !== undefined;
+    $('cacheTab').style.display = has ? '' : 'none';
+    if (has && $('p-cache').classList.contains('on')) {
+      if (S.cacheV !== cacheHave && Date.now() - cacheAsked > 1000) { cacheAsked = Date.now(); send('cacheGet'); }
+      if (S.connected !== cacheOk || (S.title || '') !== cacheTitle) drawCache();
+    }
+  }
   {   // TRACK_APP_PHONE_R556: the desk's warning - what is wrong with the CDJs, once it has held 5 s
     const w = S.warn || '', now = Date.now();
     if (w !== warnWhat) { warnWhat = w; warnSince = now; if (w) setTimeout(render, 5100); }
@@ -1046,9 +1080,66 @@ $('groups').addEventListener('click', e => {
   const g = (S.groups || []).find(x => x.key === t.dataset.t); if (g) send('group|' + g.key + '|' + (g.enabled ? 0 : 1));   // R463_PAGE
 });
 
+/* ---------------- TRACK_APP_CACHE_PHONE_R572: CACHE ---------------- */
+let C = null, cacheHave = -1, cacheAsked = 0, cacheOk = null, cacheTitle = '';
+const cArmed = {};                        // what a first tap armed: 'all' or a title -> its timer
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+function dayKey(ms) { if (!ms || ms <= 0) return ''; const d = new Date(ms); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+function dayName(k) {
+  if (k === '') return 'EARLIER · NO PLAY TIME RECORDED';
+  const t = new Date(), y = new Date(); y.setDate(y.getDate() - 1);
+  return k === dayKey(t.getTime()) ? 'TODAY' : k === dayKey(y.getTime()) ? 'YESTERDAY' : k;
+}
+function drawCache() {
+  cacheOk = S ? S.connected : null; cacheTitle = S && S.title ? S.title : '';
+  const ok = !!(S && S.connected);
+  $('ctop').style.display = ok ? '' : 'none';
+  $('cforgetall').classList.toggle('sure', !!cArmed.all);
+  $('cforgetall').textContent = cArmed.all ? 'SURE?' : 'FORGET ALL AUTOMATIC';
+  if (!ok) {
+    $('cinfo').textContent = '';
+    $('clist').innerHTML = '<div class="cempty"><b>NO CACHE</b>TRACK\'s CDJ reader is not running - the cache lives there.<br>It comes back by itself when the reader is up.</div>';
+    return;
+  }
+  const rows = C && Array.isArray(C.tracks) ? C.tracks : null;
+  if (!rows) { $('cinfo').textContent = 'Asking the reader ...'; $('clist').innerHTML = ''; return; }
+  $('cinfo').innerHTML = '<b>' + rows.length + ' tracks</b> in the cache. MANUAL are your corrections and are never re-analysed.';
+  let h = '', prev = '\u0000';
+  rows.forEach((r, i) => {
+    const k = dayKey(r.at);
+    if (k !== prev) { h += '<div class="cday">' + esc(dayName(k)) + '</div>'; prev = k; }
+    const d = r.at > 0 ? new Date(r.at) : null, now = cacheTitle !== '' && r.t === cacheTitle;
+    const meta = (d ? pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ' · ' : '') + r.f + ' flags' + (now ? ' · playing' : '');
+    const armed = Object.prototype.hasOwnProperty.call(cArmed, 't:' + r.t);
+    h += '<div class="crow' + (now ? ' now' : '') + '"><div class="tx"><div class="nm">' + esc(r.t) + '</div><div class="meta">' + esc(meta) + '</div></div>'
+      + '<span class="ctag' + (r.m ? ' man' : '') + '">' + (r.m ? 'MANUAL' : 'AUTO') + '</span>'
+      + '<button class="cf' + (armed ? ' sure' : '') + '" data-ci="' + i + '">' + (armed ? 'SURE?' : 'FORGET') + '</button></div>';
+  });
+  $('clist').innerHTML = h || '<div class="cempty">The cache is empty.</div>';
+}
+// two taps, 4 s apart at most - as the desk's tiles
+function cArm(key) {
+  if (cArmed[key]) { clearTimeout(cArmed[key]); delete cArmed[key]; return true; }
+  cArmed[key] = setTimeout(() => { delete cArmed[key]; drawCache(); }, 4000);
+  return false;
+}
+$('crefresh').onclick = () => { send('cache'); send('cacheGet'); };
+$('cforgetall').onclick = () => { if (cArm('all')) send('cacheForgetAuto'); drawCache(); };
+$('clist').addEventListener('click', e => {
+  const b = e.target.closest('[data-ci]'); if (!b || !C || !C.tracks) return;
+  const r = C.tracks[+b.dataset.ci]; if (!r) return;
+  if (cArm('t:' + r.t)) send('cacheForget|' + r.t);
+  drawCache();
+});
+
 /* ---------------- a stand-in QLC+ for screenshots and tests (?mock=1) ---------------- */
 function mockApply(cmd) {
   const a = cmd.split('|'), c = a[0], on = a[1] === '1';
+  if (c.indexOf('cache') === 0 && C) {   // TRACK_APP_CACHE_PHONE_R572 (mock)
+    if (c === 'cacheForget') C.tracks = C.tracks.filter(r => r.t !== cmd.slice(12));
+    if (c === 'cacheForgetAuto') C.tracks = C.tracks.filter(r => r.m);
+    C.v++; S.cacheV = C.v; onLine('TRACKCACHE|' + JSON.stringify(C)); render(); return;
+  }
   if (c === 'update') { S.upd.st = S.show ? 3 : S.upd.found ? 1 : 2; render(); return; }   // R474_UPDATE (R475_PHONE_MOCK)
   const m = {show: () => S.show = on, energy: () => { S.roomAuto = false; S.energy = +a[1]; }, energyAuto: () => S.roomAuto = true,
     calm: () => S.calm = S.calm > 0 ? 0 : 16, hold: () => S.hold = !S.hold, blackout: () => S.blackout = on, stutter: () => S.stutter = on,
@@ -1084,6 +1175,14 @@ if (q.get('mock')) {
     stage: ['Laserbars', 'Shark Zoom Wash', 'Mini 4 Eyes'],
     cast: ['Shark Zoom Wash', 'Mini 4 Eyes'], dropMode: 1, dropSet: ['Laserbars', 'Shark Zoom Wash'], plan: 'break', gflash: [],   // R469_PHONE_RIG
     last: {stage: +(q.get('last') || 0), shown: q.get('last') !== null, left: 198, closeMin: 9, closeAt: '03:00'}};
+  {   // TRACK_APP_CACHE_PHONE_R572 (mock): today, yesterday, an old night, one from before play times
+    const H = 3600000, t0 = new Date(); t0.setHours(0, 31, 0, 0);
+    C = {v: 1, ok: true, tracks: [
+      {t: 'Calvin Who - Midnight Session (Extended)', f: 9, m: false, at: +t0}, {t: 'Glass Harbour - Club Mix', f: 9, m: true, at: +t0 - 0.09 * H},
+      {t: 'Northern Lines', f: 6, m: false, at: +t0 - 0.18 * H}, {t: 'Velvet Static (Dub)', f: 8, m: false, at: +t0 - 21.7 * H},
+      {t: 'Run | The Room', f: 5, m: true, at: +t0 - 21.8 * H}, {t: 'Copper Sky', f: 7, m: false, at: +t0 - 166 * H}, {t: 'Old Friend', f: 4, m: false, at: 0}]};
+    S.cacheV = 1; if (q.get('nocdj')) S.connected = false;
+  }
   render();
   tab(q.get('tab') || 'live');
 } else connect();

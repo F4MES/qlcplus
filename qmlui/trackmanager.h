@@ -452,6 +452,8 @@ private:
     QString m_key;                       // this track's key from rekordbox, or empty
     QVariantList m_nextMarkers;
     QVariantList m_cacheList;
+    int m_cacheSerial = 0;               // TRACK_APP_CACHE_PHONE_R572: one up per list from the reader - the phone asks again
+    QString remoteCacheLine() const;     // TRACK_APP_CACHE_PHONE_R572: the cache for the phone, its own line
 
     int m_currentBeat;
     bool m_playing;
