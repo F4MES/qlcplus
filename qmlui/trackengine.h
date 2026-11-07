@@ -1368,6 +1368,11 @@ public:
     void noteRemote(const QString &cmd, const QString &args);   // sig:remote:<cmd>[:<args>], a drag once
     // R486_MI_LOG: sig:midi:<what> - a pad, a fader taking over, LEARN (track_runtime/midimap.inc.cpp)
     void noteMidi(const QString &tag) { logSignal(QStringLiteral("sig:midi:") + tag); }
+    // TRACK_APP_MASTERWHY_R572 (Tobias 11-07: "master-faderen kunne nogle gange ikke styre lysstyrken"): when
+    // MASTER moves, what is lit past it right now and why - logged (sig:master-free), at most every 2 s
+    QString r572MasterFree() const;
+    qint64 m_r572MasterLogMs = -100000;
+    QString m_r572MasterLast;
     // R475_ENGINE_PUBLIC: the section's own start before R236 shifts it (the colour memory), the
     // SECTION press held now (the pick's end - noteSectionOverride() only logs, R335), and who
     // the next setHaze() / setFan() is (the atmos log - "hand" when nobody says)

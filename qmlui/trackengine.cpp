@@ -8322,7 +8322,57 @@ void TrackEngine::setMaster(qreal level)
     // colour scene carries the intensity, or that has no dimmer channel at
     // all, used to ignore this fader until the next beat - or for ever
     reapplyLevels();
+    // TRACK_APP_MASTERWHY_R572: what MASTER does not reach now, and why (a new answer, or every 2 s)
+    {
+        const qint64 now = m_clock.elapsed();
+        const QString why = r572MasterFree();
+        if (why.isEmpty() == false && (why != m_r572MasterLast || now - m_r572MasterLogMs >= 2000))
+        {
+            logSignal(QStringLiteral("sig:master-free:") + why);
+            m_r572MasterLogMs = now;
+        }
+        m_r572MasterLast = why;
+    }
     emit liveChanged();
+}
+
+QString TrackEngine::r572MasterFree() const
+{
+    // TRACK_APP_MASTERWHY_R572: every way a lit group stands past MASTER by design, named - FLASH / a pad held,
+    // the drop's landing (the strobes), his DROP HIT burst, the break stabs, LAST TRACK's white floor - and what
+    // turns MASTER down on its own (the closing, a deck brake). A programme that writes a group's master dimmer
+    // itself while the engine runs it at full (prog:) is named too: HTP over the scaled group dimmer
+    QStringList out;
+    if (m_closingDim < 0.999)
+        out << QStringLiteral("closing=%1").arg(m_closingDim, 0, 'f', 2);
+    if (brakeDim() < 0.999)
+        out << QStringLiteral("brake=%1").arg(brakeDim(), 0, 'f', 2);
+    if (m_flash)
+        out << QStringLiteral("flash-button");
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_cast.contains(key) == false && m_padFlash.contains(key) == false)
+            continue;
+        const TrackGroup &g = m_groups.value(key);
+        QStringList why;
+        if (heldFull(key))
+            why << (m_padFlash.contains(key) ? QStringLiteral("pad") : QStringLiteral("flash"));
+        if (landBurstNow() && g.strobes)
+            why << (hitBurstNow(m_curBeat) ? QStringLiteral("drop-hit") : QStringLiteral("landing"));
+        else if (landBurstNow() && hitBurstNow(m_curBeat) && hitLights(key))
+            why << QStringLiteral("drop-hit");
+        if (r536Owns(key))
+            why << QStringLiteral("stabs");
+        if (lastWhiteDim(key) > 0.0)
+            why << QStringLiteral("last-white");
+        const quint32 mf = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        if (mf != Function::invalidId() && g.patternDevice == false && m_funcs.contains(mf) && m_funcs.value(mf).dimmer
+            && slotScale(QStringLiteral("mot:") + key, mf) >= 0.999 && m_master < 0.95)
+            why << QStringLiteral("prog:") + QString::number(mf);
+        if (why.isEmpty() == false)
+            out << key + QLatin1Char('=') + why.join(QLatin1Char('+'));
+    }
+    return out.join(QLatin1Char(';'));
 }
 
 bool TrackEngine::blackout() const { return m_blackout; }

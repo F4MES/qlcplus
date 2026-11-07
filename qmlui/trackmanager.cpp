@@ -2239,6 +2239,12 @@ void TrackManager::midiInput(quint32 universe, quint32 channel, uchar value, con
     if (c >= 529 && c <= 531)
         return;                          // a MIDI clock's beat / start / stop is no control
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // TRACK_APP_MIDI_R572: the same value on the same control within 3 ms is a copy, not a second press
+    if (channel == m_midiLastCh && value == m_midiLastVal && m_midiLastMs >= 0 && now - m_midiLastMs <= 3)
+        return;
+    m_midiLastCh = channel;
+    m_midiLastVal = value;
+    m_midiLastMs = now;
     const int raw = int(value);
     const int idx = midiFind(universe, channel);
     m_midiLast = QStringLiteral("Last heard: ") + midiSource(universe, channel, false)
@@ -2916,9 +2922,34 @@ void TrackManager::midiOpenIfDeaf(QLCIOPlugin *midi, quint32 line)
     // answers no for an open one (or one Windows refuses)
     if (midi == nullptr || m_midiOwnU < 0 || m_midiRawCount > 0 || m_midiPatchWorks)
         return;
+    // TRACK_APP_MIDI_R572: the plugin's own status first. Open and silent: nothing to open (asking again only
+    // leaves the plugin another connection). Not open: Windows refused it - another program has it (a browser
+    // MIDI tester, the Akai editor, a DAW): WinMM gives a MIDI input to one program at a time
+    const QString info = midi->inputInfo(line);
+    const int state = info.contains(QStringLiteral("Not Open"), Qt::CaseInsensitive) ? 0
+                    : info.contains(QStringLiteral("Open"), Qt::CaseInsensitive) ? 1 : -1;
+    if (state != m_midiOpenState)
+    {
+        m_midiOpenState = state;
+        if (m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("status:%1:%2").arg(state == 1 ? QStringLiteral("open")
+                               : state == 0 ? QStringLiteral("not-open") : QStringLiteral("unknown"), m_midiOwnName));
+        midiRefresh();
+    }
+    if (state == 1)
+        return;
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_midiOpenTries >= 12 && nowMs - m_midiOpenLastMs < 60000)
+        return;
+    m_midiOpenLastMs = nowMs;
     const bool opened = midi->openInput(line, quint32(m_midiOwnU));
     m_midiOpenTries++;
-    if (m_engine != nullptr && (opened || m_midiOpenTries == 1 || m_midiOpenTries % 60 == 0))
+    if (opened)
+    {
+        m_midiOpenState = 1;
+        midiRefresh();
+    }
+    if (m_engine != nullptr && (opened || m_midiOpenTries == 1 || m_midiOpenTries % 12 == 0))
         m_engine->noteMidi(opened ? QStringLiteral("opened:%1").arg(m_midiOwnName)
                                   : QStringLiteral("open-tries:%1:%2").arg(m_midiOwnName).arg(m_midiOpenTries));
 }
@@ -2962,6 +2993,10 @@ void TrackManager::midiRefresh()
         if (seen != m_midiSeenList && m_engine != nullptr)
             m_engine->noteMidi(QStringLiteral("seen:") + seen);
         m_midiSeenList = seen;
+        // TRACK_APP_MIDI_R572: patched, but Windows would not open it
+        if (m_midiOpenState == 0 && m_midiOwnName.isEmpty() == false && m_midiListen.isEmpty() == false)
+            m_midiListen = QStringLiteral("Could not open %1 (another program using it?)").arg(m_midiOwnName)
+                         + midiDot() + m_midiListen;
         m_midiListen = m_midiListen.isEmpty()
                      ? (midi != nullptr && ins.isEmpty() == false ? QStringLiteral("Could not open %1 (another program using it?) - ").arg(ins.join(QStringLiteral(" / "))) + seen : seen)
                      : m_midiListen + midiDot() + seen;
