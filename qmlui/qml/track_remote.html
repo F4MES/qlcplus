@@ -612,6 +612,8 @@ function drawRoom(room, roomColour) {
   const S2 = (typeof S !== 'undefined' && S && S.roomShape) || {}, asp = S2.aspect || 0.625;
   const cv = $('roomc'), w = cv.clientWidth || 340, pad = 14, rw = w - 2 * pad - 34, rh = rw / asp, h = Math.round(rh + 2 * pad);
   const dpr = window.devicePixelRatio || 1;
+  const K = Math.max(1, Math.min(2.4, w / 360));   // TRACK_APP_ROOMBIG_R572: the lamps grow with the room
+  const KT = Math.min(K, 1.7);                       // ... the numbers less
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px'; }
   const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
   const ox = (w - rw) / 2, oy = pad, px = x => ox + x * rw, py = y => oy + (1 - y) * rh;
@@ -630,8 +632,9 @@ function drawRoom(room, roomColour) {
   // TRACK_APP_ROOM_R566: a lamp's size; its address right (left by the right wall), the other side or below
   // where another lamp is in the way
   const roomSize = L => { const k = L[2];   // a strobe is long: across, or upright ("v": 82, 111)
-    return k === 'bar' ? [10, Math.max(30, Math.min(rh * 0.085, 64))] : k === 'strobe' ? (L[7] === 'v' ? [15, 26] : [26, 15]) : k === 'wash' ? [18, 18]
-      : k === 'laser' ? [14, 14] : k === 'ball' ? [14, 14] : k === 'haze' ? [12, 12] : [10, 10]; };
+    const r = k === 'bar' ? [10, Math.max(30, Math.min(rh * 0.085, 64 * K)) / K] : k === 'strobe' ? (L[7] === 'v' ? [15, 26] : [26, 15]) : k === 'wash' ? [18, 18]
+      : k === 'laser' ? [14, 14] : k === 'ball' ? [14, 14] : k === 'haze' ? [12, 12] : [10, 10];
+    return [r[0] * K, r[1] * K]; };   // TRACK_APP_ROOMBIG_R572
   const roomSide = (L, tw, th) => {
     const X = px(L[0]), Y = py(L[1]), [w, h] = roomSize(L), tries = L[0] > 0.80 ? [1, 2, 0] : [0, 1, 2];
     for (const s of tries) {
@@ -649,36 +652,36 @@ function drawRoom(room, roomColour) {
     g.globalAlpha = k === 'ball' || k === 'haze' || !on ? 1 : 0.25 + 0.75 * lit;
     g.fillStyle = k === 'haze' ? '#2A2C33' : (on ? (c || rc) : '#2C2C35'); g.strokeStyle = '#8A8A94'; g.lineWidth = 2;
     g.beginPath();
-    const bh = Math.max(30, Math.min(rh * 0.085, 64)), E = L[7];   // TRACK_APP_ROOM_R566
+    const bh = Math.max(30, Math.min(rh * 0.085, 64 * K)), E = L[7];   // TRACK_APP_ROOM_R566
     if (k === 'bar' && Array.isArray(E) && E.length) {
       g.globalAlpha = 1; g.fillStyle = '#1A1A20'; g.strokeStyle = '#4A4A54'; g.lineWidth = 1;
-      g.beginPath(); g.roundRect(X - 5, Y - bh / 2, 10, bh, 2); g.fill(); g.stroke();
+      g.beginPath(); g.roundRect(X - 5 * K, Y - bh / 2, 10 * K, bh, 2 * K); g.fill(); g.stroke();
       const eh = (bh - 4 - (E.length - 1)) / E.length;
       E.forEach((e, i) => { const ok = on && e !== '';
         g.globalAlpha = ok ? 0.35 + 0.65 * lit : 1;
         g.fillStyle = ok ? (e === '*' ? rc : (COLOUR[e] || ['#F2F2F5'])[0]) : '#2C2C35';
-        g.fillRect(X - 3, Y - bh / 2 + 2 + i * (eh + 1), 6, Math.max(1, eh)); });
+        g.fillRect(X - 3 * K, Y - bh / 2 + 2 + i * (eh + 1), 6 * K, Math.max(1, eh)); });
       g.globalAlpha = 1; g.beginPath();
     }
-    else if (k === 'bar') g.roundRect(X - 4, Y - bh / 2, 8, bh, 2);
-    else if (k === 'strobe') { const [sw, sh] = roomSize(L); g.roundRect(X - sw / 2, Y - sh / 2, sw, sh, 3); }
-    else if (k === 'haze') g.roundRect(X - 6, Y - 6, 12, 12, 3);
-    else if (k === 'laser') { g.moveTo(X, Y - 7); g.lineTo(X + 7, Y); g.lineTo(X, Y + 7); g.lineTo(X - 7, Y); g.closePath(); }
-    else g.arc(X, Y, k === 'wash' ? 9 : (k === 'ball' ? 7 : 5), 0, Math.PI * 2);
+    else if (k === 'bar') g.roundRect(X - 4 * K, Y - bh / 2, 8 * K, bh, 2 * K);
+    else if (k === 'strobe') { const [sw, sh] = roomSize(L); g.roundRect(X - sw / 2, Y - sh / 2, sw, sh, 3 * K); }
+    else if (k === 'haze') g.roundRect(X - 6 * K, Y - 6 * K, 12 * K, 12 * K, 3 * K);
+    else if (k === 'laser') { g.moveTo(X, Y - 7 * K); g.lineTo(X + 7 * K, Y); g.lineTo(X, Y + 7 * K); g.lineTo(X - 7 * K, Y); g.closePath(); }
+    else g.arc(X, Y, (k === 'wash' ? 9 : (k === 'ball' ? 7 : 5)) * K, 0, Math.PI * 2);
     if (k === 'ball') g.stroke(); else g.fill();
     g.globalAlpha = 1;
-    if (picked) { g.beginPath(); g.arc(X, Y, k === 'bar' ? bh / 2 + 6 : (k === 'strobe' ? 20 : 15), 0, Math.PI * 2); g.strokeStyle = '#FFFFFF'; g.lineWidth = 2.5; g.stroke(); }
+    if (picked) { g.beginPath(); g.arc(X, Y, k === 'bar' ? bh / 2 + 6 * K : (k === 'strobe' ? 20 : 15) * K, 0, Math.PI * 2); g.strokeStyle = '#FFFFFF'; g.lineWidth = 2.5; g.stroke(); }
     if (dmx) {
-      g.font = (picked || on ? '800 ' : '600 ') + '9px system-ui'; g.fillStyle = picked ? '#FFFFFF' : (on ? '#C8C8D0' : '#7A7A84');
+      g.font = (picked || on ? '800 ' : '600 ') + Math.round(9 * KT) + 'px system-ui'; g.fillStyle = picked ? '#FFFFFF' : (on ? '#C8C8D0' : '#7A7A84');
       const left = x > 0.80; g.textAlign = left ? 'right' : 'left';
-      const tw = g.measureText(String(dmx)).width, [side, lx] = roomSide(L, tw, 9);   // TRACK_APP_ROOM_R566
+      const tw = g.measureText(String(dmx)).width, [side, lx] = roomSide(L, tw, 9 * KT);   // TRACK_APP_ROOM_R566
       g.textAlign = 'left';
-      g.fillText(String(dmx), lx, side === 2 ? Y + roomSize(L)[1] / 2 + 10 : Y + 3);
+      g.fillText(String(dmx), lx, side === 2 ? Y + roomSize(L)[1] / 2 + 10 * KT : Y + 3 * KT);
     }
   });
   cv.onclick = (ev) => {
     const r = cv.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
-    let best = 0, bd = 26 * 26;
+    let best = 0, bd = (26 * K) * (26 * K);
     room.forEach(L => { if (!L[5]) return; const d = (px(L[0]) - mx) ** 2 + (py(L[1]) - my) ** 2; if (d < bd) { bd = d; best = L[5]; } });
     roomPick = best === roomPick ? 0 : best; drawRoom(room, roomColour); roomList(room, roomColour);
   };
