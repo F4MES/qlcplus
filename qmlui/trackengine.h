@@ -3412,6 +3412,14 @@ private:
     QSet<quint32> m_labLive;             // this build's kept looks
     QHash<quint32, QString> m_labFuncKey;
     QSet<QString> m_labOnlyGroups;       // R410_LAB_ONLY
+    // TRACK_APP_ANIROT_R572: the animation laser's looks take turns - when each was last shown (group|look ->
+    // a running number), the look of this section, and the helpers
+    QHash<QString, qint64> m_r572AniSeen;
+    QHash<QString, QString> m_r572SecLook;
+    qint64 m_r572AniSeq = 0;
+    QString r572AniLook(const TrackFuncInfo &info) const;
+    void r572AniRotate(const QString &group, QList<TrackFuncInfo *> &ok) const;
+    void r572AniSeen(const QString &group, quint32 fid);
     QTimer m_testTimer;                    // SELF TEST: one colour scene every 2 s
     QList<quint32> m_testSteps;            // the scenes it walks through
     QStringList m_testGroups;              // ... and the group each belongs to

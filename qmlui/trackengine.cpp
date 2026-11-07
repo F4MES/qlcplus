@@ -9135,6 +9135,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     Q_UNUSED(division)
     QList<TrackFuncInfo *> all = candidates(ENGINE_ROLE_MOTION, group);
     QList<TrackFuncInfo *> ok;
+    QList<TrackFuncInfo *> labNear;      // TRACK_APP_ANIROT_R572: his, but outside its ENERGY window now
     // runde 292: a pattern device follows the ceiling too, down to its own
     // calmest patterns - it was exempt, and the top-star doubling below then
     // drew its wildest patterns at 35 % twice as often as at 100 %
@@ -9159,8 +9160,9 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         if (r552SkipMotion(group, *info))     // TRACK_APP_BARS_R552: ON still / CHASE's menu / his held aim
             continue;
         // R410_LAB: a kept lab look runs in the ENERGY window it was given
-        if (info->lab && (m_faderNow + 1e-6 < info->labMin || m_faderNow - 1e-6 > info->labMax))
-            continue;
+        const bool r572LabOut = info->lab && (m_faderNow + 1e-6 < info->labMin || m_faderNow - 1e-6 > info->labMax);
+        if (r572LabOut && (patternGroup == false || m_labOnlyGroups.contains(group) == false))
+            continue;                    // TRACK_APP_ANIROT_R572: with LAB ONLY, kept aside below
         // R398_DOWN_NOZOOMPROG: ... and under STRAIGHT DOWN the beam is the
         // hold's - no programme that zooms by itself (runde 220's chasers)
         if (aimHeld && m_positionMode == QStringLiteral("down")
@@ -9245,7 +9247,12 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         // the right colour first where there is one.
         if (info->colour.isEmpty() || info->colour == colour
             || m_groups.value(group).patternDevice)
-            ok.append(info);
+        {
+            if (r572LabOut)
+                labNear.append(info);    // TRACK_APP_ANIROT_R572
+            else
+                ok.append(info);
+        }
     }
     // R410_LAB_ONLY: six kept looks or more, and the animation laser plays his
     // own from the lab - the busking scenes it borrowed step aside. Only when
@@ -9260,6 +9267,20 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         }
         if (labOwn.isEmpty() == false)
             ok = labOwn;
+        else if (labNear.isEmpty() == false)
+        {
+            // TRACK_APP_ANIROT_R572: none of his kept looks is in its ENERGY window at this slider - the
+            // nearest of HIS (Tobias: "den skal jo vaelge mellem dem vi har valgt i lab"), not a borrowed scene
+            auto gap = [this](const TrackFuncInfo *i) {
+                return qMax(0.0, qMax(i->labMin - m_faderNow, m_faderNow - i->labMax)); };
+            qreal best = 2.0;
+            foreach (TrackFuncInfo *info, labNear)
+                best = qMin(best, gap(info));
+            ok.clear();
+            foreach (TrackFuncInfo *info, labNear)
+                if (gap(info) <= best + 0.051)
+                    ok.append(info);
+        }
     }
     // a pattern device is never in the cast and dark (review 294): when the
     // ceiling left it nothing that passes the other filters, it may show
@@ -9415,6 +9436,20 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     {
         if (info->tier == tier)
             tagged.append(info);
+    }
+    // TRACK_APP_ANIROT_R572: a look he kept for ANY section belongs in this one too - one look tagged DROP must
+    // not take every drop from the looks he left open (a break keeps its calm pool, R410_LAB / runde 339)
+    if (patternGroup && tier >= 1)
+    {
+        bool labHere = false;
+        foreach (TrackFuncInfo *info, tagged)
+            labHere = labHere || info->lab;
+        if (labHere)
+        {
+            foreach (TrackFuncInfo *info, ok)
+                if (info->lab && info->tier < 0 && tagged.contains(info) == false)
+                    tagged.append(info);
+        }
     }
     // An ANIMATION LASER in a break had one pattern to play (runde 252,
     // BACKLOG 92): only a name with a break word ("vifte") is tier 0, so
@@ -9672,6 +9707,8 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     // The top star goes in TWICE instead: the same idiom as the tier pool
     // above, and the same effect where the pools are healthy (219 hot drop
     // programmes against 42 calm ones is still nine drops in ten).
+    if (patternGroup)
+        r572AniRotate(group, ok);        // TRACK_APP_ANIROT_R572: his looks take turns
     int top = 0;
     foreach (TrackFuncInfo *info, ok)
         top = qMax(top, qMax(1, info->stars));
@@ -12028,6 +12065,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (buildGoesOn == false)
         {
             m_sectionMotion.clear();
+            m_r572SecLook.clear();       // TRACK_APP_ANIROT_R572: a new section, a new turn
             m_lastFamily.clear();
             for (QMap<QString, quint32>::const_iterator it = m_active.constBegin();
                  it != m_active.constEnd(); ++it)
@@ -16220,6 +16258,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // A cut when the colour the group wore goes; a programme swap in the
         // same colour still crossfades.
         const quint32 motWas = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        if (g.patternDevice)
+            r572AniSeen(key, mf);        // TRACK_APP_ANIROT_R572
         QString wearsNow = colour;
         if (mf != Function::invalidId() && m_funcs.value(mf).coversColour
             && m_funcs.value(mf).colour.isEmpty() == false)
@@ -33454,6 +33494,79 @@ QByteArray TrackEngine::programmeOutputKey(Function *function) const
         }
     }
     return QCryptographicHash::hash(data, QCryptographicHash::Sha256);
+}
+
+/* TRACK_APP_ANIROT_R572 (Tobias 11-07: "Animationslaseren vaelger det samme program hver gang den er paa lige pt,
+ * den skal jo vaelge mellem dem vi har valgt i lab"). The animation laser is on in a drop and off in the break and
+ * build between, and every memory motionFor() had of what it showed was the SECTION's: m_lastFamily is read from
+ * the slots of the section that just ended (the laser was dark in it), m_dropLastFamilies only within one track,
+ * and the cooldown counts each colour of a look as its own programme. So the next drop started from nothing, and
+ * one look could come back drop after drop in the room's colour of the day. Now each look he kept (one LAB key -
+ * every colour of it is the same look) remembers when it was last shown, across sections and tracks, and the draw
+ * is made among the half of the legal looks shown longest ago: never the one just shown while another is legal,
+ * and round through all of them. Inside one section the look stays (a colour change re-picks the same look in the
+ * new colour). Soft, like the family rules: the legal pool is never emptied. */
+QString TrackEngine::r572AniLook(const TrackFuncInfo &info) const
+{
+    if (info.lab)
+    {
+        const QString key = m_labFuncKey.value(info.id);
+        if (key.isEmpty() == false)
+            return QStringLiteral("lab:") + key;
+    }
+    if (info.family.isEmpty() == false)
+        return QStringLiteral("fam:") + info.family;
+    return QStringLiteral("id:") + QString::number(info.id);
+}
+
+void TrackEngine::r572AniRotate(const QString &group, QList<TrackFuncInfo *> &ok) const
+{
+    if (ok.count() < 2)
+        return;
+    const QString pre = group + QLatin1Char('|');
+    // the look of this section, in the colour asked now
+    const QString held = m_r572SecLook.value(group);
+    if (held.isEmpty() == false)
+    {
+        QList<TrackFuncInfo *> same;
+        foreach (TrackFuncInfo *info, ok)
+            if (r572AniLook(*info) == held)
+                same.append(info);
+        if (same.isEmpty() == false)
+        {
+            ok = same;
+            return;
+        }
+    }
+    QHash<QString, qint64> when;
+    foreach (TrackFuncInfo *info, ok)
+    {
+        const QString look = r572AniLook(*info);
+        if (when.contains(look) == false)
+            when.insert(look, m_r572AniSeen.value(pre + look, -1));
+    }
+    if (when.count() < 2)
+        return;
+    QList<qint64> order = when.values();
+    std::sort(order.begin(), order.end());
+    const qint64 cut = order.at((int(order.count()) + 1) / 2 - 1);     // the older half (2 -> the older one)
+    QList<TrackFuncInfo *> older;
+    foreach (TrackFuncInfo *info, ok)
+        if (when.value(r572AniLook(*info)) <= cut)
+            older.append(info);
+    if (older.isEmpty() == false)
+        ok = older;
+}
+
+void TrackEngine::r572AniSeen(const QString &group, quint32 fid)
+{
+    if (fid == Function::invalidId() || m_funcs.contains(fid) == false)
+        return;
+    const QString look = r572AniLook(m_funcs.value(fid));
+    if (m_r572SecLook.value(group) != look)
+        logSignal(QStringLiteral("sig:ani-look:") + look);
+    m_r572SecLook.insert(group, look);
+    m_r572AniSeen.insert(group + QLatin1Char('|') + look, ++m_r572AniSeq);
 }
 
 quint32 TrackEngine::pickMotionWeighted(const QList<TrackFuncInfo *> &pool, int cursor) const
