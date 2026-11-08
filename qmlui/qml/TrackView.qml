@@ -66,6 +66,22 @@ Rectangle
     property bool savedSaveFeedback: false
     property bool savedFavoritesOpen: false
     property bool savedRecentOpen: false
+    // TRACK_APP_LIVEFREE_R576: the LIVE card's left edge (the popups' closers stop there) and its tiles' presses
+    function liveLeftNow() { return liveCard ? Math.max(0, liveCard.mapToItem(trackViewRoot, 0, 0).x - trackViewRoot.g / 2) : width }
+    function liveTouched() { aniListOpen = false; savedRecentOpen = false; bltGuideOpen = false }
+    function hookLive(item)
+    {
+        if (!item || !item.children)
+            return
+        for (var i = 0; i < item.children.length; i++)
+        {
+            var c = item.children[i]
+            if (c.holdEnabled !== undefined && c.pressedAt !== undefined)
+                c.pressedAt.connect(trackViewRoot.liveTouched)
+            else
+                hookLive(c)
+        }
+    }
     // TRACK_APP_FIX_R575 (review): an open LASER list / RECENT SAVED ate the next press on BLACKOUT or FLASH and
     // stayed open all night - they close by themselves after 12 s, the list when its page goes
     Timer { interval: 12000; running: trackViewRoot.aniListOpen; onTriggered: trackViewRoot.aniListOpen = false }
@@ -1411,7 +1427,7 @@ Rectangle
                         text: (trackManager && trackManager.playing ? qsTr("PLAYING") : qsTr("PAUSED"))
                               + "  ·  " + (trackManager && trackManager.engineTempo !== undefined ? trackManager.engineTempo.toFixed(1) : "0") + " BPM"
                               + (trackManager && trackManager.tempoSource ? "  ·  " + trackManager.tempoSource : "")
-                              + "  ·  " + (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? (trackAppCtl.deckText !== "" ? trackAppCtl.deckText : qsTr("CDJs ok")) : qsTr("no CDJs"))
+                              + "  ·  " + (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? (trackAppCtl.deckText !== "" ? trackAppCtl.deckText : qsTr("CDJs ok")) : (trackViewRoot.bltFeeds ? qsTr("BLT feeds TRACK") : qsTr("no CDJs")))
                                            : (trackManager && trackManager.connected ? qsTr("BLT ok") : qsTr("no BLT")))
                               + (trackViewRoot.testOn ? "  ·  " + qsTr("TEST") : "")   // R450_TEST_TRACK
                         color: trackManager && trackManager.playing
@@ -2338,7 +2354,9 @@ Rectangle
                                 objectName: "emptyTitle"
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? qsTr("Waiting for track data")
-                                                                : emptyBox.linked ? qsTr("Looking for the CDJs") : qsTr("Starting TRACK's CDJ reader"))
+                                                                : emptyBox.linked ? (trackViewRoot.bltFeeds ? qsTr("Beat Link Trigger feeds TRACK – waiting for a track")
+                                                                                                            : qsTr("Looking for the CDJs"))
+                                                                : qsTr("Starting TRACK's CDJ reader"))
                                     : emptyBox.gone ? qsTr("Beat Link Trigger stopped")   // R518_BLT_GONE_TITLE
                                     : emptyBox.running ? qsTr("Waiting for track data")
                                     : emptyBox.known ? qsTr("Beat Link Trigger is not running") : qsTr("Beat Link Trigger is not connected")
@@ -2373,7 +2391,7 @@ Rectangle
                         {
                             spacing: Math.round(8 * trackViewRoot.ks)
                             Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Math.round(10 * trackViewRoot.ks); height: width; radius: width / 2
-                                        color: (trackViewRoot.trackApp ? trackViewRoot.cdjCount > 0 : emptyBox.running) ? trackViewRoot.cGreen : trackViewRoot.cGold }
+                                        color: (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 || trackViewRoot.bltFeeds) : emptyBox.running) ? trackViewRoot.cGreen : trackViewRoot.cGold }
                             Text
                             {
                                 objectName: "emptySub"
@@ -2381,7 +2399,8 @@ Rectangle
                                 text: trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0
                                         ? (trackViewRoot.cdjCount === 1 ? qsTr("1 player found - play a track on a CDJ")
                                                                         : qsTr("%1 players found - play a track on a CDJ").arg(trackViewRoot.cdjCount))
-                                        : emptyBox.linked ? qsTr("TRACK reads the CDJs by itself - is the network cable from the DJ booth in?")
+                                        : emptyBox.linked ? (trackViewRoot.bltFeeds ? qsTr("Play a track on a CDJ")
+                                                                                     : qsTr("TRACK reads the CDJs by itself - is the network cable from the DJ booth in?"))
                                                           : qsTr("It takes a few seconds"))
                                     : emptyBox.linked ? qsTr("Beat Link Trigger is connected - play a track on a CDJ")
                                     : emptyBox.running ? qsTr("Beat Link Trigger is running - play a track on a CDJ")
@@ -3964,6 +3983,7 @@ Rectangle
             {
                 id: liveCard
                 title: "LIVE"
+                Component.onCompleted: Qt.callLater(trackViewRoot.hookLive, liveCard)   // TRACK_APP_LIVEFREE_R576
                 x: parent.width - trackViewRoot.liveW
                 y: 0
                 width: trackViewRoot.liveW
@@ -4429,12 +4449,19 @@ Rectangle
     // now, for this section; without: the next section) and closes it; a press anywhere else closes it
     Item
     {
+        id: aniListCloser
         objectName: "aniListCloser"
         anchors.fill: parent
         z: 59
         visible: aniList.visible
-        Rectangle { anchors.fill: parent; color: "#000000"; opacity: 0.45 }
-        TouchInput { anchors.fill: parent; onPressedAt: (x, y) => trackViewRoot.aniListOpen = false }
+        property real liveLeft: width                      // TRACK_APP_LIVEFREE_R576: LIVE stays free
+        onVisibleChanged: if (visible) liveLeft = trackViewRoot.liveLeftNow()
+        Rectangle { x: 0; y: 0; width: aniListCloser.liveLeft; height: parent.height; color: "#000000"; opacity: 0.45 }
+        Item
+        {
+            x: 0; y: 0; width: aniListCloser.liveLeft; height: parent.height
+            TouchInput { anchors.fill: parent; onPressedAt: (x, y) => trackViewRoot.aniListOpen = false }
+        }
     }
     Rectangle
     {
@@ -4501,11 +4528,18 @@ Rectangle
     // R452_EMPTY: the (i) guide - a press anywhere else closes it (and is taken)
     Item
     {
+        id: bltGuideCloser
         objectName: "bltGuideCloser"
         anchors.fill: parent
         z: 49
         visible: bltGuide.visible
-        TouchInput { onPressedAt: (x, y) => trackViewRoot.bltGuideOpen = false }
+        property real liveLeft: width                      // TRACK_APP_LIVEFREE_R576: LIVE stays free
+        onVisibleChanged: if (visible) liveLeft = trackViewRoot.liveLeftNow()
+        Item
+        {
+            x: 0; y: 0; width: bltGuideCloser.liveLeft; height: parent.height
+            TouchInput { onPressedAt: (x, y) => trackViewRoot.bltGuideOpen = false }
+        }
     }
     Rectangle
     {
@@ -5578,8 +5612,12 @@ Rectangle
     // SAVED_LOOKS: approved UI.
     MouseArea
     {
+        id: recentSavedDismiss
         objectName: "recentSavedDismiss"
-        anchors.fill: parent; z: 700
+        x: 0; y: 0; height: parent.height; z: 700
+        width: liveLeft                                    // TRACK_APP_LIVEFREE_R576: LIVE stays free
+        property real liveLeft: parent.width
+        onVisibleChanged: if (visible) liveLeft = trackViewRoot.liveLeftNow()
         visible: trackViewRoot.savedRecentOpen && !trackViewRoot.setupOpen && !trackViewRoot.helpOpen
         onClicked: trackViewRoot.savedRecentOpen = false
     }

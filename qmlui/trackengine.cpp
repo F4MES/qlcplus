@@ -15240,9 +15240,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // TRACK_APP_MUSIC_R575 (Tobias 11-08: "lidt mere zoomet helt ind (smalle) i de hoeje energier en gang
                 // i mellem"): from 70 % a drop's draw is the sharpest beam now and then - a sixth at 85 %, a third
                 // at 100 % (the landing's wide bar and the breaks as before)
-                if (isDrop && want > 0 && fader > 0.70
-                    && rng->bounded(1000) < int(350.0 * qBound(0.0, (fader - 0.70) / 0.30, 1.0)))
-                    want = 0;
+                // TRACK_APP_ZOOM_R576 (Tobias 11-08: "jo hoejere energi jo hoejere chance for helt smal straale"):
+                // a curve from 50 %, steeper the higher - 2 % at 60, 8 % at 70, 18 % at 80, 32 % at 90, 50 % at 100
+                {
+                    const qreal zx = qBound(0.0, (fader - 0.50) / 0.50, 1.0);
+                    if (isDrop && want > 0 && zx > 0.0 && rng->bounded(1000) < int(500.0 * zx * zx))
+                        want = 0;
+                }
                 m_zoom.insert(key, want);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
                 total += weight;
