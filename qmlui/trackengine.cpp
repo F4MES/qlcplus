@@ -10084,7 +10084,7 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         if (lasers == false && fader < 0.03 && info->type != int(Function::SceneType))
             continue;
         // TRACK_APP_HEADS80B_R572: from 80 % (groove, drop) the figure moves them, not a small glide programme
-        if (lasers == false && fader >= 0.80 - 1e-9 && tier >= 1 && m_buildLen <= 0
+        if (lasers == false && fader >= 0.85 - 1e-9 && tier >= 1 && m_buildLen <= 0   // TRACK_APP_HEADS85_R572
             && info->type != int(Function::SceneType)
             && info->name.contains(QStringLiteral("ballyhoo"), Qt::CaseInsensitive) == false)
             continue;
@@ -19185,7 +19185,7 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         pace /= m_mixMotionScale;
         pace *= r493GenrePace();         // R493_A2_G_PACE: melodic/minimal a little slower (heads only)
         // TRACK_APP_HEADS80_R572: from 80 % the figure grows and quickens with the slider (not a break's)
-        const qreal hot = (sw.tier >= 1 && sw.drawnF >= 0.0) ? qBound(0.0, (sw.drawnF - 0.80) / 0.20, 1.0) : 0.0;
+        const qreal hot = (sw.tier >= 1 && sw.drawnF >= 0.0) ? qBound(0.0, (sw.drawnF - 0.85) / 0.15, 1.0) : 0.0;   // TRACK_APP_HEADS85_R572
         const int hotTilt = 28 + int(qRound(16.0 * hot));   // TRACK_APP_HEADS80B_R572: 44 at 100 %, pan/tilt +50 %
         width = qBound(6, int(qRound(sw.width * grow * (1.0 + 0.50 * hot))), 127);
         height = qBound(4, int(qRound(sw.height * grow * (1.0 + 0.50 * hot))), hotTilt);
