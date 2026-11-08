@@ -18474,7 +18474,22 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
         // level squared (runde 174).
         const TrackFuncInfo &mfi = m_funcs.value(fid);
         if (canOwnDimmers(mfi, slotGroup(slot) == m_compositionBase) == false)   // see motionOwns (runde 231)
+        {
+            // TRACK_APP_MASTER_R573 (Tobias 11-08, 01:17, live: "Lige nu kan jeg ikke styre strobe-lamperne ...
+            // ALLE programmer skal styres af faderne for grupperne/master fader. Kun i de foerste drops takter
+            // kan den overstyre"): a programme that writes the group's master dimmer ITSELF and does not own the
+            // dimmers ran at full - HTP over the parts' scaled dimmer, so MASTER and the group's fader reached
+            // nothing (r572MasterFree's prog:). It gets MASTER and the trim now. Free only where the parts are
+            // free: the drop's landing (the strobes, his DROP HIT's groups) and his own hand (FLASH, a pad).
+            // The animation lasers' dimmer is a switch (setPart squares it) - left as it was.
+            const QString mg = slotGroup(slot);
+            const TrackGroup &g = m_groups.value(mg);
+            const bool landFree = (g.strobes || (hitBurstNow(m_curBeat) && hitLights(mg))) && landBurstNow();
+            if (mfi.dimmer && mg.isEmpty() == false && g.patternDevice == false && landFree == false
+                && heldFull(mg) == false)
+                return masterOut() * trimOf(mg);
             return 1.0;
+        }
         const QString group = slotGroup(slot);
         return masterOut() * (group.isEmpty() ? 1.0 : trimOf(group));   // R440_COLOUR_LEVEL
     }
