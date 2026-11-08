@@ -10083,6 +10083,11 @@ quint32 TrackEngine::positionFunction(const QString &group, int cursor, int tier
         // (runde 255): a chaser keeps its own pace where the sweep stands still
         if (lasers == false && fader < 0.03 && info->type != int(Function::SceneType))
             continue;
+        // TRACK_APP_HEADS80B_R572: from 80 % (groove, drop) the figure moves them, not a small glide programme
+        if (lasers == false && fader >= 0.80 - 1e-9 && tier >= 1 && m_buildLen <= 0
+            && info->type != int(Function::SceneType)
+            && info->name.contains(QStringLiteral("ballyhoo"), Qt::CaseInsensitive) == false)
+            continue;
         safe.append(info);
     }
     if (safe.isEmpty())
@@ -19181,9 +19186,9 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         pace *= r493GenrePace();         // R493_A2_G_PACE: melodic/minimal a little slower (heads only)
         // TRACK_APP_HEADS80_R572: from 80 % the figure grows and quickens with the slider (not a break's)
         const qreal hot = (sw.tier >= 1 && sw.drawnF >= 0.0) ? qBound(0.0, (sw.drawnF - 0.80) / 0.20, 1.0) : 0.0;
-        const int hotTilt = 28 + int(qRound(12.0 * hot));
-        width = qBound(6, int(qRound(sw.width * grow * (1.0 + 0.30 * hot))), 127);
-        height = qBound(4, int(qRound(sw.height * grow * (1.0 + 0.35 * hot))), hotTilt);
+        const int hotTilt = 28 + int(qRound(16.0 * hot));   // TRACK_APP_HEADS80B_R572: 44 at 100 %, pan/tilt +50 %
+        width = qBound(6, int(qRound(sw.width * grow * (1.0 + 0.50 * hot))), 127);
+        height = qBound(4, int(qRound(sw.height * grow * (1.0 + 0.50 * hot))), hotTilt);
         // R497_A4_HOOK_SHAPE (runde 497, A4): in a kickless break the wash figure's size and centre
         // follow the melody (r497_melodyheads.inc.cpp); the lift counts in the reach below and can
         // never loosen it. Nothing of it outside such a break: the values pass through as they are
@@ -19226,9 +19231,17 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // it (runde 271: see TrackSweep::minBeats)
         // TRACK_APP_HEADS80_R572: from 80 % up to a quarter quicker, and the drop character's floor (heavy 16,
         // wide/hard/tight/nervous 8 beats) a third lower at 100 %
-        const qreal quick = 1.0 + 0.25 * hot;
-        const int hotFloor = qMax(3, int(qRound(floorBeats * (1.0 - 0.35 * hot))));
+        const qreal quick = 1.0 + 0.15 * hot;   // TRACK_APP_HEADS80B_R572: more travel, not more hurry
+        const int hotFloor = qMax(3, int(qRound(floorBeats * (1.0 - 0.25 * hot))));
         beats = qMax(hotFloor, qMax(3, qMax(int(qRound(sw.beats * pace / quick)), int(qRound(sw.beats * 0.75 / quick)))));
+        if (hot > 0.0)
+        {
+            // the path of one round, roughly: four sides of the box, a Lissajous' loops more
+            const qreal loops = sw.shape == int(EFX::Lissajous) ? qMax(1, qMax(sw.fx, sw.fy)) : 1;
+            const qreal path = 4.0 * qreal(width + height) * loops;
+            const qreal beatS = 60.0 / qMax(60.0, bpm);
+            beats = qMax(beats, int(std::ceil(path / 130.0 / beatS)));
+        }
     }
     // Not for the lasers. drawSweep() fixes their pace - "nothing here is ever
     // allowed to hurry" - and then this halved it whenever the DJ hit 2x. The
