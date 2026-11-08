@@ -738,8 +738,7 @@ void TrackEngine::slotPulseTimer()
             if (m_flash == false && m_padFlash.contains(key) == false && m_landSixteenths && blink16Now() && lg.strobes && m_beatMs > 0.0)   // R362: or the mini landing
             {
                 any = true;
-                const qreal q = std::fmod(qMax(0.0, qreal(now - m_beatStartMs)) / m_beatMs * 4.0, 1.0);
-                const qreal gate = q < 0.40 ? 1.0 : 0.0;
+                const qreal gate = r575Land16Gate(now);   // TRACK_APP_MUSIC_R575: on the music's sixteenths
                 for (int i = 0; i < lg.parts.count(); i++)
                 {
                     const QString slot = partSlot(key, i);
@@ -5552,7 +5551,9 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         // never straight on from the last burst (the harness at 97-100 %: the landing and three bursts
         // back to back, 12-16 beats of strobe in one; "kun i bursts", runde 219)
         // R493_A2_G_STROBE1: the genre leans the "and again" roll (x0.70-1.20, not at 100 %) - affordable() still caps it
-        else if (isDrop && bar >= 0 && w > 0.0 && beatInBar == 0 && (roll(r493GenreStrobe(top) * (0.05 + 0.70 * w2) * trackDropActivity(m_dropFlow, bar)) || roll(0.25 * top * trackDropActivity(m_dropFlow, bar)))
+        else if (isDrop && bar >= 0 && w > 0.0 && beatInBar == 0
+                 && (roll(qMin(0.90, r575StrobeW(beat, bar) * r493GenreStrobe(top) * (0.05 + 0.70 * w2) * trackDropActivity(m_dropFlow, bar)))
+                     || roll(qMin(0.90, r575StrobeW(beat, bar) * 0.25 * top * trackDropActivity(m_dropFlow, bar))))   // TRACK_APP_MUSIC_R575
                  && dropPhase && beat - m_strobeUntil > 1 && affordable(1 + int(qRound(3.0 * w2))))
         {
             want = drawn;                                // and again, more of it
@@ -13805,8 +13806,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     const bool musicTurnNow = beatInBar == 0 && m_musicTurnBeat >= 0 && beat >= m_musicTurnBeat && beat - m_musicTurnBeat <= 3;
     bool redraw = hold == false
                && (sectionChanged || compositionChanged || m_moves.isEmpty() || faderJump || settleNow
-                   || (bar > 0 && bar % 8 == 0 && beatInBar == 0 && rng->bounded(3) > 0
-                       && (isBuild && m_buildDrawn) == false));
+                   || (bar > 0 && bar % 8 == 0 && beatInBar == 0
+                       && rng->bounded(100) < (r575PhraseTurn(beat) < 0 ? 67                    // TRACK_APP_MUSIC_R575: no curves -
+                                               : (musicTurnNow || r575PhraseTurn(beat) >= 1) ? 90 : 30)   // as before; else by the music
+                       && (isBuild && m_buildDrawn) == false)
+                   // ... and a 4-bar line where the music clearly changes, not straight after a redraw
+                   || (bar > 0 && bar % 8 == 4 && beatInBar == 0 && isBuild == false && r575PhraseTurn(beat) >= 2
+                       && beat - m_r575RedrawBeat >= 16 && rng->bounded(100) < 70));
     // R479_LOOP_ZOOM (night review 10-17): inside a DJ loop the beat numbers
     // come round again, and the 8-bar dice above was thrown on every pass
     // over its bar line. 00:54:15-31, a one-beat loop on bar 16 of a drop
@@ -13891,6 +13897,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     {
         m_movesEnergy = energy;
         m_movesFader = fader;
+        m_r575RedrawBeat = beat;         // TRACK_APP_MUSIC_R575
     }
     else if (m_hitAmokFrom >= 0 && hold == false)
     {
@@ -15230,6 +15237,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 else if (isDrop && want > 0
                          && rng->bounded(1000) < int(1000.0 * qBound(0.0, (fader - 0.50) / 0.50, 1.0)))
                     want -= 2;
+                // TRACK_APP_MUSIC_R575 (Tobias 11-08: "lidt mere zoomet helt ind (smalle) i de hoeje energier en gang
+                // i mellem"): from 70 % a drop's draw is the sharpest beam now and then - a sixth at 85 %, a third
+                // at 100 % (the landing's wide bar and the breaks as before)
+                if (isDrop && want > 0 && fader > 0.70
+                    && rng->bounded(1000) < int(350.0 * qBound(0.0, (fader - 0.70) / 0.30, 1.0)))
+                    want = 0;
                 m_zoom.insert(key, want);
                 int weight = samples == 1 ? 2 : autoLookWeight(autoLookKeys(castSet, energy), key);
                 total += weight;
@@ -18692,8 +18705,7 @@ qreal TrackEngine::pulseFactor(const QString &group) const
     // beat the deck plays. MASTER and the trim are off for the landing (R357).
     if (m_landSixteenths && m_beatMs > 0.0 && blink16Now() && m_groups.value(group).strobes)   // R362: or the mini landing (under MASTER - landFree is the landing's alone)
     {
-        const qreal q = std::fmod(qMax(0.0, qreal(now - m_beatStartMs)) / m_beatMs * 4.0, 1.0);
-        return q < 0.40 ? 1.0 : 0.0;    // full on every sixteenth: no kick's decay under it
+        return r575Land16Gate(now);     // full on the sixteenths the music hits (TRACK_APP_MUSIC_R575): no kick's decay
     }
 
     // the pulse: full on the beat, down to (1 - depth) a quarter beat later
@@ -27532,6 +27544,55 @@ bool TrackEngine::hitLights(const QString &key) const
         return false;
     const TrackGroup &g = m_groups.value(key);
     return g.lasers == false && g.patternDevice == false && g.generatable();
+}
+
+int TrackEngine::r575PhraseTurn(int beat) const
+{
+    // TRACK_APP_MUSIC_R575: the 8 beats from this line against the 8 before - the highs, the mids and (a little
+    // less) the kick. Measured on the harness' tracks at the 8-bar lines inside sections: 0.12 or more on about
+    // half of them (the 2-in-3 dice redrew two thirds), 0.25 on a quarter
+    const int n = int(m_audKick.count());
+    if (n == 0 || n != int(m_audLevel.count()) || int(m_audHigh.count()) != n || beat < 9 || beat + 7 > n)
+        return -1;
+    const bool mids = int(m_audMid.count()) == n;
+    qreal k0 = 0, k1 = 0, h0 = 0, h1 = 0, m0 = 0, m1 = 0;
+    for (int i = 0; i < 8; i++)
+    {
+        k0 += m_audKick.at(beat - 9 + i); k1 += m_audKick.at(beat - 1 + i);
+        h0 += m_audHigh.at(beat - 9 + i); h1 += m_audHigh.at(beat - 1 + i);
+        if (mids)
+        {
+            m0 += m_audMid.at(beat - 9 + i); m1 += m_audMid.at(beat - 1 + i);
+        }
+    }
+    const qreal d = qMax(qAbs(h1 - h0), qMax(qAbs(m1 - m0), 0.6 * qAbs(k1 - k0))) / (8.0 * 255.0);
+    return d >= 0.25 ? 2 : (d >= 0.12 ? 1 : 0);
+}
+
+qreal TrackEngine::r575Land16Gate(qint64 now) const
+{
+    // TRACK_APP_MUSIC_R575 (review proposal 5, his rules: blinks follow the music, the machine gun is 100 %): the
+    // landing's sixteenth lit for its first 40 % - on the beat (the kick) always, on the others where the music
+    // hits (R358's onset lines, r501OnsetAt); every one at 100 %, in his DROP HIT burst and without onsets
+    if (m_beatMs <= 0.0)
+        return 0.0;
+    const qreal pos = qMax(0.0, qreal(now - m_beatStartMs)) / m_beatMs * 4.0;
+    if (std::fmod(pos, 1.0) >= 0.40)
+        return 0.0;
+    const int q16 = qBound(0, int(pos), 3);
+    if (q16 == 0 || m_faderNow >= 1.0 - 1e-9 || hitBurstNow(m_curBeat))
+        return 1.0;
+    return r501OnsetAt(m_curBeat, q16) == 0 ? 0.0 : 1.0;
+}
+
+qreal TrackEngine::r575StrobeW(int beat, int dropBar) const
+{
+    // TRACK_APP_MUSIC_R575 (review proposal 5): the "and again" roll leans to where the track hits - an 8-bar
+    // line twice, a 4-bar line 1.4, the other bars 0.6 (0.875 on average: about the same strobe, placed), and the
+    // kick back after two beats or more without it three times (affordable() still caps the budget)
+    if (r501KickAt(beat, false) == 1 && r501KickAt(beat - 1, false) == 0 && r501KickAt(beat - 2, false) == 0)
+        return 3.0;
+    return dropBar % 8 == 0 ? 2.0 : (dropBar % 4 == 0 ? 1.4 : 0.6);
 }
 
 bool TrackEngine::hitBurstNow(int beat) const

@@ -58,6 +58,7 @@ class TrackApp : public QObject
     Q_PROPERTY(bool active READ active CONSTANT)
     Q_PROPERTY(QString build READ build CONSTANT)
     Q_PROPERTY(int cdjCount READ cdjCount NOTIFY cdjCountChanged)
+    Q_PROPERTY(bool bltFeeds READ bltFeeds NOTIFY cdjCountChanged)   // TRACK_APP_BLTFEEDS_R575
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateChanged)
     Q_PROPERTY(QString updateLatest READ updateLatest NOTIFY updateChanged)
     Q_PROPERTY(int updateStep READ updateStep NOTIFY updateChanged)
@@ -96,6 +97,7 @@ public:
     bool active() const;
     QString build() const;
     int cdjCount() const;
+    bool bltFeeds() const;
     bool updateAvailable() const;
     QString updateLatest() const;
     /** As TrackManager's (R474): 0, 1 started, 2 did not start, 3 SHOW OFF first */

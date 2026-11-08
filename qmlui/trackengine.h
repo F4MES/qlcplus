@@ -2653,6 +2653,12 @@ public:
     qreal m_faderReal = 0.0;             // the slider as it reads, under the hit's amok
     bool hitLights(const QString &key) const;
     bool hitBurstNow(int beat) const;
+    // TRACK_APP_MUSIC_R575: the phrase line's redraw by the music (-1 no curves, 0 the same, 1 changed, 2 a big
+    // change), the landing's sixteenths on the music's hits, and where in the drop a burst belongs
+    int r575PhraseTurn(int beat) const;
+    qreal r575Land16Gate(qint64 now) const;
+    qreal r575StrobeW(int beat, int dropBar) const;
+    int m_r575RedrawBeat = -1000;
     void hitWhite(bool on);
     void hitBurst(int from, int beat);
     qreal hitAmok(int beat, bool lands, bool isDrop);

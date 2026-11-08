@@ -635,6 +635,8 @@ private:
     bool m_midiFromRaw = false;          // ... this midiInput() is the plugin's own (not the patch's)
     bool m_midiPatchWorks = false;       // ... the patch delivered a value: the plugin's are not needed
     qint64 m_midiRawCount = 0;           // ... values the plugin heard
+    qint64 m_midiRescanMs = -1;          // TRACK_APP_MIDIFIX_R575: the last device rescan (no controller listed)
+    int m_midiRescans = 0;
     int m_midiOpenTries = 0;             // TRACK_APP_MIDI_R571F: asked the plugin to open the controller
     int m_midiOpenState = -1;            // TRACK_APP_MIDI_R572: the plugin's own word - 1 open, 0 not open, -1 unknown
     qint64 m_midiOpenLastMs = 0;         // ... and when TRACK last asked it to open

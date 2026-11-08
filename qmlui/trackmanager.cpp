@@ -2828,6 +2828,39 @@ void TrackManager::midiAutoPatch()
         }, Qt::QueuedConnection);
     }
     const QStringList ins = midi->inputs();
+    // TRACK_APP_MIDIFIX_R575 (review): the plugin lists the devices it found at the start - a MIDImix that was not
+    // there yet (cold boot, a hub waking, a cable in later) was never seen. With no controller listed (nothing but
+    // virtual ports), the plugin looks again: every 30 s ten times, then every 5 min. Never while a controller is
+    // listed - his working MIDImix is not touched. The devices it drops close themselves (MIDICLOSE_R575), and
+    // QLC+ reconnects its patches on the plugin's configurationChanged
+    {
+        bool controller = false;
+        foreach (const QString &n0, ins)
+        {
+            const QString l = n0.toLower();
+            if (l.contains(QStringLiteral("loopbe")) == false && l.contains(QStringLiteral("loopmidi")) == false
+                && l.contains(QStringLiteral("virtual")) == false && l.contains(QStringLiteral("microsoft")) == false
+                && l.contains(QStringLiteral("rtpmidi")) == false && l.contains(QStringLiteral("network")) == false)
+                controller = true;
+        }
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (controller == false && m_midiRescanMs < 0)
+            m_midiRescanMs = nowMs;      // the start's own list is fresh: the first look again in 30 s
+        else if (controller == false && nowMs - m_midiRescanMs >= (m_midiRescans < 10 ? 30000 : 300000))
+        {
+            m_midiRescanMs = nowMs;
+            m_midiRescans++;
+            if (m_engine != nullptr)
+                m_engine->noteMidi(QStringLiteral("rescan:%1").arg(m_midiRescans));
+            QMetaObject::invokeMethod(midi, "slotDeviceAdded", Qt::DirectConnection, Q_ARG(uint, 0), Q_ARG(uint, 0));
+            if (m_midiOwnU >= 0)
+                midiOwnReset();
+            m_midiOwnU = -1;
+            m_midiOwnName.clear();
+            midiRefresh();
+            return;                      // the next look (5 s) patches what it found
+        }
+    }
     InputOutputMap *io = m_doc->inputOutputMap();
     int midiU = -1, freeU = -1;
     for (quint32 u = 0; u < io->universesCount(); u++)
@@ -3450,7 +3483,8 @@ QString TrackManager::remoteState()
             {
                 if (connected() == false)
                     warn = QStringLiteral("CDJ READER DOWN");
-                else if (ta->property("cdjCount").toInt() <= 0)
+                else if (ta->property("cdjCount").toInt() <= 0
+                         && ta->property("bltFeeds").toBool() == false)   // TRACK_APP_BLTFEEDS_R575: BLT feeds TRACK
                     warn = QStringLiteral("NO CDJs");
                 else if (m_linkStale)
                     warn = QStringLiteral("CDJ LINK LOST");

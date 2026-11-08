@@ -55,6 +55,8 @@ public:
 
     /** R548_CDJS: the CDJs the helper sees (its "STATUS cdjs=N" lines); 0 while it does not run */
     int cdjCount() const;
+    /** TRACK_APP_BLTFEEDS_R575: Beat Link Trigger runs and feeds TRACK - the helper waits (no CDJ count of its own) */
+    bool bltFeeds() const { return m_bltFeeds; }
     /** R560_DECKS: the tempo master (1-4, 0 none), the deck the lights follow (0 none yet), the decks
      *  the room hears (playing, fader up) and those playing - from the helper's "DECKS" lines */
     int deckMaster() const;
@@ -110,6 +112,7 @@ private:
     QString m_jarOverride;       // R557_READER
     QByteArray m_outBuf;
     int m_cdjCount;
+    bool m_bltFeeds = false;             // TRACK_APP_BLTFEEDS_R575
     int m_deckMaster = 0;                // R560_DECKS
     int m_deckFollowed = 0;
     QList<int> m_decksHeard;

@@ -35,6 +35,7 @@ Win32MidiOutputDevice::Win32MidiOutputDevice(const QVariant& uid, const QString&
 Win32MidiOutputDevice::~Win32MidiOutputDevice()
 {
     qDebug() << Q_FUNC_INFO;
+    close();                             // TRACK_APP_MIDICLOSE_R575: as the input
 }
 
 bool Win32MidiOutputDevice::open()

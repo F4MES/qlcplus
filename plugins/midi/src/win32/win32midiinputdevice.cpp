@@ -76,6 +76,9 @@ Win32MidiInputDevice::Win32MidiInputDevice(const QVariant& uid, const QString& n
 Win32MidiInputDevice::~Win32MidiInputDevice()
 {
     qDebug() << Q_FUNC_INFO;
+    // TRACK_APP_MIDICLOSE_R575: a rescan deletes the devices - an open handle left behind kept the port (the new
+    // device could not open it) and its callback ran on the freed object
+    close();
 }
 
 bool Win32MidiInputDevice::open()

@@ -46,6 +46,7 @@ Rectangle
         }
     }
     readonly property int cdjCount: trackApp ? trackAppCtl.cdjCount : 0
+    readonly property bool bltFeeds: trackApp ? trackAppCtl.bltFeeds === true : false   // TRACK_APP_BLTFEEDS_R575
     // TRACK_APP_BARS_R552: the POSITION row's page - "heads" (as before) or "bars"
     property string posPage: "heads"
     // TRACK_APP_UI_R561: the animation lasers in his hand (the LASER page) - ON, a side or a size
@@ -65,6 +66,11 @@ Rectangle
     property bool savedSaveFeedback: false
     property bool savedFavoritesOpen: false
     property bool savedRecentOpen: false
+    // TRACK_APP_FIX_R575 (review): an open LASER list / RECENT SAVED ate the next press on BLACKOUT or FLASH and
+    // stayed open all night - they close by themselves after 12 s, the list when its page goes
+    Timer { interval: 12000; running: trackViewRoot.aniListOpen; onTriggered: trackViewRoot.aniListOpen = false }
+    Timer { interval: 12000; running: trackViewRoot.savedRecentOpen; onTriggered: trackViewRoot.savedRecentOpen = false }
+    onPosPageChanged: aniListOpen = false
     readonly property var savedRows: trackEngine ? trackEngine.savedLooks : []
     readonly property var savedRecentRows: trackEngine ? trackEngine.recentSavedLooks : []
     readonly property bool savedRecentEmpty: savedRecentRows.length === 0
@@ -1420,7 +1426,7 @@ Rectangle
                         objectName: "appWarn"
                         readonly property string why: !trackViewRoot.trackApp || !trackManager || trackManager.autoRun !== true ? ""
                             : (trackManager.connected !== true ? qsTr("CDJ READER DOWN")
-                               : (trackViewRoot.cdjCount <= 0 ? qsTr("NO CDJs")
+                               : (trackViewRoot.cdjCount <= 0 && !trackViewRoot.bltFeeds ? qsTr("NO CDJs")
                                   : (trackManager.linkStale === true ? qsTr("CDJ LINK LOST") : "")))
                         property string shown: ""
                         onWhyChanged: { shown = ""; if (why !== "") appWarnLate.restart(); else appWarnLate.stop() }

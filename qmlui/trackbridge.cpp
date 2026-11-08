@@ -95,6 +95,7 @@ void TrackBridge::start()
 
 void TrackBridge::stop()
 {
+    m_bltFeeds = false;                  // TRACK_APP_BLTFEEDS_R575 stop
     m_wanted = false;
     m_retry.stop();
     if (m_process == nullptr)
@@ -413,6 +414,11 @@ void TrackBridge::slotOutput()
         const QByteArray line = raw.trimmed();
         if (line.startsWith("STATUS cdjs="))
         {
+            if (m_bltFeeds)
+            {
+                m_bltFeeds = false;      // TRACK_APP_BLTFEEDS_R575: the helper reads the CDJs itself again
+                emit cdjCountChanged(m_cdjCount);
+            }
             bool ok = false;
             const int n = line.mid(12).trimmed().toInt(&ok);
             if (ok && n != m_cdjCount)
@@ -547,6 +553,11 @@ void TrackBridge::slotFinished(int exitCode, QProcess::ExitStatus status)
         m_failures = 0;
         m_logStart = false;
         m_waitedForBlt = true;
+        if (m_bltFeeds == false)
+        {
+            m_bltFeeds = true;           // TRACK_APP_BLTFEEDS_R575: BLT feeds TRACK - no "NO CDJs" for that
+            emit cdjCountChanged(m_cdjCount);
+        }
         retryIn(15000, QStringLiteral("Beat Link Trigger is running - it feeds TRACK; the helper waits until it is closed"));
         return;
     }

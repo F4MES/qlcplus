@@ -162,6 +162,7 @@ void TrackApp::waitForPredecessor(int argc, char *argv[])
 bool TrackApp::active() const { return m_active; }
 QString TrackApp::build() const { return m_rev; }
 int TrackApp::cdjCount() const { return m_active ? m_bridge.cdjCount() : 0; }
+bool TrackApp::bltFeeds() const { return m_active && m_bridge.bltFeeds(); }   // TRACK_APP_BLTFEEDS_R575
 bool TrackApp::updateAvailable() const { return m_active && (m_staged.isEmpty() == false || m_show->ready()); }
 QString TrackApp::updateLatest() const { return m_staged.isEmpty() && m_show->ready() ? QStringLiteral("PSMAIN") : m_staged; }
 int TrackApp::updateStep() const { return m_step; }
