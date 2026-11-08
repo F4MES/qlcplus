@@ -3162,6 +3162,7 @@ private:
     void tasteLast(const QString &section, QStringList &order) const;
     void learnSection(const QString &section, const QStringList &plan, const QStringList &his);
     void decaySectionTaste();            // R435_TASTE_DECAY: once a night, toward neutral
+    void decayColourTaste();             // TRACK_APP_COLTASTE_R578
     // R435_CRUMBS: the crash trail (Documents/QLC+/crumbs-current.txt)
     QFile m_crumbs;
     QString m_crashNote;                 // the last run's crash file, for the tracklog

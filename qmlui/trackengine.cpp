@@ -4891,6 +4891,46 @@ void TrackEngine::decaySectionTaste()
     emit tasteChanged();                 // R436_LEARNED
 }
 
+void TrackEngine::decayColourTaste()
+{
+    // TRACK_APP_COLTASTE_R578 (Tobias 11-08, forslag 7): learnColour() leans a tapped colour x1.08 and the one he
+    // tapped away from x0.96 (0.4-2.5) and never let go - about seven taps put red at the ceiling for good, and a
+    // colour skipped once stayed near 0.4 until he tapped it. Like the section taste (R435): 10 % a night back
+    // toward neutral, once per night (to noon), on the night's first new track. His favourite colours are a
+    // factor of their own and are not touched
+    if (m_testTrack)
+        return;
+    const QString night = QDateTime::currentDateTime().addSecs(-12 * 3600).date().toString(Qt::ISODate);
+    QSettings settings;
+    const QString last = settings.value(QStringLiteral("trackengine/colour-taste-night")).toString();
+    if (last == night)
+        return;
+    settings.setValue(QStringLiteral("trackengine/colour-taste-night"), night);
+    if (last.isEmpty())
+        return;                          // the first night with this: nothing to let go of yet
+    colourTaste(QString());              // loaded (the seed when nothing is stored)
+    if (m_colourTaste.isEmpty())
+        return;
+    QStringList out;
+    for (auto it = m_colourTaste.begin(); it != m_colourTaste.end(); )
+    {
+        const qreal v = 1.0 + (it.value() - 1.0) * ENGINE_TASTE_KEEP;
+        if (qAbs(v - 1.0) < 0.01)
+        {
+            it = m_colourTaste.erase(it);    // nearly neutral: forgotten
+            continue;
+        }
+        it.value() = v;
+        out << QString("%1:%2").arg(it.key()).arg(v, 0, 'f', 3);
+        ++it;
+    }
+    out.sort();
+    // an empty string would read back as "no taste yet" and bring the seed back: a neutral entry keeps it stored
+    settings.setValue(QStringLiteral("trackengine/colour-taste"), out.isEmpty() ? QStringLiteral("red:1.000") : out.join(';'));
+    logSignal(QStringLiteral("sig:colour-taste-decay:") + night);
+    emit tasteChanged();
+}
+
 QVariantList TrackEngine::sectionTasteTable() const
 {
     // R436_LEARNED (Tobias 10-12, forslag 1): what the engine learned, per group
@@ -22541,6 +22581,7 @@ void TrackEngine::trackLoaded(const QString &title, const QString &key)
     if (title != m_trackTitle)
     {
         decaySectionTaste();             // R435_TASTE_DECAY: the night's first new track
+        decayColourTaste();              // TRACK_APP_COLTASTE_R578: and the colour taste
         const bool had = m_dropMode != 0 || m_dropSet.isEmpty() == false || m_planSection.isEmpty() == false;
         m_dropMode = 0;
         m_dropTouched = false;
