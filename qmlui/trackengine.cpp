@@ -4451,7 +4451,8 @@ qreal TrackEngine::r536PartOut(const QString &group, int index) const
 
 bool TrackEngine::r536StabFrame(qint64 now)
 {
-    if (m_r536Live == false || m_beatMs <= 0.0 || m_doc == nullptr)
+    if (m_r536Live == false || m_beatMs <= 0.0 || m_doc == nullptr
+        || heldFull(m_r536Key))          // TRACK_APP_FIX_R574: FLASH / his pad is full, never stabbed
         return false;
     const TrackGroup &g = m_groups.value(m_r536Key);
     const int n = int(g.parts.count());
@@ -8382,7 +8383,6 @@ void TrackEngine::setBlackout(bool on)
     if (on == m_blackout)
         return;
     m_blackout = on;
-    logSignal(on ? QStringLiteral("sig:blackout") : QStringLiteral("sig:blackout-off"));
     r497TapEdge(on);                    // R497_A3_TAPS_LEARN: his tap learned; the ghost holes stop at once
     m_r519BoMs = on ? m_clock.elapsed() : -1;   // R519_FIXA_TAP_EDGE: a tap pauses the room features, held ends them
     if (on)
@@ -8397,6 +8397,9 @@ void TrackEngine::setBlackout(bool on)
         labShutdown(false);
 
     applyGroupOff();          // it owns both masks: the off ones and the black ones
+    // TRACK_APP_FIX_R574: the music's dark masks (setAutoDark let them go under BLACKOUT) as they are now
+    foreach (const QString &dk, m_darkScenes.keys())
+        padDarkMask(dk);
 
     // and the levels: reapplyLevels() knows about MASTER, the group trim, the
     // pulse AND the blackout clamp. The hand-rolled loop that used to be here
@@ -8411,6 +8414,8 @@ void TrackEngine::setBlackout(bool on)
         if (func != nullptr)
             func->adjustAttribute(m_blackout ? 0.0 : m_fadeLevel.value(fid, 0.0), m_fadeAttr.value(fid));
     }
+    // TRACK_APP_FIX_R574_BO: the row after the light (the snapshot walk no longer delays the dark)
+    logSignal(on ? QStringLiteral("sig:blackout") : QStringLiteral("sig:blackout-off"));
     emit liveChanged();
 }
 
@@ -8511,12 +8516,22 @@ QString TrackEngine::exportSettings()
         if (key == SETTINGS_ENGINE_NIGHT || key == SETTINGS_ENGINE_ROOMAUTO || key == SETTINGS_ENGINE_GROUPTRIM
             || key == QStringLiteral("trackmanager/showran"))
             continue;
+        // TRACK_APP_FIX_R574: tonight's haze AUTO, MASTER and mic AUTO are not settings either
+        if (key == QStringLiteral("trackengine/haze-auto-night") || key == SETTINGS_ENGINE_MASTER_NIGHT
+            || key == QStringLiteral("trackengine/micAutoNight"))
+            continue;
         QVariant v = settings.value(key);
         switch (v.typeId())
         {
             case QMetaType::Bool:   obj.insert(key, v.toBool()); break;
             case QMetaType::Int:    obj.insert(key, v.toInt()); break;
             case QMetaType::Double: obj.insert(key, v.toDouble()); break;
+            // TRACK_APP_FIX_R574: his LAB choices, the memories and the taste are maps / lists - toString() wrote ""
+            case QMetaType::QVariantMap:
+            case QMetaType::QVariantHash:
+            case QMetaType::QStringList:
+            case QMetaType::QVariantList:
+                obj.insert(key, QJsonValue::fromVariant(v)); break;
             default:                obj.insert(key, v.toString()); break;
         }
     }
@@ -8568,6 +8583,18 @@ QString TrackEngine::importSettings()
         if (key == SETTINGS_ENGINE_NIGHT || key == SETTINGS_ENGINE_ROOMAUTO || key == SETTINGS_ENGINE_GROUPTRIM
             || key == QStringLiteral("trackmanager/showran") || key == QStringLiteral("trackmanager/rolemode"))
             continue;
+        // TRACK_APP_FIX_R574: tonight's haze AUTO / MASTER / mic AUTO from an old file: not tonight's
+        if (key == QStringLiteral("trackengine/haze-auto-night") || key == SETTINGS_ENGINE_MASTER_NIGHT
+            || key == QStringLiteral("trackengine/micAutoNight"))
+            continue;
+        // ... and an old export's "" for a map / list never replaces what is stored
+        if (v.typeId() == QMetaType::QString && v.toString().isEmpty() && settings.contains(key))
+        {
+            const int was = settings.value(key).typeId();
+            if (was == QMetaType::QVariantMap || was == QMetaType::QVariantHash || was == QMetaType::QStringList
+                || was == QMetaType::QVariantList)
+                continue;
+        }
         if (key == QStringLiteral("trackmanager/quantize"))
             v = qBound(1, v.toInt(), 32);
         if (key == QStringLiteral("trackmanager/dropkick"))
@@ -8578,6 +8605,16 @@ QString TrackEngine::importSettings()
         n++;
     }
     savedReset(); m_savedLoaded = false; savedLoad(); emit savedLooksChanged(); // SAVED_LOOKS_IMPORT
+    // TRACK_APP_FIX_R574: the lazy caches read the imported values - the next tap wrote the old ones back
+    m_tasteLoaded = false; m_colourTaste.clear();
+    m_sectionTasteLoaded = false; m_sectionTaste.clear();
+    m_trackMemLoaded = false; m_trackMem.clear();
+    m_colMemLoaded = false; m_colMem.clear();
+    m_slabLoaded = false; m_slabVerdict.clear();
+    m_colourLevelLoaded = false; m_colourLevel.clear(); m_r541Old.clear();
+    emit tasteChanged();
+    emit slabChanged();
+    emit clabChanged();
     // take them on board: roles, stars and options are read in ensureTable
     m_accent = settings.value(SETTINGS_ENGINE_ACCENT, true).toBool();
     m_holdBars = qBound(4, settings.value(SETTINGS_ENGINE_HOLDBARS, 32).toInt(), 128);   // as setHoldBars (runde 220)
@@ -12251,6 +12288,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // jump, and a section energy measured late (a -1 flag, a BLT resend)
     // moved the scaled value up to 16 % with no hand on the fader at all.)
     bool faderJump = hold == false && beatInBar == 0 && m_movesFader >= 0.0
+                  && m_hitAmokFrom < 0       // TRACK_APP_FIX_R574: DROP HIT's glide is not a hand
                   && qAbs(fader - m_movesFader) >= 0.20;
     bool nudgeOwed = false;
     if ((sectionChanged || m_lastState.isEmpty()) && hold == false)
@@ -13852,6 +13890,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if (redraw)
     {
         m_movesEnergy = energy;
+        m_movesFader = fader;
+    }
+    else if (m_hitAmokFrom >= 0 && hold == false)
+    {
+        m_movesEnergy = energy;          // TRACK_APP_FIX_R574: the glide takes the reference with it
         m_movesFader = fader;
     }
     if (faderJump)
@@ -17443,11 +17486,13 @@ TrackMove TrackEngine::composeMove(const QString &group, TrackMove move, int tie
         move.pattern = (wide && m_groups.value(group).heads) ? drawnPattern : ENGINE_PAT_STATIC;
         // runde 353: a drop at the top keeps the walk drawMove gave the base
         // (a block of heads, never one) and its pace - not four beats a step
-        if (tier == 2 && m_faderNow >= 0.80 && m_groups.value(group).heads)
+        if (tier == 2 && m_faderNow >= 0.50 && m_groups.value(group).heads)   // TRACK_APP_FIX_R574: EVEN's ramp
         {
             if (drawnPattern == ENGINE_PAT_CHASE || drawnPattern == ENGINE_PAT_PINGPONG)
                 move.pattern = move.width >= 2 ? drawnPattern : ENGINE_PAT_HALVES;
-            move.stepBeats = drawnStepBeats;
+            else if (drawnPattern == ENGINE_PAT_ODDEVEN || drawnPattern == ENGINE_PAT_HALVES)
+                move.pattern = drawnPattern;
+            move.stepBeats = m_faderNow >= 0.65 ? drawnStepBeats : qMax(4, drawnStepBeats);
         }
         move.bare = false;
         return move; // keep the base's requested deep kick pulse and floor
@@ -19179,7 +19224,8 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // - which may already be dipping by that allowance - none, or the two
         // add up to twice what the fader allows (runde 171).
         allowed = (m_position.value(group, Function::invalidId()) == homePosition(group)
-                   && sw.upOnly == false)     // R385_BARS_FULL: the lift never dips
+                   && sw.upOnly == false     // R385_BARS_FULL: the lift never dips
+                   && r552HomeFor(group) == Function::invalidId())   // TRACK_APP_FIX_R574: his held aim - up-only
                 ? laserDownAllowed(m_faderReal) : 0;
         dy = -sw.height + qMin(2 * sw.height, allowed);
     }
@@ -21578,13 +21624,37 @@ void TrackEngine::setLogEnabled(bool on)
 QByteArray TrackEngine::logSettings(QByteArray *steady) const
 {
     QJsonObject stored;
+    // TRACK_APP_FIX_R574 (review: ~430 MB a night): what the engine LEARNS - ratings, seen, memories, taste, the
+    // nights' rows - changes all night; the log carries its size and hash, and a change of it alone writes no snapshot.
+    // His own choices (stars, bans, roles, LAB, saved looks) stay in full
+    static const QStringList learnedKeys = {
+        QStringLiteral("trackengine/auto-rating-v1"), QStringLiteral("trackengine/seen"),
+        QStringLiteral("trackengine/rating"), QStringLiteral("trackengine/colour-memory"),
+        QStringLiteral("trackengine/track-memory"), QStringLiteral("trackengine/punchdrops"),
+        QStringLiteral("trackengine/drama-night"), QStringLiteral("trackengine/r497Taps"),
+        QStringLiteral("trackengine/haze-auto-night"), QStringLiteral("trackengine/section-taste"),
+        QStringLiteral("trackengine/section-taste-night"), QStringLiteral("trackengine/colour-taste") };
+    QJsonObject learned;
     QSettings settings;
     foreach (const QString &key, settings.allKeys())
     {
         if (key == SETTINGS_ENGINE_MASTER_NIGHT)
             continue;                    // R519_FIXB_SNAP_STORED: MASTER has its own column on every row
         if (key.startsWith("trackengine/") || key.startsWith("trackmanager/"))
-            stored.insert(key, QJsonValue::fromVariant(settings.value(key)));
+        {
+            const QJsonValue jv = QJsonValue::fromVariant(settings.value(key));
+            if (learnedKeys.contains(key) || key.startsWith(QStringLiteral("trackengine/clock-night/"))
+                || key.startsWith(QStringLiteral("trackengine/atmos-night/")))
+            {
+                QJsonArray one;
+                one.append(jv);
+                const QByteArray raw = QJsonDocument(one).toJson(QJsonDocument::Compact);
+                learned.insert(key, QString::number(raw.size()) + QLatin1Char(':')
+                               + QString::fromLatin1(QCryptographicHash::hash(raw, QCryptographicHash::Sha1).toHex().left(8)));
+            }
+            else
+                stored.insert(key, jv);
+        }
     }
     QJsonObject live;
     live.insert("fullAuto", m_fullAuto);
@@ -21612,6 +21682,7 @@ QByteArray TrackEngine::logSettings(QByteArray *steady) const
     context.insert("schema", 2);
     context.insert("stored", stored);
     context.insert("live", live);
+    context.insert("learned", learned);  // TRACK_APP_FIX_R574: not in the steady copy below
     // R519_FIXB_SNAP_STEADY (night 10-30: 958 MB tracklog, 897 MB of it snapshots - 402 written only
     // because BLACKOUT was on or off at the sample, 154 only for MASTER): the snapshot's trigger leaves
     // out the momentary states (BLACKOUT, STUTTER - their sig: rows say when) and MASTER (its column)
@@ -21623,6 +21694,7 @@ QByteArray TrackEngine::logSettings(QByteArray *steady) const
         still.remove("master");
         QJsonObject quiet = context;
         quiet.insert("live", still);
+        quiet.remove("learned");         // TRACK_APP_FIX_R574
         *steady = QJsonDocument(quiet).toJson(QJsonDocument::Compact);
     }
     return QJsonDocument(context).toJson(QJsonDocument::Compact);
@@ -21646,6 +21718,14 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         m_logSettingsLast.clear(); // first row of every file/session carries its snapshot
         bool fresh = m_log.exists() == false || m_log.size() == 0;
         if (m_log.open(QIODevice::Append | QIODevice::Text) == false)
+        {
+            // TRACK_APP_FIX_R574: another program holds today's file (Excel ...) - a file of its own, not LOG off
+            crumb(QStringLiteral("log open failed: ") + m_log.fileName());
+            m_log.setFileName(dir + QDir::separator() + "tracklog-" + today + "-v2-"
+                              + QTime::currentTime().toString(QStringLiteral("HHmmss")) + ".csv");
+            fresh = true;
+        }
+        if (m_log.isOpen() == false && m_log.open(QIODevice::Append | QIODevice::Text) == false)
         {
             // and SAY so: the LOG tile stayed ON with nothing written (runde 178)
             m_logEnabled = false;
@@ -21684,7 +21764,15 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     // group-fader signal: 2-10 ms on the GUI thread each time. A changed
     // setting now reaches the log up to 16 beats late; the first row of a
     // file still carries its snapshot (m_logSettingsLast is empty there).
-    const bool sample = m_logSettingsLast.isEmpty() || (beat % 16) == 0;
+    // TRACK_APP_FIX_R574: once per 16-beat window - the signal rows of that beat (a landing, a BLACKOUT tap)
+    // walked the registry again each
+    const bool sampleDue = (beat % 16) == 0 && (beat != m_logSampledBeat || m_trackTitle != m_logSampledTitle);
+    const bool sample = m_logSettingsLast.isEmpty() || sampleDue;
+    if (sampleDue)
+    {
+        m_logSampledBeat = beat;
+        m_logSampledTitle = m_trackTitle;
+    }
     QByteArray steadySettings;           // R519_FIXB_SNAP_TRIGGER: a change of the momentary states alone writes none
     const QByteArray currentSettings = sample ? logSettings(&steadySettings) : m_logSettingsLast;
     QString snapshot;
@@ -23129,7 +23217,8 @@ bool TrackEngine::r519AniHis(const QString &key) const
 {
     return m_fullAuto == false || (m_forceOn && m_forceSet.contains(key)) || m_padFlash.contains(key)
         || m_flashHeld.contains(key) || m_labActive || m_slabActive || m_clabActive || savedActive()
-        || m_startScene || m_lastStage != 0 || m_testTimer.isActive();
+        || m_startScene || m_lastStage != 0 || m_testTimer.isActive()
+        || ((m_r561On || (r561Picked() && m_r561Queued == false)) && key == r561AniKey());   // TRACK_APP_FIX_R574
 }
 
 bool TrackEngine::r519AniLowDark(const QString &group) const
@@ -29983,9 +30072,8 @@ void TrackEngine::toggleLastTrack()
         }
         return;
     }
-    if (m_lastShown == false || m_showOnNow == false || m_testTrack || m_trackTitle.isEmpty()
-        || lastTrackEndBeat() <= 0)
-        return;
+    if (m_lastShown == false || m_showOnNow == false || m_testTrack || m_trackTitle.isEmpty())
+        return;                          // TRACK_APP_FIX_R574: no curve is no reason - the fader / the stop ends it
     // R464_NO_START: not over the start scene - tick() draws nothing under it, so no
     // outro, and the start look came back over the house light
     if (m_startScene)
@@ -30022,6 +30110,11 @@ void TrackEngine::lastTrackBeat(const QString &state, int beat, int secStart, qr
     m_lastBeatAtMs = m_clock.elapsed();      // R479_LAST_WHITE_BEATCLOCK: the white between beats
     if (bpm > 0.0)
         m_lastBpm = bpm;
+    if (lastTrackEndBeat() <= 0)
+    {
+        setLastStage(1);                 // TRACK_APP_FIX_R574: no curve - no outro lid, no white ramp, no beat end
+        return;
+    }
     // R463_OUTRO_FIRST: a flag later than the fallback (the last 32 beats) does not
     // move the outro's start later - the lid jumped back up mid-outro
     if (state == QStringLiteral("outro") && secStart <= lastTrackOutroBeat()
@@ -30211,6 +30304,8 @@ qreal TrackEngine::lastWhiteNow() const
 {
     // linear in beats from the tap to the music's end; between two beats by the clock
     const int end = lastTrackEndBeat();
+    if (end <= 0)
+        return 0.0;                      // TRACK_APP_FIX_R574: no curve - the white comes with the house light
     if (end <= m_lastArmBeat)
         return 1.0;
     qreal beat = qreal(m_lastBeatNow);
@@ -30375,7 +30470,7 @@ void TrackEngine::lastTrackAuto(bool showOn)
         m_lastUndoTitle.clear();         // another track: the undo was for that one
     if (showOn == false || m_lastShown == false || m_testTrack || m_trackTitle.isEmpty()
         || m_fullAuto == false || m_startScene || m_testTimer.isActive()
-        || m_trackTitle == m_lastUndoTitle || lastTrackEndBeat() <= 0)
+        || m_trackTitle == m_lastUndoTitle)   // TRACK_APP_FIX_R574: a deck without a curve too
         return;
     const qint64 now = m_clock.elapsed();
     if (m_fadersDownMs < 0 || m_fadersSeenMs < 0 || now - m_fadersSeenMs >= 1500
@@ -44935,7 +45030,8 @@ void TrackEngine::r514AniBeat(const QString &key, const QString &state, int beat
         return;
     m_r514AniSeen = beat;
     QString why;
-    if (m_faderReal < ENGINE_ANI_ON - 1e-9)
+    if (m_faderReal < ENGINE_ANI_ON - 1e-9
+        && ((m_r561On || (r561Picked() && m_r561Queued == false)) && key == r561AniKey()) == false)   // TRACK_APP_FIX_R574
         why = QStringLiteral("energy");      // only from 70 % when the engine picks
     else if (r507DuelHis())
         why = QStringLiteral("his");
@@ -46187,6 +46283,12 @@ bool TrackEngine::r552RunGate(const QString &slot, quint32 &fid, bool hard)
     {
         if (r552MoveAllowed() == false)
         {
+            if (m_active.contains(slot))
+            {
+                // TRACK_APP_FIX_R574: an EFX has no fade-out - its stop puts the beams back on the aim. Dark first
+                r507SafeHold(key, m_active.value(slot));
+                m_sweep.remove(key);
+            }
             stopSlot(slot, true);
             return true;
         }
@@ -46235,8 +46337,13 @@ void TrackEngine::r552Aim(bool restart)
         m_motionDim.remove(key);
         m_sectionMotion.remove(key);
     }
-    if (r552MoveAllowed() == false)
+    if (r552MoveAllowed() == false && m_active.contains(QStringLiteral("efx:") + key))
+    {
+        // TRACK_APP_FIX_R574: ON / an aim / CHASE off while the figure runs lit - dark NOW, then the stop
+        r507SafeHold(key, m_active.value(QStringLiteral("efx:") + key));
         stopSlot(QStringLiteral("efx:") + key, true);
+        m_sweep.remove(key);
+    }
     if (restart == false)
         return;
     const quint32 aim = homePosition(key);

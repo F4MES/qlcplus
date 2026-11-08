@@ -2230,7 +2230,8 @@ void TrackManager::midiInput(quint32 universe, quint32 channel, uchar value, con
     Q_UNUSED(key)
     if (m_engine == nullptr)
         return;
-    if (m_midiFromRaw == false && m_midiPatchWorks == false && trackAppObject() != nullptr)
+    if (m_midiFromRaw == false && m_midiPatchWorks == false && trackAppObject() != nullptr
+        && int(universe) == m_midiOwnU)  // TRACK_APP_MIDIFIX_R574: another port's patch says nothing about ours
     {
         m_midiPatchWorks = true;         // TRACK_APP_MIDI_R571D: QLC+'s patch delivers - the plugin's own stand down
         m_engine->noteMidi(QStringLiteral("patch-first:u%1:%2").arg(universe + 1).arg(channel));
@@ -2844,6 +2845,8 @@ void TrackManager::midiAutoPatch()
     {
         if (m_midiOwnU >= 0 && m_engine != nullptr)
             m_engine->noteMidi(QStringLiteral("gone:%1").arg(m_midiOwnName));
+        if (m_midiOwnU >= 0)
+            midiOwnReset();              // TRACK_APP_MIDIFIX_R574
         m_midiOwnU = -1;                 // nothing to hear - the next device is patched when it comes
         return;
     }
@@ -2885,6 +2888,10 @@ void TrackManager::midiAutoPatch()
         {
             m_midiOwnU = midiU;
             m_midiOwnName = ins.at(pick);
+            midiOwnReset();              // TRACK_APP_MIDIFIX_R574
+            // TRACK_APP_MIDIFIX_R574: OMNI - a controller off MIDI channel 1 (or an old per-device setting) is heard;
+            // channel 1 keeps its numbers
+            midi->setParameter(quint32(midiU), quint32(pick), QLCIOPlugin::Input, QStringLiteral("midichannel"), 16);
             if (m_engine != nullptr)
                 m_engine->noteMidi(QStringLiteral("kept:%1:u%2").arg(ins.at(pick)).arg(midiU + 1));
             midiRefresh();
@@ -2903,11 +2910,15 @@ void TrackManager::midiAutoPatch()
         m_midiOwnU = target;
         m_midiOwnName = ins.at(pick);
         m_midiFailName.clear();
+        midiOwnReset();                  // TRACK_APP_MIDIFIX_R574
+        midi->setParameter(quint32(target), quint32(pick), QLCIOPlugin::Input, QStringLiteral("midichannel"), 16);   // OMNI
         if (m_engine != nullptr)
             m_engine->noteMidi(QStringLiteral("patched:%1:u%2").arg(ins.at(pick)).arg(target + 1));
     }
     else
     {
+        if (m_midiOwnU >= 0)
+            midiOwnReset();              // TRACK_APP_MIDIFIX_R574
         m_midiOwnU = -1;
         if (m_midiFailName != ins.at(pick) && m_engine != nullptr)
             m_engine->noteMidi(QStringLiteral("open-failed:%1").arg(ins.at(pick)));   // once per device

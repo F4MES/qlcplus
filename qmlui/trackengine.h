@@ -1059,7 +1059,7 @@ public:
     void setBreakStabs(bool on);
     QString r536StrobeKey() const;
     void r536Section(int secStart, int secEnd);
-    bool r536Owns(const QString &key) const { return m_r536Live && key == m_r536Key; }
+    bool r536Owns(const QString &key) const { return m_r536Live && key == m_r536Key && heldFull(key) == false; }   // TRACK_APP_FIX_R574
     qreal r536PartOut(const QString &group, int index) const;
     bool r536StabFrame(qint64 now);
     int r534ChaseAt(int idx) const { return qMax(0, idx - m_r534Lag); }
@@ -2352,6 +2352,8 @@ private:
     bool m_logEnabled;
     QFile m_log;
     QByteArray m_logSettingsLast;
+    int m_logSampledBeat = -1;           // TRACK_APP_FIX_R574: the 16-beat window's snapshot is taken once
+    QString m_logSampledTitle;
     QByteArray m_logSettingsSteady;      // R519_FIXB_SNAP_MEMBER: the last snapshot without BLACKOUT, STUTTER, MASTER
     QString m_logSettingsId;
     // The context of the last line written, so a rating can be logged with the

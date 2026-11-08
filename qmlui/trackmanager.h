@@ -642,6 +642,8 @@ private:
     quint32 m_midiLastCh = 0xFFFFFFFFu;
     uchar m_midiLastVal = 0;
     void midiOpenIfDeaf(class QLCIOPlugin *midi, quint32 line);
+    // TRACK_APP_MIDIFIX_R574: another controller / number is another start - what was heard is forgotten
+    void midiOwnReset() { m_midiPatchWorks = false; m_midiRawCount = 0; m_midiOpenTries = 0; m_midiOpenState = -1; }
     bool m_midiLearn = false;
     bool m_midiCanUndo = false;
     bool m_midiDirty = false;
