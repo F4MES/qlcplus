@@ -3483,8 +3483,7 @@ QString TrackManager::remoteState()
             {
                 if (connected() == false)
                     warn = QStringLiteral("CDJ READER DOWN");
-                else if (ta->property("cdjCount").toInt() <= 0
-                         && ta->property("bltFeeds").toBool() == false)   // TRACK_APP_BLTFEEDS_R575: BLT feeds TRACK
+                else if (ta->property("cdjCount").toInt() <= 0)   // TRACK_APP_NOCDJS_R577 (was TRACK_APP_BLTFEEDS_R575)
                     warn = QStringLiteral("NO CDJs");
                 else if (m_linkStale)
                     warn = QStringLiteral("CDJ LINK LOST");

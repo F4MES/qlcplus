@@ -46,7 +46,7 @@ Rectangle
         }
     }
     readonly property int cdjCount: trackApp ? trackAppCtl.cdjCount : 0
-    readonly property bool bltFeeds: trackApp ? trackAppCtl.bltFeeds === true : false   // TRACK_APP_BLTFEEDS_R575
+    // TRACK_APP_NOCDJS_R577: "no CDJs" as before (the R575 bltFeeds exception is gone)
     // TRACK_APP_BARS_R552: the POSITION row's page - "heads" (as before) or "bars"
     property string posPage: "heads"
     // TRACK_APP_UI_R561: the animation lasers in his hand (the LASER page) - ON, a side or a size
@@ -1427,7 +1427,7 @@ Rectangle
                         text: (trackManager && trackManager.playing ? qsTr("PLAYING") : qsTr("PAUSED"))
                               + "  ·  " + (trackManager && trackManager.engineTempo !== undefined ? trackManager.engineTempo.toFixed(1) : "0") + " BPM"
                               + (trackManager && trackManager.tempoSource ? "  ·  " + trackManager.tempoSource : "")
-                              + "  ·  " + (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? (trackAppCtl.deckText !== "" ? trackAppCtl.deckText : qsTr("CDJs ok")) : (trackViewRoot.bltFeeds ? qsTr("BLT feeds TRACK") : qsTr("no CDJs")))
+                              + "  ·  " + (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? (trackAppCtl.deckText !== "" ? trackAppCtl.deckText : qsTr("CDJs ok")) : qsTr("no CDJs"))
                                            : (trackManager && trackManager.connected ? qsTr("BLT ok") : qsTr("no BLT")))
                               + (trackViewRoot.testOn ? "  ·  " + qsTr("TEST") : "")   // R450_TEST_TRACK
                         color: trackManager && trackManager.playing
@@ -1442,7 +1442,7 @@ Rectangle
                         objectName: "appWarn"
                         readonly property string why: !trackViewRoot.trackApp || !trackManager || trackManager.autoRun !== true ? ""
                             : (trackManager.connected !== true ? qsTr("CDJ READER DOWN")
-                               : (trackViewRoot.cdjCount <= 0 && !trackViewRoot.bltFeeds ? qsTr("NO CDJs")
+                               : (trackViewRoot.cdjCount <= 0 ? qsTr("NO CDJs")
                                   : (trackManager.linkStale === true ? qsTr("CDJ LINK LOST") : "")))
                         property string shown: ""
                         onWhyChanged: { shown = ""; if (why !== "") appWarnLate.restart(); else appWarnLate.stop() }
@@ -2354,9 +2354,7 @@ Rectangle
                                 objectName: "emptyTitle"
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 ? qsTr("Waiting for track data")
-                                                                : emptyBox.linked ? (trackViewRoot.bltFeeds ? qsTr("Beat Link Trigger feeds TRACK – waiting for a track")
-                                                                                                            : qsTr("Looking for the CDJs"))
-                                                                : qsTr("Starting TRACK's CDJ reader"))
+                                                                : emptyBox.linked ? qsTr("Looking for the CDJs") : qsTr("Starting TRACK's CDJ reader"))
                                     : emptyBox.gone ? qsTr("Beat Link Trigger stopped")   // R518_BLT_GONE_TITLE
                                     : emptyBox.running ? qsTr("Waiting for track data")
                                     : emptyBox.known ? qsTr("Beat Link Trigger is not running") : qsTr("Beat Link Trigger is not connected")
@@ -2391,7 +2389,7 @@ Rectangle
                         {
                             spacing: Math.round(8 * trackViewRoot.ks)
                             Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Math.round(10 * trackViewRoot.ks); height: width; radius: width / 2
-                                        color: (trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0 || trackViewRoot.bltFeeds) : emptyBox.running) ? trackViewRoot.cGreen : trackViewRoot.cGold }
+                                        color: (trackViewRoot.trackApp ? trackViewRoot.cdjCount > 0 : emptyBox.running) ? trackViewRoot.cGreen : trackViewRoot.cGold }
                             Text
                             {
                                 objectName: "emptySub"
@@ -2399,8 +2397,7 @@ Rectangle
                                 text: trackViewRoot.trackApp ? (trackViewRoot.cdjCount > 0
                                         ? (trackViewRoot.cdjCount === 1 ? qsTr("1 player found - play a track on a CDJ")
                                                                         : qsTr("%1 players found - play a track on a CDJ").arg(trackViewRoot.cdjCount))
-                                        : emptyBox.linked ? (trackViewRoot.bltFeeds ? qsTr("Play a track on a CDJ")
-                                                                                     : qsTr("TRACK reads the CDJs by itself - is the network cable from the DJ booth in?"))
+                                        : emptyBox.linked ? qsTr("TRACK reads the CDJs by itself - is the network cable from the DJ booth in?")
                                                           : qsTr("It takes a few seconds"))
                                     : emptyBox.linked ? qsTr("Beat Link Trigger is connected - play a track on a CDJ")
                                     : emptyBox.running ? qsTr("Beat Link Trigger is running - play a track on a CDJ")
