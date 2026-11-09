@@ -774,6 +774,27 @@ void TrackEngine::slotPulseTimer()
                 }
             }
         }
+        // TRACK_APP_BUILDBASS_R580: in a build with a bottom, the pump hits again on the quarters the bass (or the
+        // kick) plays between the beats - not the strobes, not the lasers, not a group stepping its own roll
+        if (m_r580Bottom && m_beatMs > 0.0 && m_pulseDepth.value(key, 0.0) > 0.0
+            && m_groups.value(key).strobes == false && m_groups.value(key).lasers == false
+            && m_groups.value(key).patternDevice == false && m_liveMove.value(key).subSteps <= 1)
+        {
+            const int q = int(qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999) * 4.0);
+            if (q > 0 && m_r580Seen.value(key, 0) < q)
+            {
+                m_r580Seen.insert(key, q);
+                const int nib = onsetLow(m_lastBeat, q);
+                if (nib >= 5)
+                {
+                    qreal st = 0.55 + 0.30 * qMin(1.0, qreal(nib) / 12.0);
+                    if (m_pulseStart.value(key, -1) == now)
+                        st = qMax(st, m_pulseStrength.value(key, 0.0));
+                    m_pulseStart.insert(key, now);
+                    m_pulseStrength.insert(key, st);
+                }
+            }
+        }
         // R461_AND_BASS (idea 2): the base and the Minis hit again on the "and" where the
         // bass plays it - 55-80 % of the kick's hit, so the light is not at its lowest
         // exactly when the bass comes in. Not a group stepping eighths of its own.
@@ -827,7 +848,9 @@ void TrackEngine::slotPulseTimer()
                 && sub != m_subStepSeen.value(key, 0))
             {
                 m_subStepSeen.insert(key, sub);
-                m_pulseStart.insert(key, now);
+                // TRACK_APP_BUILDBASS_R580: in a build with a bottom a step blinks where the music hits that quarter
+                if (m_r580Bottom == false || r580QuarterHit(m_lastBeat, int(within * 4.0)))
+                    m_pulseStart.insert(key, now);
             }
             QVector<qreal> mask = livePatternMask(key, mv, r534ChaseAt(m_beatIndex) + within, 1.0);   // R534_SUB_MASK
             qreal level = m_moveLevel.value(key, 0.0);
@@ -4492,6 +4515,56 @@ bool TrackEngine::r536StabFrame(qint64 now)
         m_activeOut.insert(slot, out);
     }
     return true;
+}
+
+int TrackEngine::r580BuildBottom(int beat) const
+{
+    // TRACK_APP_BUILDBASS_R580: kick (R501's light line) or a bass onset on any quarter (R461's line) on 5 of the
+    // last 8 beats. Measured on the harness' 10 tracks: 7 of 25 builds have one (Jamback - Positive's bass on the
+    // offbeats, Disko Junkie, Charlie Goes Bananas), 18 have neither (snare / clap and the roll, as before)
+    if (r501KickAt(beat, false) < 0 && onsetLow(beat, 0) < 0)
+        return -1;
+    int n = 0;
+    for (int b = beat - 7; b <= beat; b++)
+    {
+        bool hit = r501KickAt(b, false) == 1;
+        for (int q = 0; q < 4 && hit == false; q++)
+            hit = onsetLow(b, q) >= 5;
+        if (hit)
+            n++;
+    }
+    return n >= 5 ? 1 : 0;
+}
+
+int TrackEngine::r581BuildBottom(int beat, int secStart) const
+{
+    // TRACK_APP_BUILDWIN_R581: kick or bass on 60 % of the build's own beats from 3 before this one to 4 after it
+    // (at least 4 of them known); -1 without the curves
+    if (r501KickAt(beat, false) < 0 && onsetLow(beat, 0) < 0)
+        return -1;
+    int n = 0, seen = 0;
+    for (int b = qMax(secStart, beat - 3); b <= beat + 4; b++)
+    {
+        const int k = r501KickAt(b, false);
+        if (k < 0 && onsetLow(b, 0) < 0)
+            continue;                    // past the track's end
+        seen++;
+        bool hit = k == 1;
+        for (int q = 0; q < 4 && hit == false; q++)
+            hit = onsetLow(b, q) >= 5;
+        if (hit)
+            n++;
+    }
+    return (seen >= 4 && n * 10 >= seen * 6) ? 1 : 0;
+}
+
+bool TrackEngine::r580QuarterHit(int beat, int quarter) const
+{
+    // a quarter of the beat with a hit in it - the kick on the beat, or an onset (R501's lines); not known: a hit
+    const int q = qBound(0, quarter, 3);
+    if (q == 0 && r501KickAt(beat, false) == 1)
+        return true;
+    return r501OnsetAt(beat, q) != 0;
 }
 
 int TrackEngine::r534MusicBeat(int beat, bool build) const
@@ -15423,6 +15496,16 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_r534Empty = 0;
     }
     m_r534Frozen = false;
+    // TRACK_APP_BUILDBASS_R580 (Tobias 11-09: "Skal builds med bas eller kick maaske saettes til at foelge dem?" - "ja"):
+    // a build whose kick or bass runs on (5 of the last 8 beats) - the pump and the blinks follow them; where they
+    // drop out (the classic last bars: kick out, snare roll up) the build's own roll takes over as before
+    {
+        const bool was = m_r580Bottom;
+        m_r580Bottom = isBuild && hold == false && isCalm == false && preDrop == false && r581BuildBottom(beat, secStart) == 1;   // TRACK_APP_BUILDWIN_R581
+        if (was != m_r580Bottom)
+            logSignal(m_r580Bottom ? QStringLiteral("sig:build-bottom") : QStringLiteral("sig:build-bottom-off"));
+        m_r580Seen.clear();
+    }
     if (hold == false && isCalm == false && preDrop == false && r534MusicBeat(beat, isBuild) == 0)
     {
         m_r534Empty++;
@@ -16694,7 +16777,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // R534_BUILD_HIT (Tobias 11-02, 3): a build's grid hits on a kick, the snare or a clap - not on the
                 // hats alone (r534BuildHit; not known: as r501). The engine's chops in a build are untouched.
                 if (r501PulseHit(beat, mv.pulseOn, grid, g.patternDevice) == false
-                    || (isBuild && g.patternDevice == false && r534BuildHit(beat) == 0))
+                    || (isBuild && g.patternDevice == false && r534BuildHit(beat) == 0
+                        && (m_r580Bottom == false || onsetLow(beat, 0) < 5)))   // TRACK_APP_BUILDBASS_R580: or the bass
                 {
                     pulseBeat = false;
                     r506Hold = mv.pulseOn == 0 && g.strobes == false && g.lasers == false

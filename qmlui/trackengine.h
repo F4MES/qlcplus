@@ -1050,6 +1050,13 @@ public:
     /** R534_DECL: the chases follow the music (r534MusicBeat: kick or bass, in a build also the snare/claps) */
     int r534MusicBeat(int beat, bool build) const;
     int r534BuildHit(int beat) const;
+    // TRACK_APP_BUILDBASS_R580: a build with a bottom (kick or bass on 5 of the last 8 beats) - its pump and blinks
+    // follow the kick and the bass; -1 without the curves
+    int r580BuildBottom(int beat) const;
+    int r581BuildBottom(int beat, int secStart) const;   // TRACK_APP_BUILDWIN_R581
+    bool r580QuarterHit(int beat, int quarter) const;
+    bool m_r580Bottom = false;
+    QHash<QString, int> m_r580Seen;      // the quarter a group last re-hit on (the bass between the beats)
     /** R535_DECL: the music profile, only logged (r535BeatClass / r535Profile / r535DropType) */
     QChar r535BeatClass(int beat) const;
     QString r535Profile(int from, int n) const;
