@@ -649,6 +649,7 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     // for a beat) and not held 70 ms. A deck that can say it and plays no loop: the R571 guess stands aside
     {
         m_cdjLoopOk = obj.value(QStringLiteral("loopOk")).toBool(false);
+        m_cdjLooping = obj.value(QStringLiteral("looping")).toBool(false);   // TRACK_APP_NXS2LOOP_R586
         const QJsonArray lp = obj.value(QStringLiteral("loop")).toArray();
         if (m_cdjLoopOk && lp.count() == 2 && lp.at(0).toInt() > 0 && lp.at(1).toInt() >= lp.at(0).toInt())
         {
@@ -693,6 +694,16 @@ void TrackManager::handlePosition(const QJsonObject &obj)
                                                                                              // phantom was the top)
     {
         m_phantomObj = obj;              // TRACK_APP_LOOP_R571: one past the loop's top - wait for its jump
+        m_phantomTimer.start();
+        return;
+    }
+    // TRACK_APP_NXS2LOOP_R586: the deck says it loops but not where (CDJ-2000NXS2) - a beat that would start the
+    // next section while it loops is held as the loop's phantom from the FIRST pass: the jump back drops it, and if
+    // the DJ let the loop go there it plays 70 ms late (as R571's hold after the first pass)
+    if (m_phantomPass == false && playing && m_playing && m_cdjLooping && m_cdjLoopTo <= 0
+        && beat == m_currentBeat + 1 && stateAtBeat(beat) != stateAtBeat(m_currentBeat))
+    {
+        m_phantomObj = obj;
         m_phantomTimer.start();
         return;
     }

@@ -3909,8 +3909,9 @@
   (try
     (let [[p _] @qlc-sent-track
           s (when p (.getLatestStatusFor (org.deepsymmetry.beatlink.VirtualCdj/getInstance) (int p)))]
-      (when (and (instance? org.deepsymmetry.beatlink.CdjStatus s)
-                 (.canReportLooping ^org.deepsymmetry.beatlink.CdjStatus s))
+      (when (instance? org.deepsymmetry.beatlink.CdjStatus s)
+       (if-not (.canReportLooping ^org.deepsymmetry.beatlink.CdjStatus s)
+        {:looping (.isLooping ^org.deepsymmetry.beatlink.CdjStatus s)}   ; TRACK_APP_NXS2LOOP_R586: NXS2 - that, not where
         (let [^org.deepsymmetry.beatlink.CdjStatus st s
               lend (.getLoopEnd st)
               grid (when (pos? lend)
@@ -3919,7 +3920,7 @@
               b1   (when grid (.findBeatAtTime grid (long (max 0 (- lend 5)))))]
           (if (and (.isLooping st) b0 b1 (pos? (int b0)) (>= (int b1) (int b0)))
             {:loopOk true :loop [(int b0) (int b1)]}
-            {:loopOk true}))))
+            {:loopOk true})))))
     (catch Throwable _ nil)))
 
 (defn qlc-send-position! [beat playing?]
