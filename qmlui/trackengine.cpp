@@ -951,6 +951,8 @@ void TrackEngine::slotPulseTimer()
         any = true;
     if (r536StabFrame(now))              // R536_TIMER_FRAME: a quiet break's stab on one strobe head
         any = true;
+    if (r584Frame(now))                  // TRACK_APP_DROPSTAB_R584: the drop's stab on the strobe heads
+        any = true;
     if (any == false)
         m_pulseTimer.stop();
 }
@@ -4517,6 +4519,91 @@ bool TrackEngine::r536StabFrame(qint64 now)
     return true;
 }
 
+void TrackEngine::r584Section(int secStart, int secEnd)
+{
+    // TRACK_APP_DROPSTAB_R584: the drop's stabs, measured once - every quarter where the lows (8+), the mids (12+)
+    // and the highs (12+) hit at once, and the same quarter neither one beat, two beats nor a bar before: a hit,
+    // not the groove. The track's own onset scale (12 = its p90). Measured on the harness' 41 drops (the landing's
+    // 8 beats left out): 1.7 such stabs per 8 bars on average, none in a quarter of the drops; at most one in two bars is kept
+    const int n = int(m_onsetLow.count());
+    if (n == 0 || m_onsetMid.count() != n || m_onsetHigh.count() != n)
+        return;
+    const int a = qBound(1, secStart + 8, n);
+    const int e = qBound(a, secEnd > secStart ? secEnd : secStart + 64, n + 1);
+    QSet<int> hits;
+    int stabs = 0;
+    int last = -100;                     // one stab in two bars at most: rare, so it reads as played
+    for (int b = a; b < e; b++)
+    {
+        int bits = 0;
+        for (int q = 0; q < 4; q++)
+        {
+            if (onsetLow(b, q) < 8 || onsetMid(b, q) < 12 || onsetHigh(b, q) < 12)
+                continue;
+            const bool groove = hits.contains((b - 1) * 4 + q) || hits.contains((b - 2) * 4 + q)
+                             || hits.contains((b - 4) * 4 + q);
+            hits.insert(b * 4 + q);
+            if (groove == false && bits == 0 && b - last >= 8)
+            {
+                bits |= 1 << q;
+                last = b;
+            }
+        }
+        if (bits != 0)
+        {
+            m_r584Map.insert(b, bits);
+            stabs += qPopulationCount(quint32(bits));
+        }
+    }
+    if (stabs > 0 && m_testTrack == false)
+        logSignal(QStringLiteral("sig:drop-stabs:%1@%2").arg(stabs).arg(secStart));
+}
+
+bool TrackEngine::r584Frame(qint64 now)
+{
+    // TRACK_APP_DROPSTAB_R584: on the stab's quarter every strobe head on stage goes up to the stab's level for 60 %
+    // of the quarter (as BREAK STABS' blink), at MASTER x the strobes' fader; then the levels as they were
+    const QString key = m_r536Key;
+    if (m_doc == nullptr || key.isEmpty() || m_beatMs <= 0.0)
+        return false;
+    const qreal dur = qMax(45.0, m_beatMs * 0.25 * 0.60);
+    const bool running = m_r584Start >= 0 && qreal(now - m_r584Start) < dur;
+    if (m_r584Start >= 0 && running == false)
+    {
+        m_r584Start = -1;
+        reapplyLevels();                 // the stab is over: the strobes as the engine has them
+    }
+    if (m_r584Live == false || m_cast.contains(key) == false || heldFull(key) || r536Owns(key))
+        return running;
+    const int q = int(qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999) * 4.0);
+    const int id = m_lastBeat * 4 + q;
+    const qreal into = qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999) * 4.0 - qreal(q);
+    if ((m_r584Map.value(m_lastBeat, 0) & (1 << q)) != 0 && m_r584Fired != id && into < 0.30)
+    {
+        m_r584Fired = id;
+        m_r584Start = now;
+        m_r584Strength = qBound(0.0, (qMax(0, onsetMid(m_lastBeat, q)) + qMax(0, onsetHigh(m_lastBeat, q))) / 30.0, 1.0);
+        logSignal(QStringLiteral("sig:drop-stab"));
+    }
+    if (m_r584Start < 0 || qreal(now - m_r584Start) >= dur)
+        return m_r584Live;
+    const TrackGroup &g = m_groups.value(key);
+    const qreal lvl = qBound(0.0, (0.55 + 0.45 * m_r584Strength) * trimOf(key) * masterOut(), 1.0);
+    for (int i = 0; i < g.parts.count(); i++)
+    {
+        const QString slot = partSlot(key, i);
+        if (m_active.contains(slot) == false)
+            continue;
+        Function *func = m_doc->function(m_active.value(slot));
+        if (func == nullptr)
+            continue;
+        const qreal out = qMax(m_activeOut.value(slot, 0.0), lvl);
+        m_activeAttr.insert(slot, func->requestAttributeOverride(ENGINE_INTENSITY_ATTR, out));
+        m_activeOut.insert(slot, out);
+    }
+    return true;
+}
+
 int TrackEngine::r580BuildBottom(int beat) const
 {
     // TRACK_APP_BUILDBASS_R580: kick (R501's light line) or a bass onset on any quarter (R461's line) on 5 of the
@@ -4556,6 +4643,88 @@ int TrackEngine::r581BuildBottom(int beat, int secStart) const
             n++;
     }
     return (seen >= 4 && n * 10 >= seen * 6) ? 1 : 0;
+}
+
+void TrackEngine::r583BarLock(const QString &group, EFX *efx, int beats, qreal beatMs, uint ms)
+{
+    // TRACK_APP_BARLOCK_R583 (Tobias 11-09, forslag 4): a head figure of N beats should come round on the beat it
+    // started on, every N beats - a circle or an eight landing on the one, as a programmer times it by hand. The
+    // round drifts: each wrap of the EFX clock drops up to a tick, and every live length change (the slider, the
+    // pitch) moves where the top falls. On each beat the round is read and the length nudged - at most 3 %
+    // longer or shorter, so it pulls in over a bar or two and never jumps (EFX keeps the angle on a length
+    // change). Never the laser bars (their pace is his rule), never a ping-pong or a single shot
+    if (efx == nullptr || beats < 2 || beatMs <= 0.0 || ms < 250 || efx->fixtures().isEmpty()
+        || efx->runOrder() != Function::Loop || m_curBeat < 0 || m_sweepDrawn.contains(group) == false)
+        return;
+    const EFXFixture *ef = efx->fixtures().first();
+    if (ef == nullptr || ef->trackForward() == false)
+        return;
+    // the grid it locks to: the beat the figure was drawn on - set again (to the beat nearest where the round
+    // stands) when the figure is drawn anew, its length changes, or it stands far off (a restart): a nudge, never
+    // a chase after a grid it left
+    const qreal round = qreal(ef->trackRound());
+    auto reAnchor = [&]() {
+        const int k = int(qRound(round * qreal(beats))) % beats;
+        m_r583Anchor.insert(group, m_curBeat - k);
+        m_r583Beats.insert(group, beats);
+        m_r583Drawn.insert(group, m_sweepDrawn.value(group));
+    };
+    if (m_r583Drawn.value(group, -1) != m_sweepDrawn.value(group) || m_r583Beats.value(group, -1) != beats
+        || m_r583Anchor.contains(group) == false)
+        reAnchor();
+    int since = m_curBeat - m_r583Anchor.value(group);
+    qreal err = qreal(((since % beats) + beats) % beats) / qreal(beats) - round;
+    if (err > 0.5)
+        err -= 1.0;
+    else if (err < -0.5)
+        err += 1.0;
+    if (qAbs(err) > 0.30)
+    {
+        reAnchor();
+        since = m_curBeat - m_r583Anchor.value(group);
+        err = qreal(((since % beats) + beats) % beats) / qreal(beats) - round;
+        if (err > 0.5)
+            err -= 1.0;
+        else if (err < -0.5)
+            err += 1.0;
+    }
+    if (qAbs(err) < 0.004)
+    {
+        if (efx->duration() != ms)
+            efx->setDuration(ms);        // on the bar: the plain length
+        return;
+    }
+    // behind (err > 0): a little quicker; ahead: a little slower - the error over about a bar
+    const qreal rate = 1.0 / qreal(ms) + err / (4.0 * beatMs);
+    const qreal want = rate > 0.0 ? 1.0 / rate : qreal(ms) * 1.03;
+    const uint dur = uint(qBound(qreal(ms) * 0.97, want, qreal(ms) * 1.03));
+    if (qAbs(int(efx->duration()) - int(dur)) >= 2)
+        efx->setDuration(dur);
+}
+
+QSet<int> TrackEngine::r585Print(int beat) const
+{
+    // TRACK_APP_MOTIF_R585: the next 16 beats as a set of hits - beat offset x quarter x band (the kick on the beat,
+    // the bass, the mids, the highs at R358 / R461's lines); empty without the curves or past the track's end
+    QSet<int> out;
+    if (m_onsetLow.isEmpty() || beat < 1 || beat + 15 > int(m_onsetLow.count()))
+        return out;
+    for (int i = 0; i < 16; i++)
+    {
+        const int b = beat + i;
+        if (r501KickAt(b, false) == 1)
+            out.insert(i * 16 + 0);
+        for (int q = 0; q < 4; q++)
+        {
+            if (onsetLow(b, q) >= 5)
+                out.insert(i * 16 + 4 + q);
+            if (onsetMid(b, q) >= 4)
+                out.insert(i * 16 + 8 + q);
+            if (onsetHigh(b, q) >= 4)
+                out.insert(i * 16 + 12 + q);
+        }
+    }
+    return out;
 }
 
 bool TrackEngine::r580QuarterHit(int beat, int quarter) const
@@ -13033,6 +13202,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
     m_r536Key = r536StrobeKey();
+    // TRACK_APP_DROPSTAB_R584 (Tobias 11-09, forslag 3: "skal gaa under knappen i settings som de andre stabs paa den
+    // samme knap"): BREAK STABS' switch also gives the DROP its stabs - a quarter where the lows, the mids and the
+    // highs all hit hard at once (an orchestra hit, a "hey", a full-band stab), not one the bar keeps repeating.
+    // The strobe heads on stage flash up on it for 60 % of the quarter, at MASTER x their fader (never past them);
+    // from 80 % ENERGY, after the landing, never under HOLD / CALM / STILL / a mix / BLACKOUT / FLASH / his pad
+    if (sectionChanged || secStart != m_r584For)
+    {
+        m_r584For = secStart;
+        m_r584Map.clear();
+        if (isDrop && breakStabs())
+            r584Section(secStart, secEnd);
+    }
+    m_r584Live = isDrop && breakStabs() && m_r584Map.isEmpty() == false && m_faderReal >= R536_FADER - 1e-9
+                 && landBurstNow() == false && dropBar >= 2 && hold == false && isCalm == false && still == false
+                 && m_mixing == false && m_blackout == false && m_flash == false && m_r536Key.isEmpty() == false
+                 && m_groupOff.contains(m_r536Key) == false;
     const bool r536Want = m_r536Active && isBreak && breakStabs() && m_faderReal >= R536_FADER - 1e-9
                        && m_r536Key.isEmpty() == false && eligible.contains(m_r536Key) && m_groupOff.contains(m_r536Key) == false
                        && hold == false && isCalm == false && still == false && m_mixing == false && m_blackout == false;
@@ -14006,6 +14191,69 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                     // (runde 339: 25-50 %, was 30-60 % - the heads down in
                     // 44 % of the build beats of 10-02 made the builds alike)
                     && fader >= 0.30 && rng->bounded(100) < int(25.0 + 25.0 * qBound(0.0, energy, 1.0));
+    // TRACK_APP_MOTIF_R585 (Tobias 11-09, forslag 1: "lyset genkender gentagelser i nummeret"): at a 4-bar line
+    // (the same material: 70 %+ of the hits shared - a drop's 16-beat blocks of one riff measure 0.66-0.91, a new part 0.3-0.5)
+    // inside a section the next 16 beats are compared with what played at this section's earlier phrase lines
+    // (where the kick, the bass, the snare and the hats hit, quarter by quarter). The same material as the one
+    // the light runs now: it holds (no dice redraw). The same as an EARLIER one (A B A): the light goes back to
+    // the moves and programmes it ran there. Nothing like any of them, on an 8-bar line: new material, a new look.
+    // Not in a build (its own climb), not under HOLD / CALM / STILL, a mix or the DJ's loop; a section line, a
+    // new cast, his hand on the slider still draw as before
+    if (sectionChanged)
+    {
+        m_r585Snaps.clear();
+        m_r585Cur = -1;
+    }
+    else if (m_r585Cur >= 0 && m_r585Cur < m_r585Snaps.count())
+    {
+        m_r585Snaps[m_r585Cur].moves = m_moves;          // what runs over the current material
+        m_r585Snaps[m_r585Cur].motion = m_sectionMotion;
+    }
+    if (softContext && hold == false && isCalm == false && still == false && m_mixing == false && loopRepeat == false
+        && isBuild == false && beatInBar == 0 && bar > 0 && bar % 4 == 0 && m_r585Snaps.isEmpty() == false)
+    {
+        const QSet<int> fp = r585Print(beat);
+        int best = -1;
+        qreal bestSim = 0.0;
+        for (int i = 0; i < m_r585Snaps.count() && fp.count() >= 6; i++)
+        {
+            const QSet<int> &o = m_r585Snaps.at(i).fp;
+            const int uni = int((fp + o).count());
+            const qreal sim = uni > 0 ? qreal((fp & o).count()) / qreal(uni) : 0.0;
+            if (sim > bestSim)
+            {
+                bestSim = sim;
+                best = i;
+            }
+        }
+        if (best >= 0 && bestSim >= 0.70 && best == m_r585Cur)
+        {
+            if (redraw)
+                logSignal(QStringLiteral("sig:motif-hold:%1").arg(m_r585Snaps.at(best).beat));
+            redraw = false;              // the same material: the same light
+        }
+        else if (best >= 0 && bestSim >= 0.70)
+        {
+            const R585Snap s = m_r585Snaps.at(best);
+            foreach (const QString &key, castSorted)
+            {
+                if (s.moves.contains(key))
+                    m_moves.insert(key, s.moves.value(key));
+                if (s.motion.contains(key))
+                    m_sectionMotion.insert(key, s.motion.value(key));
+                else
+                    m_sectionMotion.remove(key);
+            }
+            m_r585Cur = best;
+            redraw = false;
+            logSignal(QStringLiteral("sig:motif-back:%1").arg(s.beat));
+        }
+        else if (fp.count() >= 6 && bestSim < 0.50 && bar % 8 == 0 && redraw == false)
+        {
+            redraw = true;               // new material: a new look
+            logSignal(QStringLiteral("sig:motif-new"));
+        }
+    }
     if (redraw)
     {
         m_movesEnergy = energy;
@@ -14093,6 +14341,24 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // runde 275: the build's moves are drawn once they have been drawn IN it;
     // any beat that is not a build lets go (a hidden drop, a fader under 30 %)
     m_buildDrawn = isBuild && (m_buildDrawn || redraw);
+    // TRACK_APP_MOTIF_R585: a look drawn on a line (the section's first, a redraw) is remembered with what played
+    if ((sectionChanged || redraw) && isBuild == false && beatInBar == 0)
+    {
+        R585Snap s;
+        s.beat = beat;
+        s.fp = r585Print(beat);
+        s.moves = m_moves;
+        s.motion = m_sectionMotion;
+        if (s.fp.count() >= 6)
+        {
+            m_r585Snaps.append(s);
+            while (m_r585Snaps.count() > 8)
+                m_r585Snaps.removeFirst();
+            m_r585Cur = int(m_r585Snaps.count()) - 1;
+        }
+        else
+            m_r585Cur = -1;
+    }
 
     savedMoves(energy); // SAVED_LOOKS_MOVES: restore choices, never raw DMX or absolute laser aims
     /* ---- texture: the lit fixtures of a group sit at slightly different
@@ -19489,6 +19755,8 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // and the ENERGY fader resizes it (the live ratio above)
         if (qAbs(int(efx->duration()) - int(ms)) > int(ms / 50))
             efx->setDuration(ms);
+        if (laser == false && sw.shape >= 0)
+            r583BarLock(group, efx, beats, beatMs, ms);   // TRACK_APP_BARLOCK_R583: the round on the bar
         if (laser && sw.shape >= 0)
         {
             int h = 0, d = 0;

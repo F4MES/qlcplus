@@ -643,6 +643,31 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         syncSawBeat(beat);               // R470_SYNC_SEEN: a beat run early - BLT says it now
         return;
     }
+    // TRACK_APP_CDJLOOP_R582 (Tobias 11-09, forslag 5): the deck says its loop itself (CDJ-3000, a helper that
+    // reads it). From the loop's FIRST pass: the section it wraps is held (m_loopTop), and a beat past its end
+    // is the loop's phantom - dropped, not played (the drop flag right after a looped build bar no longer lands
+    // for a beat) and not held 70 ms. A deck that can say it and plays no loop: the R571 guess stands aside
+    {
+        m_cdjLoopOk = obj.value(QStringLiteral("loopOk")).toBool(false);
+        const QJsonArray lp = obj.value(QStringLiteral("loop")).toArray();
+        if (m_cdjLoopOk && lp.count() == 2 && lp.at(0).toInt() > 0 && lp.at(1).toInt() >= lp.at(0).toInt())
+        {
+            m_cdjLoopFrom = lp.at(0).toInt();
+            m_cdjLoopTo = lp.at(1).toInt();
+        }
+        else
+        {
+            m_cdjLoopFrom = -1;
+            m_cdjLoopTo = -1;
+        }
+        if (m_cdjLoopTo > 0 && playing)
+        {
+            if (beat > m_cdjLoopTo && beat <= m_cdjLoopTo + 1)
+                return;                  // the phantom past the loop's end - the deck jumps back
+            if (beat >= m_cdjLoopFrom && beat <= m_cdjLoopTo)
+                m_loopTop = qMax(m_loopTop, m_cdjLoopTo);
+        }
+    }
     // TRACK_APP_LOOP_R571: a held beat past the loop's top - the jump (or a stop) drops it, anything
     // forward plays it first
     if (m_phantomPass == false && m_phantomObj.isEmpty() == false)
@@ -663,6 +688,7 @@ void TrackManager::handlePosition(const QJsonObject &obj)
             m_phantomObj = QJsonObject();   // the loop jumped (or the deck stopped): it never was
     }
     if (m_phantomPass == false && playing && m_playing && m_jumpFrom > 0 && (beat == m_jumpFrom + 1 || beat == m_jumpFrom)
+        && m_cdjLoopOk == false          // TRACK_APP_CDJLOOP_R582: the deck says its loops - no guessed hold
         && beat == m_currentBeat + 1 && m_lastJumpMs > 0 && now - m_lastJumpMs < 24000)   // (the top: the first pass's
                                                                                              // phantom was the top)
     {
@@ -696,9 +722,10 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         // inner flag of a drop (Timbaland 273) re-landed the drop with a new
         // colour on its first pass. A cue back into a build is another kind.
         const bool firstLoop = m_currentBeat - beat <= 16 && stateAtBeat(beat) == stateAtBeat(m_currentBeat);
-        m_loopTop = (again || firstLoop) ? qMax(m_loopTop, m_currentBeat) : -1;
+        m_loopTop = (again || firstLoop || m_cdjLoopTo > 0) ? qMax(m_loopTop, m_currentBeat) : -1;   // TRACK_APP_CDJLOOP_R582: the deck's loop
     }
-    else if (m_loopTop > 0 && (beat > m_loopTop || beat < m_currentBeat || playing == false))
+    else if (m_loopTop > 0 && (beat > m_loopTop || beat < m_currentBeat || playing == false)
+             && (m_cdjLoopTo <= 0 || beat < m_cdjLoopFrom || beat > m_cdjLoopTo || playing == false))   // TRACK_APP_CDJLOOP_R582
         m_loopTop = -1;                   // played past it, jumped away, or stopped
     if (beat != m_currentBeat || (beat == m_syncAhead && m_syncRealBeat != m_syncAhead))   // R472_SYNC_SAID: BLT says the early one
         m_beatChangedMs = now;

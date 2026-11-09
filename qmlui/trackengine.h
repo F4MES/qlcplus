@@ -1056,6 +1056,16 @@ public:
     int r581BuildBottom(int beat, int secStart) const;   // TRACK_APP_BUILDWIN_R581
     bool r580QuarterHit(int beat, int quarter) const;
     bool m_r580Bottom = false;
+    // TRACK_APP_DROPSTAB_R584: the drop's own stabs (BREAK STABS' switch) - beat -> quarters, the drop measured,
+    // the stab running, the last one fired
+    QHash<int, int> m_r584Map;
+    int m_r584For = -1;
+    bool m_r584Live = false;
+    qint64 m_r584Start = -1;
+    int m_r584Fired = -1;
+    qreal m_r584Strength = 0.0;
+    void r584Section(int secStart, int secEnd);
+    bool r584Frame(qint64 now);
     QHash<QString, int> m_r580Seen;      // the quarter a group last re-hit on (the bass between the beats)
     /** R535_DECL: the music profile, only logged (r535BeatClass / r535Profile / r535DropType) */
     QChar r535BeatClass(int beat) const;
@@ -2399,6 +2409,18 @@ private:
 
     /* generated motion */
     QMap<QString, TrackMove> m_moves;      // this section's move per group
+    // TRACK_APP_MOTIF_R585: what the music played at each phrase line of this section (its fingerprint) and the
+    // moves and programmes the light ran over it - the one running now is kept up to date
+    struct R585Snap
+    {
+        int beat = -1;
+        QSet<int> fp;
+        QMap<QString, TrackMove> moves;
+        QHash<QString, quint32> motion;
+    };
+    QList<R585Snap> m_r585Snaps;
+    int m_r585Cur = -1;
+    QSet<int> r585Print(int beat) const;
     qreal m_movesEnergy = -1.0;            // the energy the moves were last drawn at (the pulse's reference)
     qreal m_movesFader = -1.0;             // ... and the SLIDER then: a jump of a fifth redraws (runde 289)
     QString m_rhythmLead;                 // one leading effect, other groups support it
@@ -2424,6 +2446,10 @@ private:
     QMap<QString, QList<int> > m_moveHistory;   // the last patterns per group - not again
     QMap<QString, QList<int> > m_sweepHistory;  // the last figures per head group
     QHash<QString, int> m_sweepDrawn;            // R447_HEADS_ROUND: the beat each group's figure was drawn on
+    void r583BarLock(const QString &group, class EFX *efx, int beats, qreal beatMs, uint ms);   // TRACK_APP_BARLOCK_R583
+    QHash<QString, int> m_r583Anchor;    // the beat the round counts from, the figure length and draw it was set for
+    QHash<QString, int> m_r583Beats;
+    QHash<QString, int> m_r583Drawn;
     int m_musicTurnBeat = -1;                         // R447_HEADS_ROUND: the last musical turn (BLT)
     bool headsRoundDone(const QString &key, int beat) const;
     int m_fillUntil = -1;

@@ -638,6 +638,10 @@ private:
     qint64 m_midiRescanMs = -1;          // TRACK_APP_MIDIFIX_R575: the last device rescan (no controller listed)
     int m_midiRescans = 0;
     int m_midiOpenTries = 0;             // TRACK_APP_MIDI_R571F: asked the plugin to open the controller
+    // TRACK_APP_CDJLOOP_R582: the followed deck's own loop (from a helper that can read it) - -1 unknown / none
+    bool m_cdjLoopOk = false;
+    int m_cdjLoopFrom = -1;
+    int m_cdjLoopTo = -1;
     int m_midiOpenState = -1;            // TRACK_APP_MIDI_R572: the plugin's own word - 1 open, 0 not open, -1 unknown
     qint64 m_midiOpenLastMs = 0;         // ... and when TRACK last asked it to open
     qint64 m_midiLastMs = -1;            // ... the last value heard, to drop a copy of it (one per extra open request)

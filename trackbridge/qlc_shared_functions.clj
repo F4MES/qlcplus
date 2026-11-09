@@ -3903,6 +3903,25 @@
            (not (.isPlaying ^org.deepsymmetry.beatlink.CdjStatus s))))
     (catch Throwable _ false)))
 
+;; TRACK_APP_CDJLOOP_R582: {:loopOk true :loop [first-beat last-beat]} while the followed deck plays a loop,
+;; {:loopOk true} when it can report loops and plays none, nil when it cannot (an older player) or on any doubt
+(defn qlc-deck-loop []
+  (try
+    (let [[p _] @qlc-sent-track
+          s (when p (.getLatestStatusFor (org.deepsymmetry.beatlink.VirtualCdj/getInstance) (int p)))]
+      (when (and (instance? org.deepsymmetry.beatlink.CdjStatus s)
+                 (.canReportLooping ^org.deepsymmetry.beatlink.CdjStatus s))
+        (let [^org.deepsymmetry.beatlink.CdjStatus st s
+              lend (.getLoopEnd st)
+              grid (when (pos? lend)
+                     (.getLatestBeatGridFor (org.deepsymmetry.beatlink.data.BeatGridFinder/getInstance) (int p)))
+              b0   (when grid (.findBeatAtTime grid (long (+ (.getLoopStart st) 5))))
+              b1   (when grid (.findBeatAtTime grid (long (max 0 (- lend 5)))))]
+          (if (and (.isLooping st) b0 b1 (pos? (int b0)) (>= (int b1) (int b0)))
+            {:loopOk true :loop [(int b0) (int b1)]}
+            {:loopOk true}))))
+    (catch Throwable _ nil)))
+
 (defn qlc-send-position! [beat playing?]
   ;; a stop goes through whatever the beat says. This is the only event that
   ;; carries :playing false, and a deck paused where the position is unknown
@@ -3922,7 +3941,8 @@
                    bpm (assoc :bpm bpm)
                    (some? air) (assoc :air air)
                    (some? faders) (assoc :faders faders)
-                   closure (assoc :mixerTime (:mixerTime closure))))))))   ; R484_LF_CLJPOS2
+                   closure (assoc :mixerTime (:mixerTime closure))
+                   true (merge (qlc-deck-loop))))))))   ; R484_LF_CLJPOS2 / TRACK_APP_CDJLOOP_R582
 
 ;; ---------------------------------------------------------------- wiring
 

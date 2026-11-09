@@ -184,6 +184,11 @@ private:
     /** 0..M_PI*2, current position, recomputed on each timer tick; depends on elapsed() and parent->duration() */
     float m_currentAngle;
 
+public:
+    /** TRACK_APP_BARLOCK_R583: the round so far, 0..1 (read only) */
+    float trackRound() const { return m_currentAngle / 6.2831853f; }
+    bool trackForward() const { return m_runTimeDirection == Function::Forward; }
+
     /*************************************************************************
      * Running
      *************************************************************************/
