@@ -6037,6 +6037,17 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
             // R520_DROPHIT_BARS: his STROBE / DARK burst takes the bars too - still only at the full stop
             // (the amok), only a whole static look, lit (the joins below); the draw is still made first
             m_strobeFocus.clear(); // C20261020: choose from actually eligible groups below
+            // TRACK_APP_DROPBUDGET_R589 (Tobias 11-10: "Lav 1"): the drop starts a budget of its own. The build's
+            // riser strobes every beat of the build's last part - "outside the budget" (R479), but its beats were
+            // counted all the same: after a long build at the top (a 32-bar build: about 50 beats, the window
+            // holds 30) the drop landed on a spent window and got none of its "and again" bursts for up to 64
+            // beats. The window now starts on the landing (the engine's own - not his DROP HIT, not the heads'
+            // accent): the landing and the bursts after it share the budget he knows, the riser no longer eats it
+            if (landing && m_hitStrobeNow == false && headsOnly == false)
+            {
+                m_strobeWindow = beat;
+                m_strobeSpent = 0;
+            }
             m_strobeRate = want;
             m_strobeUntil = beat + beats - 1;
             m_strobeHeadsOnly = headsOnly;
@@ -31597,7 +31608,12 @@ void TrackEngine::hazeAutoTick(bool showOn)
     if (m < 0)
         m += 24 * 60;
     const int i = m / 15;
-    if (i >= ENGINE_CLOCK_POINTS)
+    // TRACK_APP_HAZECLOSE_R589 (Tobias 11-10: "Lav ... 3"): with the closing switched ON, AUTO takes the haze and
+    // the fan to 0 from closing time (1 % a step, as always). The closing's own zeroing runs only with ENERGY by
+    // clock - and ENERGY is by hand after every start - so past the row AUTO held the 02:45 haze and fan for the
+    // rest of the night. The closing OFF: the DJ decides, both hold as before. His hand on HAZE still turns AUTO off
+    const bool closed = m_closingOn && m >= closingMinutes();
+    if (i >= ENGINE_CLOCK_POINTS && closed == false)
         return;                          // outside the row: both hold
     atmosRowLoad();
     // one step toward a point's value; the bottom 3 % is off, as on the sliders
@@ -31611,7 +31627,7 @@ void TrackEngine::hazeAutoTick(bool showOn)
             next = 0;
         return next;
     };
-    const int wantH = m_atmosRowH.value(i, -1);
+    const int wantH = closed ? 0 : m_atmosRowH.value(i, -1);
     if (wantH >= 0 && m_hazeChannels.isEmpty() == false)
     {
         const int at = int(qRound(m_haze * 100.0));
@@ -31622,7 +31638,7 @@ void TrackEngine::hazeAutoTick(bool showOn)
             setHaze(next / 100.0);
         }
     }
-    const int wantF = m_atmosRowF.value(i, -1);
+    const int wantF = closed ? 0 : m_atmosRowF.value(i, -1);
     if (wantF >= 0 && m_fanChannels.isEmpty() == false)
     {
         const int at = int(qRound(m_fan * 100.0));
