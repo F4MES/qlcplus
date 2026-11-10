@@ -1056,6 +1056,15 @@ public:
     int r581BuildBottom(int beat, int secStart) const;   // TRACK_APP_BUILDWIN_R581
     bool r580QuarterHit(int beat, int quarter) const;
     bool m_r580Bottom = false;
+    // TRACK_APP_FIX_R588: the broad round of 11-10 - laser-lab.json read again when it could not be read at the
+    // start, the day's backup, and where a backup export is written (empty: track-settings.json)
+    void r588LabRetry();
+    void r588Backup();
+    int m_r588LabTries = 0;
+    bool m_r588LabWait = false;
+    qint64 m_r588BackupMs = 0;
+    bool m_r588OtherSaid = false;
+    QString m_r588ExportPath;
     // TRACK_APP_STROBECAP_R587: the strobe lamps' hard ceiling - the cap each strobe group has now (0-255), the
     // values the universes had cut at the last beat, and when it was last logged
     void r587StrobeCap(const QString &group, bool force);

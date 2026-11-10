@@ -4604,6 +4604,75 @@ bool TrackEngine::r584Frame(qint64 now)
     return true;
 }
 
+void TrackEngine::r588LabRetry()
+{
+    // TRACK_APP_FIX_R588 (#74): laser-lab.json was there but could not be read when the table was built (Documents
+    // on a drive not up yet, a sync holding the file) - R544 never writes over it, but nothing read it again: every
+    // kept LASER LAB look was out of the show until something else rebuilt the table. It is tried again every
+    // 15 s, eight times; the table is rebuilt once, when it reads
+    if (m_labLoadBad == false || m_r588LabWait || m_r588LabTries >= 8)
+        return;
+    m_r588LabTries++;
+    m_r588LabWait = true;
+    QTimer::singleShot(15000, this, [this]() {
+        m_r588LabWait = false;
+        if (m_labLoadBad == false)
+            return;
+        labLoad();
+        if (m_labLoadBad == false)
+        {
+            logSignal(QStringLiteral("sig:lab-store-back:%1").arg(m_r588LabTries));
+            rebuild();
+        }
+        else
+            r588LabRetry();
+    });
+}
+
+void TrackEngine::r588Backup()
+{
+    // TRACK_APP_FIX_R588: a dated copy of everything he has taught the engine - the settings as EXPORT writes them
+    // (roles, stars, verdicts, bans, LAB choices, the memories) and laser-lab.json - in Documents/QLC+/backup, once
+    // a day, the newest 14 kept. EXPORT's own file is one file: a bad night or a wrong IMPORT had nothing older
+    // to go back to. Only at a quiet moment (a minute after the start, no beat for half a minute): the export
+    // is a few hundred ms. To go back: copy a track-settings-<date>.json over track-settings.json and IMPORT
+    const qint64 now = m_clock.elapsed();
+    if (now < 60000 || now - m_r588BackupMs < 60000 || m_funcs.isEmpty() || m_testTrack)
+        return;
+    m_r588BackupMs = now;
+    if (m_beatStartMs > 0 && now - m_beatStartMs < 30000)
+        return;                          // the music plays: later
+    const QString day = QDate::currentDate().toString(QStringLiteral("yyyyMMdd"));
+    QSettings settings;
+    if (settings.value(QStringLiteral("trackengine/backup-day")).toString() == day)
+        return;
+    const QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QStringLiteral("/QLC+");
+    const QString dir = docs + QStringLiteral("/backup");
+    if (QDir().mkpath(dir) == false)
+        return;
+    m_r588ExportPath = dir + QStringLiteral("/track-settings-") + day + QStringLiteral(".json");
+    exportSettings();
+    const bool ok = QFileInfo(m_r588ExportPath).size() > 2;
+    m_r588ExportPath.clear();
+    if (ok == false)
+        return;                          // tried again in a minute
+    settings.setValue(QStringLiteral("trackengine/backup-day"), day);
+    const QString lab = docs + QStringLiteral("/laser-lab.json");
+    if (m_labLoadBad == false && QFileInfo(lab).size() > 2)
+    {
+        const QString to = dir + QStringLiteral("/laser-lab-") + day + QStringLiteral(".json");
+        QFile::remove(to);
+        QFile::copy(lab, to);
+    }
+    foreach (const QString &prefix, QStringList() << QStringLiteral("track-settings-") << QStringLiteral("laser-lab-"))
+    {
+        QStringList have = QDir(dir).entryList(QStringList() << prefix + QStringLiteral("????????.json"), QDir::Files, QDir::Name);
+        while (have.count() > 14)
+            QFile::remove(dir + QLatin1Char('/') + have.takeFirst());
+    }
+    logSignal(QStringLiteral("sig:backup:") + day);
+}
+
 void TrackEngine::r587StrobeCap(const QString &group, bool force)
 {
     // TRACK_APP_STROBECAP_R587 (Tobias 11-09/10: "igen i weekenden stod med fadere der ikke reagerede ... Specifikt
@@ -4658,7 +4727,21 @@ void TrackEngine::r587StrobeCaps(bool force)
             hits += uni->trackCapHits();
     const int more = hits - m_r587Hits;
     m_r587Hits = hits;
-    if (more >= 30 && m_clock.elapsed() - m_r587LogMs >= 10000 && m_testTrack == false)
+    // TRACK_APP_FIX_R588 (#45): a programme with its own dimmer and colour is MEANT to stand on the ceiling
+    // (its colour carries the level) - nothing to report
+    bool r588Known = false;
+    foreach (const QString &key, m_groupOrder)
+    {
+        if (m_groups.value(key).strobes == false)
+            continue;
+        const quint32 mf = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        if (mf != Function::invalidId() && m_funcs.contains(mf))
+        {
+            const TrackFuncInfo &mi = m_funcs[mf];
+            r588Known = r588Known || (mi.dimmer && mi.setsColour && mi.coversColour);
+        }
+    }
+    if (more >= 30 && r588Known == false && m_clock.elapsed() - m_r587LogMs >= 10000 && m_testTrack == false)
     {
         m_r587LogMs = m_clock.elapsed();
         QStringList who;
@@ -4905,6 +4988,8 @@ void TrackEngine::newTrackMemory(const QString &title)
     if (title != m_trackTitle)          // the same track sent again keeps what its drops looked like
     {
         m_lookMemory.clear();
+        hitAmokEnd();                    // TRACK_APP_FIX_R588 (#75): his DROP HIT's amok ends with its track
+        m_hitAmokOwed = false;
         m_motifs.clear(); // C20261022: never borrow another song
         m_lookRepeat = 0;
         m_previousFlowTrack.clear(); // C20261020: contrast is per track
@@ -7113,10 +7198,49 @@ void TrackEngine::saveRoles()
     if (m_funcs.isEmpty())
         return;
 
+    // TRACK_APP_FIX_R588 (#42): the stores are keyed by programme number, and this wrote only the programmes of
+    // the show that is open - another show file (a test show, an old copy) opened once threw away every role, star,
+    // verdict and ban of his own. When most of what is stored belongs to programmes this show does not have, it is
+    // another show: what is stored for them is kept as it is. (His own show with a few programmes deleted is not:
+    // theirs go, as before - a number used again must not inherit a ban)
+    const QString r588Keys[5] = { SETTINGS_ENGINE_ROLES, SETTINGS_ENGINE_STARS, SETTINGS_ENGINE_RATING,
+                                  SETTINGS_ENGINE_BANNED, SETTINGS_ENGINE_SEEN };
+    QStringList r588Kept[5];
+    {
+        QSettings stored;
+        int all = 0, foreign = 0;
+        for (int k = 0; k < 5; k++)
+        {
+            const QStringList was = stored.value(r588Keys[k]).toString().split(';', Qt::SkipEmptyParts);
+            foreach (const QString &e, was)
+            {
+                bool ok = false;
+                const quint32 fid = e.section(':', 0, 0).toUInt(&ok);
+                if (ok == false)
+                    continue;
+                all++;
+                if (m_funcs.contains(fid) == false)
+                {
+                    foreign++;
+                    r588Kept[k] << e;
+                }
+            }
+        }
+        if (all < 20 || foreign * 2 <= all)
+            for (int k = 0; k < 5; k++)
+                r588Kept[k].clear();
+        else if (m_r588OtherSaid == false)
+        {
+            m_r588OtherSaid = true;
+            crumb(QStringLiteral("roles: another show (%1 of %2 stored are not here) - kept").arg(foreign).arg(all));
+        }
+    }
+
     QStringList entries;
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
         if (it.value().role != it.value().guess || it.value().step)
             entries << QString("%1:%2").arg(it.key()).arg(it.value().role);
+    entries << r588Kept[0];
     QSettings().setValue(SETTINGS_ENGINE_ROLES, entries.join(';'));
     QSettings().setValue(SETTINGS_ENGINE_GROUPOFF,
                          QStringList(m_groupOff.values()).join(';'));
@@ -7125,6 +7249,7 @@ void TrackEngine::saveRoles()
     for (QHash<quint32, TrackFuncInfo>::const_iterator it = m_funcs.constBegin(); it != m_funcs.constEnd(); ++it)
         if (it.value().stars != it.value().starsGuess && it.value().generated == false)
             stars << QString("%1:%2").arg(it.key()).arg(it.value().stars);
+    stars << r588Kept[1];
     QSettings().setValue(SETTINGS_ENGINE_STARS, stars.join(';'));
 
     QStringList rating, bans, exposure;
@@ -7147,9 +7272,23 @@ void TrackEngine::saveRoles()
                 exposure << QString("%1:%2:%3").arg(it.key()).arg(b).arg(info.seen[b]);
         }
     }
+    rating << r588Kept[2];
+    bans << r588Kept[3];
+    exposure << r588Kept[4];
     QSettings().setValue(SETTINGS_ENGINE_RATING, rating.join(';'));
     QSettings().setValue(SETTINGS_ENGINE_BANNED, bans.join(';'));
     QSettings().setValue(SETTINGS_ENGINE_SEEN, exposure.join(';'));
+    // TRACK_APP_FIX_R588 (#20): the recipe store took a few new entries on every NEXT and thumb, never lost one,
+    // and is written in full each time. Over 6000 the weakest go first - a single thumb down nothing repeated -
+    // down to 5000; every thumb up and every repeated verdict stays
+    if (m_autoRatings.count() > 6000)
+    {
+        for (auto it = m_autoRatings.begin(); it != m_autoRatings.end() && m_autoRatings.count() > 5000;)
+            if (it.value().first == 0 && it.value().second <= 1)
+                it = m_autoRatings.erase(it);
+            else
+                ++it;
+    }
     QJsonObject recipes;
     for (auto it = m_autoRatings.constBegin(); it != m_autoRatings.constEnd(); ++it)
     {
@@ -8891,7 +9030,7 @@ QString TrackEngine::exportSettings()
     // QSaveFile: written beside the real one and moved into place, so a crash
     // halfway leaves the previous export - the only backup of the ratings,
     // roles and bans - rather than an empty file (runde 176)
-    QSaveFile file(engineSettingsPath());
+    QSaveFile file(m_r588ExportPath.isEmpty() ? engineSettingsPath() : m_r588ExportPath);   // TRACK_APP_FIX_R588: or the backup
     if (file.open(QIODevice::WriteOnly) == false)
         return tr("could not write %1").arg(file.fileName());
     file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
@@ -11041,7 +11180,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // loop over (last build beat, landing) kept landFree on the build beat,
     // the strobes over MASTER outside the landing
     // R520_DROPHIT_LANDGUARD: DROP HIT's burst is four bars (ENGINE_HIT_BURST 16) - "until - 8" cleared it on its first beat
-    if (m_landBurstUntil >= 0 && (beat > m_landBurstUntil || beat < m_landBurstUntil - 16 || beat < m_landBurstFrom))
+    // TRACK_APP_FIX_R588 (#64): ... or the track jumped back inside it (a DJ loop over the drop's first bar played
+    // the landing again and again, free of MASTER and the faders for as long as the loop ran) - one landing, once
+    if (m_landBurstUntil >= 0 && (beat > m_landBurstUntil || beat < m_landBurstUntil - 16 || beat < m_landBurstFrom
+                                  || (m_lastBeat >= 0 && beat < m_lastBeat && hitBurstNow(beat) == false)))
     {
         m_landBurstUntil = -1;   // the landing is over: the strobes back under MASTER and the trim
         reapplyLevels();
@@ -19022,7 +19164,23 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
             const bool landFree = (g.strobes || (hitBurstNow(m_curBeat) && hitLights(mg))) && landBurstNow();
             if (mfi.dimmer && mg.isEmpty() == false && g.patternDevice == false && landFree == false
                 && heldFull(mg) == false)
-                return masterOut() * trimOf(mg);
+            {
+                // TRACK_APP_FIX_R588 (#45): a programme that writes the dimmer AND paints the colour on every lamp
+                // (13 of his strobe scenes) had both scaled - the lamp showed (MASTER x fader) squared: 25 % at
+                // half, next to nothing at a quarter, so the fader's lower half did nothing. The dimmer and the
+                // colour multiply in the lamp, so each gets the root - and where the strobes' ceiling (R587) holds
+                // the dimmer at MASTER x fader already, the colour takes what is left. The lamp shows MASTER x
+                // fader, as every other programme; never more
+                const qreal s = masterOut() * trimOf(mg);
+                if (mfi.setsColour && mfi.coversColour && g.rgb && s > 0.0 && s < 1.0)
+                {
+                    const qreal capF = (g.strobes && m_r587Cap.value(mg, 255) < 255)
+                                       ? qBound(0.0, masterOut() * m_groupTrim.value(mg, 1.0), 1.0) : 1.0;
+                    const qreal c = capF > 0.0 ? s / capF : 0.0;
+                    return (c >= capF) ? qBound(0.0, c, 1.0) : std::sqrt(s);
+                }
+                return s;
+            }
             return 1.0;
         }
         const QString group = slotGroup(slot);
@@ -20474,7 +20632,8 @@ void TrackEngine::logSignal(const QString &tag)
     // is about the look that is on stage, not about the bar the track has
     // reached, so this holds for the sig: lines too.
     QString sect = m_lookState.isEmpty() ? m_lastState : m_lookState;
-    QString mark = QString(tag).replace(',', ' ');
+    // TRACK_APP_FIX_R588 (#57): ... and a line break or a quote in a title broke the row for everything reading it
+    QString mark = QString(tag).replace(',', ' ').replace('\n', ' ').replace('\r', ' ').replace('"', '\'');
     crumb(mark);                         // R435_CRUMBS: his presses, in the trail too
 
     // A verdict is filed against the snapshot markVerdictPoint() took when
@@ -21196,7 +21355,9 @@ int TrackEngine::clockPercent() const
     // time, until 05:00 - the house decides when it is over
     // R463_LAST_CLOCK: ... not while LAST TRACK holds: nought put the start scene up
     // over the last track and the house light
-    if (m_clockCurve.isEmpty() || (minutes >= (m_closingOn ? close : 540) && lastTrackHolds() == false))
+    // TRACK_APP_FIX_R588 (#76): 06:00, where LAST TRACK's own window ends - at 05:00 the room went from the last
+    // point to nought (the start scene) in one step with the music still playing
+    if (m_clockCurve.isEmpty() || (minutes >= (m_closingOn ? close : 600) && lastTrackHolds() == false))
         return 0;                    // closed, until 20:00
     const int last = int(m_clockCurve.count()) - 1;
     auto curveAt = [&](int m) {
@@ -21492,6 +21653,7 @@ void TrackEngine::closingTick(bool showOn)
         return;
     lastTrackTick(showOn);                           // R458_LAST_TRACK
     r587StrobeCaps(false);               // TRACK_APP_STROBECAP_R587: SHOW OFF, a lab, the start scene - within 200 ms
+    r588Backup();                        // TRACK_APP_FIX_R588: the day's backup, at a quiet moment
     hazeNagTick(showOn);                             // R467_HAZE_NAG
     padFlashTick();                                  // R469_GROUP_FLASH
     clockHandTick(showOn);                           // R470_CLOCK_HAND
@@ -25647,6 +25809,7 @@ void TrackEngine::labEnsureShow()
     m_labFuncKey.clear();
     m_labOnlyGroups.clear();
     labLoad();
+    r588LabRetry();                      // TRACK_APP_FIX_R588 (#74)
     labScan();
     if (m_doc == nullptr || labReady() == false)
         return;
@@ -27325,6 +27488,10 @@ QVariantList TrackEngine::sendItems()
     return out;
 }
 
+#include <QThread>
+#include <QSharedPointer>
+#include <QAtomicInt>
+
 bool TrackEngine::sendMake(const QStringList &ids)
 {
     if (m_sendState == 1)
@@ -27335,6 +27502,7 @@ bool TrackEngine::sendMake(const QStringList &ids)
     int copied = 0;
     if (ids.contains(QStringLiteral("settings")) && sendSnapshot(folder + "/settings-snapshot.json"))
         copied++;
+    QList<QPair<QString, QString> > jobs;
     foreach (const QString &id, ids)
     {
         const QStringList files = sendFilesOf(id);
@@ -27345,11 +27513,32 @@ bool TrackEngine::sendMake(const QStringList &ids)
             if (id == QStringLiteral("wer"))
                 name = QFileInfo(f).dir().dirName() + "-Report.wer";
             const QString to = folder + "/" + name;
-            QFile::remove(to);
-            if (QFile::copy(f, to))
-                copied++;
+            jobs << qMakePair(f, to);
         }
     }
+    // TRACK_APP_FIX_R588 (#29): the copies - up to a gigabyte of logs and dumps - ran here, on the thread that
+    // draws the page and steps the light: the show stood still until they were done. They run on a thread of
+    // their own now; the note, the log line and the zip follow when it has finished
+    const QString zip = folder + ".zip";
+    QFile::remove(zip);
+    m_sendFolder = folder;
+    m_sendZip = zip;
+    m_sendState = 1;
+    m_sendResult = tr("Packing %1 files ...").arg(copied + int(jobs.count()));
+    emit sendChanged();
+    QSharedPointer<QAtomicInt> done(new QAtomicInt(copied));
+    QThread *worker = QThread::create([jobs, done]() {
+        for (int i = 0; i < jobs.count(); i++)
+        {
+            QFile::remove(jobs.at(i).second);
+            if (QFile::copy(jobs.at(i).first, jobs.at(i).second))
+                done->fetchAndAddRelaxed(1);
+        }
+    });
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, worker, [worker]() { worker->wait(30000); });
+    connect(worker, &QThread::finished, this, [this, worker, done, ids, stamp, folder, zip]() {
+    worker->deleteLater();
+    const int copied = done->loadRelaxed();
     // a short note: what this is, which build, when
     QFile note(folder + "/README.txt");
     if (note.open(QIODevice::WriteOnly | QIODevice::Text))
@@ -27364,13 +27553,6 @@ bool TrackEngine::sendMake(const QStringList &ids)
     logSignal(QStringLiteral("sig:send-to-claude:%1:%2").arg(stamp).arg(copied));
     // pack it: Windows 10+ has bsdtar as tar.exe (-a picks zip from the name),
     // macOS and Linux have zip; without either the folder is the delivery
-    const QString zip = folder + ".zip";
-    QFile::remove(zip);
-    m_sendFolder = folder;
-    m_sendZip = zip;
-    m_sendState = 1;
-    m_sendResult = tr("Packing %1 files ...").arg(copied);
-    emit sendChanged();
     QProcess *p = new QProcess(this);
     p->setWorkingDirectory(folder);
     connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
@@ -27391,6 +27573,8 @@ bool TrackEngine::sendMake(const QStringList &ids)
 #else
     p->start(QStringLiteral("zip"), QStringList() << "-r" << "-q" << zip << ".");
 #endif
+    });
+    worker->start();
     return true;
 }
 
@@ -28196,7 +28380,11 @@ void TrackEngine::hitStep(int beat, bool isDrop, const QString &nextState, int b
         if (beat > m_hitStrobeFrom)
             m_hitStrobePlayed += m_hitStep;
         if (beat > m_hitStrobeUntil || beat < m_hitStrobeFrom || m_hitStrobePlayed > m_hitStrobeUntil - m_hitStrobeFrom)
+        {
+            if (m_landBurstUntil == m_hitStrobeUntil)
+                m_landBurstUntil = -1;   // TRACK_APP_FIX_R588 (#64): his burst is over - so is its freedom from the faders
             m_hitStrobeUntil = -1;
+        }
         else
             m_hitStrobeNow = (beat == m_hitStrobeFrom && m_hitStrobePlayed == 0);
     }
@@ -29306,7 +29494,9 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
             why = QStringLiteral("drop-over");
         else if (beat < m_formFrom)
             why = QStringLiteral("jump-back");
-        else if (beat >= m_formUntil && beatInBar == 0
+        // TRACK_APP_FIX_R588 (#16): the storm against the drop's phase as it is NOW - its length was fixed on the
+        // landing beat, before this drop's size and hardness were measured: the previous drop's numbers
+        else if (beat >= (m_formNow == DF_STORM ? m_formFrom + dropPhaseBeats() - 1 : m_formUntil) && beatInBar == 0
                  && (nextState == QStringLiteral("drop") || secEnd - beat > 16))   // not for the drop's last bars
             why = QStringLiteral("played");
         else if (isCalm || still)
@@ -35292,13 +35482,19 @@ void TrackEngine::savedBeat(const QString &state, int beat, int boundary)
     if (!m_savedQueue.contains(qkey))
         for (auto it = m_savedQueue.constBegin(); it != m_savedQueue.constEnd(); ++it)
             if (savedById(it.value()).value(QStringLiteral("section")).toString() == state
-                && ((it.key() < boundary && boundary - it.key() <= 8)
+                && ((it.key() < boundary && boundary - it.key() <= 31)   // TRACK_APP_FIX_R588 (#49): quantise 16 / 32
                     || (state == QStringLiteral("drop") && r544EarlyFlag(boundary, it.key())))) { qkey = it.key(); break; }
     if (m_savedQueue.contains(qkey) && beat >= boundary && beat < boundary + 4) {
         const QString id = m_savedQueue.take(qkey); const auto row = savedById(id);
         if (row.value(QStringLiteral("section")).toString() == state && savedInvalid(row).isEmpty() && !m_hold && calmBarsLeft() == 0) { activate = row; used = true; }
     }
-    for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();) if (it.key() + 3 < beat) it = m_savedQueue.erase(it); else ++it;
+    // TRACK_APP_FIX_R588 (#49): a look queued at a flag waits until its section HAS started - with SETUP's quantise
+    // at 16 or 32 that is up to 31 beats after the flag, and it was thrown away 4 beats after the flag
+    for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();)
+    {
+        const bool waiting = boundary < it.key() && beat - it.key() < 32;
+        if (it.key() + 3 < beat && waiting == false) it = m_savedQueue.erase(it); else ++it;
+    }
     if (!activate.isEmpty() && savedInvalid(activate).isEmpty()) {
         savedStop();
         m_savedPlaying = activate; m_savedPlayingFrom = boundary; m_savedPlayingState = state;
@@ -47929,7 +48125,10 @@ void TrackEngine::aniPick(int index)
         m_r561PickState.clear();
         m_r561Queued = false;
         if (key.isEmpty() == false)
+        {
             m_sectionMotion.remove(key);
+            m_r572SecLook.remove(key);   // TRACK_APP_FIX_R588 (#65): the section's held look was his pick - the engine picks anew now
+        }
         r561Changed(QStringLiteral("engine"));
         return;
     }
@@ -47985,7 +48184,10 @@ void TrackEngine::aniAuto()
     m_r561Queued = false;
     const QString key = r561AniKey();
     if (key.isEmpty() == false)
+    {
         m_sectionMotion.remove(key);
+        m_r572SecLook.remove(key);       // TRACK_APP_FIX_R588 (#65)
+    }
     r561Changed(QStringLiteral("auto"));
 }
 

@@ -641,6 +641,13 @@ private:
     // TRACK_APP_CDJLOOP_R582: the followed deck's own loop (from a helper that can read it) - -1 unknown / none
     bool m_cdjLoopOk = false;
     bool m_cdjLooping = false;           // TRACK_APP_NXS2LOOP_R586: the deck says it loops (an NXS2: not where)
+    // TRACK_APP_FIX_R588: the reader went quiet for 30 s (the warning stays until it speaks again), his flag
+    // corrections made while no reader was connected (title -> the line), the port's retry said once, and the
+    // pads a controller that went away still held
+    bool m_r588Quiet = false;
+    QHash<QString, QByteArray> m_r588Markers;
+    bool m_r588PortSaid = false;
+    void r588MidiLetGo();
     int m_cdjLoopFrom = -1;
     int m_cdjLoopTo = -1;
     int m_midiOpenState = -1;            // TRACK_APP_MIDI_R572: the plugin's own word - 1 open, 0 not open, -1 unknown
@@ -650,7 +657,7 @@ private:
     uchar m_midiLastVal = 0;
     void midiOpenIfDeaf(class QLCIOPlugin *midi, quint32 line);
     // TRACK_APP_MIDIFIX_R574: another controller / number is another start - what was heard is forgotten
-    void midiOwnReset() { m_midiPatchWorks = false; m_midiRawCount = 0; m_midiOpenTries = 0; m_midiOpenState = -1; }
+    void midiOwnReset() { m_midiPatchWorks = false; m_midiRawCount = 0; m_midiOpenTries = 0; m_midiOpenState = -1; r588MidiLetGo(); }
     bool m_midiLearn = false;
     bool m_midiCanUndo = false;
     bool m_midiDirty = false;

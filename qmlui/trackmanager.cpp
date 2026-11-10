@@ -239,9 +239,33 @@ void TrackManager::restartServer()
         m_server->close();
 
     if (m_server->listen(QHostAddress::Any, quint16(m_port)))
+    {
         qDebug() << "[TrackManager] listening on port" << m_port;
+        m_r588PortSaid = false;
+    }
     else
-        qWarning() << "[TrackManager] cannot listen on" << m_port << m_server->errorString();
+    {
+        // TRACK_APP_FIX_R588 (#80): the port was busy (the instance before this one still closing, another program
+        // for a moment) and nothing tried again - the CDJ reader could never connect until a restart. Every 3 s
+        if (m_r588PortSaid == false)
+            qWarning() << "[TrackManager] cannot listen on" << m_port << m_server->errorString() << "- trying again";
+        m_r588PortSaid = true;
+        const int port = m_port;
+        QTimer::singleShot(3000, this, [this, port]() {
+            if (m_server != nullptr && m_server->isListening() == false && port == m_port)
+                restartServer();
+        });
+    }
+}
+
+void TrackManager::r588MidiLetGo()
+{
+    // TRACK_APP_FIX_R588: the controller is gone (unplugged, a hub asleep, patched anew) - a pad it held (FLASH,
+    // BLACKOUT, STUTTER) never sends its release, and the room stood in white or in the dark until someone found
+    // the button on the screen. What it held is let go, as on a release
+    for (int i = 0; i < m_midiMaps.count(); i++)
+        if (m_midiMaps.at(i).armed)
+            midiRelease(m_midiMaps[i]);
 }
 
 int TrackManager::listenPort() const { return m_port; }
@@ -270,6 +294,9 @@ void TrackManager::slotNewConnection()
         connect(sock, SIGNAL(readyRead()), this, SLOT(slotReadyRead()));
         connect(sock, SIGNAL(disconnected()), this, SLOT(slotDisconnected()));
         forgetLinkState();                       // LINK_FORGET_FJ3: BLT starts afresh
+        for (auto it = m_r588Markers.constBegin(); it != m_r588Markers.constEnd(); ++it)
+            sock->write(it.value());             // TRACK_APP_FIX_R588 (#40): his corrections it never heard
+        m_r588Markers.clear();
         emit connectedChanged();
     }
 }
@@ -327,6 +354,7 @@ void TrackManager::slotReadyRead()
     QTcpSocket *sock = qobject_cast<QTcpSocket *>(sender());
     if (sock == nullptr)
         return;
+    m_r588Quiet = false;                 // TRACK_APP_FIX_R588 (#27): the reader speaks
 
     // out of the hash while we parse: handling a line may add or drop
     // a client, and that would move the buffers under us
@@ -1250,7 +1278,9 @@ void TrackManager::slotEnergyTick()
     // watchdog: a playing track that stops sending positions for four
     // seconds is a broken link, not a pause
     // no client at all is a broken link right away
-    bool stale = m_playing && ((m_lastPosMs > 0
+    // TRACK_APP_FIX_R588 (#27): ... and stays one after the half minute below has called the track over - the
+    // warning went out at 30 s with the link still dead; it goes when the reader says anything again
+    bool stale = (m_playing || m_r588Quiet) && ((m_lastPosMs > 0
               && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 4000)
              || (m_clients.isEmpty() && m_testTrack == false));   // R452_TT_STALE1: the test track needs no BLT
     if (stale != m_linkStale)
@@ -1269,6 +1299,7 @@ void TrackManager::slotEnergyTick()
     if (stale && m_playing && QDateTime::currentMSecsSinceEpoch() - m_lastPosMs > 30000)
     {
         m_playing = false;
+        m_r588Quiet = true;              // TRACK_APP_FIX_R588 (#27)
         m_lastEngineBeat = -1;           // R187_WATCHDOG_BEAT: a resume on the same beat runs
         emit positionChanged();
         if (m_engine != nullptr && m_autoRun && m_roleMode)
@@ -5580,9 +5611,27 @@ void TrackManager::sendMarkers(bool manual)
     obj.insert(QStringLiteral("markers"), arr);
     QByteArray line = QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n";
 
+    int wrote = 0;
     foreach (QTcpSocket *client, m_clients)
         if (client != nullptr && client->state() == QAbstractSocket::ConnectedState)
+        {
             client->write(line);
+            wrote++;
+        }
+    // TRACK_APP_FIX_R588 (#40): nobody to tell (the reader restarting, the link down) - his correction lives only
+    // in the reader's cache, so it was gone the next time the track came. Kept (the latest per track) and sent
+    // when a reader connects
+    if (manual && m_title.isEmpty() == false)
+    {
+        if (wrote == 0)
+        {
+            if (m_r588Markers.count() >= 50 && m_r588Markers.contains(m_title) == false)
+                m_r588Markers.erase(m_r588Markers.begin());
+            m_r588Markers.insert(m_title, line);
+        }
+        else
+            m_r588Markers.remove(m_title);
+    }
 }
 
 /*********************************************************************
