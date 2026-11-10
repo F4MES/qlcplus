@@ -162,6 +162,11 @@ public:
 
     uchar applyPassthrough(int channel, uchar value);
 
+    /** TRACK_APP_STROBECAP_R587: a ceiling on what one channel may send, whatever wrote it (255 = none) - TRACK's
+     *  last line for the strobe lamps' master dimmers; and how many values it has cut down so far */
+    void setTrackCap(int channel, uchar cap);
+    int trackCapHits() const;
+
 protected slots:
     /**
      * Called every time the Grand Master changed value
@@ -498,6 +503,8 @@ protected:
     QScopedPointer<QByteArray> m_preGMValues;
     /** Array of values AFTER the Grand Master changes (applyGM) */
     QScopedPointer<QByteArray> m_postGMValues;
+    uchar m_trackCap[UNIVERSE_SIZE];     // TRACK_APP_STROBECAP_R587
+    QAtomicInt m_trackCapHits;
     /** Array of the last preGM values written before the zeroIntensityChannels call  */
     QScopedPointer<QByteArray> m_lastPostGMValues;
     /** Array of non-intensity only values */

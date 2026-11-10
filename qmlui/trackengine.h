@@ -1056,6 +1056,13 @@ public:
     int r581BuildBottom(int beat, int secStart) const;   // TRACK_APP_BUILDWIN_R581
     bool r580QuarterHit(int beat, int quarter) const;
     bool m_r580Bottom = false;
+    // TRACK_APP_STROBECAP_R587: the strobe lamps' hard ceiling - the cap each strobe group has now (0-255), the
+    // values the universes had cut at the last beat, and when it was last logged
+    void r587StrobeCap(const QString &group, bool force);
+    void r587StrobeCaps(bool force);
+    QHash<QString, int> m_r587Cap;
+    int m_r587Hits = 0;
+    qint64 m_r587LogMs = -100000;
     // TRACK_APP_DROPSTAB_R584: the drop's own stabs (BREAK STABS' switch) - beat -> quarters, the drop measured,
     // the stab running, the last one fired
     QHash<int, int> m_r584Map;

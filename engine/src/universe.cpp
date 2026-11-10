@@ -74,6 +74,7 @@ Universe::Universe(quint32 id, GrandMaster *gm, QObject *parent)
     , m_passthroughValues()
 {
     m_modifiers.fill(NULL, UNIVERSE_SIZE);
+    memset(m_trackCap, 255, sizeof(m_trackCap));   // TRACK_APP_STROBECAP_R587: no ceiling
 
     connect(m_grandMaster, SIGNAL(valueChanged(uchar)),
             this, SLOT(slotGMValueChanged()));
@@ -624,9 +625,26 @@ void Universe::updatePostGMValue(int channel)
         value = applyGM(channel, value);
 
     value = applyModifiers(channel, value);
+    // TRACK_APP_STROBECAP_R587: TRACK's ceiling - every write of the channel ends here, so nothing gets past it
+    if (channel >= 0 && channel < UNIVERSE_SIZE && value > m_trackCap[channel])
+    {
+        value = m_trackCap[channel];
+        m_trackCapHits.fetchAndAddRelaxed(1);
+    }
     value = applyPassthrough(channel, value);
 
     (*m_postGMValues)[channel] = static_cast<char>(value);
+}
+
+void Universe::setTrackCap(int channel, uchar cap)
+{
+    if (channel >= 0 && channel < UNIVERSE_SIZE)
+        m_trackCap[channel] = cap;
+}
+
+int Universe::trackCapHits() const
+{
+    return m_trackCapHits.loadRelaxed();
 }
 
 /************************************************************************

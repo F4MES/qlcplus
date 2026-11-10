@@ -4604,6 +4604,76 @@ bool TrackEngine::r584Frame(qint64 now)
     return true;
 }
 
+void TrackEngine::r587StrobeCap(const QString &group, bool force)
+{
+    // TRACK_APP_STROBECAP_R587 (Tobias 11-09/10: "igen i weekenden stod med fadere der ikke reagerede ... Specifikt
+    // strobe-lamperne er vigtige, da de er meget lyse" -> "Lav 1"): the strobe lamps' HARD ceiling. Whatever
+    // writes a strobe lamp's master dimmer - the engine, a programme of the show file with its own dimmer, a
+    // path nobody has found yet - the universe cuts it down to MASTER x the group's fader on every frame.
+    // Free (no ceiling) only where his rules say so: the drop's landing and his DROP HIT's burst, FLASH WHITE or
+    // a pad held (heldFull), LAST TRACK's white and the house light; and where the engine is not the one on
+    // stage: SHOW OFF, the start scene, the labs, the self test. The engine's own levels are at or under the
+    // ceiling by construction (level x pulse x trim x MASTER), so the show it draws is unchanged
+    const TrackGroup &g = m_groups.value(group);
+    if (g.strobes == false || m_doc == nullptr || m_doc->inputOutputMap() == nullptr)
+        return;
+    int cap = 255;
+    const bool engineOn = m_showOnNow && m_startScene == false && m_lastStage == 0 && m_labActive == false
+                       && m_slabActive == false && m_clabActive == false && m_testTimer.isActive() == false;
+    const bool landFree = (g.strobes || (hitBurstNow(m_curBeat) && hitLights(group))) && landBurstNow();
+    if (engineOn && landFree == false && heldFull(group) == false)
+    {
+        const qreal f = qBound(0.0, m_groupTrim.value(group, 1.0) * masterOut(), 1.0);
+        cap = qMin(255, int(255.0 * f + 1.0));   // a step of room for the rounding
+    }
+    if (force == false && m_r587Cap.value(group, -1) == cap)
+        return;
+    m_r587Cap.insert(group, cap);
+    foreach (quint32 id, g.fixtures)
+    {
+        Fixture *fxi = m_doc->fixture(id);
+        const quint32 ch = dimmerChannel(fxi);
+        if (fxi == nullptr || ch == QLCChannel::invalid())
+            continue;
+        Universe *uni = m_doc->inputOutputMap()->universe(fxi->universe());
+        if (uni != nullptr)
+            uni->setTrackCap(int(fxi->address() + ch), uchar(cap));
+    }
+}
+
+void TrackEngine::r587StrobeCaps(bool force)
+{
+    if (m_doc == nullptr || m_doc->inputOutputMap() == nullptr)
+        return;
+    foreach (const QString &key, m_groupOrder)
+        if (m_groups.value(key).strobes)
+            r587StrobeCap(key, force);
+    if (force == false)
+        return;
+    // once a beat: has the ceiling had to cut anything? A few values at a fader move or a landing's end are
+    // the frame in between; many in one beat is something writing past the faders - named in the log
+    int hits = 0;
+    foreach (Universe *uni, m_doc->inputOutputMap()->universes())
+        if (uni != nullptr)
+            hits += uni->trackCapHits();
+    const int more = hits - m_r587Hits;
+    m_r587Hits = hits;
+    if (more >= 30 && m_clock.elapsed() - m_r587LogMs >= 10000 && m_testTrack == false)
+    {
+        m_r587LogMs = m_clock.elapsed();
+        QStringList who;
+        foreach (const QString &key, m_groupOrder)
+        {
+            if (m_groups.value(key).strobes == false)
+                continue;
+            const quint32 mf = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+            who << key + QLatin1Char('=') + QString::number(m_r587Cap.value(key, 255))
+                   + (mf != Function::invalidId() ? QStringLiteral(":mot") + QString::number(mf) : QString());
+        }
+        logSignal(QStringLiteral("sig:strobe-cap:%1:%2").arg(more).arg(who.join(QLatin1Char(';'))));
+    }
+}
+
 int TrackEngine::r580BuildBottom(int beat) const
 {
     // TRACK_APP_BUILDBASS_R580: kick (R501's light line) or a bass onset on any quarter (R461's line) on 5 of the
@@ -13202,6 +13272,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
     m_r536Key = r536StrobeKey();
+    r587StrobeCaps(true);                // TRACK_APP_STROBECAP_R587: every beat, written again (a new show file too)
     // TRACK_APP_DROPSTAB_R584 (Tobias 11-09, forslag 3: "skal gaa under knappen i settings som de andre stabs paa den
     // samme knap"): BREAK STABS' switch also gives the DROP its stabs - a quarter where the lows, the mids and the
     // highs all hit hard at once (an orchestra hit, a "hey", a full-band stab), not one the bar keeps repeating.
@@ -19005,6 +19076,7 @@ void TrackEngine::reapplyLevels()
     // for the next beat to come round
     if (m_doc == nullptr)
         return;
+    r587StrobeCaps(false);               // TRACK_APP_STROBECAP_R587: the strobes' ceiling follows the faders at once
     foreach (const QString &slot, m_active.keys())
     {
         quint32 fid = m_active.value(slot);
@@ -21419,6 +21491,7 @@ void TrackEngine::closingTick(bool showOn)
     if (m_docTimer.isActive())
         return;
     lastTrackTick(showOn);                           // R458_LAST_TRACK
+    r587StrobeCaps(false);               // TRACK_APP_STROBECAP_R587: SHOW OFF, a lab, the start scene - within 200 ms
     hazeNagTick(showOn);                             // R467_HAZE_NAG
     padFlashTick();                                  // R469_GROUP_FLASH
     clockHandTick(showOn);                           // R470_CLOCK_HAND
@@ -23813,6 +23886,8 @@ void TrackEngine::setDimmer(const QString &group, qreal level)
 void TrackEngine::setPart(const QString &group, int index, qreal level)
 {
     const TrackGroup &g = m_groups.value(group);
+    if (g.strobes)
+        r587StrobeCap(group, false);     // TRACK_APP_STROBECAP_R587: the ceiling first, then the level
     if (index < 0 || index >= g.parts.count())
         return;
     quint32 fid = g.parts.at(index);
