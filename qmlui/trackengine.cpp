@@ -12915,6 +12915,14 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the drop ARRIVES (not a drop running on into its next section): while
     // one waits for its kick m_lookState reads "build" (runde 233)
     const bool dropArrives = isDrop && m_lookState != QStringLiteral("drop");
+    // TRACK_APP_FIX_R590 (#18): under HOLD the look's state is not moved on, so a drop that lands while he holds
+    // "arrived" on every one of its beats - its size was measured anew each beat (from inside the drop: small), and
+    // the single-eye draw, the phase's length and the big-drop mark were rolled again each beat. Once per drop
+    if (isDrop == false)
+        m_r590DropDrawn = false;
+    const bool dropDraw = dropArrives && m_r590DropDrawn == false;
+    if (dropDraw)
+        m_r590DropDrawn = true;
     // R369_FORCED_LAND: the landing is the drop's first downbeat ONCE per drop.
     // R365 tied it to the beat the drop look arrived - but a DROP the operator
     // presses a bar or three early (the build still running) arrives mid-bar
@@ -12943,7 +12951,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // measured where the drop arrives. ENERGY is the ceiling as before; the
     // drop's size only takes a small drop down from it - shorter strobes, one
     // impact bar, quarters, no white.
-    if (dropArrives)
+    if (dropDraw)
         // R361_DROP_FORCED: a DROP the operator pressed is a whole drop - the
         // music under it is often a groove with no jump at all (size 0)
         // R363_LATE_SIZE: a late landing is measured from its bar line - from
@@ -12951,7 +12959,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         m_dropSize = m_dropForced ? 1.0 : dropSizeAt((dropBar == 0 && beatInBar > 0) ? beat - beatInBar : beat);
     // R480_STROBE_PHASE_5: where the drop arrives - its own -2..+2 bars, and its hardness unknown
     // until its kick is heard (bar 2, below)
-    if (dropArrives)
+    if (dropDraw)
     {
         m_barSingleDraw = rng->bounded(100) < 35; // C20261020: even a HIT need not be single-eye
         // R488_DX_SINGLE is gone (R489_EX_NO_SINGLE): strob-storm's stop is whole bars now, it draws no single eyes
@@ -14248,7 +14256,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
         compositionChanged = lead != m_rhythmLead || roleContextChanged;
-        if (compositionChanged)
+        // TRACK_APP_FIX_R590 (#33): under HOLD the look stands - the lead dropping out of the cast (ENERGY under the
+        // animation laser's line, a laser pad, ANI ON) threw away every group's held programme and the whole room
+        // changed under his HOLD. Only the new lead picks again
+        if (compositionChanged && hold)
+            m_sectionMotion.remove(lead);
+        else if (compositionChanged)
             m_sectionMotion.clear(); // programmes must obey the new roles too
         m_rhythmLead = lead;
     }
@@ -17478,7 +17491,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // landing bar, and the hit budget below still decides.
     if (isDrop == false)
         m_bigDrop = false;
-    else if (dropArrives)
+    else if (dropDraw)
         m_bigDrop = fader >= 0.85 || ((m_dropStyle == 1 || m_dropStyle == 4) && fader >= 0.78);   // R374_SPREAD
     // ... out of a four-on-the-floor: the two beats before the gap had their
     // kick, so a half-time or broken beat (a kick on one in four - Nelly
@@ -22275,7 +22288,7 @@ void TrackEngine::setLogEnabled(bool on)
     emit tableChanged();
 }
 
-QByteArray TrackEngine::logSettings(QByteArray *steady) const
+QByteArray TrackEngine::logSettings(QByteArray *steady, bool withLearned) const
 {
     QJsonObject stored;
     // TRACK_APP_FIX_R574 (review: ~430 MB a night): what the engine LEARNS - ratings, seen, memories, taste, the
@@ -22296,9 +22309,14 @@ QByteArray TrackEngine::logSettings(QByteArray *steady) const
             continue;                    // R519_FIXB_SNAP_STORED: MASTER has its own column on every row
         if (key.startsWith("trackengine/") || key.startsWith("trackmanager/"))
         {
+            // TRACK_APP_FIX_R590 (#43): the cheap look never reads what the engine learns - the recipe store alone is
+            // about half a megabyte in the registry
+            const bool isLearned = learnedKeys.contains(key) || key.startsWith(QStringLiteral("trackengine/clock-night/"))
+                                || key.startsWith(QStringLiteral("trackengine/atmos-night/"));
+            if (isLearned && withLearned == false)
+                continue;
             const QJsonValue jv = QJsonValue::fromVariant(settings.value(key));
-            if (learnedKeys.contains(key) || key.startsWith(QStringLiteral("trackengine/clock-night/"))
-                || key.startsWith(QStringLiteral("trackengine/atmos-night/")))
+            if (isLearned)
             {
                 QJsonArray one;
                 one.append(jv);
@@ -22351,6 +22369,8 @@ QByteArray TrackEngine::logSettings(QByteArray *steady) const
         quiet.remove("learned");         // TRACK_APP_FIX_R574
         *steady = QJsonDocument(quiet).toJson(QJsonDocument::Compact);
     }
+    if (withLearned == false)
+        return QByteArray();             // TRACK_APP_FIX_R590: the cheap look wants the steady copy only
     return QJsonDocument(context).toJson(QJsonDocument::Compact);
 }
 
@@ -22420,7 +22440,9 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
     // file still carries its snapshot (m_logSettingsLast is empty there).
     // TRACK_APP_FIX_R574: once per 16-beat window - the signal rows of that beat (a landing, a BLACKOUT tap)
     // walked the registry again each
-    const bool sampleDue = (beat % 16) == 0 && (beat != m_logSampledBeat || m_trackTitle != m_logSampledTitle);
+    // TRACK_APP_FIX_R590 (#43): ... and on the 8th beat of the 16, not the first - the first is the phrase line, where
+    // drops land and looks are drawn; whatever the sample costs no longer falls on it
+    const bool sampleDue = (beat % 16) == 7 && (beat != m_logSampledBeat || m_trackTitle != m_logSampledTitle);
     const bool sample = m_logSettingsLast.isEmpty() || sampleDue;
     if (sampleDue)
     {
@@ -22428,7 +22450,18 @@ void TrackEngine::logBeat(const QString &state, int beat, qreal level, qreal ene
         m_logSampledTitle = m_trackTitle;
     }
     QByteArray steadySettings;           // R519_FIXB_SNAP_TRIGGER: a change of the momentary states alone writes none
-    const QByteArray currentSettings = sample ? logSettings(&steadySettings) : m_logSettingsLast;
+    // TRACK_APP_FIX_R590 (#43): the sample read every setting from the registry, the learned stores too (the recipe
+    // store: ~0.5 MB), made two JSON documents of it all and a SHA-1 of each learned value - every 16 beats, on the
+    // thread that steps the light - to find, nearly every time, that nothing had changed. The cheap look first: his
+    // own settings only, one document. The full snapshot is built only when that has changed (what is written is
+    // the same as before)
+    QByteArray currentSettings = m_logSettingsLast;
+    if (sample)
+    {
+        logSettings(&steadySettings, false);
+        if (m_logSettingsLast.isEmpty() || steadySettings != m_logSettingsSteady)
+            currentSettings = logSettings(&steadySettings, true);
+    }
     QString snapshot;
     if (currentSettings != m_logSettingsLast
         && (m_logSettingsLast.isEmpty() || steadySettings != m_logSettingsSteady))
@@ -27366,6 +27399,14 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
         }
         if (out.isEmpty() && tonight && logs.isEmpty() == false)
             out << logs.first().absoluteFilePath();
+        // TRACK_APP_FIX_R590 (#52): the night's haze / fan log (atmos-<night>.csv) goes with its tracklog - it was
+        // never sent, and every haze review had to ask for it
+        foreach (const QFileInfo &fi, docs.entryInfoList(QStringList() << "atmos-*.csv", QDir::Files, QDir::Time))
+        {
+            const qint64 h = fi.lastModified().secsTo(now) / 3600;
+            if ((tonight && h < 16) || (tonight == false && h >= 16 && h < 40))
+                out << fi.absoluteFilePath();
+        }
     }
     else if (id == QStringLiteral("mic"))
     {
@@ -27413,6 +27454,8 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
             foreach (const QFileInfo &sub, d.entryInfoList(QStringList() << "AppCrash_qlcplus*" << "AppCrash_TRACK-engine*" /* TRACK_APP_LOGS_R551 */, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time))
             {
                 const QString wer = sub.absoluteFilePath() + "/Report.wer";
+                if (sub.lastModified().daysTo(QDateTime::currentDateTime()) > 14)
+                    continue;            // TRACK_APP_FIX_R590 (#52): a crash from last winter says nothing about last night
                 if (QFileInfo::exists(wer))
                     out << wer;
                 if (out.count() >= 20)

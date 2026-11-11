@@ -1056,6 +1056,7 @@ public:
     int r581BuildBottom(int beat, int secStart) const;   // TRACK_APP_BUILDWIN_R581
     bool r580QuarterHit(int beat, int quarter) const;
     bool m_r580Bottom = false;
+    bool m_r590DropDrawn = false;        // TRACK_APP_FIX_R590 (#18): this drop's once-a-drop draws are made
     // TRACK_APP_FIX_R588: the broad round of 11-10 - laser-lab.json read again when it could not be read at the
     // start, the day's backup, and where a backup export is written (empty: track-settings.json)
     void r588LabRetry();
@@ -2032,7 +2033,7 @@ protected:
     qreal tempoScore(const TrackFuncInfo &info, qreal bpm) const;
     void checkConflicts(const QSet<QString> &cast);
     void logBeat(const QString &state, int beat, qreal level, qreal energy, qreal sectionEnergy);
-    QByteArray logSettings(QByteArray *steady = nullptr) const;   // R519_FIXB_SNAP_DECL: steady = without the momentary states
+    QByteArray logSettings(QByteArray *steady = nullptr, bool withLearned = true) const;   // TRACK_APP_FIX_R590: false = the cheap look   // R519_FIXB_SNAP_DECL: steady = without the momentary states
     TrackMove composeMove(const QString &group, TrackMove move, int tier) const;
     /** A marker line in the tracklog at the numbers of the last beat: the
      *  operator did something. Same columns as a beat, so one parser reads

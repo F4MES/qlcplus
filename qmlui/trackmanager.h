@@ -152,6 +152,7 @@ class TrackManager : public QObject
     Q_PROPERTY(QVariantMap midiBanner READ midiBanner NOTIFY midiChanged)
     Q_PROPERTY(QVariantList midiMappings READ midiMappings NOTIFY midiChanged)
     Q_PROPERTY(QString midiListen READ midiListen NOTIFY midiChanged)
+    Q_PROPERTY(bool midiOk READ midiOk NOTIFY midiChanged)   // TRACK_APP_FIX_R590 (#15): a controller is patched and open
     Q_PROPERTY(QString midiLast READ midiLast NOTIFY midiChanged)
     Q_PROPERTY(bool midiCanUndo READ midiCanUndo NOTIFY midiChanged)
 
@@ -282,6 +283,7 @@ public:
     QVariantMap midiBanner() const;
     QVariantList midiMappings() const;
     QString midiListen() const;
+    bool midiOk() const { return m_r590MidiOk; }
     QString midiLast() const;
     bool midiCanUndo() const;
     /** the controls a controller can drive: { t (the page's objectName), name, kind 0 fader / 1 button / 2 held } */
@@ -644,6 +646,7 @@ private:
     // TRACK_APP_FIX_R588: the reader went quiet for 30 s (the warning stays until it speaks again), his flag
     // corrections made while no reader was connected (title -> the line), the port's retry said once, and the
     // pads a controller that went away still held
+    bool m_r590MidiOk = false;
     bool m_r588Quiet = false;
     QHash<QString, QByteArray> m_r588Markers;
     bool m_r588PortSaid = false;

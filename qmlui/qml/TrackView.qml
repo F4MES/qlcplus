@@ -1445,7 +1445,13 @@ Rectangle
                                : (trackViewRoot.cdjCount <= 0 ? qsTr("NO CDJs")
                                   : (trackManager.linkStale === true ? qsTr("CDJ LINK LOST") : "")))
                         property string shown: ""
-                        onWhyChanged: { shown = ""; if (why !== "") appWarnLate.restart(); else appWarnLate.stop() }
+                        // TRACK_APP_FIX_R590 (#51): one failure turning into another (READER DOWN -> NO CDJs -> LINK LOST
+                        // while the reader restarts) only changes the words - the red pill went out for 5 s at each step
+                        onWhyChanged: {
+                            if (why === "") { shown = ""; appWarnLate.stop() }
+                            else if (shown !== "") shown = why
+                            else appWarnLate.restart()
+                        }
                         Component.onCompleted: if (why !== "") appWarnLate.restart()
                         Timer { id: appWarnLate; interval: 5000; onTriggered: appWarn.shown = appWarn.why }
                         visible: shown !== ""

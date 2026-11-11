@@ -544,7 +544,7 @@ Rectangle
                 Timer { id: midiClearArm; interval: 4000; onTriggered: midiClearAllTile.armed = false }
             }
             // where QLC+ hears MIDI
-            Rectangle { x: 20; y: 56; width: 10; height: 10; radius: 5; color: midiPanel.listen !== "" ? "#6ECD82" : "#F05050" }
+            Rectangle { x: 20; y: 56; width: 10; height: 10; radius: 5; color: (trackManager && trackManager.midiOk === true) ? "#6ECD82" : "#F05050" }   // TRACK_APP_FIX_R590 (#15)
             Text
             {
                 objectName: "midiListen"

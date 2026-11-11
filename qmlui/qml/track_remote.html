@@ -754,7 +754,7 @@ function render() {
       }
     }
   }
-  const dots = $('dots').children, inBar = S.playing && beat > 0 ? (beat - 1) % 4 : -1;
+  const dots = $('dots').children, inBar = S.playing && beat > 0 ? (((beat - 1 - (S.downbeat || 0)) % 4) + 4) % 4 : -1;   // TRACK_APP_FIX_R590 (#14): from the track's downbeat
   for (let i = 0; i < 4; i++) { dots[i].className = i === inBar ? (i === 0 ? 'one' : 'on') : ''; }
   // the track's sections and where it is
   const strip = $('strip');

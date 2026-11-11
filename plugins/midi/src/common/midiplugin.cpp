@@ -207,10 +207,16 @@ bool MidiPlugin::openInput(quint32 input, quint32 universe)
     MidiInputDevice* dev = inputDevice(input);
     if (dev != NULL && dev->isOpen() == false)
     {
+        // TRACK_APP_FIX_R590 (#39 / #66): open FIRST, connect once. The connection was made before the open and
+        // never taken back when Windows refused the device (another program holding it, a cable bump) - TRACK asks
+        // again every 5 s, so when the controller finally opened every message arrived as many times as it had been
+        // refused: a button on a Program Change tapped twice (HOLD on and straight off, NEXT LOOK skipping one)
+        if (dev->open() == false)
+            return false;
         connect(dev, SIGNAL(valueChanged(QVariant,ushort,uchar)),
-                this, SLOT(slotValueChanged(QVariant,ushort,uchar)));
+                this, SLOT(slotValueChanged(QVariant,ushort,uchar)), Qt::UniqueConnection);
         addToMap(universe, input, Input);
-        return dev->open();
+        return true;
     }
     return false;
 }

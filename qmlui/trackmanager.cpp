@@ -289,6 +289,10 @@ void TrackManager::slotNewConnection()
         QTcpSocket *sock = m_server->nextPendingConnection();
         if (sock == nullptr)
             continue;
+        // TRACK_APP_FIX_R590 (#56): a reader that comes back is asked for its cache list - the CACHE view (the phone,
+        // SETUP) stayed "empty" or showed the old list until someone pressed REFRESH
+        if (m_clients.isEmpty())
+            QTimer::singleShot(800, this, [this]() { if (m_clients.isEmpty() == false) requestCache(); });
         m_clients.append(sock);
         m_buffers.insert(sock, QByteArray());
         connect(sock, SIGNAL(readyRead()), this, SLOT(slotReadyRead()));
@@ -344,6 +348,7 @@ void TrackManager::slotDisconnected()
     {
         forgetLinkState();                       // LINK_FORGET_FJ3_LAST
         m_cacheList.clear();                     // the editor's rows were BLT's
+        m_cacheSerial++;                         // TRACK_APP_FIX_R590 (#62): the phone's copy goes with it
         emit cacheChanged();
     }
     emit connectedChanged();
@@ -3095,6 +3100,10 @@ void TrackManager::midiRefresh()
         }
     }
     m_midiListen = where.isEmpty() ? QString() : QStringLiteral("Listening on ") + where.join(QStringLiteral(", "));
+    // TRACK_APP_FIX_R590 (#15): the dot's colour - an input is patched, and (the TRACK app) Windows opened it. The
+    // page asked only whether the line had any text, and in the TRACK app it always has: "no MIDI device seen",
+    // "Could not open ..." showed a green dot
+    m_r590MidiOk = where.isEmpty() == false && (trackAppObject() == nullptr || m_midiOpenState != 0);
     // TRACK_APP_MIDI_R571C: in the TRACK app the panel says what TRACK sees
     if (trackAppObject() != nullptr && m_doc != nullptr && m_doc->ioPluginCache() != nullptr)
     {
@@ -3397,6 +3406,7 @@ QString TrackManager::remoteState()
     o.insert(QStringLiteral("override"), overrideState());
     o.insert(QStringLiteral("beat"), currentBeat());
     o.insert(QStringLiteral("beats"), beatCount());
+    o.insert(QStringLiteral("downbeat"), m_downbeat);   // TRACK_APP_FIX_R590 (#14): the phone's dots, as the desk's
     o.insert(QStringLiteral("playing"), playing());
     o.insert(QStringLiteral("bpm"), engineBpm());
     o.insert(QStringLiteral("tempo"), tempoSource());
