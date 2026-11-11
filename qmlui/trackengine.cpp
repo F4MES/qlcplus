@@ -12339,6 +12339,11 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     else if (m_colour.isEmpty() && m_palette.isEmpty() == false)
         m_colour = firstRoomColour();
+    // TRACK_APP_FIX_R591 (#69): the repeated build's colour is for THAT build's first beat. Where no draw ran (the
+    // room was in the colour already, his tile was on) it stayed armed - the theme colours stood aside for it
+    // (R509) and it came back as a colour change a section or an hour later, when the tile went off
+    if (sectionChanged)
+        m_reuseColour.clear();
     // R493_A2_BEAT_HOOK (runde 493, A2): a key clash's hard cut (r493_camelot.inc.cpp) and the
     // melody wave's break (r493_melody.inc.cpp)
     r493CamelotBeat(beat, beatInBar, hold, isCalm, changeColour);
@@ -13865,15 +13870,23 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // redraw below); HOLD keeps it, as it keeps the rest of the look.
     const bool whiteHere = isDrop || hold;
     const QStringList roomPairs = mixesWith.value(m_colour);
-    auto partnerOk = [this, &roomPairs, whiteHere](const QString &c) {
+    // TRACK_APP_FIX_R591 (#63): keeping = the partner the look has (HOLD keeps a white one); a NEW draw gets white
+    // only in a drop - under HOLD in a break a redraw could pick white, the pair runde 246 took out of the breaks
+    auto partnerOk = [this, &roomPairs, whiteHere, isDrop](const QString &c, bool keeping) {
         if (m_palette.contains(c) == false || engineBannedColour(c))
             return false;
         if (roomPairs.contains(c))
             return true;
-        return c == QStringLiteral("white") && whiteHere
+        return c == QStringLiteral("white") && (keeping ? whiteHere : isDrop)
             && (m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
                 || m_colour == QStringLiteral("cyan"));
     };
+    // TRACK_APP_FIX_R591 (#19): the colour fade makes the outgoing hue the partner "during the fade" (below) - and
+    // nothing drew the look's own partner again when the fade was over: the old colour stayed in the look for the
+    // rest of the section. One draw on the first beat after the fade (not under HOLD: the look stands)
+    const bool r591FadeOver = m_r591FadePartner && m_autoFade == false;
+    if (r591FadeOver)
+        m_r591FadePartner = false;
     if (setPartner.isEmpty() == false && setPartner != m_colour)
     {
         m_partnerPick = setPartner;      // runde 304: the tiles' pair is the look's pair
@@ -13899,12 +13912,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     else if (((sectionChanged || changeColour || faderJump) && hold == false)   // runde 292: a hand redraws it
              || (m_partnerPick.isEmpty() && m_partnerSolo == false)
-             || (m_partnerPick.isEmpty() == false && partnerOk(m_partnerPick) == false))
+             || (m_partnerPick.isEmpty() == false && partnerOk(m_partnerPick, true) == false)
+             || (r591FadeOver && hold == false))   // TRACK_APP_FIX_R591 (#19)
     {
         QStringList pool;
         foreach (const QString &c, m_palette)
         {
-            if (c != m_colour && partnerOk(c))
+            if (c != m_colour && partnerOk(c, false))
                 pool << c;
         }
         m_partnerPick = pool.isEmpty() ? QString() : pool.at(int(rng->bounded(int(pool.count()))));
@@ -13919,6 +13933,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     // C20261022_BRIDGE: the outgoing hue is the only partner during the fade.
     if (m_autoFade) {
+        m_r591FadePartner = true;        // TRACK_APP_FIX_R591 (#19)
         m_partnerPick = m_autoFadeFrom; m_partnerSolo = false;
         if (!accentColour.isEmpty()) accentColour = m_autoFadeFrom;
     }
@@ -20007,9 +20022,15 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
     {
         // the pitch fader drifts the clock: keep the figure on the beat -
         // and the ENERGY fader resizes it (the live ratio above)
-        if (qAbs(int(efx->duration()) - int(ms)) > int(ms / 50))
+        // TRACK_APP_FIX_R591 (#61): a figure that runs "one after another" (Serial) starts its heads in turn through
+        // its first round. A new length in that round re-times every head from where it stands - and the ones still
+        // waiting stand at nought: half of them started at once, the rest out of turn. The bar lock (R583) trims
+        // the length on nearly every beat, so since R583 this happened to almost every such figure. Its first
+        // round is left alone now - the length and the lock both wait for the last head to be on its way
+        const bool serialEntry = efx->propagationMode() == EFX::Serial && efx->elapsed() < efx->duration() + 100;
+        if (serialEntry == false && qAbs(int(efx->duration()) - int(ms)) > int(ms / 50))
             efx->setDuration(ms);
-        if (laser == false && sw.shape >= 0)
+        if (laser == false && sw.shape >= 0 && serialEntry == false)
             r583BarLock(group, efx, beats, beatMs, ms);   // TRACK_APP_BARLOCK_R583: the round on the bar
         if (laser && sw.shape >= 0)
         {

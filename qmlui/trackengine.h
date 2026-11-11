@@ -1056,7 +1056,8 @@ public:
     int r581BuildBottom(int beat, int secStart) const;   // TRACK_APP_BUILDWIN_R581
     bool r580QuarterHit(int beat, int quarter) const;
     bool m_r580Bottom = false;
-    bool m_r590DropDrawn = false;        // TRACK_APP_FIX_R590 (#18): this drop's once-a-drop draws are made
+    bool m_r590DropDrawn = false;
+    bool m_r591FadePartner = false;      // TRACK_APP_FIX_R591 (#19): the partner is the colour fade's outgoing hue        // TRACK_APP_FIX_R590 (#18): this drop's once-a-drop draws are made
     // TRACK_APP_FIX_R588: the broad round of 11-10 - laser-lab.json read again when it could not be read at the
     // start, the day's backup, and where a backup export is written (empty: track-settings.json)
     void r588LabRetry();

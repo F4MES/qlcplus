@@ -766,7 +766,11 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         // inner flag of a drop (Timbaland 273) re-landed the drop with a new
         // colour on its first pass. A cue back into a build is another kind.
         const bool firstLoop = m_currentBeat - beat <= 16 && stateAtBeat(beat) == stateAtBeat(m_currentBeat);
-        m_loopTop = (again || firstLoop || m_cdjLoopTo > 0) ? qMax(m_loopTop, m_currentBeat) : -1;   // TRACK_APP_CDJLOOP_R582: the deck's loop
+        // TRACK_APP_FIX_R591 (#78): on a confirmed repeat the top is where it jumped from NOW - the first pass may
+        // have played the deck's phantom beat past the loop, and the maximum kept that beat as the top for good: the
+        // section after the loop then started a beat late (and a loop the DJ halves kept its old, longer top)
+        m_loopTop = (again && m_cdjLoopTo <= 0) ? m_currentBeat
+                  : ((again || firstLoop || m_cdjLoopTo > 0) ? qMax(m_loopTop, m_currentBeat) : -1);   // TRACK_APP_CDJLOOP_R582: the deck's loop
     }
     else if (m_loopTop > 0 && (beat > m_loopTop || beat < m_currentBeat || playing == false)
              && (m_cdjLoopTo <= 0 || beat < m_cdjLoopFrom || beat > m_cdjLoopTo || playing == false))   // TRACK_APP_CDJLOOP_R582

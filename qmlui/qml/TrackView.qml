@@ -1517,6 +1517,9 @@ Rectangle
                     property bool checked: trackManager ? trackManager.autoRun : false
                     // runde 296: SHOW OFF asks SURE? and waits 4 s for the second tap
                     property bool armOff: false
+                    // TRACK_APP_FIX_R591 (#67): the show switched from somewhere else (the phone, MIDI) while SURE? was up
+                    // left it armed - one tap then stopped a running show
+                    onCheckedChanged: armOff = false
                     property string text: checked ? (armOff ? qsTr("SURE?") : qsTr("SHOW ON")) : qsTr("START SHOW")
                     Timer { id: showOffArm; interval: 4000; onTriggered: showSwitch.armOff = false }
                     color: armOff ? "#E3B44F" : (checked ? "#3FBF3F" : (trackViewRoot.trackApp ? "#122814" : "#4A1E1E"))   // TRACK_APP_UI_R560: ready, not red
