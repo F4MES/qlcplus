@@ -4604,6 +4604,17 @@ bool TrackEngine::r584Frame(qint64 now)
     return true;
 }
 
+QString TrackEngine::r592PartnerFor(const QString &group) const
+{
+    // TRACK_APP_WHITETOP_R592: the look's partner as THIS group may wear it. White by the 90 % rule is for the wash
+    // (the moving heads), the laser bars and the animation lasers; every other group has no partner then - its
+    // programmes are drawn in the room's colour alone
+    if (m_r592WhiteTop == false || m_partnerPick != QStringLiteral("white"))
+        return m_partnerPick;
+    const TrackGroup &g = m_groups.value(group);
+    return (g.heads || g.lasers || g.patternDevice) ? m_partnerPick : QString();
+}
+
 void TrackEngine::r588LabRetry()
 {
     // TRACK_APP_FIX_R588 (#74): laser-lab.json was there but could not be read when the table was built (Documents
@@ -9980,8 +9991,9 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         {
             // a scene with no colour word paints a colour we cannot name -
             // it is not a partner of anything
-            const bool fitsLook = m_partnerPick.isEmpty() ? partners.contains(info->colour)
-                                : (info->colour == m_partnerPick || info->colour == m_colour);
+            const QString lookPartner = r592PartnerFor(group);   // TRACK_APP_WHITETOP_R592
+            const bool fitsLook = lookPartner.isEmpty() ? partners.contains(info->colour)
+                                : (info->colour == lookPartner || info->colour == m_colour);
             if (fitsLook && engineBannedColour(info->colour) == false)
                 fits.append(info);
         }
@@ -9997,7 +10009,7 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         QList<TrackFuncInfo *> fitting;
         foreach (TrackFuncInfo *info, ok)
         {
-            if (pairFits(*info, m_colour, m_partnerPick))
+            if (pairFits(*info, m_colour, r592PartnerFor(group)))   // TRACK_APP_WHITETOP_R592
                 fitting.append(info);
         }
         if (fitting.isEmpty())
@@ -13872,11 +13884,24 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     const QStringList roomPairs = mixesWith.value(m_colour);
     // TRACK_APP_FIX_R591 (#63): keeping = the partner the look has (HOLD keeps a white one); a NEW draw gets white
     // only in a drop - under HOLD in a break a redraw could pick white, the pair runde 246 took out of the breaks
-    auto partnerOk = [this, &roomPairs, whiteHere, isDrop](const QString &c, bool keeping) {
+    // TRACK_APP_WHITETOP_R592 (Tobias 11-12: "efter 90% maa hvid gerne vaere makkerfarve i TRACK (men kun paa wash og
+    // begge typer lasere)"): from 90 % on the ENERGY slider white may be the look's partner in every section and
+    // with every room colour (not uv: "no white under uv", runde 329) - worn by the wash and the two kinds of
+    // lasers only (r592PartnerFor): the strobe lamps and the Minis stay in the room's colour. Under 90 % as
+    // before: white only in a drop, only with blue, magenta or cyan
+    const bool r592Bmc = m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
+                      || m_colour == QStringLiteral("cyan");
+    const bool r592Top = m_faderReal >= 0.90 - 1e-9 && m_colour != QStringLiteral("uv");
+    const bool r592Other = (setPartner.isEmpty() == false && setPartner != m_colour) || m_override.isEmpty() == false
+                        || accentColour.isEmpty() == false
+                        || (m_mixing && m_nextColour.isEmpty() == false && m_nextColour != m_colour);
+    auto partnerOk = [this, &roomPairs, whiteHere, isDrop, r592Top](const QString &c, bool keeping) {
         if (m_palette.contains(c) == false || engineBannedColour(c))
             return false;
         if (roomPairs.contains(c))
             return true;
+        if (c == QStringLiteral("white") && r592Top)
+            return true;                 // TRACK_APP_WHITETOP_R592
         return c == QStringLiteral("white") && (keeping ? whiteHere : isDrop)
             && (m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
                 || m_colour == QStringLiteral("cyan"));
@@ -13931,6 +13956,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_partnerPick.clear();
     }
 
+    // TRACK_APP_WHITETOP_R592: the engine's own white partner that the old rule does not cover is the 90 % rule's -
+    // not his tiles' pair, the accent's, the mix's or the fade's (those are theirs, on every group as before)
+    const bool r592Was = m_r592WhiteTop;
+    m_r592WhiteTop = r592Other == false && m_autoFade == false && m_partnerPick == QStringLiteral("white")
+                     && (whiteHere && r592Bmc) == false;
+    if (m_r592WhiteTop != r592Was)
+        logSignal(m_r592WhiteTop ? QStringLiteral("sig:white-partner:top") : QStringLiteral("sig:white-partner:off"));
     // C20261022_BRIDGE: the outgoing hue is the only partner during the fade.
     if (m_autoFade) {
         m_r591FadePartner = true;        // TRACK_APP_FIX_R591 (#19)
@@ -16611,6 +16643,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // The bars' echo is then skipped (they already wear its hue, 286).
         if (colour == m_colour && m_partnerPick.isEmpty() == false && m_partnerPick != m_colour
             && m_overrideSet.count() < 2
+            && r592PartnerFor(key).isEmpty() == false   // TRACK_APP_WHITETOP_R592
             && colourForGroup(key, colour) != colour
             && colourForGroup(key, m_partnerPick) == m_partnerPick)
             colour = m_partnerPick;
@@ -16792,7 +16825,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // ... and a two-colour programme whose partner is no longer the
                 // look's (runde 243)
                 if (mf != Function::invalidId()
-                    && pairFits(m_funcs.value(mf), m_colour, m_partnerPick) == false)
+                    && pairFits(m_funcs.value(mf), m_colour, r592PartnerFor(key)) == false)   // TRACK_APP_WHITETOP_R592
                     mf = Function::invalidId();
             }
             // R400_HOLD_AIM: a position held on the page lets go of the
@@ -30044,7 +30077,7 @@ quint32 TrackEngine::dropFormSideColour(const QString &key, const QString &colou
     // group's own colour scene for its side's colour writes for it.
     if (m_formNow != DF_SIDE || dropFormOwns(key) == false || m_doc == nullptr)
         return Function::invalidId();
-    if (m_override.isEmpty() == false || m_overrideSet.count() >= 2 || m_partnerPick.isEmpty())
+    if (m_override.isEmpty() == false || m_overrideSet.count() >= 2 || r592PartnerFor(key).isEmpty())   // TRACK_APP_WHITETOP_R592
         return Function::invalidId();
     const TrackGroup &g = m_groups.value(key);
     // the accent group wears the partner all over: its sides are the room's and the partner too
@@ -36375,7 +36408,7 @@ bool TrackEngine::r493StabFrame(qint64 now)
             continue;                    // the timer was late: a late blink is not on the stab
         const QString key = m_r493StabKey;
         const QString hue = colourForGroup(key, m_colour);
-        const QString partner = colourForGroup(key, m_partnerPick);
+        const QString partner = colourForGroup(key, r592PartnerFor(key));   // TRACK_APP_WHITETOP_R592
         const quint32 fa = colourFunction(key, hue);
         const quint32 fb = colourFunction(key, partner);
         if (fa == Function::invalidId() || fb == Function::invalidId() || fa == fb || partner == hue
@@ -40497,7 +40530,7 @@ bool TrackEngine::r498RushMasks(bool isDrop)
     const QString partner = m_partnerPick;
     if (m_r498RushCount % 2 == 1 && partner.isEmpty() == false && partner != washColour
         && (m_override.isEmpty() || m_overrideSet.count() >= 2) && engineBannedColour(partner) == false
-        && (partner != QStringLiteral("white") || isDrop) && colourForGroup(wash, partner) == partner
+        && (partner != QStringLiteral("white") || isDrop || m_r592WhiteTop) && colourForGroup(wash, partner) == partner   // TRACK_APP_WHITETOP_R592
         && colourFunction(wash, partner) != Function::invalidId())
         washColour = partner;
     Scene *washScene = qobject_cast<Scene *>(m_doc->function(colourFunction(wash, washColour)));

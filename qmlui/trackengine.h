@@ -1056,6 +1056,9 @@ public:
     int r581BuildBottom(int beat, int secStart) const;   // TRACK_APP_BUILDWIN_R581
     bool r580QuarterHit(int beat, int quarter) const;
     bool m_r580Bottom = false;
+    // TRACK_APP_WHITETOP_R592: the look's partner is white by the 90 % rule - the wash and the lasers only
+    bool m_r592WhiteTop = false;
+    QString r592PartnerFor(const QString &group) const;
     bool m_r590DropDrawn = false;
     bool m_r591FadePartner = false;      // TRACK_APP_FIX_R591 (#19): the partner is the colour fade's outgoing hue        // TRACK_APP_FIX_R590 (#18): this drop's once-a-drop draws are made
     // TRACK_APP_FIX_R588: the broad round of 11-10 - laser-lab.json read again when it could not be read at the
