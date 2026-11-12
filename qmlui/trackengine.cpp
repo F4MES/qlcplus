@@ -11004,8 +11004,12 @@ QString TrackEngine::accentFor(const QString &colour, bool allowWhite) const
     QStringList partners = engineMixesWith().value(colour);
     if (partners.isEmpty())
         partners = offRig.value(colour);
+    // TRACK_APP_FIX_R593: ... and, from 90 % on the ENERGY slider, under every room colour but uv (Tobias 11-12) -
+    // still one draw in four at most and never two drops running (allowWhite), and then on the wash and the
+    // lasers only (r592PartnerFor, the accent group below)
     const bool whiteFits = colour == QLatin1String("blue") || colour == QLatin1String("magenta")
-                        || colour == QLatin1String("cyan");
+                        || colour == QLatin1String("cyan")
+                        || (m_faderReal >= 0.90 - 1e-9 && colour != QLatin1String("uv"));
     if (allowWhite && whiteFits)
         partners << QStringLiteral("white");
     // of the partners the palette has, one at random - the same pair every
@@ -12701,12 +12705,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             }
         }
         // R358_REPEAT: the first one's programmes, where they still exist
+        m_r593Reused.clear();
         for (QHash<QString, quint32>::const_iterator it = m_reuseMotion.constBegin();
              it != m_reuseMotion.constEnd(); ++it)
         {
             if (m_funcs.contains(it.value()))
+            {
                 m_sectionMotion.insert(it.key(), it.value());
+                m_r593Reused.insert(it.key(), it.value());   // TRACK_APP_FIX_R593 (#58)
+            }
         }
+        m_r593ReusedBeat = beat;
         m_reuseMotion.clear();
         // Do the laser bars lead this section? Drawn once, by the energy:
         // at a quarter of the fader roughly one drop in seven, at the top
@@ -13885,23 +13894,24 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // TRACK_APP_FIX_R591 (#63): keeping = the partner the look has (HOLD keeps a white one); a NEW draw gets white
     // only in a drop - under HOLD in a break a redraw could pick white, the pair runde 246 took out of the breaks
     // TRACK_APP_WHITETOP_R592 (Tobias 11-12: "efter 90% maa hvid gerne vaere makkerfarve i TRACK (men kun paa wash og
-    // begge typer lasere)"): from 90 % on the ENERGY slider white may be the look's partner in every section and
-    // with every room colour (not uv: "no white under uv", runde 329) - worn by the wash and the two kinds of
-    // lasers only (r592PartnerFor): the strobe lamps and the Minis stay in the room's colour. Under 90 % as
-    // before: white only in a drop, only with blue, magenta or cyan
+    // begge typer lasere)") + TRACK_APP_FIX_R593 (the same evening: "Hov, ikke alle sektioner, kun i drops"): from
+    // 90 % on the ENERGY slider white may be the look's partner IN A DROP with every room colour (not uv: "no white
+    // under uv", runde 329) - worn by the wash and the two kinds of lasers only (r592PartnerFor): the strobe lamps
+    // and the Minis stay in the room's colour. With blue, magenta or cyan, and under 90 %, as before: white only in
+    // a drop, only with those three, on every group. HOLD keeps a white partner, as it keeps the look
     const bool r592Bmc = m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
                       || m_colour == QStringLiteral("cyan");
     const bool r592Top = m_faderReal >= 0.90 - 1e-9 && m_colour != QStringLiteral("uv");
+    // TRACK_APP_FIX_R593: the engine's own accent (a drop's) is the engine's draw too - only his tiles and the mix are not
     const bool r592Other = (setPartner.isEmpty() == false && setPartner != m_colour) || m_override.isEmpty() == false
-                        || accentColour.isEmpty() == false
-                        || (m_mixing && m_nextColour.isEmpty() == false && m_nextColour != m_colour);
+                        || (accentColour.isEmpty() && m_mixing && m_nextColour.isEmpty() == false && m_nextColour != m_colour);
     auto partnerOk = [this, &roomPairs, whiteHere, isDrop, r592Top](const QString &c, bool keeping) {
         if (m_palette.contains(c) == false || engineBannedColour(c))
             return false;
         if (roomPairs.contains(c))
             return true;
-        if (c == QStringLiteral("white") && r592Top)
-            return true;                 // TRACK_APP_WHITETOP_R592
+        if (c == QStringLiteral("white") && r592Top && (keeping ? whiteHere : isDrop))
+            return true;                 // TRACK_APP_WHITETOP_R592 / TRACK_APP_FIX_R593: in a drop
         return c == QStringLiteral("white") && (keeping ? whiteHere : isDrop)
             && (m_colour == QStringLiteral("blue") || m_colour == QStringLiteral("magenta")
                 || m_colour == QStringLiteral("cyan"));
@@ -13960,7 +13970,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // not his tiles' pair, the accent's, the mix's or the fade's (those are theirs, on every group as before)
     const bool r592Was = m_r592WhiteTop;
     m_r592WhiteTop = r592Other == false && m_autoFade == false && m_partnerPick == QStringLiteral("white")
-                     && (whiteHere && r592Bmc) == false;
+                     && r592Bmc == false;   // TRACK_APP_FIX_R593: the section is the old rule's now - the colour tells them apart
     if (m_r592WhiteTop != r592Was)
         logSignal(m_r592WhiteTop ? QStringLiteral("sig:white-partner:top") : QStringLiteral("sig:white-partner:off"));
     // C20261022_BRIDGE: the outgoing hue is the only partner during the fade.
@@ -13994,6 +14004,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         QStringList cands;
         foreach (const QString &key, castSorted)
         {
+            // TRACK_APP_FIX_R593: white by the 90 % rule is worn all over by a laser group only - never the strobe
+            // lamps or the Minis (no laser on stage: no group wears it whole; the wash has it in its programmes)
+            if (m_r592WhiteTop && m_groups.value(key).lasers == false && m_groups.value(key).patternDevice == false)
+                continue;
             if (key != base)
                 cands << key;
         }
@@ -14309,7 +14323,17 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (compositionChanged && hold)
             m_sectionMotion.remove(lead);
         else if (compositionChanged)
+        {
             m_sectionMotion.clear(); // programmes must obey the new roles too
+            // TRACK_APP_FIX_R593 (#58): "the room learns the song" (R358) - a build that sounds like the first gets
+            // the first one's programmes. They were put in at the section line and thrown away here on the same
+            // beat (a break into a build always moves the tier), so the repeat never showed. Back in, for the
+            // groups on stage - the new lead draws its own
+            if (m_r593ReusedBeat == beat)
+                for (QHash<QString, quint32>::const_iterator it = m_r593Reused.constBegin(); it != m_r593Reused.constEnd(); ++it)
+                    if (m_funcs.contains(it.value()) && castSet.contains(it.key()) && it.key() != lead)
+                        m_sectionMotion.insert(it.key(), it.value());
+        }
         m_rhythmLead = lead;
     }
 
@@ -31709,7 +31733,9 @@ void TrackEngine::hazeAutoTick(bool showOn)
     // the fan to 0 from closing time (1 % a step, as always). The closing's own zeroing runs only with ENERGY by
     // clock - and ENERGY is by hand after every start - so past the row AUTO held the 02:45 haze and fan for the
     // rest of the night. The closing OFF: the DJ decides, both hold as before. His hand on HAZE still turns AUTO off
-    const bool closed = m_closingOn && m >= closingMinutes();
+    // TRACK_APP_FIX_R593 (own review): ... until noon, where AUTO switches itself off - "closed" ran on to 20:00,
+    // so AUTO armed before the doors open (a test at 19:00) was pulled to 0 instead of holding as it always did
+    const bool closed = m_closingOn && m >= closingMinutes() && m < 16 * 60;
     if (i >= ENGINE_CLOCK_POINTS && closed == false)
         return;                          // outside the row: both hold
     atmosRowLoad();
@@ -40530,7 +40556,7 @@ bool TrackEngine::r498RushMasks(bool isDrop)
     const QString partner = m_partnerPick;
     if (m_r498RushCount % 2 == 1 && partner.isEmpty() == false && partner != washColour
         && (m_override.isEmpty() || m_overrideSet.count() >= 2) && engineBannedColour(partner) == false
-        && (partner != QStringLiteral("white") || isDrop || m_r592WhiteTop) && colourForGroup(wash, partner) == partner   // TRACK_APP_WHITETOP_R592
+        && (partner != QStringLiteral("white") || isDrop) && colourForGroup(wash, partner) == partner
         && colourFunction(wash, partner) != Function::invalidId())
         washColour = partner;
     Scene *washScene = qobject_cast<Scene *>(m_doc->function(colourFunction(wash, washColour)));

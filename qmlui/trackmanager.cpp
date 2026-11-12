@@ -671,8 +671,13 @@ void TrackManager::handlePosition(const QJsonObject &obj)
         && (now - m_beatChangedMs < 150
             || (m_syncAhead > 0 && m_currentBeat == m_syncAhead && m_syncRealBeat != m_syncAhead)))
         return;
-    if (beat == m_currentBeat && playing == m_playing && timeMs == m_trackTimeMs)
+    // TRACK_APP_FIX_R593 (#53): the deck's time is not part of the test. No reader sends it today, so 0 == 0 made
+    // every status repeat a duplicate - and that is what keeps the loop's held phantom beat (R571, R586) from being
+    // overtaken by the echo of the beat before it. A reader that sends the time would have broken both silently
+    if (beat == m_currentBeat && playing == m_playing)
     {
+        if (timeMs > 0)
+            m_trackTimeMs = timeMs;
         syncSawBeat(beat);               // R470_SYNC_SEEN: a beat run early - BLT says it now
         return;
     }

@@ -718,12 +718,32 @@ function roomList(room, roomColour) {
   const el = $('roomlist'); if (!el) return;
   const rc = (COLOUR[roomColour] || ['#F2F2F5'])[0];
   const rows = room.filter(L => L[5]).sort((a, b) => a[5] - b[5]);
-  const sig = JSON.stringify(rows) + '|' + roomPick + '|' + rc;
-  if (el.dataset.sig === sig) return; el.dataset.sig = sig;
-  el.innerHTML = rows.map(L => '<div class="rrow' + (L[5] === roomPick ? ' on' : '') + '" data-dmx="' + L[5] + '"><b>' + L[5] + '</b><span>'
-    + (ROOM_KIND[L[2]] || L[2]) + (L[6] && L[2] !== 'haze' ? ' · ' + esc(L[6]) : '') + '</span>'
-    + (L[2] === 'haze' ? '' : '<i><u style="width:' + Math.round(100 * Math.max(0, Math.min(1, L[3]))) + '%;background:' + (L[4] || rc) + '"></u></i>') + '</div>').join('');
-  el.querySelectorAll('.rrow').forEach(d => d.onclick = () => { const n = +d.dataset.dmx; roomPick = roomPick === n ? 0 : n; drawRoom(room, roomColour); });
+  // TRACK_APP_FIX_R593 (#79): the rows are built only when the LAMPS change (address, kind, name). Their levels
+  // and colours changed on nearly every state, so the whole list was replaced four times a second - a finger that
+  // went down on one row came up on its replacement and the tap was lost. Levels, colours and the picked row
+  // are updated in place; one listener on the list, set once
+  const sig = rows.map(L => L[5] + ':' + L[2] + ':' + (L[6] || '')).join('|');
+  if (el.dataset.sig !== sig) {
+    el.dataset.sig = sig;
+    el.innerHTML = rows.map(L => '<div class="rrow" data-dmx="' + L[5] + '"><b>' + L[5] + '</b><span>'
+      + (ROOM_KIND[L[2]] || L[2]) + (L[6] && L[2] !== 'haze' ? ' · ' + esc(L[6]) : '') + '</span>'
+      + (L[2] === 'haze' ? '' : '<i><u></u></i>') + '</div>').join('');
+  }
+  if (!el.dataset.hooked) {
+    el.dataset.hooked = '1';
+    el.addEventListener('click', e => {
+      const d = e.target.closest ? e.target.closest('.rrow') : null; if (!d) return;
+      const n = +d.dataset.dmx; roomPick = roomPick === n ? 0 : n;
+      if (S && Array.isArray(S.room)) drawRoom(S.room, S.colour);
+    });
+  }
+  const byDmx = {}; rows.forEach(L => { byDmx[L[5]] = L; });
+  el.querySelectorAll('.rrow').forEach(d => {
+    const L = byDmx[+d.dataset.dmx]; if (!L) return;
+    d.classList.toggle('on', L[5] === roomPick);
+    const u = d.querySelector('u');
+    if (u) { u.style.width = Math.round(100 * Math.max(0, Math.min(1, L[3]))) + '%'; u.style.background = L[4] || rc; }
+  });
 }
 let groupKeys = '', sectionsBuilt = false, colourKeys = '', lastStageSeen;
 

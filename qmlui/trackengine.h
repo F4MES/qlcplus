@@ -1060,6 +1060,9 @@ public:
     bool m_r592WhiteTop = false;
     QString r592PartnerFor(const QString &group) const;
     bool m_r590DropDrawn = false;
+    // TRACK_APP_FIX_R593 (#58): the programmes a repeated build got back, and the beat they were put in on
+    QHash<QString, quint32> m_r593Reused;
+    int m_r593ReusedBeat = -1;
     bool m_r591FadePartner = false;      // TRACK_APP_FIX_R591 (#19): the partner is the colour fade's outgoing hue        // TRACK_APP_FIX_R590 (#18): this drop's once-a-drop draws are made
     // TRACK_APP_FIX_R588: the broad round of 11-10 - laser-lab.json read again when it could not be read at the
     // start, the day's backup, and where a backup export is written (empty: track-settings.json)
