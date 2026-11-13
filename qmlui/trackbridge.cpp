@@ -369,7 +369,10 @@ void TrackBridge::slotLaunch()
     connect(m_process, &QProcess::readyReadStandardOutput, this, &TrackBridge::slotOutput);
     m_outBuf.clear();
 
-    QStringList args = QStringList() << QStringLiteral("-Dfile.encoding=UTF-8");
+    // TRACK_APP_FIX_R595: out of memory a JVM often loses one thread and keeps the rest - the socket stays up, TRACK
+    // says "connected" and nothing arrives. With this it exits instead, and the restart with its back-off takes over
+    QStringList args = QStringList() << QStringLiteral("-Dfile.encoding=UTF-8")
+                                     << QStringLiteral("-XX:+ExitOnOutOfMemoryError");
     if (m_logDir.isEmpty() == false)
         args << QStringLiteral("-Dqlc.bridge.logdir=") + QDir::toNativeSeparators(m_logDir);
     args

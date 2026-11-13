@@ -295,6 +295,10 @@ void TrackManager::slotNewConnection()
             QTimer::singleShot(800, this, [this]() { if (m_clients.isEmpty() == false) requestCache(); });
         m_clients.append(sock);
         m_buffers.insert(sock, QByteArray());
+        // TRACK_APP_FIX_R595: the link's own rows in the night log. "The light froze mid-track" could not be told
+        // from the log: a reader that dropped, positions that stopped and the 30 s watchdog left no line at all
+        if (m_engine != nullptr)
+            m_engine->noteLink(QStringLiteral("connect:%1").arg(m_clients.count()));
         connect(sock, SIGNAL(readyRead()), this, SLOT(slotReadyRead()));
         connect(sock, SIGNAL(disconnected()), this, SLOT(slotDisconnected()));
         forgetLinkState();                       // LINK_FORGET_FJ3: BLT starts afresh
@@ -329,6 +333,8 @@ void TrackManager::slotDisconnected()
     m_clients.removeAll(sock);
     m_buffers.remove(sock);
     sock->deleteLater();
+    if (m_engine != nullptr)
+        m_engine->noteLink(QStringLiteral("disconnect:%1").arg(m_clients.count()));   // TRACK_APP_FIX_R595
 
     // only the last client leaving is a broken link
     if (m_playing && m_clients.isEmpty() && m_linkStale == false && m_testTrack == false)   // R452_TT_STALE2
@@ -637,6 +643,8 @@ void TrackManager::handlePosition(const QJsonObject &obj)
     {
         m_linkStale = false;
         emit linkChanged();
+        if (m_engine != nullptr)
+            m_engine->noteLink(QStringLiteral("back:pos"));   // TRACK_APP_FIX_R595
     }
     // R358_BRAKE: the deck's effective tempo from every status BLT sends,
     // before the repeats are dropped below - a brake happens between beats
@@ -1301,6 +1309,10 @@ void TrackManager::slotEnergyTick()
     {
         m_linkStale = stale;
         emit linkChanged();
+        if (m_engine != nullptr)         // TRACK_APP_FIX_R595
+            m_engine->noteLink(stale == false ? QStringLiteral("back")
+                               : m_clients.isEmpty() ? QStringLiteral("stale:noclient")
+                               : QStringLiteral("stale:nopos:%1").arg(QDateTime::currentMSecsSinceEpoch() - m_lastPosMs));
         if (stale && m_engine != nullptr && m_autoRun && m_roleMode)   // R244_STALE_IDLE
         {
             m_lastEngineBeat = -1;
@@ -1314,6 +1326,8 @@ void TrackManager::slotEnergyTick()
     {
         m_playing = false;
         m_r588Quiet = true;              // TRACK_APP_FIX_R588 (#27)
+        if (m_engine != nullptr)
+            m_engine->noteLink(QStringLiteral("lost-track:30s"));   // TRACK_APP_FIX_R595
         m_lastEngineBeat = -1;           // R187_WATCHDOG_BEAT: a resume on the same beat runs
         emit positionChanged();
         if (m_engine != nullptr && m_autoRun && m_roleMode)

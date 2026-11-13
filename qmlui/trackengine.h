@@ -1413,6 +1413,7 @@ public:
     void noteRemote(const QString &cmd, const QString &args);   // sig:remote:<cmd>[:<args>], a drag once
     // R486_MI_LOG: sig:midi:<what> - a pad, a fader taking over, LEARN (track_runtime/midimap.inc.cpp)
     void noteMidi(const QString &tag) { logSignal(QStringLiteral("sig:midi:") + tag); }
+    void noteLink(const QString &tag) { logSignal(QStringLiteral("sig:link:") + tag); }   // TRACK_APP_FIX_R595: the CDJ link's health
     // TRACK_APP_MASTERWHY_R572 (Tobias 11-07: "master-faderen kunne nogle gange ikke styre lysstyrken"): when
     // MASTER moves, what is lit past it right now and why - logged (sig:master-free), at most every 2 s
     QString r572MasterFree() const;

@@ -4224,9 +4224,18 @@ Rectangle
                                     color: parent.picked ? (stutterTile.on ? "#E0A030" : "#101010")
                                                          : (stutterTile.on ? "#101010" : "#9A9AA4")
                                 }
-                                TouchInput
+                                // TRACK_APP_FIX_R595 (Tobias 11-13, "Lav 3"): a finger target bigger than the chip it draws -
+                                // a near miss above or beside a 30 px chip pressed the tile under it (STUTTER on) instead
+                                // of the rate. Up over the chip, down to the tile's edge, half the gap to each side
+                                Item
                                 {
-                                    onPressedAt: (x, y) => { if (trackEngine) trackEngine.stutterRate = modelData.r }
+                                    x: -Math.round(3 * trackViewRoot.ks); y: -Math.round(12 * trackViewRoot.ks)
+                                    width: parent.width + Math.round(6 * trackViewRoot.ks)
+                                    height: parent.height + Math.round(12 * trackViewRoot.ks) + stutterTile.pad
+                                    TouchInput
+                                    {
+                                        onPressedAt: (x, y) => { if (trackEngine) trackEngine.stutterRate = modelData.r }
+                                    }
                                 }
                             }
                         }
@@ -4307,9 +4316,16 @@ Rectangle
                                     minimumPixelSize: 7
                                     color: parent.picked ? "#101010" : (hitTile.armed ? "#3A0E0E" : "#9A9AA4")
                                 }
-                                TouchInput
+                                // TRACK_APP_FIX_R595: as the STUTTER chips - a near miss armed or disarmed the HIT instead
+                                Item
                                 {
-                                    onPressedAt: (x, y) => { if (trackEngine) trackEngine.hitKind = modelData.k }
+                                    x: -Math.round(3 * trackViewRoot.ks); y: -Math.round(12 * trackViewRoot.ks)
+                                    width: parent.width + Math.round(6 * trackViewRoot.ks)
+                                    height: parent.height + Math.round(12 * trackViewRoot.ks) + hitTile.pad
+                                    TouchInput
+                                    {
+                                        onPressedAt: (x, y) => { if (trackEngine) trackEngine.hitKind = modelData.k }
+                                    }
                                 }
                             }
                         }
@@ -5674,6 +5690,14 @@ Rectangle
             x: recentPopup.pad; y: recentPopup.pad + 5
             text: "RECENT SAVED LOOKS"; color: trackViewRoot.cText
             font.pixelSize: trackViewRoot.fs(14); font.bold: true
+        }
+        // TRACK_APP_FIX_R595: the x is 38 x 32 px at every scale - the whole corner of the title row closes too
+        Item
+        {
+            x: parent.width - width; y: 0
+            width: Math.max(72, Math.round(72 * trackViewRoot.ks))
+            height: recentPopup.pad + recentPopup.titleH
+            TouchInput { onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.savedRecentOpen = false } }
         }
         Btn
         {

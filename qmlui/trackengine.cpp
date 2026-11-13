@@ -8436,6 +8436,20 @@ void TrackEngine::updateColourLayer(int beat, const QString &base, bool isBreak,
     // laser bars change colour as they always have (Tobias: "lasere skifter
     // bare farver som nu"), not on every step of the walk
     int lead = int(std::floor(m_layerPos + (style == 1 ? 0.5 : 0.0))) % n;
+    // TRACK_APP_FIX_R595 (#59): "the colour the base shows most of now" - but the base walks its OWN list (his
+    // tiles without white, without a banned colour) and this counted on all of them: with red / white / blue the
+    // base showed red while the lasers and the accent were told blue, one step in three. From the base's list
+    {
+        const QStringList baseSeq = layerColours(m_layerBaseKey);
+        const int bn = int(baseSeq.count());
+        if (bn >= 2)
+        {
+            const int at = ((int(std::floor(m_layerPos + (style == 1 ? 0.5 : 0.0))) % bn) + bn) % bn;
+            const int idx = int(m_overrideSet.indexOf(baseSeq.at(at)));
+            if (idx >= 0)
+                lead = idx;
+        }
+    }
     if (m_overrideSet.at(lead) == QStringLiteral("white"))
         lead = (lead + 1) % n;
     if (m_overrideSet.at(lead) != m_override && (style == 1 || m_layerLeadAge >= 16))
