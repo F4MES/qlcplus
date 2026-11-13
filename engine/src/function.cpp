@@ -1349,7 +1349,9 @@ int Function::requestAttributeOverride(int attributeIndex, qreal value)
     }
     else
     {
-        qDebug() << name() << "Override requested for existing attribute" << attributeIndex << "value" << value << "single ID" << attributeID;
+        // TRACK_APP_FIX_R594: the debug line that stood here ran on EVERY write of a running level - TRACK writes a
+        // part's dimmer through this call up to 50 times a second per part, and with no handler installed (no -d)
+        // each one built its text and went to Windows' debug output on the thread that steps the light
     }
     }   // R346_ATTR_REQUEST_END
 

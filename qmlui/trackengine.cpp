@@ -391,6 +391,20 @@ void TrackEngine::crumbsOpen()
             QFile::remove(dir + QDir::separator() + kept);
             if (QFile::rename(path, dir + QDir::separator() + kept))
                 m_crashNote = kept;
+            // TRACK_APP_FIX_R594: ... and the two files before it. Only the last one (30-60 minutes at peak) was
+            // kept; the two older ones were written over an hour into the next run, so a crash that built up slowly
+            // lost its lead-up unless SEND was pressed at once. Copies - the trail's own rotation goes on as it was
+            const QString stem = kept.left(kept.length() - 4);
+            foreach (const QString &older, QStringList() << QStringLiteral("prev") << QStringLiteral("prev2"))
+            {
+                const QString from = dir + QDir::separator() + QStringLiteral("crumbs-") + older + QStringLiteral(".txt");
+                const QString to = dir + QDir::separator() + stem + QLatin1Char('-') + older + QStringLiteral(".txt");
+                if (QFileInfo::exists(from))
+                {
+                    QFile::remove(to);
+                    QFile::copy(from, to);
+                }
+            }
         }
     }
     m_crumbs.setFileName(path);
@@ -9408,7 +9422,7 @@ QList<TrackFuncInfo *> TrackEngine::candidates(int role, const QString &group) c
             ci = m_candIndex.insert(key, buildCandidates(role, group));
         entries = &ci.value();
     }
-    const int gate = candidateGate();
+    const int gate = m_r594NoGate > 0 ? 6 : candidateGate();   // TRACK_APP_FIX_R594: the hand-pick menu takes them all
     QList<TrackFuncInfo *> out;
     out.reserve(entries->count());
     for (const CandEntry &e : *entries)
@@ -17074,8 +17088,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // A cut when the colour the group wore goes; a programme swap in the
         // same colour still crossfades.
         const quint32 motWas = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        // TRACK_APP_FIX_R594: "seen" only when the laser was lit - a look that stood assigned under BLACKOUT, MASTER
+        // under the laser's line or ENERGY under 70 % lost its turn in the rotation without ever being shown
         if (g.patternDevice)
-            r572AniSeen(key, mf);        // TRACK_APP_ANIROT_R572
+            r572AniSeen(key, mf, aniMasterOn() && r519AniLowDark(key) == false && m_blackout == false);   // TRACK_APP_ANIROT_R572
         QString wearsNow = colour;
         if (mf != Function::invalidId() && m_funcs.value(mf).coversColour
             && m_funcs.value(mf).colour.isEmpty() == false)
@@ -34611,15 +34627,16 @@ void TrackEngine::r572AniRotate(const QString &group, QList<TrackFuncInfo *> &ok
         ok = older;
 }
 
-void TrackEngine::r572AniSeen(const QString &group, quint32 fid)
+void TrackEngine::r572AniSeen(const QString &group, quint32 fid, bool lit)
 {
     if (fid == Function::invalidId() || m_funcs.contains(fid) == false)
         return;
     const QString look = r572AniLook(m_funcs.value(fid));
     if (m_r572SecLook.value(group) != look)
         logSignal(QStringLiteral("sig:ani-look:") + look);
-    m_r572SecLook.insert(group, look);
-    m_r572AniSeen.insert(group + QLatin1Char('|') + look, ++m_r572AniSeq);
+    m_r572SecLook.insert(group, look);   // the section's look either way: it holds through the section
+    if (lit)
+        m_r572AniSeen.insert(group + QLatin1Char('|') + look, ++m_r572AniSeq);
 }
 
 quint32 TrackEngine::pickMotionWeighted(const QList<TrackFuncInfo *> &pool, int cursor) const
@@ -35623,16 +35640,27 @@ void TrackEngine::savedBeat(const QString &state, int beat, int boundary)
             if (savedById(it.value()).value(QStringLiteral("section")).toString() == state
                 && ((it.key() < boundary && boundary - it.key() <= 31)   // TRACK_APP_FIX_R588 (#49): quantise 16 / 32
                     || (state == QStringLiteral("drop") && r544EarlyFlag(boundary, it.key())))) { qkey = it.key(); break; }
-    if (m_savedQueue.contains(qkey) && beat >= boundary && beat < boundary + 4) {
+    // TRACK_APP_FIX_R594: the look he queued was taken off the queue at its flag even when HOLD or CALM kept it
+    // from playing - gone, the QUEUED chip with it, without a word. It waits now (still QUEUED) and comes in on the
+    // first beat after HOLD / CALM lets go, in the section it was queued for; that section over, it goes as before
+    const bool r594Held = m_hold || calmBarsLeft() > 0;
+    if (m_r594SavedWait >= 0 && (m_r594SavedWaitAt != boundary || m_savedQueue.contains(m_r594SavedWait) == false))
+        m_r594SavedWait = -1;
+    if (m_savedQueue.contains(qkey) && beat >= boundary && (beat < boundary + 4 || m_r594SavedWait == qkey)) {
+        if (r594Held && savedById(m_savedQueue.value(qkey)).value(QStringLiteral("section")).toString() == state) {
+            m_r594SavedWait = qkey; m_r594SavedWaitAt = boundary;
+        } else {
         const QString id = m_savedQueue.take(qkey); const auto row = savedById(id);
         if (row.value(QStringLiteral("section")).toString() == state && savedInvalid(row).isEmpty() && !m_hold && calmBarsLeft() == 0) { activate = row; used = true; }
+        m_r594SavedWait = -1;
+        }
     }
     // TRACK_APP_FIX_R588 (#49): a look queued at a flag waits until its section HAS started - with SETUP's quantise
     // at 16 or 32 that is up to 31 beats after the flag, and it was thrown away 4 beats after the flag
     for (auto it = m_savedQueue.begin(); it != m_savedQueue.end();)
     {
         const bool waiting = boundary < it.key() && beat - it.key() < 32;
-        if (it.key() + 3 < beat && waiting == false) it = m_savedQueue.erase(it); else ++it;
+        if (it.key() + 3 < beat && waiting == false && it.key() != m_r594SavedWait) it = m_savedQueue.erase(it); else ++it;
     }
     if (!activate.isEmpty() && savedInvalid(activate).isEmpty()) {
         savedStop();
@@ -48011,7 +48039,14 @@ QList<QPair<QString, quint32> > TrackEngine::r561Figures() const
     if (key.isEmpty())
         return lab;
     QSet<QString> seen;
-    foreach (TrackFuncInfo *info, candidates(ENGINE_ROLE_MOTION, key))
+    // TRACK_APP_FIX_R594: the page picks by the row's NUMBER, and this list was built from what the engine may draw
+    // right now - a figure that only plays at a full fader, or only in a long build, came and went with the fader.
+    // Between the list he saw and his tap the rows could shift: the tap took the neighbour. The list is every
+    // figure now, the same at any fader (his pick is his)
+    m_r594NoGate++;
+    const QList<TrackFuncInfo *> r594All = candidates(ENGINE_ROLE_MOTION, key);
+    m_r594NoGate--;
+    foreach (TrackFuncInfo *info, r594All)
     {
         if (info == nullptr || info->junk || info->groups.contains(key) == false)
             continue;

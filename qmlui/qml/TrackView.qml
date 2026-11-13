@@ -191,6 +191,7 @@ Rectangle
     }             // runde 393: the guide over the page
     // the pencil: the flag tools stay out until it is tapped again (Tobias 10-07)
     property bool markerEdit: false
+    property string r594Title: ""        // TRACK_APP_FIX_R594: the track the MARKERS pencil was opened on
 
     property int dragIndex: -1
     // runde 396: the bar a dragged flag would land on - drawn while the finger moves,
@@ -440,7 +441,21 @@ Rectangle
     Connections
     {
         target: trackManager
-        function onTrackChanged() { wfArea.release(); wfCanvas.selected = -1; wfCanvas.requestPaint() }
+        // TRACK_APP_FIX_R594: a NEW track closes the MARKERS pencil. Left open after a flag was fixed (DONE never
+        // tapped) it hid the PLAN lane, the armed HIT tag and LAST's outro band on every track that followed -
+        // all armed in the engine, none of it on the page. The same track sent again leaves it open
+        function onTrackChanged()
+        {
+            wfArea.release(); wfCanvas.selected = -1
+            const t = trackManager ? trackManager.title : ""
+            if (t !== trackViewRoot.r594Title)
+            {
+                if (trackViewRoot.r594Title !== "")
+                    trackViewRoot.markerEdit = false
+                trackViewRoot.r594Title = t
+            }
+            wfCanvas.requestPaint()
+        }
         function onMarkersChanged()
         {
             // runde 397: the list changed under a drag (the other hand on UNDO,

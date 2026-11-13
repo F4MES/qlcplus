@@ -1060,6 +1060,10 @@ public:
     bool m_r592WhiteTop = false;
     QString r592PartnerFor(const QString &group) const;
     bool m_r590DropDrawn = false;
+    // TRACK_APP_FIX_R594: the queued saved look that waits for HOLD / CALM to let go (its flag beat, its section's start)
+    int m_r594SavedWait = -1;
+    int m_r594SavedWaitAt = -1;
+    mutable int m_r594NoGate = 0;        // the animation laser's hand-pick menu is being built: every figure, at any fader
     // TRACK_APP_FIX_R593 (#58): the programmes a repeated build got back, and the beat they were put in on
     QHash<QString, quint32> m_r593Reused;
     int m_r593ReusedBeat = -1;
@@ -3493,7 +3497,7 @@ private:
     // 0 under 80 % on the slider, 1 at 100 % - how much more the heads move up there
     qreal r572HeadsHot() const { return std::sqrt(qBound(0.0, (m_faderNow - 0.50) / 0.50, 1.0)); }   // TRACK_APP_EVEN_R572: 50 -> 100 %, most of it by 80 % (was TRACK_APP_HEADS85_R572)
     void r572AniRotate(const QString &group, QList<TrackFuncInfo *> &ok) const;
-    void r572AniSeen(const QString &group, quint32 fid);
+    void r572AniSeen(const QString &group, quint32 fid, bool lit = true);   // TRACK_APP_FIX_R594: lit = it was really shown
     QTimer m_testTimer;                    // SELF TEST: one colour scene every 2 s
     QList<quint32> m_testSteps;            // the scenes it walks through
     QStringList m_testGroups;              // ... and the group each belongs to

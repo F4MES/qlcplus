@@ -401,6 +401,7 @@ $('updB').onclick = () => {
   const U = S.upd || {};
   // R475_PHONE_UPD: a script put on the Desktop later is found by QLC+ at the tap (it says so if not)
   if (S.show || U.st === 1) { if (S.show) send('update'); return; }   // QLC+ says SHOW OFF first
+  if (U.app === 'TRACK' && !U.avail) return;   // TRACK_APP_FIX_R594: nothing fetched, nothing to switch to - it armed SURE? and then did nothing
   if (!updSure) { updAt = Date.now(); updSure = setTimeout(() => { updSure = 0; render(); }, 5000); render(); return; }
   if (Date.now() - updAt < 400) return;  // a double tap is not SURE? answered
   clearTimeout(updSure); updSure = 0; send('update'); render();

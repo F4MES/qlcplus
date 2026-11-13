@@ -1413,7 +1413,15 @@ void TrackManager::setEnergyTrim(int percent)
     // clock itself is what moved it (announceRoom sets roomPercent first)
     if (m_engine != nullptr && m_engine->roomAuto() && percent != m_engine->roomPercent())
         m_engine->setRoomAuto(false);
-    QSettings().setValue(SETTINGS_TRACK_TRIM, m_energyTrim);
+    // TRACK_APP_FIX_R594: the slider's value went to the registry on every step of the fader, the phone, MIDI and
+    // the clock - and nothing has read it since R380 (ENERGY starts at 0). It also stood in the tracklog's settings
+    // snapshot, so every ENERGY move made the next sample write a whole new snapshot. The old key is taken out once
+    static bool r594TrimGone = false;
+    if (r594TrimGone == false)
+    {
+        r594TrimGone = true;
+        QSettings().remove(SETTINGS_TRACK_TRIM);
+    }
     emit energyChanged();
     applyEnergy();
     // R190_LASER_NOW: no beat is coming (link lost, deck stopped) - the
@@ -2260,6 +2268,14 @@ QString TrackManager::midiSource(quint32 universe, quint32 channel, bool shortFo
     return text + midiDot() + QStringLiteral("universe %1").arg(universe + 1);
 }
 
+static QString r594MidiBase(QString name)
+{
+    // TRACK_APP_FIX_R594: Windows names a controller on another USB port (or a second of its kind) "2- MIDI Mix" -
+    // the same controller. The number in front, the case and the spaces round it are not part of who it is
+    static const QRegularExpression front(QStringLiteral("^\\s*\\d+\\s*-\\s*"));
+    return name.remove(front).trimmed().toLower();
+}
+
 int TrackManager::midiFind(quint32 universe, quint32 channel)
 {
     for (int i = 0; i < m_midiMaps.count(); i++)
@@ -2273,10 +2289,12 @@ int TrackManager::midiFind(quint32 universe, quint32 channel)
     for (int i = 0; i < m_midiMaps.count(); i++)
     {
         MidiMap &m = m_midiMaps[i];
-        if (m.channel != channel || m.device != ip->inputName())
+        // TRACK_APP_FIX_R594: by the controller's own name - moved to another USB port it came back as "2- MIDI Mix"
+        // on another universe, and his learned buttons and faders stayed with the old name and did nothing
+        if (m.channel != channel || r594MidiBase(m.device) != r594MidiBase(ip->inputName()))
             continue;
         InputPatch *was = m_doc->inputOutputMap()->inputPatch(m.universe);
-        if (was != nullptr && was->inputName() == m.device)
+        if (was != nullptr && was != ip && r594MidiBase(was->inputName()) == r594MidiBase(m.device))
             continue;                    // still there: a second one of the same kind
         m.universe = universe;
         midiSave();
