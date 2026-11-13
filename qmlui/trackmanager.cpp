@@ -127,6 +127,9 @@ TrackManager::TrackManager(QQuickView *view, Doc *doc, QObject *parent)
     m_lastPosMs = 0;
     m_linkStale = false;
     m_engine = new TrackEngine(m_doc, this);
+    // TRACK_APP_KEEP_R596: after a crash ENERGY is where it stood (R380's 0 is for a clean start)
+    if (m_engine->r596KeptEnergy() > 0)
+        m_energyTrim = m_engine->r596KeptEnergy();
     m_phantomTimer.setSingleShot(true);  // TRACK_APP_LOOP_R571
     m_phantomTimer.setInterval(70);
     connect(&m_phantomTimer, &QTimer::timeout, this, [this]() {
@@ -1436,6 +1439,8 @@ void TrackManager::setEnergyTrim(int percent)
         r594TrimGone = true;
         QSettings().remove(SETTINGS_TRACK_TRIM);
     }
+    if (m_engine != nullptr)
+        m_engine->r596Energy(m_energyTrim);   // TRACK_APP_KEEP_R596: kept for a crash (one write a second at most)
     emit energyChanged();
     applyEnergy();
     // R190_LASER_NOW: no beat is coming (link lost, deck stopped) - the
@@ -1528,6 +1533,8 @@ void TrackManager::setAutoRun(bool enable)
     updateShowFlag();                    // R475_UPDATE_SHOW: update-qlc.cmd never closes QLC+ with the show on
     if (m_engine != nullptr)
         m_engine->noteShow(m_autoRun);   // R482_LOG_SHOW: sig:show-on / sig:show-off in the tracklog
+    if (m_engine != nullptr && m_autoRun)
+        m_engine->r596ShowOn();          // TRACK_APP_KEEP_R596: the crashed run's haze and fan
 
     // SHOW ON: clear the Virtual Console once - every function it started
     // stops and its Level sliders let go - so nothing left over from

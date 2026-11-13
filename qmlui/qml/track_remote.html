@@ -637,9 +637,19 @@ let aniOpen = false;   // TRACK_APP_UI_R561: LASER's list on the phone
 let roomPick = 0;
 function drawRoom(room, roomColour) {
   const S2 = (typeof S !== 'undefined' && S && S.roomShape) || {}, asp = S2.aspect || 0.625;
-  const cv = $('roomc'), w = cv.clientWidth || 340, pad = 14, rw = w - 2 * pad - 34, rh = rw / asp, h = Math.round(rh + 2 * pad);
+  const cv = $('roomc'), w = cv.clientWidth || 340, pad = 14;
+  let rw = w - 2 * pad - 34, rh = rw / asp;
+  // TRACK_APP_KEEP_R596 (Tobias 11-13: "Lav Room paa iPad"): the room is drawn as wide as the page and 1.6 times as
+  // tall - on an iPad that is taller than the screen, and the DJ booth (the way to read the map) is off the bottom.
+  // On a wide page the room fits the height it has; a phone is as it was
+  const pagesEl = document.querySelector('.pages');
+  if (w >= 600 && pagesEl && pagesEl.clientHeight > 0) {
+    const avail = Math.max(320, pagesEl.clientHeight - 2 * pad - 28);
+    if (rh > avail) { rh = avail; rw = rh * asp; }
+  }
+  const h = Math.round(rh + 2 * pad);
   const dpr = window.devicePixelRatio || 1;
-  const K = Math.max(1, Math.min(2.4, w / 360));   // TRACK_APP_ROOMBIG_R572: the lamps grow with the room
+  const K = Math.max(1, Math.min(2.4, (rw + 2 * pad + 34) / 360));   // TRACK_APP_ROOMBIG_R572: the lamps grow with the room
   const KT = Math.min(K, 1.7);                       // ... the numbers less
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px'; }
   const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);

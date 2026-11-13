@@ -359,6 +359,7 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
         connect(m_doc, SIGNAL(fixtureGroupChanged(quint32)), this, SLOT(slotDocChanged()));
     }
     crumbsOpen();                        // R435_CRUMBS
+    r596CrashRestore();                  // TRACK_APP_KEEP_R596: after a crash, the faders where they stood
 }
 
 TrackEngine::~TrackEngine()
@@ -386,6 +387,7 @@ void TrackEngine::crumbsOpen()
         old.close();
         if (clean == false)
         {
+            m_r596Crashed = true;        // TRACK_APP_KEEP_R596
             const QString kept = "crash-crumbs-"
                 + QFileInfo(path).lastModified().toString("yyyyMMdd-HHmmss") + ".txt";
             QFile::remove(dir + QDir::separator() + kept);
@@ -882,6 +884,7 @@ void TrackEngine::slotPulseTimer()
             continue;
         }
         if (m_pulseDepth.value(key, 0.0) <= 0.0 && m_breathe.value(key, 0) <= 0
+            && r597Live(key) == false    // TRACK_APP_MUSIC_R597
             && !m_sequenceGroups.contains(key)
             && !(m_landSixteenths && blink16Now() && m_groups.value(key).strobes)   // runde 359 (R362: or the mini landing)
             && !(m_pluckSlots != 0 && smallWash(key)))                            // R461_BREAK_PLUCK
@@ -4629,6 +4632,334 @@ QString TrackEngine::r592PartnerFor(const QString &group) const
     return (g.heads || g.lasers || g.patternDevice) ? m_partnerPick : QString();
 }
 
+void TrackEngine::r596CrashRestore()
+{
+    // TRACK_APP_KEEP_R596 (Tobias 11-13: "Faderne skal alle sammen gerne starte hvor de stoppede efter et crash" /
+    // "ENERGY auto efter et crash om natten"): the last run did not end clean (its trail has no END line) and it
+    // is still the same night - ENERGY comes back at its percent and with its AUTO, the haze and the fan at theirs
+    // when the show is started (never with the show off). MASTER and the group faders come back on every restart
+    // the same night as before (runde 184, R519). A clean start: ENERGY at 0 and by hand, as always
+    if (m_r596Crashed == false)
+        return;
+    QSettings settings;
+    if (settings.value(SETTINGS_ENGINE_NIGHT).toString() == nightKey())
+        m_roomAuto = settings.value(SETTINGS_ENGINE_ROOMAUTO, false).toBool();
+    const QStringList kept = settings.value(QStringLiteral("tracknight/keep")).toString().split(QLatin1Char(';'));
+    if (kept.count() == 4 && kept.at(0) == nightKey())
+    {
+        bool okE = false, okH = false, okF = false;
+        const int energy = kept.at(1).toInt(&okE);
+        const qreal haze = kept.at(2).toDouble(&okH), fan = kept.at(3).toDouble(&okF);
+        if (okE && energy > 0 && energy <= 100)
+        {
+            m_r596KeptEnergy = energy;
+            m_r596Energy = energy;       // what the next write keeps, until ENERGY moves
+        }
+        if (okH && haze > 0.0 && haze <= 1.0)
+            m_r596KeptHaze = haze;
+        if (okF && fan > 0.0 && fan <= 1.0)
+            m_r596KeptFan = fan;
+    }
+    crumb(QStringLiteral("crash restore: energy %1 auto %2 haze %3 fan %4").arg(m_r596KeptEnergy).arg(m_roomAuto ? 1 : 0)
+          .arg(m_r596KeptHaze, 0, 'f', 2).arg(m_r596KeptFan, 0, 'f', 2));
+}
+
+void TrackEngine::r596Energy(int percent)
+{
+    m_r596Energy = percent;
+    r596Keep();
+}
+
+void TrackEngine::r596Keep()
+{
+    // a second after the last move: one write, not one a step of a fader
+    if (m_r596KeepHooked == false)
+    {
+        m_r596KeepHooked = true;
+        m_r596KeepTimer.setSingleShot(true);
+        m_r596KeepTimer.setInterval(1000);
+        connect(&m_r596KeepTimer, &QTimer::timeout, this, [this]() { r596KeepWrite(); });
+    }
+    m_r596KeepTimer.start();
+}
+
+void TrackEngine::r596KeepWrite()
+{
+    // its own key outside trackengine/ - tonight's state: not in EXPORT, not in the tracklog's snapshot
+    const QString now = nightKey() + QLatin1Char(';') + QString::number(qMax(0, m_r596Energy)) + QLatin1Char(';')
+                      + QString::number(m_haze, 'f', 2) + QLatin1Char(';') + QString::number(m_fan, 'f', 2);
+    if (now == m_r596Written)
+        return;
+    m_r596Written = now;
+    QSettings().setValue(QStringLiteral("tracknight/keep"), now);
+}
+
+void TrackEngine::r596ShowOn()
+{
+    // the haze and the fan of the crashed run, once, as the show starts - not over AUTO (it has its own row)
+    const qreal haze = m_r596KeptHaze, fan = m_r596KeptFan;
+    m_r596KeptHaze = -1.0;
+    m_r596KeptFan = -1.0;
+    if (m_hazeAuto)
+        return;
+    if (haze > 0.0)
+    {
+        atmosNext(QStringLiteral("crash-restore"));
+        setHaze(haze);
+    }
+    if (fan > 0.0)
+    {
+        atmosNext(QStringLiteral("crash-restore"));
+        setFan(fan);
+    }
+    if (haze > 0.0 || fan > 0.0)
+        logSignal(QStringLiteral("sig:crash-restore:haze%1:fan%2").arg(int(qRound(haze * 100))).arg(int(qRound(qMax(0.0, fan) * 100))));
+}
+
+int TrackEngine::r597Hits(int from, int count) const
+{
+    // the quarters with a hat, a snare or a note in them (the highs at 5, the mids at 6 of the track's own scale)
+    int hits = 0;
+    for (int b = qMax(1, from); b < from + count; b++)
+        for (int q = 0; q < 4; q++)
+            if (onsetHigh(b, q) >= 5 || onsetMid(b, q) >= 6)
+                hits++;
+    return hits;
+}
+
+void TrackEngine::r597Beat(int beat, int bar, int beatInBar, bool isDrop, bool isBuild, int dropBar, bool quietHand)
+{
+    // TRACK_APP_MUSIC_R597 (Tobias 11-13: "Kan vi faa lyset til at foelge musikken bedre baade i lave og hoeje
+    // energier ... specielt i hoeje energier 90+ ... bruge strobe-lamperne og wash heads til at pulse lidt mere paa
+    // beatet" -> "Lav 1, 2, 3, 6, 8, 9, 10, 11"). What the music does on THIS beat, for the frames until the next:
+    // everything here is measured in the track (the kick curve, the onsets by quarter) - no hit, no pulse - and
+    // every layer is a factor of 1.0 or less on levels that already follow MASTER and the faders
+    const qint64 now = m_clock.elapsed();
+    if (m_r597AnsQ >= 0 && m_r597BeatAt >= 0)
+        m_r597AnsAt = m_r597BeatAt + qint64(m_r597AnsQ * m_beatMs / 4.0);
+    if (m_r597NoteMask != 0 && m_r597BeatAt >= 0)
+        for (int q = 3; q >= 0; q--)
+            if ((m_r597NoteMask & (1 << q)) != 0)
+            {
+                m_r597NoteAt = m_r597BeatAt + qint64(q * m_beatMs / 4.0);
+                break;
+            }
+    m_r597BeatAt = now;
+    if (r501KickAt(beat, false) == 1)
+        m_r597KickAt = now;
+    // the programme's turn: it has had one when the strobe lamps wore it for four bars (the cast loop sets Shown)
+    if (m_r597ShownBeat == beat - 1 && m_r597Prog != 0 && ++m_r597ShownBeats == 16)
+        m_r597ProgLast = m_r597Prog;
+    if (isDrop == false)
+        m_r597Prog = 0;
+    // 2 / 6: the drop's layers - past the landing, never under HOLD / CALM / STILL, a mix, BLACKOUT
+    m_r597Drop = isDrop && dropBar >= 0 && quietHand == false && landBurstNow() == false && m_blackout == false
+                 && m_mixing == false && m_onsetLow.isEmpty() == false;
+    // 6: the drop in waves - its first 8 bars full, the next 8 lighter, and round again
+    m_r597Wave = ((qMax(0, dropBar) / 8) % 2 == 0) ? 1.0 : 0.6;
+    // 3: what the strobe lamps answer WITH, read once over the drop's first eight bars - the clap or snare on 2 and
+    // 4 (the engine's own measure, runde 358: the highs on those beats 1.4 times the others, on whichever parity
+    // carries them), else the off-beat hat; a drop with neither has nothing to answer with, and the kick takes the turn
+    if (m_r597Prog == 3 && isDrop && dropBar >= 0)
+    {
+        const int ds = beat - dropBar * 4 - beatInBar;
+        if (ds != m_r597AnsFor)
+        {
+            m_r597AnsFor = ds;
+            qreal on24 = 0.0, on13 = 0.0;
+            int n24 = 0, n13 = 0, hats = 0;
+            for (int b = ds; b < ds + 32; b++)
+            {
+                const int c = onsetHigh(b, 0);
+                if (c < 0)
+                    continue;
+                if (((b - ds) % 2) == 1) { on24 += c; n24++; }
+                else { on13 += c; n13++; }
+                if (onsetHigh(b, 2) >= 5 || onsetMid(b, 2) >= 6)
+                    hats++;
+            }
+            m_r597AnsMode = -1;
+            if (n24 >= 8 && n13 >= 8)
+            {
+                on24 /= n24;
+                on13 /= n13;
+                if (on24 >= 5.0 && on24 >= 1.4 * on13 + 0.5) { m_r597AnsMode = 0; m_r597AnsParity = 1; }
+                else if (on13 >= 5.0 && on13 >= 1.4 * on24 + 0.5) { m_r597AnsMode = 0; m_r597AnsParity = 0; }
+            }
+            if (m_r597AnsMode < 0 && hats >= 12)
+                m_r597AnsMode = 1;
+            if (m_r597AnsMode < 0)
+                m_r597Prog = 1;
+            if (m_testTrack == false)
+                logSignal(QStringLiteral("sig:drop-answer:") + (m_r597AnsMode == 0 ? QStringLiteral("clap")
+                          : m_r597AnsMode == 1 ? QStringLiteral("hat") : QStringLiteral("none-kick")));
+        }
+    }
+    // 1 / 3: the programme - only the classic drop (a form has the strobe lamps for itself: 0 = DF_CLASSIC), never his amok
+    m_r597ProgOn = m_r597Drop && m_r597Prog != 0 && m_formNow == 0 && m_hitAmokFrom < 0 && m_faderReal >= 0.90 - 1e-9;
+    m_r597Shown = m_r597ProgOn && m_r597ShownBeat >= beat - 1;   // (the cast loop sets it on the first beat itself)
+    m_r597AnsQ = -1;
+    if (m_r597ProgOn && m_r597Prog == 3)
+    {
+        const bool clap = (beatInBar % 2) == m_r597AnsParity && onsetHigh(beat, 0) >= 4;
+        if (m_r597AnsMode == 0 && clap)
+        {
+            m_r597AnsQ = 0;
+            m_r597ClapBeat = beat;
+        }
+        // (the clap gone for two bars: the off-beat hat keeps the answer going)
+        else if ((m_r597AnsMode == 1 || beat - m_r597ClapBeat >= 8) && (onsetHigh(beat, 2) >= 5 || onsetMid(beat, 2) >= 6))
+            m_r597AnsQ = 2;
+    }
+    // 11: the melody's notes in a quiet groove (under 55 %), on the wash - as the Minis' twinkle in a break. A note
+    // is a hit in the mids that is NOT as strong in the highs: a clap or a snare has both (12 and 12 on his
+    // tracks), a pluck, a stab or a vocal chop has the mids (7-9 against 2-4)
+    m_r597NoteMask = 0;
+    m_r597Melody = isDrop == false && isBuild == false && quietHand == false && m_lookState == QStringLiteral("normal")
+                   && m_faderReal >= 0.10 && m_faderReal < 0.55 && m_blackout == false;
+    if (m_r597Melody)
+        for (int q = 0; q < 4; q++)
+            if (onsetMid(beat, q) >= 6 && onsetMid(beat, q) >= onsetHigh(beat, q) + 2)
+                m_r597NoteMask |= 1 << q;
+    // 9: how busy the music is - the last four bars against the track's own average, read on a 4-bar line: thin
+    // (under 60 %) the heads take a fifth longer over a round, busy (over 140 %) an eighth shorter
+    const int n = int(m_onsetLow.count());
+    if (m_r597DensFor != m_trackTitle)
+    {
+        m_r597DensFor = m_trackTitle;
+        m_r597DensAvg = n >= 32 ? qreal(r597Hits(1, n)) * 16.0 / qreal(n) : 0.0;
+        m_r597Pace = 1.0;
+        m_r597FillUntil = -1;
+    }
+    if (beatInBar == 0 && bar % 4 == 0)
+    {
+        qreal pace = 1.0;
+        if (quietHand == false && m_r597DensAvg >= 4.0 && beat > 16)
+        {
+            const qreal ratio = qreal(r597Hits(beat - 16, 16)) / m_r597DensAvg;
+            pace = ratio < 0.60 ? 1.20 : (ratio > 1.40 ? 0.88 : 1.0);
+        }
+        if (pace != m_r597Pace)
+        {
+            m_r597Pace = pace;
+            if (m_testTrack == false)
+                logSignal(QStringLiteral("sig:head-pace:") + (pace > 1.0 ? QStringLiteral("thin") : pace < 1.0 ? QStringLiteral("busy") : QStringLiteral("even")));
+        }
+    }
+    // 10: a fill - the last bar before an 8-bar line has half again as many hits as the three bars before it
+    // (and at least ten of its sixteen quarters). Not a build (its roll has its own light), not HOLD / CALM / STILL
+    if (beatInBar == 0 && bar % 8 == 7 && isBuild == false && quietHand == false && beat > 12 && m_faderReal >= 0.25)
+    {
+        const int here = r597Hits(beat, 4), before = r597Hits(beat - 12, 12);
+        if (here >= 10 && 2 * here >= before + 4)
+        {
+            m_r597FillUntil = beat + 3;
+            if (m_testTrack == false)
+                logSignal(QStringLiteral("sig:fill:%1:%2").arg(here).arg(before));
+        }
+    }
+}
+
+bool TrackEngine::r597Live(const QString &group) const
+{
+    // TRACK_APP_MUSIC_R597: a group one of the layers is on right now (the frame timer keeps it)
+    const TrackGroup &g = m_groups.value(group);
+    if (g.strobes)
+        return m_r597Shown && group == m_r536Key;
+    return g.heads && group == m_compositionBase && (m_r597Drop || m_r597Melody);
+}
+
+qreal TrackEngine::r597Pulse(const QString &group, qint64 now) const
+{
+    // TRACK_APP_MUSIC_R597: this frame's factor for one group - 1.0 where no layer is the group's
+    if (m_beatMs <= 0.0 || m_r597BeatAt < 0)
+        return 1.0;
+    const TrackGroup &g = m_groups.value(group);
+    const qreal sinceKick = m_r597KickAt >= 0 ? qreal(now - m_r597KickAt) : 1.0e9;
+    if (m_r597Drop)
+    {
+        if (g.strobes && m_r597ProgOn && m_r597Shown && group == m_r536Key && m_padFlash.contains(group) == false
+            && m_flashHeld.contains(group) == false)
+        {
+            if (m_r597Prog == 1)
+            {
+                // 1: the strobe lamps, in the room's colour, up on every kick and falling away over the beat -
+                // half deep at 90 %, 85 % at the top; no kick, no pulse (they stand on the floor of it)
+                const qreal top = qBound(0.0, (m_faderReal - 0.90) / 0.10, 1.0);
+                const qreal depth = (0.50 + 0.35 * top) * m_r597Wave;
+                return (1.0 - depth) + depth * std::exp(-sinceKick / (m_beatMs * 0.30));
+            }
+            // 3: the answer - the wash has the kick (below), the strobe lamps come on the clap or the off-beat hat
+            const qint64 at = m_r597AnsQ >= 0 ? m_r597BeatAt + qint64(m_r597AnsQ * m_beatMs / 4.0) : -1;
+            const qreal since = (at >= 0 && now >= at) ? qreal(now - at)
+                              : (m_r597AnsAt >= 0 ? qreal(now - m_r597AnsAt) : 1.0e9);
+            return 0.10 + 0.90 * m_r597Wave * std::exp(-since / (m_beatMs * 0.22));
+        }
+        // 2: the wash pumps on the measured kick - full on it, down toward 75-55 % (by ENERGY) before the next;
+        // not on top of a move that already blinks it hard on the beat. The kick gone: it stays down (his dip)
+        if (g.heads && group == m_compositionBase && m_pulseDepth.value(group, 0.0) < 0.5)
+        {
+            const qreal depth = (0.25 + 0.20 * qBound(0.0, (m_faderReal - 0.50) / 0.50, 1.0)) * m_r597Wave;
+            return (1.0 - depth) + depth * std::exp(-sinceKick / (m_beatMs * 0.40));
+        }
+        return 1.0;
+    }
+    return 1.0;
+}
+
+qreal TrackEngine::r597Lift(const QString &group, qint64 now) const
+{
+    // TRACK_APP_MUSIC_R597 (11): the melody lift - in a quiet groove under 55 % the wash comes UP 15 % on each note
+    // and falls back over a third of a beat. A lift on what pulseFactor has worked out (after its floors: under
+    // them it could not be seen), never past 1.0 - so never past MASTER, the trim or ENERGY's own level
+    if (m_r597Melody == false || m_beatMs <= 0.0 || m_r597BeatAt < 0 || group != m_compositionBase
+        || m_groups.value(group).heads == false)
+        return 1.0;
+    const qreal within = qBound(0.0, qreal(now - m_r597BeatAt) / m_beatMs, 0.999);
+    qreal since = 1.0e9;
+    for (int k = int(within * 4.0); k >= 0; k--)
+        if ((m_r597NoteMask & (1 << k)) != 0 && within >= k / 4.0)
+        {
+            since = (within - k / 4.0) * m_beatMs;
+            break;
+        }
+    if (since > 1.0e8 && m_r597NoteAt >= 0)
+        since = qreal(now - m_r597NoteAt);
+    if (since > m_beatMs * 2.0)
+        return 1.0;
+    return 1.0 + 0.15 * std::exp(-since / qMax(60.0, m_beatMs * 0.35));
+}
+
+int TrackEngine::r597HeadBeats(int beats) const
+{
+    // TRACK_APP_MUSIC_R597 (9): the round's length by how busy the music is; (8): a slow figure (12 beats and up)
+    // takes a phrase length - 16, 32 or 64 beats - so its rounds end on the 4- and 8-bar lines (the bar lock, R583,
+    // keeps them there). Never the lasers (the caller)
+    if (beats >= 12)
+    {
+        // the phrase length nearest what was drawn (thin music leans to the longer, busy to the shorter), never
+        // under 70 % or over 160 % of it
+        static const int lens[3] = { 16, 32, 64 };
+        const qreal want = qreal(beats) * (m_r597Pace > 1.0 ? 1.15 : (m_r597Pace < 1.0 ? 0.90 : 1.0));
+        int best = 0;
+        qreal bestD = 1.0e9;
+        for (int i = 0; i < 3; i++)
+        {
+            const qreal r = qreal(lens[i]) / qreal(beats);
+            const qreal d = qAbs(std::log(qreal(lens[i]) / want));
+            if (r >= 0.70 && r <= 1.60 && d < bestD)
+            {
+                bestD = d;
+                best = lens[i];
+            }
+        }
+        if (best > 0)
+            return best;
+    }
+    const int out = qMax(3, int(qRound(qreal(beats) * m_r597Pace)));
+    return out;
+}
+
 void TrackEngine::r588LabRetry()
 {
     // TRACK_APP_FIX_R588 (#74): laser-lab.json was there but could not be read when the table was built (Documents
@@ -7107,6 +7438,7 @@ void TrackEngine::setHaze(qreal level)
     m_atmosChangedMs = m_clock.elapsed();    // R473_ATMOS: logged once it has settled
     m_atmosChangedBy = by;
     applyAtmos(m_hazeScene, m_hazeChannels, level);
+    r596Keep();                          // TRACK_APP_KEEP_R596
     emit liveChanged();
 }
 
@@ -7125,6 +7457,7 @@ void TrackEngine::setFan(qreal level)
     m_atmosChangedMs = m_clock.elapsed();    // R473_ATMOS
     m_atmosChangedBy = by;
     applyAtmos(m_fanScene, m_fanChannels, level);
+    r596Keep();                          // TRACK_APP_KEEP_R596
     emit liveChanged();
 }
 
@@ -9080,6 +9413,19 @@ QString TrackEngine::exportSettings()
     // QSaveFile: written beside the real one and moved into place, so a crash
     // halfway leaves the previous export - the only backup of the ratings,
     // roles and bans - rather than an empty file (runde 176)
+    // TRACK_APP_KEEP_R596 (Tobias 11-13: "Laser LAB i export/import"): his LASER LAB looks live in laser-lab.json,
+    // not in the settings - EXPORT left them out, so a restore on another PC brought the colour and strobe choices
+    // back and not one laser look. The file goes into the export whole (and so into the daily backup)
+    {
+        QFile lab(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QStringLiteral("/QLC+/laser-lab.json"));
+        if (m_labLoadBad == false && lab.open(QIODevice::ReadOnly))
+        {
+            QJsonParseError pe;
+            const QJsonDocument ld = QJsonDocument::fromJson(lab.readAll(), &pe);
+            if (pe.error == QJsonParseError::NoError && ld.isObject() && ld.object().isEmpty() == false)
+                obj.insert(QStringLiteral("_files/laser-lab"), ld.object());
+        }
+    }
     QSaveFile file(m_r588ExportPath.isEmpty() ? engineSettingsPath() : m_r588ExportPath);   // TRACK_APP_FIX_R588: or the backup
     if (file.open(QIODevice::WriteOnly) == false)
         return tr("could not write %1").arg(file.fileName());
@@ -9175,6 +9521,33 @@ QString TrackEngine::importSettings()
     m_groupOff.clear();
     foreach (QString key, settings.value(SETTINGS_ENGINE_GROUPOFF, QString()).toString().split(';', Qt::SkipEmptyParts))
         m_groupOff.insert(key);
+    // TRACK_APP_KEEP_R596: the file's LASER LAB looks, when it has them (an export from before R596 has none: the
+    // looks stay as they are). The looks on this PC are copied to backup/ first - nothing he kept is thrown away -
+    // and never while the lab itself is open
+    {
+        const QJsonObject lab = obj.value(QStringLiteral("_files/laser-lab")).toObject();
+        if (lab.isEmpty() == false && m_labActive == false)
+        {
+            const QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QStringLiteral("/QLC+");
+            const QString path = docs + QStringLiteral("/laser-lab.json");
+            if (QFileInfo(path).size() > 2 && QDir().mkpath(docs + QStringLiteral("/backup")))
+                QFile::copy(path, docs + QStringLiteral("/backup/laser-lab-before-import-")
+                                  + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")) + QStringLiteral(".json"));
+            QSaveFile out(path);
+            if (out.open(QIODevice::WriteOnly))
+            {
+                out.write(QJsonDocument(lab).toJson(QJsonDocument::Indented));
+                if (out.commit())
+                {
+                    m_labLoaded = false;
+                    m_labLoadBad = false;
+                    labLoad();
+                    n++;
+                    emit labChanged();
+                }
+            }
+        }
+    }
     m_dirty = true;
     // the file's roles REPLACE the ones in memory: ensureTable() carries a
     // function's in-memory role over, and loadRoles() only overrides the ids
@@ -12997,6 +13370,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // the lead for this beat (the groups are painted in the cast loop below)
     updateColourLayer(beat, base, isBreak, isBuild, isDrop, prog, fader,
                       hold || still || isCalm, forceNext || m_dropArrivedNow || m_lateLandNow, kick);
+    m_r597SecStart = secStart;           // TRACK_APP_MUSIC_R597 (8)
     autoFadeTick(beat, autoPreviousColour, !isDrop && !isBuild && !turn && !preDrop,
                  hold || still || isCalm, forceNext || isDrop || isBuild || m_flash || m_blackout
                  || r493CamelotCutNow(beat));   // R493_A2_CAM_HARD: the clash's cut is never faded
@@ -13015,6 +13389,24 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // until its kick is heard (bar 2, below)
     if (dropDraw)
     {
+        // TRACK_APP_MUSIC_R597 (Tobias 11-13, 1 and 3: "det er vigtigt at det er et program ... ikke hele tiden paa
+        // strobe-hovederne ... skiftes til at vaere hver anden saa det hele tiden varierer"; 3 "igen ikke i alle
+        // drops"): from 90 % every OTHER drop has a programme on the strobe lamps, and the two take turns - the
+        // lamps pulse on the kick, then (two drops on) the wash takes the kick and the lamps answer. A drop only
+        // counts as having had one when the lamps wore it for four bars (r597Beat): a drop that was a form all
+        // through, or had the strobe lamps off the stage, leaves the turn to the next
+        const bool r597Had = m_r597ShownBeats >= 16;
+        m_r597Prog = 0;
+        m_r597ShownBeats = 0;
+        if (m_faderReal >= 0.90 - 1e-9 && hold == false && isCalm == false)
+        {
+            if (r597Had == false)
+                m_r597Prog = m_r597ProgLast == 1 ? 3 : (m_r597ProgLast == 3 ? 1 : (rng->bounded(2) == 0 ? 1 : 3));
+            m_r597AnsFor = -1;
+            if (m_testTrack == false)
+                logSignal(QStringLiteral("sig:drop-pulse:") + (m_r597Prog == 1 ? QStringLiteral("kick")
+                          : m_r597Prog == 3 ? QStringLiteral("answer") : QStringLiteral("none")));
+        }
         m_barSingleDraw = rng->bounded(100) < 35; // C20261020: even a HIT need not be single-eye
         // R488_DX_SINGLE is gone (R489_EX_NO_SINGLE): strob-storm's stop is whole bars now, it draws no single eyes
         if (hold == false && isCalm == false)
@@ -13487,6 +13879,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
     m_r536Key = r536StrobeKey();
+    r597Beat(beat, bar, beatInBar, isDrop, isBuild, dropBar, hold || isCalm || still);   // TRACK_APP_MUSIC_R597
     r587StrobeCaps(true);                // TRACK_APP_STROBECAP_R587: every beat, written again (a new show file too)
     // TRACK_APP_DROPSTAB_R584 (Tobias 11-09, forslag 3: "skal gaa under knappen i settings som de andre stabs paa den
     // samme knap"): BREAK STABS' switch also gives the DROP its stabs - a quarter where the lows, the mids and the
@@ -16232,7 +16625,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             m_baseCover.insert(key);
     }
     r507SafeHandover(castSet);           // R507_SAFE_HANDOVER_CALL: the outgoing laser type cut before anything lights
-    bool anyPulse = !m_sequenceGroups.isEmpty();
+    bool anyPulse = !m_sequenceGroups.isEmpty() || m_r597Drop || m_r597Melody;   // TRACK_APP_MUSIC_R597
     bool moveHit = false;
     // runde 153: did a strobe group draw one of the show's chases this beat?
     // On the log so the trial can be measured instead of remembered.
@@ -16528,6 +16921,22 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             if (tier != 2 || fader < 0.75)
                 mv.subSteps = 1;
             mv.flashBar = false;
+        }
+        // TRACK_APP_MUSIC_R597 (1, 3): under the drop's programme the strobe lamps stand as ONE lit group - no
+        // walk, no blink, no chase of their own; r597Pulse is their light (the landing's impact keeps its chase)
+        if (m_r597ProgOn && g.strobes && key == m_r536Key && impactNow == false && darkGroups.contains(key) == false)
+        {
+            mv.pattern = ENGINE_PAT_STATIC;
+            mv.pulse = 0.0;
+            mv.pulseOn = 0;
+            mv.subSteps = 1;
+            mv.flashBar = false;
+            mv.bare = false;
+            mv.ownChaser = false;
+            mv.breatheBars = 0;
+            mv.texture = 0.0;
+            m_r597Shown = true;
+            m_r597ShownBeat = beat;
         }
 
         QString colour = m_colour;
@@ -17248,6 +17657,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                           || (mv.pulseOn == 2 && (beatInBar == 1 || beatInBar == 3))
                           || (mv.pulseOn == 3 && beatInBar == 0);
             qreal depth = darkGroups.contains(key) ? 0.0 : mv.pulse;
+            // TRACK_APP_MUSIC_R597 (6): the drop in waves - the wash's own kick pulse three quarters as deep in
+            // the drop's bars 9-16 (25-32 ...), full again from the next 8-bar line
+            if (m_r597Drop && m_r597Wave < 1.0 && g.heads && g.patternDevice == false && depth > 0.0)
+                depth *= 0.75;
             // The fader, live, on the kick: the move drew its depth at
             // m_movesEnergy; between draws the fader scales it by the ratio
             // of a gentle curve (half depth at the bottom, full at the top),
@@ -18132,6 +18545,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_vocalNow) ev << "vocal";
         if (m_grooveSlots != 0) ev << QString("groove%1").arg(m_grooveSlots);
         if (m_backbeat) ev << "backbeat";
+        if (m_r597Shown) ev << (m_r597Prog == 1 ? "drop-kick" : "drop-answer");   // TRACK_APP_MUSIC_R597
         if (riserFollow) ev << QString("riser%1").arg(int(qRound(100.0 * buildProg)));
         if (m_deckSpeed < 0.85) ev << "brake";
         // runde 359
@@ -19458,6 +19872,7 @@ qreal TrackEngine::pulseFactor(const QString &group) const
         return r575Land16Gate(now);     // full on the sixteenths the music hits (TRACK_APP_MUSIC_R575): no kick's decay
     }
 
+    factor *= r597Pulse(group, now);     // TRACK_APP_MUSIC_R597: the kick pump and the drop's programme
     // the pulse: full on the beat, down to (1 - depth) a quarter beat later
     // and flat from there - a kick, not a sine
     qreal depth = m_pulseDepth.value(group, 0.0);
@@ -19540,7 +19955,7 @@ qreal TrackEngine::pulseFactor(const QString &group) const
         if (ml > 0.0)
             factor = qMax(factor, qMin(1.0, ENGINE_OWN_FLOOR / ml));
     }
-    return factor;
+    return qMin(1.0, factor * r597Lift(group, now));   // TRACK_APP_MUSIC_R597 (11)
 }
 
 QString TrackEngine::moveName(const TrackMove &move) const
@@ -20067,6 +20482,8 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         beats *= m_speed < -1 ? 4 : 2;     // TRACK_APP_SPEED_R563: 1/4
     else if (m_speed > 0 && laser == false)
         beats = qMin(beats, qMax(4, beats / 2));       // 2x: never under a bar, never slower (runde 199, 201)
+    if (laser == false && sw.shape >= 0)
+        beats = r597HeadBeats(beats);    // TRACK_APP_MUSIC_R597 (8, 9)
     uint ms = uint(qMax(250.0, beats * beatMs));
 
     // THE BARS GROW OUT OF THE AIM (runde 219, the 09-20 log: "sigtet var
@@ -34594,8 +35011,11 @@ QString TrackEngine::r572AniLook(const TrackFuncInfo &info) const
     if (info.lab)
     {
         const QString key = m_labFuncKey.value(info.id);
+        // TRACK_APP_KEEP_R596 (round): the picture, not the variant - "G3P40" and "G3P40/turn" are the same picture
+        // with and without its movement, and "never the one just shown" let one follow the other drop after drop
+        // (his rule 11-07: AUTO varies between his LASER LAB looks)
         if (key.isEmpty() == false)
-            return QStringLiteral("lab:") + key;
+            return QStringLiteral("lab:") + key.section(QLatin1Char('/'), 0, 0);
     }
     if (info.family.isEmpty() == false)
         return QStringLiteral("fam:") + info.family;
@@ -34676,6 +35096,40 @@ quint32 TrackEngine::pickMotionWeighted(const QList<TrackFuncInfo *> &pool, int 
 
 QVector<qreal> TrackEngine::livePatternMask(const QString &group, const TrackMove &move, qreal beat, qreal prog) const
 {
+    // TRACK_APP_MUSIC_R597 (10, Tobias 11-13): a drum fill in the last bar before an 8-bar line (r597Beat) - the
+    // chases of the wash, the Minis and the strobe lamps step twice as fast for that one bar and land on the line.
+    // Never the lasers; the strobe lamps never faster than half a beat a step (his rule)
+    if (m_r597FillGuard == false && m_r597FillUntil >= 0 && m_lastBeat <= m_r597FillUntil && m_lastBeat >= m_r597FillUntil - 3
+        && move.pattern != ENGINE_PAT_STATIC)
+    {
+        const TrackGroup &fg = m_groups.value(group);
+        // (not the chase the engine's own fill - a kick gap, runde 324 - is doubling in this bar already)
+        const bool engineFill = m_lastBeat <= m_fillUntil && group != m_compositionBase
+                                && (m_fullAuto == false || group == m_rhythmLead);
+        if (fg.lasers == false && fg.patternDevice == false && engineFill == false)
+        {
+            TrackMove fast = move;
+            bool changed = true;
+            if (fast.subSteps > 1)
+            {
+                if (fg.strobes || fast.subSteps >= 4)
+                    changed = false;
+                else
+                    fast.subSteps *= 2;
+            }
+            else if (fast.stepBeats >= 2)
+                fast.stepBeats /= 2;
+            else
+                fast.subSteps = 2;
+            if (changed)
+            {
+                m_r597FillGuard = true;
+                const QVector<qreal> out = livePatternMask(group, fast, beat, prog);
+                m_r597FillGuard = false;
+                return out;
+            }
+        }
+    }
     beat = qMax(0.0, beat);
     int step = (move.subSteps > 1 ? int(std::floor(beat * move.subSteps))
                                   : int(beat) / qMax(1, move.stepBeats)) + move.phase;
@@ -35963,6 +36417,15 @@ void TrackEngine::autoFadeTick(int beat, const QString &previous, bool soft, boo
             m_autoFade = true;
             m_autoFadeFrom = previous; m_autoFadeTo = m_colour;
             m_autoFadeP = 0.0; m_autoFadeBeat = beat;
+            // TRACK_APP_MUSIC_R597 (8, Tobias 11-13): the fade was 8 beats from wherever it began. It ends ON a line
+            // now: on the section's next 8-bar line when that is 4-16 beats off, else on its next 4-bar line (a bar line at least)
+            m_r597FadeRate = 1.0 / 8.0;
+            if (m_r597SecStart >= 0 && beat >= m_r597SecStart)
+            {
+                const int to8 = 32 - ((beat - m_r597SecStart) % 32), to4 = 16 - ((beat - m_r597SecStart) % 16);
+                const int len = (to8 >= 4 && to8 <= 16) ? to8 : (to4 >= 4 ? to4 : to4 + 4);   // (under a bar off: the bar line after)
+                m_r597FadeRate = 1.0 / qreal(len);
+            }
             qualitySignal(QStringLiteral("sig:auto-colour-fade"));
         }
         m_autoFadePrevious = m_autoFade;
@@ -35975,7 +36438,7 @@ void TrackEngine::autoFadeTick(int beat, const QString &previous, bool soft, boo
         m_autoFadeBeat = beat;
     }
     m_autoFadeBeat = beat;
-    m_autoFadeRate = frozen ? 0.0 : 1.0 / 8.0;
+    m_autoFadeRate = frozen ? 0.0 : m_r597FadeRate;   // TRACK_APP_MUSIC_R597 (8)
     if (m_autoFadeP >= 1.0) autoFadeStop();
     else if (!m_layerTimer.isActive()) m_layerTimer.start();
 }

@@ -1060,6 +1060,58 @@ public:
     bool m_r592WhiteTop = false;
     QString r592PartnerFor(const QString &group) const;
     bool m_r590DropDrawn = false;
+    // TRACK_APP_MUSIC_R597 (Tobias 11-13: 1, 2, 3, 6, 8, 9, 10, 11 of the "follow the music" list):
+    // this drop's pulse programme at 90 %+ (0 none, 1 the strobe lamps on the kick, 3 call and answer) and the
+    // last one drawn; where the answers fall (0 the clap on 2 and 4, 1 the off-beat hat); the drop's layers run
+    // this beat / the programme does; the drop's wave (1.0 or 0.6 by its 8-bar halves); the clock at this beat, at
+    // the last beat with a kick, this beat's answer quarter and the clock at the last answer before it; the
+    // groove's melody lift (this beat's notes by quarter, the clock at the last note before it); the heads' pace by
+    // how busy the music is; the fill's last beat; the colour fade's step a beat; the section's start for it
+    int m_r597Prog = 0;
+    int m_r597ProgLast = -1;
+    bool m_r597Shown = false;
+    int m_r597ShownBeats = 0;
+    int m_r597ShownBeat = -99;
+    int m_r597ClapBeat = -99;
+    int m_r597AnsFor = -1;
+    int m_r597AnsParity = 1;
+    int m_r597AnsMode = 0;
+    bool m_r597Drop = false;
+    bool m_r597ProgOn = false;
+    qreal m_r597Wave = 1.0;
+    qint64 m_r597BeatAt = -1;
+    qint64 m_r597KickAt = -1;
+    int m_r597AnsQ = -1;
+    qint64 m_r597AnsAt = -1;
+    bool m_r597Melody = false;
+    int m_r597NoteMask = 0;
+    qint64 m_r597NoteAt = -1;
+    qreal m_r597Pace = 1.0;
+    QString m_r597DensFor;
+    qreal m_r597DensAvg = 0.0;
+    int m_r597FillUntil = -1;
+    qreal m_r597FadeRate = 0.125;
+    int m_r597SecStart = -1;
+    mutable bool m_r597FillGuard = false;
+    qreal r597Pulse(const QString &group, qint64 now) const;
+    bool r597Live(const QString &group) const;
+    qreal r597Lift(const QString &group, qint64 now) const;
+    int r597HeadBeats(int beats) const;
+    int r597Hits(int from, int count) const;
+    void r597Beat(int beat, int bar, int beatInBar, bool isDrop, bool isBuild, int dropBar, bool quietHand);
+    // TRACK_APP_KEEP_R596: the last run did not end clean; ENERGY as last told; what the crashed run stood at
+    // (-1: nothing to bring back); the write that follows a move by a second
+    bool m_r596Crashed = false;
+    int m_r596Energy = -1;
+    int m_r596KeptEnergy = -1;
+    qreal m_r596KeptHaze = -1.0;
+    qreal m_r596KeptFan = -1.0;
+    QString m_r596Written;
+    QTimer m_r596KeepTimer;
+    bool m_r596KeepHooked = false;
+    void r596Keep();
+    void r596KeepWrite();
+    void r596CrashRestore();
     // TRACK_APP_FIX_R594: the queued saved look that waits for HOLD / CALM to let go (its flag beat, its section's start)
     int m_r594SavedWait = -1;
     int m_r594SavedWaitAt = -1;
@@ -1414,6 +1466,10 @@ public:
     // R486_MI_LOG: sig:midi:<what> - a pad, a fader taking over, LEARN (track_runtime/midimap.inc.cpp)
     void noteMidi(const QString &tag) { logSignal(QStringLiteral("sig:midi:") + tag); }
     void noteLink(const QString &tag) { logSignal(QStringLiteral("sig:link:") + tag); }   // TRACK_APP_FIX_R595: the CDJ link's health
+    // TRACK_APP_KEEP_R596: after a crash the faders come back where they stood (the same night)
+    int r596KeptEnergy() const { return m_r596KeptEnergy; }
+    void r596Energy(int percent);
+    void r596ShowOn();
     // TRACK_APP_MASTERWHY_R572 (Tobias 11-07: "master-faderen kunne nogle gange ikke styre lysstyrken"): when
     // MASTER moves, what is lit past it right now and why - logged (sig:master-free), at most every 2 s
     QString r572MasterFree() const;
