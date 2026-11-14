@@ -36,6 +36,9 @@ static QObject *trackAppObject();          // TRACK_APP_PHONE_R549 (with the upd
 #include "inputoutputmap.h"          // R486_MI_INC: MIDI LEARN hears the inputs
 #include "inputpatch.h"
 #include "ioplugincache.h"           // TRACK_APP_MIDI_R571
+#include <functional>
+#include <QPointer>
+void r599InstallDevFilter(std::function<void()> hit);   // TRACK_APP_MIDIHEAL_R599 (the end of this file)
 #include "qlcioplugin.h"
 #include "qlcinputprofile.h"
 #include "qlcinputchannel.h"
@@ -2683,6 +2686,15 @@ void TrackManager::midiLearnStart()
 {
     midiInit();
     midiRefresh();
+    // TRACK_APP_MIDIHEAL_R599: LEARN is where he finds out the controller is deaf - one that has said nothing for
+    // ten seconds is opened again first (at most every five seconds)
+    if (trackAppObject() != nullptr && m_midiOwnU >= 0)
+    {
+        const qint64 r599Now = QDateTime::currentMSecsSinceEpoch();
+        if ((m_midiLastMs < 0 || r599Now - m_midiLastMs > 10000)
+            && (m_r599ReopenMs < 0 || r599Now - m_r599ReopenMs > 5000))
+            r599Reopen(QStringLiteral("learn"));
+    }
     m_midiLearn = true;
     m_midiTarget.clear();
     m_midiCanUndo = false;
@@ -2929,6 +2941,25 @@ void TrackManager::midiAutoPatch()
     QLCIOPlugin *midi = m_doc->ioPluginCache()->plugin(QStringLiteral("MIDI"));
     if (midi == nullptr)
         return;
+    // TRACK_APP_MIDIHEAL_R599 (Tobias 11-14: the MIDImix listed and "Listening on", nothing heard): QLC+'s QML
+    // program never hears Windows' device changes (only the old UI hands its window to the hot-plug monitor), so
+    // the MIDI plugin kept the devices and the handles it opened at the start for good. A controller that Windows
+    // took away and gave back (a cable, a hub, power saving, plugged in again) stood "Open" on a dead handle. The
+    // TRACK app listens for the change itself and opens the controller again where it has not spoken since
+    if (m_r599Filter == false)
+    {
+        m_r599Filter = true;
+        m_r599DevTimer.setSingleShot(true);
+        connect(&m_r599DevTimer, &QTimer::timeout, this, &TrackManager::r599DevSettle);
+        QPointer<TrackManager> self(this);
+        r599InstallDevFilter([self]() {
+            if (self.isNull() == false)
+                QMetaObject::invokeMethod(self.data(), [self]() {
+                    if (self.isNull() == false)
+                        self->r599DevChanged();
+                }, Qt::QueuedConnection);
+        });
+    }
     if (m_midiRawHooked == false)
     {
         // TRACK_APP_MIDI_R571D: the plugin's own values, for the line TRACK patched
@@ -2940,8 +2971,13 @@ void TrackManager::midiAutoPatch()
             InputPatch *ip = m_doc->inputOutputMap()->inputPatch(quint32(m_midiOwnU));
             if (ip == nullptr || ip->plugin() != midi || ip->input() != input)
                 return;
-            if (m_midiRawCount++ == 0 && m_engine != nullptr)
-                m_engine->noteMidi(QStringLiteral("raw-first:%1:%2").arg(m_midiOwnName).arg(channel));
+            if (m_midiRawCount++ == 0)
+            {
+                if (m_engine != nullptr)
+                    m_engine->noteMidi(QStringLiteral("raw-first:%1:%2").arg(m_midiOwnName).arg(channel));
+                m_r599Reopens = 0;       // TRACK_APP_MIDIHEAL_R599: it speaks
+                QTimer::singleShot(0, this, &TrackManager::midiRefresh);
+            }
             if (m_midiPatchWorks)
                 return;                  // the patch delivers: QLC+'s own path
             m_midiFromRaw = true;
@@ -3082,6 +3118,69 @@ void TrackManager::midiAutoPatch()
     midiRefresh();
 }
 
+void TrackManager::r599DevChanged()
+{
+    // TRACK_APP_MIDIHEAL_R599: Windows says its devices changed (one message per device node, in bursts) - looked
+    // at once the burst has settled
+    if (trackAppObject() == nullptr)
+        return;
+    if (m_r599DevMs < 0)
+        m_r599DevMs = QDateTime::currentMSecsSinceEpoch();
+    m_r599DevTimer.start(2500);
+}
+
+void TrackManager::r599DevSettle()
+{
+    const qint64 since = m_r599DevMs;
+    m_r599DevMs = -1;
+    if (since < 0 || trackAppObject() == nullptr || m_doc == nullptr || m_doc->ioPluginCache() == nullptr)
+        return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // a pad under his finger: not now (twenty seconds at most - a release that got lost holds nothing up)
+    bool held = false;
+    for (int i = 0; i < m_midiMaps.count(); i++)
+        held = held || m_midiMaps.at(i).armed;
+    if (held && m_r599Waits < 8)
+    {
+        m_r599Waits++;
+        m_r599DevMs = since;
+        m_r599DevTimer.start(2500);
+        return;
+    }
+    m_r599Waits = 0;
+    // heard since the change: its handle is alive, whatever else came or went
+    if (m_midiOwnU >= 0 && m_midiLastMs >= since)
+        return;
+    // a PC whose devices change all the time (a loose plug elsewhere): 20 s, a minute, five minutes apart
+    const qint64 gap = m_r599Reopens <= 0 ? 20000 : (m_r599Reopens == 1 ? 60000 : 300000);
+    if (m_r599ReopenMs >= 0 && now - m_r599ReopenMs < gap)
+        return;
+    m_r599Reopens++;
+    r599Reopen(QStringLiteral("devchange"));
+}
+
+void TrackManager::r599Reopen(const QString &why)
+{
+    // TRACK_APP_MIDIHEAL_R599: the MIDI plugin looks at Windows' devices again - it closes the handles it has
+    // (MIDICLOSE_R575), QLC+ opens its patches again on the plugin's configurationChanged, and TRACK patches the
+    // controller by name on its next look (half a second)
+    if (m_doc == nullptr || m_doc->ioPluginCache() == nullptr)
+        return;
+    QLCIOPlugin *midi = m_doc->ioPluginCache()->plugin(QStringLiteral("MIDI"));
+    if (midi == nullptr)
+        return;
+    m_r599ReopenMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_engine != nullptr)
+        m_engine->noteMidi(QStringLiteral("reopen:") + why);
+    QMetaObject::invokeMethod(midi, "slotDeviceAdded", Qt::DirectConnection, Q_ARG(uint, 0), Q_ARG(uint, 0));
+    if (m_midiOwnU >= 0)
+        midiOwnReset();
+    m_midiOwnU = -1;
+    m_midiOwnName.clear();
+    midiRefresh();
+    QTimer::singleShot(500, this, &TrackManager::midiAutoPatch);
+}
+
 void TrackManager::midiOpenIfDeaf(QLCIOPlugin *midi, quint32 line)
 {
     // TRACK_APP_MIDI_R571F: nothing heard yet - is the device open at all? The plugin opens a closed one and
@@ -3163,6 +3262,10 @@ void TrackManager::midiRefresh()
         if (seen != m_midiSeenList && m_engine != nullptr)
             m_engine->noteMidi(QStringLiteral("seen:") + seen);
         m_midiSeenList = seen;
+        // TRACK_APP_MIDIHEAL_R599: open, and not one value from it yet - said, so "listening" is not read as "working"
+        if (m_midiListen.isEmpty() == false && m_midiOwnU >= 0 && m_midiOpenState != 0
+            && m_midiRawCount == 0 && m_midiPatchWorks == false)
+            m_midiListen += midiDot() + QStringLiteral("nothing heard from it yet");
         // TRACK_APP_MIDI_R572: patched, but Windows would not open it
         if (m_midiOpenState == 0 && m_midiOwnName.isEmpty() == false && m_midiListen.isEmpty() == false)
             m_midiListen = QStringLiteral("Could not open %1 (another program using it?)").arg(m_midiOwnName)
@@ -6337,5 +6440,45 @@ static bool r517BltSeenNative()
     if (seen == false)
         EnumWindows(r517BltWindow, reinterpret_cast<LPARAM>(&seen));
     return seen;
+}
+#endif
+
+// TRACK_APP_MIDIHEAL_R599: WM_DEVICECHANGE reaches every top-level window (DBT_DEVNODES_CHANGED needs no
+// registration). Only seen and passed on - never eaten, nothing done inside the window procedure
+#if defined(Q_OS_WIN)
+#include <QAbstractNativeEventFilter>
+#include <QCoreApplication>
+#include <qt_windows.h>
+namespace {
+class R599DevFilter : public QAbstractNativeEventFilter
+{
+public:
+    std::function<void()> m_hit;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    bool nativeEventFilter(const QByteArray &, void *message, qintptr *) override
+#else
+    bool nativeEventFilter(const QByteArray &, void *message, long *) override
+#endif
+    {
+        const MSG *msg = static_cast<const MSG *>(message);
+        if (msg != nullptr && msg->message == WM_DEVICECHANGE && m_hit)
+            m_hit();
+        return false;
+    }
+};
+}
+
+void r599InstallDevFilter(std::function<void()> hit)
+{
+    static R599DevFilter *filter = nullptr;
+    if (filter != nullptr || QCoreApplication::instance() == nullptr)
+        return;
+    filter = new R599DevFilter;
+    filter->m_hit = hit;
+    QCoreApplication::instance()->installNativeEventFilter(filter);
+}
+#else
+void r599InstallDevFilter(std::function<void()>)
+{
 }
 #endif

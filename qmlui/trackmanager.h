@@ -659,6 +659,18 @@ private:
     quint32 m_midiLastCh = 0xFFFFFFFFu;
     uchar m_midiLastVal = 0;
     void midiOpenIfDeaf(class QLCIOPlugin *midi, quint32 line);
+    // TRACK_APP_MIDIHEAL_R599 (Tobias 11-14: "Listening on MIDI Mix, men ingen Last heard"): the first device change
+    // of a burst (Windows' WM_DEVICECHANGE), the last time TRACK opened the controller again and how often in a
+    // row without hearing it, the settle timer, the Windows filter installed
+    qint64 m_r599DevMs = -1;
+    qint64 m_r599ReopenMs = -1;
+    int m_r599Reopens = 0;
+    int m_r599Waits = 0;
+    QTimer m_r599DevTimer;
+    bool m_r599Filter = false;
+    void r599DevChanged();
+    void r599DevSettle();
+    void r599Reopen(const QString &why);
     // TRACK_APP_MIDIFIX_R574: another controller / number is another start - what was heard is forgotten
     void midiOwnReset() { m_midiPatchWorks = false; m_midiRawCount = 0; m_midiOpenTries = 0; m_midiOpenState = -1; r588MidiLetGo(); }
     bool m_midiLearn = false;
