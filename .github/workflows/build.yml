@@ -727,8 +727,10 @@ jobs:
         run: |
           set -e
           REV=$(git rev-parse --short HEAD)
+          # TRACK_APP_BUILDNOTE_R601: the commit's subject - its R-number is shown on TRACK's page
           python3 trackbridge/make_release.py --base dl/TRACK-app-base.zip --rev "$REV" \
-              --jre rt-in/jre.zip --blt rt-in/beat-link-trigger.jar --out rel
+              --jre rt-in/jre.zip --blt rt-in/beat-link-trigger.jar --out rel \
+              --label "$(git log -1 --format=%s)"
           ls -la rel
 
       - name: Publish track-app-latest

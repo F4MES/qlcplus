@@ -84,7 +84,13 @@ def build_runtime(jre, blt, target):
         put(out, 'RUNTIME-NOTICE.txt', NOTICE)
 
 
-def build_app(base, rev, rid, target):
+def round_of(label):
+    """TRACK_APP_BUILDNOTE_R601: "TRACK app R601: ..." -> "R601" (the first R-number in the commit's subject)"""
+    m = re.search(r'\bR(\d{3,5})\b', label or '')
+    return 'R' + m.group(1) if m else ''
+
+
+def build_app(base, rev, rid, target, rnd=''):
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as out, zipfile.ZipFile(base) as src:
         names = set(src.namelist())
         assert 'qlcplus-qml.exe' in names, 'no qlcplus-qml.exe in the portable folder'
@@ -103,6 +109,8 @@ def build_app(base, rev, rid, target):
         put(out, 'trackbridge.jar', jar.read_bytes())
         jar.unlink()
         put(out, 'track-app-build.txt', rev + '\n')
+        if rnd:
+            put(out, 'track-app-round.txt', rnd + '\n')     # TRACK_APP_BUILDNOTE_R601: the page's foot line
         put(out, 'runtime.txt', rid + '\n')
         put(out, 'TRACK-README.md', (HERE / 'README.md').read_bytes())
         # R549 (Tobias 11-04: "QLC skal fjernes fra navne, logoer osv"): TRACK's logo for its window and shortcut
@@ -121,6 +129,7 @@ def main():
     ap.add_argument('--jre', required=True)
     ap.add_argument('--blt', required=True)
     ap.add_argument('--out', required=True)
+    ap.add_argument('--label', default='', help="the commit's subject - its R-number goes with the build")
     a = ap.parse_args()
     if not re.fullmatch(r'[0-9a-f]{6,40}', a.rev):
         raise SystemExit('odd rev: %r' % a.rev)
@@ -130,7 +139,9 @@ def main():
     rt = out / ('TRACK-runtime-%s.zip' % rid)
     build_runtime(a.jre, a.blt, rt)
     app = out / 'TRACK-app.zip'
-    build_app(a.base, a.rev, rid, app)
+    rnd = round_of(a.label)
+    print('round: %s (from %r)' % (rnd or '-', a.label))     # TRACK_APP_BUILDNOTE_R601: in the CI log
+    build_app(a.base, a.rev, rid, app, rnd)
     rsha, rsize = sha_size(rt)
     asha, asize = sha_size(app)
     manifest = {'rev': a.rev,

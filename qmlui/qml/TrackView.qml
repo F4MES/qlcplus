@@ -4414,10 +4414,26 @@ Rectangle
                     }
                 }
             }
-            Row
+            // TRACK_APP_BUILDNOTE_R601 (mockup approved 11-14): which TRACK this is - always, dim, at the end of the line
+            Text
             {
+                id: buildFoot
+                objectName: "buildFoot"
+                visible: trackViewRoot.trackApp
                 anchors.right: parent.right
                 anchors.rightMargin: 4
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.verticalCenterOffset: -2
+                text: !visible ? "" : "TRACK  " + trackAppCtl.build
+                                      + (trackAppCtl.buildRound !== undefined && trackAppCtl.buildRound !== "" ? "  \u00B7  " + trackAppCtl.buildRound : "")
+                color: trackViewRoot.cDim
+                font.pixelSize: trackViewRoot.fs(11)
+                font.letterSpacing: trackViewRoot.fs(11) * 0.08
+            }
+            Row
+            {
+                anchors.right: buildFoot.visible ? buildFoot.left : parent.right
+                anchors.rightMargin: buildFoot.visible ? Math.round(22 * trackViewRoot.ks) : 4
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.verticalCenterOffset: -2
                 spacing: 12
@@ -4466,6 +4482,7 @@ Rectangle
                     objectName: "nextTitleText"
                     // TRACK_APP_FIX_R566: never past the middle of the line (ON STAGE has the left half)
                     readonly property real room: parent.parent.width / 2 - 16 - nextLabelText.width - 12
+                                                 - (buildFoot.visible ? buildFoot.width + Math.round(22 * trackViewRoot.ks) : 0)   // TRACK_APP_BUILDNOTE_R601
                                                  - (nextDeckLabel.visible ? nextDeckLabel.width + 12 : 0)
                                                  - (nextStateBox.visible ? nextStateBox.width + 12 : 0)
                     width: Math.max(40, Math.min(implicitWidth, room))
@@ -5837,6 +5854,70 @@ Rectangle
                     font.pixelSize: trackViewRoot.fs(13)
                     font.letterSpacing: (trackViewRoot.fs(13)) * 0.06
                 }
+            }
+        }
+    }
+
+    // TRACK_APP_BUILDNOTE_R601 (mockup approved 11-14): once, after the first start of a new build - TRACK UPDATED
+    // (12 s) or UPDATE DID NOT START (30 s) over the waveform; it fades away and takes no taps (nothing under it is covered
+    // for the finger)
+    Rectangle
+    {
+        id: updNote
+        objectName: "updNote"
+        readonly property int kind: trackViewRoot.trackApp && trackAppCtl.updateNoteKind !== undefined ? trackAppCtl.updateNoteKind : 0
+        property int shownKind: 0
+        function play() { if (kind === 0) return; shownKind = kind; updNoteRun.restart() }
+        onKindChanged: play()
+        Component.onCompleted: play()
+        visible: opacity > 0.01
+        opacity: 0
+        z: 50
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: trackViewRoot.topH + Math.round(64 * trackViewRoot.ks)
+        width: noteRow.implicitWidth + Math.round(40 * trackViewRoot.ks)
+        height: Math.round(54 * trackViewRoot.ks)
+        radius: height / 2
+        color: shownKind === 2 ? "#2A1212" : "#10241A"
+        border.width: 2
+        border.color: shownKind === 2 ? "#E03030" : trackViewRoot.cGreen
+        SequentialAnimation
+        {
+            id: updNoteRun
+            PauseAnimation { duration: 1500 }                 // the page settles first
+            NumberAnimation { target: updNote; property: "opacity"; to: 1.0; duration: 300 }
+            PauseAnimation { duration: updNote.shownKind === 2 ? 30000 : 12000 }
+            NumberAnimation { target: updNote; property: "opacity"; to: 0.0; duration: 2000 }
+        }
+        Row
+        {
+            id: noteRow
+            anchors.centerIn: parent
+            spacing: Math.round(14 * trackViewRoot.ks)
+            Rectangle
+            {
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.round(26 * trackViewRoot.ks); height: width; radius: width / 2
+                color: updNote.shownKind === 2 ? "#E03030" : trackViewRoot.cGreen
+                Text { anchors.centerIn: parent; text: updNote.shownKind === 2 ? "!" : "\u2713"; color: "#0E0E12"; font.bold: true; font.pixelSize: trackViewRoot.fs(16) }
+            }
+            Text
+            {
+                anchors.verticalCenter: parent.verticalCenter
+                text: updNote.shownKind === 2 ? qsTr("UPDATE DID NOT START") : qsTr("TRACK UPDATED")
+                color: updNote.shownKind === 2 ? "#FF6A6A" : trackViewRoot.cGreen
+                font.bold: true
+                font.pixelSize: trackViewRoot.fs(17)
+                font.letterSpacing: trackViewRoot.fs(17) * 0.08
+            }
+            Text
+            {
+                objectName: "updNoteText"
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.StyledText
+                text: trackViewRoot.trackApp && trackAppCtl.updateNote !== undefined ? trackAppCtl.updateNote : ""
+                color: trackViewRoot.cText
+                font.pixelSize: trackViewRoot.fs(14)
             }
         }
     }

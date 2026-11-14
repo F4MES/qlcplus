@@ -81,6 +81,12 @@ class TrackApp : public QObject
     Q_PROPERTY(int nextDeck READ nextDeck NOTIFY decksChanged)
     Q_PROPERTY(QString nextState READ nextState NOTIFY decksChanged)
     Q_PROPERTY(QString nextTrack READ nextTrack NOTIFY decksChanged)
+    /** TRACK_APP_BUILDNOTE_R601: the round the build was made in ("R601"; "" when the release did not say) */
+    Q_PROPERTY(QString buildRound READ buildRound CONSTANT)
+    /** TRACK_APP_BUILDNOTE_R601: once, on the first start after UPDATE TRACK: 1 updated, 2 the new build did
+     *  not start and the launcher went back (0 nothing to say) - and the line that goes with it */
+    Q_PROPERTY(int updateNoteKind READ updateNoteKind NOTIFY updateNoteChanged)
+    Q_PROPERTY(QString updateNote READ updateNote NOTIFY updateNoteChanged)
 
 public:
     /** beforeQuit: what the restart does just before QLC+ quits (main.cpp: no "save?" box) */
@@ -114,6 +120,9 @@ public:
     int nextDeck() const;
     QString nextState() const;
     QString nextTrack() const;
+    QString buildRound() const;          // TRACK_APP_BUILDNOTE_R601
+    int updateNoteKind() const;
+    QString updateNote() const;
 
     /** R558_SHOW (main.cpp): the show to open now (given: the shortcut's file) and how to open
      *  one TRACK had to download first */
@@ -129,6 +138,7 @@ signals:
     void cdjCountChanged();
     void updateChanged();
     void decksChanged();                 // R560_DECKS
+    void updateNoteChanged();            // TRACK_APP_BUILDNOTE_R601
 
 private slots:
     void slotCheck();
@@ -187,6 +197,12 @@ private:
     int m_step;
     QFile m_hashFile;
     QCryptographicHash m_hash;
+
+    // TRACK_APP_BUILDNOTE_R601: the round, and the note on the first start of a new build
+    QString m_round;
+    int m_noteKind = 0;
+    QString m_note;
+    void r601Note();
 };
 
 #endif

@@ -85,6 +85,10 @@ TrackApp::TrackApp(bool active, std::function<void()> beforeQuit, QObject *paren
     if (m_rev.isEmpty())
         m_rev = QDir(m_appDir).dirName();
     m_runtimeId = readLine(QDir(m_appDir).filePath(QStringLiteral("runtime.txt")));
+    // TRACK_APP_BUILDNOTE_R601: the release writes the round from the commit ("R601"); a build without it says nothing
+    m_round = readLine(QDir(m_appDir).filePath(QStringLiteral("track-app-round.txt")));
+    if (QRegularExpression(QStringLiteral("^R[0-9]{1,5}$")).match(m_round).hasMatch() == false)
+        m_round.clear();
 
     QString runtimeDir;
     if (m_installed && m_runtimeId.isEmpty() == false)
@@ -168,6 +172,9 @@ QString TrackApp::updateLatest() const { return m_staged.isEmpty() && m_show->re
 int TrackApp::updateStep() const { return m_step; }
 QObject *TrackApp::reader() const { return m_reader; }
 QObject *TrackApp::show() const { return m_show; }
+QString TrackApp::buildRound() const { return m_round; }          // TRACK_APP_BUILDNOTE_R601
+int TrackApp::updateNoteKind() const { return m_active ? m_noteKind : 0; }
+QString TrackApp::updateNote() const { return m_active ? m_note : QString(); }
 
 QString TrackApp::updateWhat() const
 {
@@ -280,6 +287,7 @@ void TrackApp::start()
         return;
     }
     log(QStringLiteral("TRACK %1 started (runtime %2)").arg(m_rev, m_runtimeId.isEmpty() ? QStringLiteral("-") : m_runtimeId));
+    r601Note();                          // TRACK_APP_BUILDNOTE_R601 - before the minute that clears pending.txt
     // a build that runs a minute is no longer "pending" (R570_LAUNCH: the launcher waits 65 s for it)
     QTimer::singleShot(60000, this, [this]() {
         const QString pending = file(QStringLiteral("pending.txt"));
@@ -291,6 +299,52 @@ void TrackApp::start()
     bool isInt = false;
     const int first = qEnvironmentVariableIntValue("QLC_TRACK_UPDATE_FIRST_MS", &isInt);
     m_checkTimer.start(isInt && first > 0 ? first : kFirstCheckMs);
+}
+
+void TrackApp::r601Note()
+{
+    // TRACK_APP_BUILDNOTE_R601 (Tobias 11-14: "kan du give et build nummer eller noget et sted i track appen saa jeg/vi
+    // kan se at track faktisk er opdateret ... en lille boks der fader vaek igen, der viser at appen er opdateret, og
+    // ikke fejlet"). From 8 to 14 Nov every new build stopped at its first start on the lys-pc and the launcher went
+    // quietly back - nothing on the page said so. Now, once:
+    // - the first start of the build UPDATE TRACK switched to: pending.txt names it (UPDATE writes it, this build or
+    //   the launcher clears it after a minute) -> "TRACK UPDATED"
+    // - the build the launcher just went back to: bad-build.txt was written in the last 10 minutes -> "UPDATE DID
+    //   NOT START"
+    // note-shown.txt keeps it to once (a restart in the same minute says nothing again)
+    const QString shownPath = file(QStringLiteral("note-shown.txt"));
+    const QString shown = readLine(shownPath);
+    const QString pending = readLine(file(QStringLiteral("pending.txt")));
+    if (pending.isEmpty() == false && pending == m_rev)
+    {
+        if (shown == QStringLiteral("ok:") + m_rev)
+            return;
+        const QString was = readLine(file(QStringLiteral("previous.txt")));
+        m_noteKind = 1;
+        m_note = tr("build %1").arg(m_rev) + (m_round.isEmpty() ? QString() : QStringLiteral("  \u00B7  ") + m_round);
+        if (was.isEmpty() == false && was != m_rev)
+            m_note += QStringLiteral("  \u00B7  <font color='#8C8C96'>") + tr("was %1").arg(was) + QStringLiteral("</font>");
+        writeLine(shownPath, QStringLiteral("ok:") + m_rev);
+        log(QStringLiteral("update: TRACK is now %1%2 (was %3) - TRACK UPDATED on the page")
+                .arg(m_rev, m_round.isEmpty() ? QString() : QStringLiteral(" ") + m_round, was.isEmpty() ? QStringLiteral("-") : was));
+    }
+    else
+    {
+        const QString badPath = file(QStringLiteral("bad-build.txt"));
+        const QString bad = readLine(badPath);
+        const QFileInfo badInfo(badPath);
+        if (bad.isEmpty() || bad == m_rev || badInfo.exists() == false || shown == QStringLiteral("bad:") + bad)
+            return;
+        const qint64 age = badInfo.lastModified().secsTo(QDateTime::currentDateTime());
+        if (age < -60 || age > 600)
+            return;                      // an old one (or a clock that jumped) - nothing just happened
+        m_noteKind = 2;
+        m_note = tr("build %1 stopped at its first start").arg(bad) + QStringLiteral("  \u00B7  <font color='#8C8C96'>")
+               + tr("still on %1 - it is not offered again").arg(m_rev) + QStringLiteral("</font>");
+        writeLine(shownPath, QStringLiteral("bad:") + bad);
+        log(QStringLiteral("update: build %1 did not start - still on %2 - UPDATE DID NOT START on the page").arg(bad, m_rev));
+    }
+    emit updateNoteChanged();
 }
 
 void TrackApp::log(const QString &what) const
