@@ -3572,7 +3572,7 @@ Rectangle
                             // TRACK_APP_UI_R561: HEADS · BARS · LASER - the one shown dark; white = in his hand
                             anchors.horizontalCenter: parent.horizontalCenter
                             anchors.bottom: parent.bottom; anchors.bottomMargin: Math.round(6 * trackViewRoot.ks)
-                            spacing: Math.round(5 * trackViewRoot.ks)
+                            spacing: Math.round(6 * trackViewRoot.ks)    // TRACK_APP_DOTSIZE_R603: was 5
                             Repeater
                             {
                                 model: [ "heads", "bars", "laser" ]
@@ -3595,7 +3595,9 @@ Rectangle
                                         NumberAnimation { to: 0.2; duration: 600; easing.type: Easing.InOutSine }
                                         NumberAnimation { to: 1.0; duration: 600; easing.type: Easing.InOutSine }
                                     }
-                                    width: Math.round(6 * trackViewRoot.ks); height: width; radius: width / 2
+                                    // TRACK_APP_DOTSIZE_R603 (Tobias 11-14: "du maa gerne goere alle prikkerne en lille smule
+                                    // stoerre"): 6 -> 8 (5 px at 1366, 7 px at 1920; was 4 / 6)
+                                    width: Math.max(5, Math.round(8 * trackViewRoot.ks)); height: width; radius: width / 2
                                     // on the gold tile: the page shown dark, the others faint, a page in his hand white
                                     color: trackViewRoot.posPage === modelData ? trackViewRoot.cGold : (hand ? "#FFFFFF" : "#4A4A54")
                                     border.width: trackViewRoot.posPage === modelData && hand ? 1 : 0   // TRACK_APP_UI_R566 (R567: 1 px)
