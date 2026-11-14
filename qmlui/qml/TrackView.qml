@@ -3579,7 +3579,22 @@ Rectangle
                                 Rectangle
                                 {
                                     objectName: "posDot:" + modelData
+                                    // TRACK_APP_DOTPULSE_R602: the heads' own page counts too (a position held: not AUTO)
                                     readonly property bool hand: (modelData === "bars" && trackViewRoot.barsHand) || (modelData === "laser" && trackViewRoot.aniHand)
+                                                                 || (modelData === "heads" && trackViewRoot.trackApp && !!trackEngine && trackEngine.positionMode !== "")
+                                    // TRACK_APP_DOTPULSE_R602 (Tobias 11-14: "Kan prikken pulsere eller blinke, hvis siden IKKE er
+                                    // paa auto? ... saa man kan se at den er live naar man ikke er paa siden"): a page in his hand
+                                    // that is not the one shown pulses white; the one shown keeps its gold with the white ring
+                                    readonly property bool pulsing: hand && trackViewRoot.posPage !== modelData
+                                    property real pulse: 1.0
+                                    opacity: pulsing ? pulse : 1.0
+                                    SequentialAnimation on pulse
+                                    {
+                                        running: parent.pulsing && trackViewRoot.animate
+                                        loops: Animation.Infinite
+                                        NumberAnimation { to: 0.2; duration: 600; easing.type: Easing.InOutSine }
+                                        NumberAnimation { to: 1.0; duration: 600; easing.type: Easing.InOutSine }
+                                    }
                                     width: Math.round(6 * trackViewRoot.ks); height: width; radius: width / 2
                                     // on the gold tile: the page shown dark, the others faint, a page in his hand white
                                     color: trackViewRoot.posPage === modelData ? trackViewRoot.cGold : (hand ? "#FFFFFF" : "#4A4A54")
