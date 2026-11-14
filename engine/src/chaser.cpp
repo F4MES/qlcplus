@@ -745,10 +745,13 @@ int Chaser::adjustAttribute(qreal fraction, int attributeId)
         {
             m_runner->adjustStepIntensity(getAttributeValue(Function::Intensity));
         }
-        else
-        {
-            m_startupAction.m_masterIntensity = getAttributeValue(Function::Intensity);
-        }
+        // TRACK_APP_FADERS_R598 (Tobias 11-14: "man kan ikke styre meget af lyset paa gruppe-faderne"): the level a
+        // NEW runner starts at was only kept while there was no runner. A chaser stopped and started again on the
+        // same turn (the bars' kick-chase launches its packet on every kick) still has its old runner when the new
+        // level is asked for - the old runner got it and was deleted, and the new one started at the level of the
+        // chaser's very first start: MASTER and the group's fader reached nothing while it ran (harness: the bars
+        // at 82 % with their fader on 20). Kept on every change now
+        m_startupAction.m_masterIntensity = getAttributeValue(Function::Intensity);
     }
 
     return attrIndex;

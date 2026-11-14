@@ -1123,6 +1123,15 @@ public:
     // TRACK_APP_FIX_R588: the broad round of 11-10 - laser-lab.json read again when it could not be read at the
     // start, the day's backup, and where a backup export is written (empty: track-settings.json)
     void r588LabRetry();
+    // TRACK_APP_FADERS_R598 (Tobias 11-14: "man kan ikke styre meget af lyset paa gruppe-faderne"): is the group's
+    // colour scene running at full UNDER its programme (the clock when it last was, per group), and the level of a
+    // programme that paints its own colour - the root only where the programme's colour is the lamp's colour
+    bool r598ColourUnder(const QString &group) const;
+    qreal r598Root(const QString &slot, quint32 fid, qreal out) const;
+    mutable QHash<QString, qint64> m_r598ColSeen;
+    // ... and "man kan ikke faa hvid vaek som makkerfarve": NEXT on a look with a white partner or accent - no
+    // white again in this section
+    bool m_r598NoWhite = false;
     void r588Backup();
     int m_r588LabTries = 0;
     bool m_r588LabWait = false;

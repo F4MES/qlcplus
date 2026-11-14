@@ -906,7 +906,7 @@ void TrackEngine::slotPulseTimer()
                 if (canOwnDimmers(m_funcs.value(fid), key == m_compositionBase)     // runde 231
                     && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
                     && m_groups.value(key).rgb)
-                    out = std::sqrt(out);
+                    out = r598Root(slot, fid, out);   // TRACK_APP_FADERS_R598
                 if (lightsOutFor(key))   // R513_LIVE_PAD_PULSEMOT
                     out = 0.0;
                 if (r507SafeDark(key))
@@ -4960,6 +4960,45 @@ int TrackEngine::r597HeadBeats(int beats) const
     return out;
 }
 
+bool TrackEngine::r598ColourUnder(const QString &group) const
+{
+    // TRACK_APP_FADERS_R598 (Tobias 11-14: "man kan ikke styre meget af lyset paa gruppe-faderne"): the group's
+    // colour scene (col: / colx:) is running at FULL - it does not carry the dimmer, so slotScale leaves it
+    // unscaled; the parts or the programme hold the intensity. A scene that just stopped is still fading out for
+    // a beat: under it until then (the wrong way round would be the lamp over its fader)
+    if (group.isEmpty())
+        return false;
+    const TrackGroup &g = m_groups.value(group);
+    const qint64 now = m_clock.elapsed();
+    for (int i = 0; i < 2; i++)
+    {
+        const quint32 fid = m_active.value((i == 0 ? QStringLiteral("col:") : QStringLiteral("colx:")) + group,
+                                           Function::invalidId());
+        if (fid == Function::invalidId())
+            continue;
+        if (m_funcs.value(fid).dimmer || g.hasDimmer == false || g.parts.isEmpty())
+            continue;                    // it carries the light itself: scaled with the faders (slotScale)
+        m_r598ColSeen.insert(group, now);
+        return true;
+    }
+    const qint64 seen = m_r598ColSeen.value(group, -1);
+    return seen >= 0 && now - seen < qint64(qMax(400.0, m_beatMs));
+}
+
+qreal TrackEngine::r598Root(const QString &slot, quint32 fid, qreal out) const
+{
+    // TRACK_APP_FADERS_R598: a chase that owns the dimmers and paints the colour scales BOTH with its intensity,
+    // so it takes the root of the level (runde 174) - right while its own colour is the lamp's colour. With the
+    // group's colour scene at full under it the lamp's colour does not move, and the root of MASTER x fader was
+    // all the fader could do. There MASTER and the fader go on whole; the look at full faders is as it was
+    out = qBound(0.0, out, 1.0);
+    const QString group = slotGroup(slot);
+    if (r598ColourUnder(group) == false)
+        return std::sqrt(out);
+    const qreal s = qBound(0.0, slotScale(slot, fid), 1.0);
+    return s > 0.0 ? std::sqrt(qBound(0.0, out / s, 1.0)) * s : 0.0;
+}
+
 void TrackEngine::r588LabRetry()
 {
     // TRACK_APP_FIX_R588 (#74): laser-lab.json was there but could not be read when the table was built (Documents
@@ -8500,7 +8539,37 @@ void TrackEngine::toggleColourOverride(const QString &colour)
         set.append(colour);
     // R370: FADE and CHASE keep two tiles at least - the last tap but one is
     // refused (the tile blinks); AUTO lets them all go
-    if (m_colourMode != 0 && set.count() < 2)
+    // TRACK_APP_FADERS_R598 (Tobias 11-14: "man kan ikke faa hvid vaek som makkerfarve"): with two tiles in FADE
+    // or CHASE the tap that took one out was refused (the tile blinked) - blue + white fading, and white could not
+    // be taken away without a third tile first or AUTO. The tile goes now, and the engine's own partner for the
+    // one that stays takes its place (as FADE / CHASE pick their two tiles, R370) - never white, never the colour
+    // just taken out; the mode stays. No other colour to give: refused, as before
+    if (m_colourMode != 0 && set.count() == 1)
+    {
+        const QString stay = set.first();
+        QString add = stay == QStringLiteral("white") ? QString() : accentFor(stay, false);
+        if (add.isEmpty() || add == stay || add == colour || add == QStringLiteral("white")
+            || m_palette.contains(add) == false || engineBannedColour(add))
+        {
+            add.clear();
+            foreach (const QString &c, m_palette)
+            {
+                if (c != stay && c != colour && c != QStringLiteral("white") && engineBannedColour(c) == false)
+                {
+                    add = c;
+                    break;
+                }
+            }
+        }
+        if (add.isEmpty())
+        {
+            emit colourRejected(colour);
+            return;
+        }
+        set.append(add);
+        logSignal(QStringLiteral("sig:colour-swap:") + colour + QLatin1Char(':') + add);
+    }
+    else if (m_colourMode != 0 && set.count() < 2)
     {
         emit colourRejected(colour);
         return;
@@ -14251,6 +14320,18 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         const bool strobesOnly = fx.count() == 1 && m_groups.value(*fx.constBegin()).strobes;
         m_dropStrobesOnly = m_dropStrobesOnly && strobesOnly;
     }
+    // TRACK_APP_FADERS_R598 (Tobias 11-14: "man kan ikke faa hvid vaek som makkerfarve"): NEXT redrew the partner
+    // from a pool with white still in it, and the accent could come back white on the NEXT after - his NEXT on a
+    // look with white beside the room colour means "not white": none again until the next section
+    if (sectionChanged)
+        m_r598NoWhite = false;
+    if (forceNext && m_override.isEmpty()
+        && (m_partnerPick == QStringLiteral("white") || (isDrop && m_accentPick == QStringLiteral("white"))))
+    {
+        if (m_r598NoWhite == false)
+            logSignal(QStringLiteral("sig:white-partner:next-off"));
+        m_r598NoWhite = true;
+    }
     /* ---- accent: a partner colour on one effect group in drops ---- */
     savedColours(); // SAVED_LOOKS_COLOUR
     QString accentColour;
@@ -14279,7 +14360,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // often than not - and on the strobes, every time (below), which
             // is the "white pulsing on the strobes almost constantly" of
             // 2026-09-15.
-            bool allowWhite = m_accentWasWhite == false && rng->bounded(4) == 0;
+            bool allowWhite = m_accentWasWhite == false && rng->bounded(4) == 0 && m_r598NoWhite == false;   // TRACK_APP_FADERS_R598
             m_accentPick = accentFor(m_colour, allowWhite);
             m_accentWasWhite = (m_accentPick == QStringLiteral("white"));
             // R513_COLOUR_ACCENT_HOOK (r513, Tobias 10-28: "bare lav det som du synes er bedst"): a returning
@@ -14374,7 +14455,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         QStringList pool;
         foreach (const QString &c, m_palette)
         {
-            if (c != m_colour && partnerOk(c, false))
+            if (c != m_colour && partnerOk(c, false)
+                && (m_r598NoWhite == false || c != QStringLiteral("white")))   // TRACK_APP_FADERS_R598
                 pool << c;
         }
         m_partnerPick = pool.isEmpty() ? QString() : pool.at(int(rng->bounded(int(pool.count()))));
@@ -19712,7 +19794,11 @@ qreal TrackEngine::slotScale(const QString &slot, quint32 fid) const
                 // the dimmer at MASTER x fader already, the colour takes what is left. The lamp shows MASTER x
                 // fader, as every other programme; never more
                 const qreal s = masterOut() * trimOf(mg);
-                if (mfi.setsColour && mfi.coversColour && g.rgb && s > 0.0 && s < 1.0)
+                // TRACK_APP_FADERS_R598: ... but only where the programme's colour IS the lamp's colour. With the
+                // group's colour scene running at full under it (a programme in a colour of its own, a strobe
+                // burst's shutter scene) the lamp's colour stays full, HTP - the root on the dimmer alone left
+                // the lamp at the ROOT of the fader: 45 % at a fader on 20, 71 % at half. The whole fader then
+                if (mfi.setsColour && mfi.coversColour && g.rgb && s > 0.0 && s < 1.0 && r598ColourUnder(mg) == false)
                 {
                     const qreal capF = (g.strobes && m_r587Cap.value(mg, 255) < 255)
                                        ? qBound(0.0, masterOut() * m_groupTrim.value(mg, 1.0), 1.0) : 1.0;
@@ -19821,7 +19907,7 @@ void TrackEngine::reapplyLevels()
                 if (canOwnDimmers(m_funcs.value(fid), group == m_compositionBase)   // runde 231
                     && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
                     && m_groups.value(group).rgb)
-                    out = std::sqrt(qBound(0.0, out, 1.0));
+                    out = r598Root(slot, fid, out);   // TRACK_APP_FADERS_R598
             }
         }
         out = lightsOutFor(group) ? 0.0 : qBound(0.0, out, 1.0);   // R513_LIVE_PAD_REAPPLY
@@ -24047,7 +24133,7 @@ void TrackEngine::run(const QString &slot, quint32 fid, qreal level, int divisio
         if (canOwnDimmers(m_funcs.value(fid), ownGroup == m_compositionBase)   // runde 231
             && m_funcs.value(fid).setsColour && m_funcs.value(fid).coversColour
             && m_groups.value(ownGroup).rgb)
-            out = std::sqrt(out);
+            out = r598Root(slot, fid, out);   // TRACK_APP_FADERS_R598
     }
     if (slot.startsWith(QStringLiteral("pos:")) == false && r507SafeDark(slotGroup(slot)))
         out = 0.0;                       // R507_SAFE_RUN_LEVEL: a laser held dark, as setPart() (not the aim)
@@ -24275,6 +24361,16 @@ void TrackEngine::stopSlot(const QString &slot, bool hard)
     int attr = m_activeAttr.value(slot, -1);
     if (r516AniStepped(slot, fid))
         hard = true;                     // R516_LAB_STOP: an animation laser's chaser goes off, it does not fade (scaled)
+    if (slot.startsWith(QStringLiteral("col:")) || slot.startsWith(QStringLiteral("colx:")))
+    {
+        // TRACK_APP_FADERS_R598: a colour scene that fades out is still under the programme for a beat (stamped
+        // here); one cut hard is gone at once
+        const QString cg = slotGroup(slot);
+        if (hard)
+            m_r598ColSeen.remove(cg);
+        else if (r598ColourUnder(cg))
+            m_r598ColSeen.insert(cg, m_clock.elapsed());
+    }
     m_active.remove(slot);
     crumb(QStringLiteral("stop ") + slot + QLatin1Char(' ') + QString::number(fid) + (hard ? QStringLiteral(" hard") : QString()));   // R435_CRUMBS
     m_activeAttr.remove(slot);
