@@ -114,6 +114,7 @@ Rectangle
     }
     property bool learnedOpen: false     // R436_LEARNED
     property bool midiOpen: false        // R486_MI_SETUP_OPEN
+    property bool midiMap: true          // TRACK_APP_MIDIMAP_R611: SETUP > MIDI shows the controller drawing (LIST: the list)
     property bool labMenuOpen: false     // R436_LAB_MENU
     property string ioMessage: ""
 
@@ -494,7 +495,10 @@ Rectangle
             readonly property var rows: trackManager && trackManager.midiMappings ? trackManager.midiMappings : []
             readonly property string listen: trackManager && trackManager.midiListen ? trackManager.midiListen : ""
             readonly property real listH: Math.min(Math.max(1, rows.length) * 38, Math.max(38 * 3, setupRoot.height - 330))
-            readonly property real wantH: 124 + listH + 10
+            // TRACK_APP_MIDIMAP_R611: the drawing, and a line for each learned control that is not on it
+            readonly property real mapH: 448 + (mapRest > 0 ? 28 + mapRest * 20 : 0)
+            readonly property int mapRest: setupRoot.midiMap && midiMapView.placed ? midiMapView.placed["_rest"].length : 0
+            readonly property real wantH: setupRoot.midiMap ? 108 + mapH + 14 : 124 + listH + 10
             Layout.preferredHeight: visible ? wantH : 0
             Layout.maximumHeight: visible ? wantH : 0
             visible: setupRoot.midiOpen
@@ -511,6 +515,204 @@ Rectangle
                 x: 190; y: 16; width: parent.width - 190 - 290; elide: Text.ElideRight
                 text: qsTr("Input only - nothing is sent back. A fader takes over when it passes the value on the screen.")
                 color: setupRoot.cDim; font.pixelSize: 13
+            }
+            // TRACK_APP_MIDIMAP_R611 (Tobias 11-14, forslag 9, mockup approved: "Ja byg 5 og 9"): MAP draws the Akai
+            // MIDImix as it leaves the factory (knobs CC 16-31 / 46-61 three a strip, the strips' faders 19 23 27 31 49 53
+            // 57 61, the master fader 62; MUTE notes 1 4 .. 22, REC ARM 3 6 .. 24, BANK LEFT 25, BANK RIGHT 26, SOLO 27) and
+            // writes on each control what it does in TRACK - blue = learned, grey = not. Faders and knobs stand where the
+            // controller last was. A control learned from somewhere else (a remapped MIDImix, another controller) is
+            // listed under the drawing. LIST is the list as before
+            TrackTile
+            {
+                objectName: "midiMapTile"
+                x: parent.width - 20 - 120 - 8 - 130 - 8 - 90 - 4 - 90; y: 8; width: 90; height: 34
+                label: qsTr("MAP"); active: setupRoot.midiMap; activeColor: "#4FA3E3"
+                onTapped: setupRoot.midiMap = true
+            }
+            TrackTile
+            {
+                objectName: "midiListTile"
+                x: parent.width - 20 - 120 - 8 - 130 - 8 - 90; y: 8; width: 90; height: 34
+                label: qsTr("LIST"); active: !setupRoot.midiMap; activeColor: "#4FA3E3"
+                onTapped: setupRoot.midiMap = false
+            }
+            Item
+            {
+                id: midiMapView
+                objectName: "midiMapView"
+                visible: setupRoot.midiMap
+                x: 20; y: 108; width: parent.width - 40; height: midiPanel.mapH
+                // the factory layout: CC / note -> place
+                function placeOf(r)
+                {
+                    var knobs = [16, 20, 24, 28, 46, 50, 54, 58]
+                    if (r.cc !== undefined && r.cc >= 0)
+                    {
+                        if (r.cc === 62) return "fm"
+                        for (var s = 0; s < 8; s++)
+                        {
+                            var b = knobs[s]
+                            if (r.cc >= b && r.cc <= b + 2) return "k" + (r.cc - b + 1) + "_" + (s + 1)
+                            if (r.cc === b + 3) return "f" + (s + 1)
+                        }
+                        return ""
+                    }
+                    if (r.note !== undefined && r.note >= 0)
+                    {
+                        if (r.note === 25) return "bl"
+                        if (r.note === 26) return "br"
+                        if (r.note === 27) return "solo"
+                        if (r.note >= 1 && r.note <= 24)
+                        {
+                            var strip = Math.floor((r.note - 1) / 3) + 1, which = (r.note - 1) % 3
+                            if (which === 0) return "m" + strip
+                            if (which === 2) return "r" + strip
+                        }
+                    }
+                    return ""
+                }
+                readonly property var placed:
+                {
+                    var out = ({ "_rest": [] })
+                    var rows = midiPanel.rows
+                    for (var i = 0; i < rows.length; i++)
+                    {
+                        var k = placeOf(rows[i])
+                        if (k === "" || out[k] !== undefined) out["_rest"].push(rows[i])
+                        else out[k] = rows[i]
+                    }
+                    return out
+                }
+                readonly property real stripW: (width - 150) / 8
+                readonly property color cOn: "#4FA3E3"
+                readonly property color cOff: "#3A3A42"
+
+                component Knob: Item
+                {
+                    property string key
+                    readonly property var row: midiMapView.placed[key]
+                    width: midiMapView.stripW; height: 50
+                    Rectangle
+                    {
+                        anchors.horizontalCenter: parent.horizontalCenter; width: 26; height: 26; radius: 13
+                        color: "#1E1E22"; border.width: 2; border.color: row ? midiMapView.cOn : midiMapView.cOff
+                        Rectangle
+                        {
+                            visible: !!row && row.at >= 0; width: 2; height: 9; color: "#FFFFFF"; x: 12; y: 3
+                            transform: Rotation { origin.x: 1; origin.y: 10; angle: -135 + 2.7 * (row && row.at >= 0 ? row.at : 0) }
+                        }
+                    }
+                    Text
+                    {
+                        anchors.horizontalCenter: parent.horizontalCenter; y: 30; width: parent.width - 4
+                        horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                        text: row ? row.n : "-"; color: row ? setupRoot.cText : "#55555E"; font.pixelSize: 10; font.bold: !!row
+                    }
+                }
+                component Pad: Item
+                {
+                    property string key
+                    property string name
+                    readonly property var row: midiMapView.placed[key]
+                    width: midiMapView.stripW; height: 36
+                    Rectangle
+                    {
+                        anchors.horizontalCenter: parent.horizontalCenter; width: parent.width - 18; height: 22; radius: 4
+                        color: row ? "#1B2A38" : "transparent"; border.width: 1; border.color: row ? midiMapView.cOn : midiMapView.cOff
+                        Text
+                        {
+                            anchors.centerIn: parent; width: parent.width - 6; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                            text: row ? row.n : parent.parent.name; color: row ? setupRoot.cText : "#55555E"; font.pixelSize: 10; font.bold: !!row
+                        }
+                    }
+                }
+                component Slider: Item
+                {
+                    property string key
+                    readonly property var row: midiMapView.placed[key]
+                    width: midiMapView.stripW; height: 128
+                    Rectangle { id: slot; anchors.horizontalCenter: parent.horizontalCenter; width: 4; height: 96; radius: 2; color: "#2E2E36" }
+                    Rectangle
+                    {
+                        anchors.horizontalCenter: parent.horizontalCenter; width: 30; height: 12; radius: 2
+                        y: slot.y + (slot.height - height) * (1 - (row && row.at >= 0 ? row.at / 100 : 0))
+                        color: row ? "#DADAE2" : "#3A3A42"; border.width: 1; border.color: row ? midiMapView.cOn : "#4A4A52"
+                    }
+                    Text
+                    {
+                        anchors.horizontalCenter: parent.horizontalCenter; y: 104; width: parent.width - 4
+                        horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                        text: row ? row.n : "-"; color: row ? setupRoot.cText : "#55555E"; font.pixelSize: 11; font.bold: !!row
+                    }
+                }
+
+                Rectangle { width: parent.width; height: 448; radius: 8; color: "#151518"; border.width: 1; border.color: "#2A2A30" }
+                Text { x: 14; y: 8; text: qsTr("AKAI MIDIMIX"); color: "#6A6A74"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1.5 }
+                Row
+                {
+                    x: midiMapView.width - 370; y: 8; spacing: 16
+                    Row
+                    {
+                        spacing: 6
+                        Rectangle { width: 10; height: 10; radius: 5; color: midiMapView.cOn; anchors.verticalCenter: parent.verticalCenter }
+                        Text { text: qsTr("learned"); color: "#9A9AA4"; font.pixelSize: 11 }
+                    }
+                    Row
+                    {
+                        spacing: 6
+                        Rectangle { width: 10; height: 10; radius: 5; color: "transparent"; border.width: 1; border.color: "#5A5A64"; anchors.verticalCenter: parent.verticalCenter }
+                        Text { text: qsTr("not learned - LEARN, tap a control, move it"); color: "#9A9AA4"; font.pixelSize: 11 }
+                    }
+                }
+                Row
+                {
+                    x: 14; y: 30
+                    Repeater
+                    {
+                        model: 8
+                        Column
+                        {
+                            spacing: 2
+                            Text { width: midiMapView.stripW; horizontalAlignment: Text.AlignHCenter; text: index + 1; color: "#55555E"; font.pixelSize: 10; font.bold: true }
+                            Knob { key: "k1_" + (index + 1) }
+                            Knob { key: "k2_" + (index + 1) }
+                            Knob { key: "k3_" + (index + 1) }
+                            Pad { key: "m" + (index + 1); name: qsTr("MUTE") }
+                            Pad { key: "r" + (index + 1); name: qsTr("REC ARM") }
+                            Slider { key: "f" + (index + 1) }
+                        }
+                    }
+                    Item { width: 14; height: 1 }
+                    Column
+                    {
+                        spacing: 2
+                        Item { width: 120; height: 114 }
+                        Pad { key: "bl"; name: qsTr("BANK LEFT"); width: 120 }
+                        Pad { key: "br"; name: qsTr("BANK RIGHT"); width: 120 }
+                        Pad { key: "solo"; name: qsTr("SOLO"); width: 120 }
+                        Slider { key: "fm"; width: 120 }
+                    }
+                }
+                // learned, but not on the drawing (a remapped MIDImix, another controller, a Program Change)
+                Text
+                {
+                    visible: midiMapView.placed["_rest"].length > 0
+                    x: 4; y: 458; text: qsTr("NOT ON THE DRAWING"); color: "#6A6A74"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1
+                }
+                Column
+                {
+                    x: 4; y: 478; spacing: 2
+                    Repeater
+                    {
+                        model: midiMapView.placed["_rest"]
+                        Text
+                        {
+                            width: midiMapView.width - 8; elide: Text.ElideRight; font.pixelSize: 13
+                            text: "<b>" + modelData.n + "</b>  <font color='#4FA3E3'>" + modelData.f + "</font>"
+                            textFormat: Text.StyledText; color: setupRoot.cText
+                        }
+                    }
+                }
             }
             TrackTile
             {
@@ -567,17 +769,19 @@ Rectangle
                 model: [ { x: 20, t: qsTr("CONTROL") }, { x: 20 + midiPanel.cName, t: qsTr("FROM YOUR CONTROLLER") },
                          { x: 20 + midiPanel.cName + midiPanel.cFrom, t: qsTr("KIND") },
                          { x: 20 + midiPanel.cName + midiPanel.cFrom + midiPanel.cKind, t: qsTr("NOW") } ]
-                Text { x: modelData.x; y: 100; text: modelData.t; color: "#6A6A74"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1 }
+                Text { visible: !setupRoot.midiMap   // TRACK_APP_MIDIMAP_R611
+                       x: modelData.x; y: 100; text: modelData.t; color: "#6A6A74"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1 }
             }
             Text
             {
-                visible: midiPanel.rows.length === 0
+                visible: midiPanel.rows.length === 0 && !setupRoot.midiMap   // TRACK_APP_MIDIMAP_R611
                 x: 20; y: 124; width: parent.width - 40; height: 38; verticalAlignment: Text.AlignVCenter
                 text: qsTr("Nothing learned yet. Tap LEARN, tap a control on the page, then move a fader or press a button on your controller.")
                 color: setupRoot.cDim; font.pixelSize: 14; elide: Text.ElideRight
             }
             ListView
             {
+                visible: !setupRoot.midiMap      // TRACK_APP_MIDIMAP_R611
                 x: 12; y: 120; width: parent.width - 24; height: midiPanel.listH
                 clip: true
                 interactive: contentHeight > height

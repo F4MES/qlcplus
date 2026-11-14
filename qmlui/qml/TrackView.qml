@@ -4360,11 +4360,12 @@ Rectangle
                 {
                     id: flashTile
                     objectName: "flash"
-                    property bool on: trackEngine ? trackEngine.flashing : false
+                    property bool on: trackEngine ? (trackEngine.flashing && trackEngine.flashingColour !== true) : false   // TRACK_APP_FLASHCOLOUR_R610
                     // R452_HIT_LIVE: the right half, beside DROP HIT
                     x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(3) + liveCard.bigH + trackViewRoot.g
                     width: liveCard.halfW
-                    height: liveCard.bigH
+                    // TRACK_APP_FLASHCOLOUR_R610 (mockup approved 11-14): the upper half - FLASH COLOUR is the lower
+                    height: trackViewRoot.trackApp ? Math.round((liveCard.bigH - trackViewRoot.g * 0.6) / 2) : liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#FFFFFF" : (flashIn.down ? "#34343C" : "#24242A")
                     scale: flashIn.down ? 0.975 : 1.0                                                        // R402_PRESS
@@ -4375,16 +4376,18 @@ Rectangle
                     {
                         anchors.centerIn: parent
                         spacing: Math.round(6 * trackViewRoot.ks)
-                        ControlIcon { anchors.horizontalCenter: parent.horizontalCenter; width: Math.round(24 * trackViewRoot.ks); height: width
+                        ControlIcon { visible: !trackViewRoot.trackApp   // TRACK_APP_FLASHCOLOUR_R610: half the height in TRACK
+                                      anchors.horizontalCenter: parent.horizontalCenter; width: Math.round(24 * trackViewRoot.ks); height: width
                                       kind: "flash"; ink: flashTile.on ? "#101010" : "#FFFFFF" }
                         Text
                         {
                             anchors.horizontalCenter: parent.horizontalCenter
                             horizontalAlignment: Text.AlignHCenter
-                            text: qsTr("FLASH") + "\n" + qsTr("WHITE")      // R452_HIT_LIVE: half the width now
+                            text: trackViewRoot.trackApp ? qsTr("FLASH WHITE")                        // TRACK_APP_FLASHCOLOUR_R610
+                                                         : qsTr("FLASH") + "\n" + qsTr("WHITE")      // R452_HIT_LIVE: half the width now
                             color: flashTile.on ? "#101010" : "#FFFFFF"
                             font.bold: true
-                            font.pixelSize: trackViewRoot.fs(16)
+                            font.pixelSize: trackViewRoot.trackApp ? trackViewRoot.fs(14) : trackViewRoot.fs(16)
                             font.letterSpacing: (trackViewRoot.fs(16)) * 0.12
                         }
                     }
@@ -4397,6 +4400,48 @@ Rectangle
                         // the page destroyed with the finger still down: no release
                         // ever comes, and FLASH stood at full all night (r199)
                         Component.onDestruction: if (down && trackEngine) trackEngine.setFlash(false)
+                    }
+                }
+                // TRACK_APP_FLASHCOLOUR_R610 (Tobias 11-14, forslag 5, mockup approved: "Ja byg 5 og 9"): FLASH COLOUR - the
+                // same flash in the look's partner colour (else the room's), while held. Edge and bar in that colour, filled
+                // with it while it flashes
+                Rectangle
+                {
+                    id: flashColourTile
+                    objectName: "flashColour"
+                    visible: trackViewRoot.trackApp
+                    readonly property bool on: trackEngine ? trackEngine.flashingColour === true : false
+                    readonly property color hue: trackViewRoot.swatch(trackEngine && trackEngine.flashHue ? trackEngine.flashHue : "blue")
+                    x: flashTile.x; y: flashTile.y + flashTile.height + Math.round(trackViewRoot.g * 0.6)
+                    width: flashTile.width
+                    height: liveCard.bigH - flashTile.height - Math.round(trackViewRoot.g * 0.6)
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: on ? hue : (flashColourIn.down ? "#34343C" : "#24242A")
+                    scale: flashColourIn.down ? 0.975 : 1.0
+                    Behavior on scale { enabled: trackViewRoot.animate; NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
+                    border.width: 2
+                    border.color: hue
+                    Text
+                    {
+                        anchors.centerIn: parent; anchors.verticalCenterOffset: -Math.round(3 * trackViewRoot.ks)
+                        text: qsTr("FLASH COLOUR"); color: "#FFFFFF"; font.bold: true
+                        font.pixelSize: trackViewRoot.fs(14); font.letterSpacing: trackViewRoot.fs(14) * 0.10
+                    }
+                    Rectangle
+                    {
+                        visible: !flashColourTile.on
+                        anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom
+                        anchors.bottomMargin: Math.round(8 * trackViewRoot.ks)
+                        width: parent.width * 0.6; height: Math.max(3, Math.round(4 * trackViewRoot.ks)); radius: height / 2
+                        color: flashColourTile.hue
+                    }
+                    TouchInput
+                    {
+                        id: flashColourIn
+                        onPressedAt: (x, y) => { if (trackEngine) trackEngine.setFlashColour(true) }
+                        onReleasedAt: (x, y, inside) => { if (trackEngine) trackEngine.setFlashColour(false) }
+                        onCanceled: { if (trackEngine) trackEngine.setFlashColour(false) }
+                        Component.onDestruction: if (down && trackEngine) trackEngine.setFlashColour(false)
                     }
                 }
             }
@@ -5194,7 +5239,7 @@ Rectangle
                 { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
                 { y: 2, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
                 { y: 3, h: 2, b: "<b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 while held; a quick tap locks it.  <b>BLACKOUT</b> - dark while held. Slide off to lock; tap to release." },
-                { y: 4, h: 2, b: "<b>DROP HIT</b> arms a hit on the next drop: a tap = the gold kind, or <b>FLSH</b> / <b>STRB</b> / <b>DARK</b>. Once, then off.  <b>FLASH WHITE</b> - white while held." }
+                { y: 4, h: 2, b: "<b>DROP HIT</b> arms a hit on the next drop: a tap = the gold kind, or <b>FLSH</b> / <b>STRB</b> / <b>DARK</b>. Once, then off.  <b>FLASH WHITE</b> - white while held. <b>FLASH COLOUR</b> - the same flash in the look's partner colour (else the room's), while held." }
             ]
             HelpText
             {

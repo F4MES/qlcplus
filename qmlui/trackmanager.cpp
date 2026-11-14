@@ -2153,6 +2153,7 @@ QVariantList TrackManager::midiTargets() const
     add(QStringLiteral("stutter"), QStringLiteral("STUTTER"), MidiHold);
     add(QStringLiteral("blackout"), QStringLiteral("BLACKOUT"), MidiHold);
     add(QStringLiteral("flash"), QStringLiteral("FLASH WHITE"), MidiHold);
+    add(QStringLiteral("flashColour"), QStringLiteral("FLASH COLOUR"), MidiHold);   // TRACK_APP_FLASHCOLOUR_R610
     add(QStringLiteral("dropHit"), QStringLiteral("DROP HIT"), MidiButton);
     add(QStringLiteral("hitKind:1"), QStringLiteral("DROP HIT FLSH"), MidiButton);
     add(QStringLiteral("hitKind:2"), QStringLiteral("DROP HIT STRB"), MidiButton);
@@ -2548,6 +2549,19 @@ void TrackManager::midiButton(int idx, int raw, qint64 now)
                     m_engine->setFlash(true);
                 }
             }
+            else if (target == QLatin1String("flashColour"))   // TRACK_APP_FLASHCOLOUR_R610: as FLASH WHITE
+            {
+                if (pc >= 384 && pc <= 511 && m.armed)
+                {
+                    m.armed = false;
+                    m_engine->setFlashColour(false);
+                }
+                else
+                {
+                    m.armed = true;
+                    m_engine->setFlashColour(true);
+                }
+            }
             else if (target == QLatin1String("blackout"))
             {
                 if (m_engine->blackout())
@@ -2583,6 +2597,8 @@ void TrackManager::midiButton(int idx, int raw, qint64 now)
             m.armed = false;
             if (target == QLatin1String("flash"))
                 m_engine->setFlash(false);
+            else if (target == QLatin1String("flashColour"))
+                m_engine->setFlashColour(false);  // TRACK_APP_FLASHCOLOUR_R610
             else if (target == QLatin1String("blackout"))
                 m_engine->setBlackout(false);
             else if (target == QLatin1String("stutter") && now - m.pressMs >= TRACK_MIDI_TAP_MS)
@@ -2885,6 +2901,8 @@ void TrackManager::midiRelease(MidiMap &m)
     {
         if (m.target == QLatin1String("flash"))
             m_engine->setFlash(false);
+        else if (m.target == QLatin1String("flashColour"))
+            m_engine->setFlashColour(false);      // TRACK_APP_FLASHCOLOUR_R610
         else if (m.target == QLatin1String("blackout"))
         {
             if (m.boGen == m_r561BoOff)          // TRACK_APP_FIX_R570: a stale hold lets nothing go
@@ -3340,6 +3358,12 @@ QVariantList TrackManager::midiMappings() const
         row.insert(QStringLiteral("t"), m.target);
         row.insert(QStringLiteral("n"), names.value(m.target, m.target.section(QLatin1Char(':'), -1).toUpper()));
         row.insert(QStringLiteral("f"), midiSource(m.universe, m.channel, false));
+        // TRACK_APP_MIDIMAP_R611: where it sits on the controller drawing (SETUP > MIDI > MAP) - CC n / note n, -1 none
+        {
+            const quint32 c = m.channel & 0x0FFF;
+            row.insert(QStringLiteral("cc"), c <= 127 ? int(c) : -1);
+            row.insert(QStringLiteral("note"), (c >= 128 && c <= 255) ? int(c - 128) : -1);
+        }
         row.insert(QStringLiteral("tag"), midiSource(m.universe, m.channel, true));
         row.insert(QStringLiteral("k"), m.kind == MidiFader ? QStringLiteral("FADER")
                                        : m.kind == MidiHold ? QStringLiteral("HOLD") : QStringLiteral("BUTTON"));
@@ -3475,6 +3499,8 @@ static bool remoteHeldOn(TrackEngine *e, const QString &what)
         return e->stutter();
     if (what == QLatin1String("haze"))
         return e->haze() > e->hazeRest() + 0.001;   // R484_HZ_PHONE_ON: held = over its rest
+    if (what == QLatin1String("flashc"))
+        return e->flashingColour();                 // TRACK_APP_FLASHCOLOUR_R610
     return e->flashing();
 }
 
@@ -3515,6 +3541,8 @@ void TrackManager::remoteWatch()
             m_engine->atmosNext(QStringLiteral("limit"));
             m_engine->setHaze(m_engine->hazeRest());   // R484_HZ_PHONE_GONE: back to its rest - never off
         }
+        else if (what == QLatin1String("flashc"))
+            m_engine->setFlashColour(false);        // TRACK_APP_FLASHCOLOUR_R610
         else
             m_engine->setFlash(false);
         qDebug() << "[TRACK remote] the phone went quiet - let go of" << what;
@@ -3688,7 +3716,9 @@ QString TrackManager::remoteState()
         o.insert(QStringLiteral("stutterRate"), e->stutterRate());
         o.insert(QStringLiteral("hitKind"), e->hitKind());
         o.insert(QStringLiteral("hitLast"), e->hitLast());
-        o.insert(QStringLiteral("flash"), e->flashing());
+        o.insert(QStringLiteral("flash"), e->flashing() && e->flashingColour() == false);
+        o.insert(QStringLiteral("flashc"), e->flashingColour());         // TRACK_APP_FLASHCOLOUR_R610
+        o.insert(QStringLiteral("flashHue"), e->flashHue());
         o.insert(QStringLiteral("colour"), e->currentColour());
         o.insert(QStringLiteral("overrides"), QJsonArray::fromStringList(e->colourOverrides()));
         o.insert(QStringLiteral("colourMode"), e->colourMode());
@@ -3900,6 +3930,12 @@ QString TrackManager::remoteCommand(const QString &line)
         const bool on = a.value(1) == QStringLiteral("1");
         e->setFlash(on);
         remoteHeld(QStringLiteral("flash"), on, a);
+    }
+    else if (cmd == QStringLiteral("flashc"))   // TRACK_APP_FLASHCOLOUR_R610
+    {
+        const bool on = a.value(1) == QStringLiteral("1");
+        e->setFlashColour(on);
+        remoteHeld(QStringLiteral("flashc"), on, a);
     }
     // ---- LOOK
     else if (cmd == QStringLiteral("section"))

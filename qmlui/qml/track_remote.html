@@ -77,6 +77,9 @@ button{font-family:inherit;cursor:pointer}
 .g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}.g4{grid-template-columns:repeat(4,1fr)}
 .b{height:58px;border-radius:10px;background:var(--btn);display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;font-size:13px;letter-spacing:.08em;color:var(--text);position:relative;border:0;padding:0 4px;touch-action:none}
 .b.tall{height:118px}
+/* TRACK_APP_FLASHCOLOUR_R610 */
+.fpair{display:grid;grid-template-rows:1fr 1fr;gap:6px;height:118px}.fpair .b{height:auto}
+.fcol{position:relative;background:#24242A}.fcol .fbar{position:absolute;left:30%;right:30%;bottom:6px;height:3px;border-radius:2px}
 .b.sm{height:44px;font-size:12px}
 .b.on{background:var(--green);color:#0A2A0A}
 .b.gold{background:var(--gold);color:#1A1408}
@@ -220,7 +223,11 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
         <button class="b tall" id="blackout">BLACKOUT<span class="sub">hold · slide off locks</span></button>
         <button class="b tall" id="hit"><span id="hittitle">DROP HIT</span><span class="sub" id="hitsub">arms the next drop</span>
           <div class="chips" id="kinds"><span data-k="1">FLSH</span><span data-k="2">STRB</span><span data-k="3">DARK</span></div></button>
-        <button class="b tall flash" id="flash">FLASH WHITE<span class="sub">hold</span></button>
+        <!-- TRACK_APP_FLASHCOLOUR_R610 (mockup approved 11-14): FLASH WHITE over FLASH COLOUR in the one cell -->
+        <div class="fpair">
+          <button class="b flash" id="flash">FLASH WHITE<span class="sub">hold</span></button>
+          <button class="b fcol" id="flashc">FLASH COLOUR<span class="sub" id="flashcsub">hold</span><span class="fbar" id="flashcbar"></span></button>
+        </div>
       </div>
     </div>
 
@@ -490,6 +497,7 @@ function holdButton(el, what, opts) {
 holdButton($('blackout'), 'blackout', {});
 holdButton($('stutter'), 'stutter', {tapMs: 250});
 holdButton($('flash'), 'flash', {momentary: true});
+holdButton($('flashc'), 'flashc', {momentary: true});   // TRACK_APP_FLASHCOLOUR_R610
 $('rates').addEventListener('pointerdown', e => { const c = e.target.closest('[data-r]'); if (c) { e.stopPropagation(); send('stutterRate|' + c.dataset.r); } });
 $('kinds').addEventListener('pointerdown', e => { const c = e.target.closest('[data-k]'); if (c) { e.stopPropagation(); send('hit|' + c.dataset.k); } });
 $('hit').addEventListener('click', e => {
@@ -881,6 +889,13 @@ function render() {
   const kind = S.hitKind > 0 ? S.hitKind : (S.hitLast || 1);
   [...$('kinds').children].forEach(c => cls(c, 'on', +c.dataset.k === kind));
   cls($('flash'), 'white', S.flash);
+  {   // TRACK_APP_FLASHCOLOUR_R610: edge and bar in the colour it will flash, filled while held
+    const fh = S.flashHue || S.colour || 'blue', k = COLOUR[fh] || ['#9AA0A6', '#C8C8D0'], fc = $('flashc');
+    fc.style.boxShadow = 'inset 0 0 0 2px ' + k[0];
+    fc.style.background = S.flashc ? k[0] : '';
+    $('flashcbar').style.background = S.flashc ? 'transparent' : k[0];
+    $('flashcsub').textContent = 'hold · ' + fh;
+  }
 
   // --- LOOK
   if (!sectionsBuilt) {
@@ -1175,6 +1190,7 @@ function mockApply(cmd) {
   const m = {show: () => S.show = on, energy: () => { S.roomAuto = false; S.energy = +a[1]; }, energyAuto: () => S.roomAuto = true,
     calm: () => S.calm = S.calm > 0 ? 0 : 16, hold: () => S.hold = !S.hold, blackout: () => S.blackout = on, stutter: () => S.stutter = on,
     stutterRate: () => S.stutterRate = +a[1], hit: () => { S.hitKind = +a[1]; if (+a[1] > 0) S.hitLast = +a[1]; }, flash: () => S.flash = on,
+    flashc: () => S.flashc = on,   // TRACK_APP_FLASHCOLOUR_R610 (mock)
     section: () => S.override = a[1] === S.override ? '' : a[1], colourAuto: () => S.overrides = [],
     colour: () => { const i = S.overrides.indexOf(a[1]); i >= 0 ? S.overrides.splice(i, 1) : S.overrides.push(a[1]); },
     colourMode: () => S.colourMode = S.colourMode === +a[1] ? 0 : +a[1], position: () => S.position = a[1] === S.position ? '' : a[1],

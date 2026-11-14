@@ -508,6 +508,9 @@ class TrackEngine : public QObject
      *  walk - all of it. Not remembered between nights. */
     Q_PROPERTY(int speed READ speed WRITE setSpeed NOTIFY liveChanged)
     Q_PROPERTY(bool flashing READ flashing NOTIFY liveChanged)
+    /** TRACK_APP_FLASHCOLOUR_R610: FLASH COLOUR - held, and the colour it flashes (the look's partner, else the room's) */
+    Q_PROPERTY(bool flashingColour READ flashingColour NOTIFY liveChanged)
+    Q_PROPERTY(QString flashHue READ flashHue NOTIFY liveChanged)
     /** Everything the engine drives at zero - colours, chases, parts - while
      *  the engine keeps following the track underneath, so releasing it
      *  lands on the right look. A toggle, not a hold. */
@@ -1242,6 +1245,9 @@ public:
     void setSpeed(int speed);
     bool flashing() const;
     Q_INVOKABLE void setFlash(bool pressed);
+    bool flashingColour() const { return m_flash && m_r610On; }     // TRACK_APP_FLASHCOLOUR_R610
+    QString flashHue() const;
+    Q_INVOKABLE void setFlashColour(bool pressed);
     bool blackout() const;
     void setBlackout(bool on);
     /** R450_TEST_TRACK: the Track page's made-up track is playing - nothing
@@ -2465,6 +2471,9 @@ private:
                                           // for the hard thresholds and the paths tick() does not hand it to
     QMap<QString, qreal> m_groupTrim;     // the DJ's fader per group, 1.0 when untouched
     bool m_flash;
+    // TRACK_APP_FLASHCOLOUR_R610: the hand's flash in a colour - the hue while it is held ("" = FLASH WHITE)
+    QString m_r610Hue;
+    bool m_r610On = false;
     QString m_lastState;
     QString m_report;
     QStringList m_warnings;

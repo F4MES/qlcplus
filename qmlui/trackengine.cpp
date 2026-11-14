@@ -3049,7 +3049,8 @@ void TrackEngine::genFlash(bool on, const QString &colour)
     // cast are cut hard, the rest fall back on the next beat.
     // It used to be white every time. White is punctuation - it belongs on
     // the downbeat of a drop, not on every accent all night.
-    QString hue = colour.isEmpty() ? QStringLiteral("white") : colour;
+    // TRACK_APP_FLASHCOLOUR_R610: his FLASH COLOUR (no colour given, the hand's) - the colour it was pressed in
+    QString hue = colour.isEmpty() ? (m_r610Hue.isEmpty() ? QStringLiteral("white") : m_r610Hue) : colour;
     if (on)
     {
         foreach (const QString &key, m_groupOrder)
@@ -3084,6 +3085,9 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             // stays, so moving a fader mid-flash does not pull it down either.
             m_flashHeld.insert(key);
             quint32 fid = colourFunction(key, hue);
+            // TRACK_APP_FLASHCOLOUR_R610: a group with no scene of the partner flashes the room's colour - not white
+            if (fid == Function::invalidId() && colour.isEmpty() && m_r610Hue.isEmpty() == false && m_colour.isEmpty() == false)
+                fid = colourFunction(key, m_colour);
             if (fid == Function::invalidId())
                 fid = colourFunction(key, QStringLiteral("white"));
             if (fid != Function::invalidId())
@@ -9685,6 +9689,42 @@ void TrackEngine::setSpeed(int speed)
 
 bool TrackEngine::flashing() const { return m_flash; }
 
+QString TrackEngine::flashHue() const
+{
+    // TRACK_APP_FLASHCOLOUR_R610 (Tobias 11-14, forslag 5, mockup approved: "Ja byg 5 og 9"): 140 FLASH from the
+    // phone in one night, all white on the strobe lamps - "never overdo white". FLASH COLOUR is the same flash in
+    // the look's partner colour; with no partner (or a white one) the room's own colour. Held: the colour it began in
+    if (m_r610On && m_r610Hue.isEmpty() == false)
+        return m_r610Hue;
+    if (m_partnerPick.isEmpty() == false && m_partnerPick != QStringLiteral("white") && m_palette.contains(m_partnerPick))
+        return m_partnerPick;
+    if (m_colour.isEmpty() == false)
+        return m_colour;
+    return QStringLiteral("blue");
+}
+
+void TrackEngine::setFlashColour(bool pressed)
+{
+    // TRACK_APP_FLASHCOLOUR_R610: FLASH WHITE's flash (every strobe group, full, MASTER and trim stepped over) in a
+    // colour. FLASH WHITE held already: that one stays. Let go: as FLASH WHITE let go
+    if (pressed)
+    {
+        if (m_flash)
+            return;
+        m_r610Hue = flashHue();
+        m_r610On = true;
+        qualitySignal(QStringLiteral("sig:flash-colour:") + m_r610Hue);
+        setFlash(true);
+        emit liveChanged();
+        return;
+    }
+    if (m_r610On && m_flash)
+        setFlash(false);
+    m_r610Hue.clear();
+    m_r610On = false;
+    emit liveChanged();
+}
+
 void TrackEngine::setFlash(bool pressed)
 {
     if (pressed == m_flash)
@@ -9716,8 +9756,9 @@ void TrackEngine::setFlash(bool pressed)
         foreach (const QString &key, m_groupOrder)
             stopSlot("str:" + key, true);
         m_strobeUntil = -1;
-        quint32 fid = flashFunction(strobeGroups, "white");
-        if (fid == Function::invalidId())
+        // TRACK_APP_FLASHCOLOUR_R610: FLASH COLOUR takes no scene of his (they are white): only the generated colour
+        quint32 fid = m_r610Hue.isEmpty() ? flashFunction(strobeGroups, "white") : Function::invalidId();
+        if (fid == Function::invalidId() && m_r610Hue.isEmpty())
             fid = flashFunction(allOn, "white");
         // the same colour guard as the automatic hit: the ranking may hand
         // back a RED scene when there is no white one, and that must not be
@@ -9775,6 +9816,8 @@ void TrackEngine::setFlash(bool pressed)
         // level override stayed at full - MASTER and the trim back on now,
         // not on the next beat (runde 215)
         reapplyLevels();
+        m_r610Hue.clear();               // TRACK_APP_FLASHCOLOUR_R610: the next FLASH is white again
+        m_r610On = false;
     }
     // R510_LIVE_FLASH_DARK (runde 510, LIVE): his FLASH wins over the music's own dark AT ONCE. A pause
     // stop's dark (r509), a silent beat and the black beat before a drop (R356) are never drawn under
