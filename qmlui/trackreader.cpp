@@ -237,7 +237,9 @@ void TrackReader::start()
     bool isInt = false;
     const int first = qEnvironmentVariableIntValue("QLC_TRACK_BLT_FIRST_MS", &isInt);
     m_checkTimer.start(isInt && first > 0 ? first : kFirstCheckMs);
-    QTimer::singleShot(30000, this, &TrackReader::cleanup);
+    // TRACK_APP_READERKEEP_R604 (the log of 11-14): the tidy ran 30 s after the start - before the first check
+    // (2 min) knew which jar is offered - so it removed the 8.1.0-Preview it had fetched, and the check fetched it
+    // again a minute later, at every start. It runs once the check has answered (releasesRead)
 }
 
 void TrackReader::checkNow()
@@ -359,11 +361,13 @@ void TrackReader::releasesRead(const QByteArray &json)
         setStep(0);
         if (had)
             log(QStringLiteral("CDJ reader: nothing newer than %1").arg(have));
+        QTimer::singleShot(0, this, &TrackReader::cleanup);       // TRACK_APP_READERKEEP_R604: the offer is known
         return;
     }
     if (want.version == m_cand.version && want.sha256 == m_cand.sha256 && m_candReady)
     {
         setStep(0);
+        QTimer::singleShot(0, this, &TrackReader::cleanup);       // TRACK_APP_READERKEEP_R604
         return;                         // already waiting for his two taps
     }
     m_cand = want;
@@ -489,6 +493,7 @@ void TrackReader::fetchDone(bool ok, const QString &why)
     {
         m_lastWhy.clear();
         setStep(0);
+        QTimer::singleShot(0, this, &TrackReader::cleanup);       // TRACK_APP_READERKEEP_R604: the offered one is in place - keep it
         return;
     }
     m_candReady = false;

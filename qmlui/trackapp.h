@@ -60,6 +60,8 @@ class TrackApp : public QObject
     Q_PROPERTY(int cdjCount READ cdjCount NOTIFY cdjCountChanged)
     Q_PROPERTY(bool bltFeeds READ bltFeeds NOTIFY cdjCountChanged)   // TRACK_APP_BLTFEEDS_R575
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateChanged)
+    /** TRACK_APP_LOADTEST_R605: a fetched build that cannot start on this PC ("e7fe1f0|C0000139"; "" none) */
+    Q_PROPERTY(QString updateBlocked READ updateBlocked NOTIFY updateChanged)
     Q_PROPERTY(QString updateLatest READ updateLatest NOTIFY updateChanged)
     Q_PROPERTY(int updateStep READ updateStep NOTIFY updateChanged)
     /** R557_READER: the CDJ reader's own updates (Beat Link Trigger's jar) - SETUP, ADVANCED */
@@ -105,6 +107,7 @@ public:
     int cdjCount() const;
     bool bltFeeds() const;
     bool updateAvailable() const;
+    QString updateBlocked() const;       // TRACK_APP_LOADTEST_R605
     QString updateLatest() const;
     /** As TrackManager's (R474): 0, 1 started, 2 did not start, 3 SHOW OFF first */
     int updateStep() const;
@@ -193,6 +196,8 @@ private:
     QList<Fetch> m_jobs;
     Fetch m_job;
     QString m_staged;           // a build fetched, checked and unpacked
+    QString m_blocked;          // TRACK_APP_LOADTEST_R605: "<build>|<code>" - fetched, but Windows will not start it here
+    void loadTest(const QString &rev);
     QString m_lastWhy;
     int m_step;
     QFile m_hashFile;

@@ -3672,6 +3672,10 @@
 ;; runde 414 (aftenen 10-09): 7 numre naaede aldrig QLC+, selv om BLT havde
 ;; titlen - hvad der manglede, stod ingen steder. En linje pr. nummer i BLT's log.
 (defonce qlc-missing-logged (atom #{}))
+;; TRACK_APP_NOGRID_R609 (Tobias 11-14, forslag 8): what the title waits for right now - "nogrid" / "nowave" /
+;; "noqlc" - until it is sent. The TRACK app's helper (bridge.clj, report-next!) says it on the NEXT TRACK line:
+;; the night of 11-13/14 "ANOTR - Relax My Eyes" stood two minutes without a beat grid and the page said ANALYSING
+(defonce qlc-missing-now (atom {}))
 
 (defn qlc-send-track! [player]
   (try
@@ -3807,6 +3811,7 @@
           ;; a full queue after a whole analysis is worth the back-off (r199)
           (when-not ok
             (swap! qlc-failed-at assoc [:send player title] (System/currentTimeMillis)))
+          (when ok (swap! qlc-missing-now dissoc title))   ; TRACK_APP_NOGRID_R609
           (try (timbre/info "QLC+ track" (if ok "sent" "FAILED") "-"
                             (count display) "beats," (count markers) "markers"
                             (let [pc (:patent (get @qlc-cache title))]
@@ -3819,6 +3824,9 @@
                (catch Throwable _ nil))
           ok)
         (do
+          ;; TRACK_APP_NOGRID_R609: what it waits for, for the NEXT TRACK line
+          (when title
+            (swap! qlc-missing-now assoc title (cond (nil? grid) "nogrid" (nil? detail) "nowave" :else "noqlc")))
           ;; runde 414: say once per track WHAT is missing (BLT's log)
           (when title
             (let [k [(long player) title (nil? detail) (nil? grid)]]

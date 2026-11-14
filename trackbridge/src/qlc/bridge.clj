@@ -260,10 +260,14 @@
           [p title] guess
           sent   (shared-value 'qlc-next-sent)
           failed (get (or (shared-value 'qlc-failed-at) {}) title)
+          ;; TRACK_APP_NOGRID_R609: what the shared functions wait for ("nogrid" / "nowave"), an older file: nil
+          missing (get (or (shared-value 'qlc-missing-now) {}) title)
           now    (System/currentTimeMillis)
           st     (cond (nil? title)                                "none"
                        (= title sent)                              "ready"
                        (and failed (< (- now (long failed)) 60000)) "failed"
+                       (= missing "nogrid")                        "nogrid"   ; TRACK_APP_NOGRID_R609
+                       (= missing "nowave")                        "nowave"
                        :else                                       "analysing")
           line   (if (= st "none")
                    "NEXT d=0 s=none t="

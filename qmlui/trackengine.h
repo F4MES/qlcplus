@@ -1132,6 +1132,36 @@ public:
     // ... and "man kan ikke faa hvid vaek som makkerfarve": NEXT on a look with a white partner or accent - no
     // white again in this section
     bool m_r598NoWhite = false;
+    // TRACK_APP_BUILDTAPS_R606 (Tobias 11-14, forslag 4): his BLACKOUT taps in a build set the build's roll - the
+    // taps of this build (ms), the rate they gave (4 / 8 / 16, -1 none), when the last came, which track
+    QList<qint64> m_r606Taps;
+    // TRACK_APP_WHITEBUDGET_R607 (Tobias 11-14, forslag 6): the engine's own white, counted - (ms, ms of white) per
+    // beat over the last 10 minutes; over the budget its white rests until it is well under again
+    QList<QPair<qint64, qint64> > m_r607Spent;
+    // TRACK_APP_NEXTTASTE_R608 (Tobias 11-14, forslag 2): what NEXT throws away, remembered over the nights -
+    // "<section>|f|<group>|<family>" and "<section>|p|<group>|<pattern>" -> a weight (1 = no opinion)
+    QVariantMap m_r608Taste;
+    bool m_r608Loaded = false;
+    QString m_r608State;
+    bool m_r608Watch = false;
+    int m_r608LandAt = -1;
+    QString m_r608LandTitle;
+    QString m_r608LandState;
+    void r608Load();
+    void r608Nudge(qreal factor, const QString &why);
+    void r608Beat(const QString &state, int beat);
+    bool r608Skip(const QString &key) const;
+    QString r608PatKey(const QString &group, int pattern) const;
+    qint64 m_r607LastMs = -1;
+    int m_r607LastBeat = -1;
+    bool m_r607Over = false;
+    void r607WhiteBeat(int beat);
+    bool r607WhiteOk() const { return m_r607Over == false; }
+    int m_r606Tier = -1;
+    qint64 m_r606LastMs = -1;
+    QString m_r606Title;
+    void r606Tap();
+    int r606Chop(int chop, bool chopOk, bool isBuild, int toDrop, qreal fader);
     void r588Backup();
     int m_r588LabTries = 0;
     bool m_r588LabWait = false;

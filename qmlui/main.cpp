@@ -28,6 +28,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QIcon>
+#include <cstring>                       // TRACK_APP_LOADTEST_R605
 
 #include "app.h"
 #include "trackapp.h"             // TRACK_APP_BRIDGE (track-app branch)
@@ -56,6 +57,13 @@ void printVersion()
 
 int main(int argc, char *argv[])
 {
+    // TRACK_APP_LOADTEST_R605: TRACK starts a fetched build once with this before it offers UPDATE TRACK. Getting
+    // here at all means Windows found every DLL and every function the build asks for (0xC0000139 - a function
+    // missing - stops a program before main); it leaves again at once: no guard, no window, no log
+    for (int i = 1; i < argc; i++)
+        if (std::strcmp(argv[i], "--track-loadtest") == 0)
+            return 0;
+
     // TRACK_APP_RESTART (R548): an update's restart waits until the TRACK that started it is gone -
     // the guard below would turn it away while that one still runs
     TrackApp::waitForPredecessor(argc, argv);

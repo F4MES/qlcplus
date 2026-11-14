@@ -487,7 +487,9 @@ void TrackBridge::slotOutput()
                 else if (part.startsWith("s="))
                     st = QString::fromLatin1(part.mid(2));
             }
-            if (d < 0 || d > 6 || (st != QLatin1String("ready") && st != QLatin1String("analysing") && st != QLatin1String("failed")))
+            // TRACK_APP_NOGRID_R609: "nogrid" / "nowave" - the CDJ has not given its beat grid / waveform yet
+            if (d < 0 || d > 6 || (st != QLatin1String("ready") && st != QLatin1String("analysing") && st != QLatin1String("failed")
+                                   && st != QLatin1String("nogrid") && st != QLatin1String("nowave")))
             {
                 d = 0;
                 st.clear();

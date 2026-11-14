@@ -126,6 +126,7 @@ TrackApp::~TrackApp()
     m_checkTimer.stop();
     if (m_proc != nullptr && m_proc->state() != QProcess::NotRunning)
     {
+        m_proc->disconnect(this);        // TRACK_APP_LOADTEST_R605: a load test killed by the quit is no verdict
         m_proc->kill();
         m_proc->waitForFinished(2000);
     }
@@ -168,6 +169,7 @@ QString TrackApp::build() const { return m_rev; }
 int TrackApp::cdjCount() const { return m_active ? m_bridge.cdjCount() : 0; }
 bool TrackApp::bltFeeds() const { return m_active && m_bridge.bltFeeds(); }   // TRACK_APP_BLTFEEDS_R575
 bool TrackApp::updateAvailable() const { return m_active && (m_staged.isEmpty() == false || m_show->ready()); }
+QString TrackApp::updateBlocked() const { return m_active ? m_blocked : QString(); }   // TRACK_APP_LOADTEST_R605
 QString TrackApp::updateLatest() const { return m_staged.isEmpty() && m_show->ready() ? QStringLiteral("PSMAIN") : m_staged; }
 int TrackApp::updateStep() const { return m_step; }
 QObject *TrackApp::reader() const { return m_reader; }
@@ -457,6 +459,23 @@ void TrackApp::manifestRead(const QByteArray &json)
     }
     if (rev == m_rev || rev == m_staged)
         return;                         // nothing new, or already waiting for his two taps
+    // TRACK_APP_LOADTEST_R605: a build this PC could not start in the load test is not fetched again - and the
+    // chip keeps saying so (after a restart too)
+    {
+        const QString cant = readLine(file(QStringLiteral("cant-start.txt")));
+        if (cant.section(QLatin1Char('|'), 0, 0) == rev)
+        {
+            if (m_blocked != cant)
+            {
+                m_blocked = cant;
+                emit updateChanged();
+            }
+            if (m_lastWhy != QStringLiteral("cant:") + rev)
+                log(QStringLiteral("update: build %1 cannot start on this PC - not offered").arg(rev));
+            m_lastWhy = QStringLiteral("cant:") + rev;
+            return;
+        }
+    }
     // R570_LAUNCH (bug round 570): a build the launcher sent back (it stopped at its first start) is not
     // fetched and offered again - every start downloaded it, every UPDATE went dark and back
     if (rev == readLine(file(QStringLiteral("bad-build.txt"))))
@@ -522,14 +541,80 @@ void TrackApp::nextFetch()
     m_job = m_jobs.takeFirst();
     if (m_job.asset.isEmpty())
     {
-        // every file in place: the chip
-        m_staged = m_job.target;
-        m_lastWhy.clear();
-        log(QStringLiteral("update: build %1 is ready - UPDATE TRACK on the page (SHOW OFF)").arg(m_staged));
-        emit updateChanged();
+        // every file in place: TRACK_APP_LOADTEST_R605 - Windows starts it once first, then the chip
+        loadTest(m_job.target);
         return;
     }
     download();
+}
+
+void TrackApp::loadTest(const QString &rev)
+{
+    // TRACK_APP_LOADTEST_R605 (Tobias 11-14, forslag 1): from 8 to 14 Nov UPDATE TRACK offered six builds this PC
+    // could not start (0xC0000139 - a function missing from a DLL beside it); each time the light went out, the
+    // launcher went back to R572 and nothing said why. Now the fetched build is started once, here and hidden, with
+    // --track-loadtest (main returns at once, before the guard and any window). Windows refusing it: not offered -
+    // the chip says the build cannot start on this PC, and it is not fetched again. No answer within 30 s (the
+    // test itself hung): offered as before - the launcher still guards the real start
+    const QString engine = file(QStringLiteral("app/%1/%2").arg(rev, QFileInfo(QCoreApplication::applicationFilePath()).fileName()));
+    auto stage = [this, rev](const QString &how) {
+        m_staged = rev;
+        m_lastWhy.clear();
+        if (m_blocked.isEmpty() == false)
+            m_blocked.clear();
+        log(QStringLiteral("update: build %1 %2 - UPDATE TRACK on the page (SHOW OFF)").arg(rev, how));
+        emit updateChanged();
+    };
+    auto block = [this, rev](const QString &code) {
+        m_blocked = rev + QLatin1Char('|') + code;
+        writeLine(file(QStringLiteral("cant-start.txt")), m_blocked);
+        m_lastWhy = QStringLiteral("cant:") + rev;
+        log(QStringLiteral("update: build %1 cannot start on this PC (%2) - not offered").arg(rev, code));
+        emit updateChanged();
+    };
+#if defined(Q_OS_WIN)
+    // a loader error ends the test instead of a box no one clicks (as the launcher)
+    SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+#endif
+    QProcess *p = new QProcess(this);
+    m_proc = p;
+    m_busy = true;
+    QTimer *limit = new QTimer(p);
+    limit->setSingleShot(true);
+    connect(limit, &QTimer::timeout, this, [this, p, stage]() {
+        if (m_proc == p)
+            m_proc = nullptr;
+        m_busy = false;
+        p->disconnect(this);
+        p->kill();
+        p->deleteLater();
+        stage(QStringLiteral("is ready (its load test gave no answer)"));
+    });
+    connect(p, &QProcess::finished, this, [this, p, limit, stage, block](int code, QProcess::ExitStatus status) {
+        limit->stop();
+        if (m_proc == p)
+            m_proc = nullptr;
+        m_busy = false;
+        p->deleteLater();
+        if (status == QProcess::NormalExit && code == 0)
+            stage(QStringLiteral("starts here and is ready"));
+        else
+            block(QStringLiteral("code %1").arg(QString::number(quint32(code), 16).toUpper()));
+    });
+    connect(p, &QProcess::errorOccurred, this, [this, p, limit, block](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart)
+            return;
+        limit->stop();
+        if (m_proc == p)
+            m_proc = nullptr;
+        m_busy = false;
+        p->deleteLater();
+        block(QStringLiteral("it would not start"));
+    });
+    p->setStandardInputFile(QProcess::nullDevice());
+    p->setWorkingDirectory(QFileInfo(engine).absolutePath());
+    limit->start(30000);
+    p->start(engine, QStringList() << QStringLiteral("--track-loadtest"));
 }
 
 void TrackApp::download()

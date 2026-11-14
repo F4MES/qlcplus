@@ -1290,7 +1290,10 @@ Rectangle
                 {
                     id: updChip
                     objectName: "updateChip"
-                    visible: trackViewRoot.trackApp ? trackAppCtl.updateAvailable === true   // TRACK_APP_UPD_R571: during the show too
+                    // TRACK_APP_LOADTEST_R605: also when a fetched build cannot start on this PC - it says so, red, and does nothing
+                    readonly property string blocked: trackViewRoot.trackApp && trackAppCtl.updateBlocked !== undefined ? trackAppCtl.updateBlocked : ""
+                    readonly property bool onlyBlocked: blocked !== "" && !(trackViewRoot.trackApp && trackAppCtl.updateAvailable === true)
+                    visible: trackViewRoot.trackApp ? (trackAppCtl.updateAvailable === true || blocked !== "")   // TRACK_APP_UPD_R571: during the show too
                                                     : (trackManager ? trackManager.updateAvailable === true : false)
                     readonly property int st: trackViewRoot.trackApp ? trackAppCtl.updateStep
                                             : (trackManager && trackManager.updateStep !== undefined ? trackManager.updateStep : 0)
@@ -1309,14 +1312,14 @@ Rectangle
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: arm ? trackViewRoot.cGold : "#141418"
                     border.width: arm ? 0 : 2
-                    border.color: trackViewRoot.cGold
-                    opacity: showOn && !arm ? 0.6 : 1.0
+                    border.color: onlyBlocked ? "#E03030" : trackViewRoot.cGold                    // TRACK_APP_LOADTEST_R605
+                    opacity: showOn && !arm && !onlyBlocked ? 0.6 : 1.0
                     Rectangle
                     {
                         visible: !updChip.arm
                         x: Math.round(16 * trackViewRoot.ks); anchors.verticalCenter: parent.verticalCenter
                         width: Math.round(10 * trackViewRoot.ks); height: width; radius: width / 2
-                        color: trackViewRoot.cGold
+                        color: updChip.onlyBlocked ? "#E03030" : trackViewRoot.cGold                 // TRACK_APP_LOADTEST_R605
                     }
                     Column
                     {
@@ -1329,9 +1332,10 @@ Rectangle
                         {
                             objectName: "updateChipText"
                             width: parent.width; elide: Text.ElideRight
-                            text: updChip.st === 1 ? qsTr("UPDATE STARTED") : updChip.arm ? qsTr("SURE? - TAP AGAIN")
+                            text: updChip.onlyBlocked ? qsTr("UPDATE BLOCKED")                         // TRACK_APP_LOADTEST_R605
+                                : updChip.st === 1 ? qsTr("UPDATE STARTED") : updChip.arm ? qsTr("SURE? - TAP AGAIN")
                                 : trackViewRoot.trackApp ? qsTr("UPDATE TRACK") : qsTr("UPDATE QLC+")
-                            color: updChip.arm ? "#1A1408" : trackViewRoot.cGold
+                            color: updChip.onlyBlocked ? "#FF6A6A" : updChip.arm ? "#1A1408" : trackViewRoot.cGold
                             font.bold: true
                             font.pixelSize: trackViewRoot.fs(16)
                             font.letterSpacing: trackViewRoot.fs(16) * 0.06
@@ -1340,7 +1344,8 @@ Rectangle
                         {
                             objectName: "updateChipSub"
                             width: parent.width; elide: Text.ElideRight   // R475_CHIPSUB_DESK: SURE? over a tap's "SHOW OFF first"
-                            text: updChip.st === 1 ? (trackViewRoot.trackApp ? qsTr("TRACK restarts by itself") : qsTr("QLC+ restarts by itself"))
+                            text: updChip.onlyBlocked ? qsTr("%1 won't start on this PC").arg(updChip.blocked.split("|")[0])   // TRACK_APP_LOADTEST_R605
+                                : updChip.st === 1 ? (trackViewRoot.trackApp ? qsTr("TRACK restarts by itself") : qsTr("QLC+ restarts by itself"))
                                 : updChip.showOn ? qsTr("SHOW OFF first")
                                 : updChip.arm ? (trackViewRoot.trackApp ? qsTr("light out about 10 s") : qsTr("light out about 1 min"))
                                 : updChip.st === 2 ? (trackViewRoot.trackApp ? qsTr("did not install - see the log") : qsTr("update-qlc.cmd not found"))
@@ -1355,7 +1360,7 @@ Rectangle
                     TouchInput
                     {
                         onReleasedAt: (x, y, inside) => {
-                            if (!inside || !trackManager || updChip.st === 1)
+                            if (!inside || !trackManager || updChip.st === 1 || updChip.onlyBlocked)   // TRACK_APP_LOADTEST_R605
                                 return
                             if (updChip.showOn) { updChip.go(); return }   // "SHOW OFF first"
                             if (!updChip.arm) { updChip.arm = true; updChip.armAt = Date.now(); updArm.restart(); return }
@@ -4476,17 +4481,22 @@ Rectangle
                     visible: parent.appNext
                     anchors.verticalCenter: parent.verticalCenter
                     readonly property string st: trackViewRoot.trackApp ? trackAppCtl.nextState : ""
-                    readonly property color ink: st === "ready" ? "#8CE696" : (st === "failed" ? "#F07A7A" : "#E8B85A")
+                    // TRACK_APP_NOGRID_R609: no beat grid / waveform from the CDJ yet - red, as a failure
+                    readonly property bool waiting: st === "nogrid" || st === "nowave"
+                    readonly property color ink: st === "ready" ? "#8CE696" : ((st === "failed" || waiting) ? "#F07A7A" : "#E8B85A")
                     width: nextStateText.implicitWidth + Math.round(16 * trackViewRoot.ks)
                     height: Math.round(18 * trackViewRoot.ks); radius: height / 2
-                    color: st === "ready" ? "#16301A" : (st === "failed" ? "#3A1616" : "#33270F")
+                    color: st === "ready" ? "#16301A" : ((st === "failed" || waiting) ? "#3A1616" : "#33270F")
                     border.width: 1; border.color: Qt.darker(ink, 1.6)
                     Text
                     {
                         id: nextStateText
                         objectName: "nextStateText"
                         anchors.centerIn: parent
-                        text: parent.st === "ready" ? "✓ " + qsTr("READY") : (parent.st === "failed" ? qsTr("NOT ANALYSED - TRYING AGAIN") : qsTr("ANALYSING…"))
+                        text: parent.st === "ready" ? "✓ " + qsTr("READY") : (parent.st === "failed" ? qsTr("NOT ANALYSED - TRYING AGAIN")
+                              : parent.st === "nogrid" ? qsTr("NO BEAT GRID YET - CAN'T READ IT")      // TRACK_APP_NOGRID_R609
+                              : parent.st === "nowave" ? qsTr("NO WAVEFORM YET - CAN'T READ IT")
+                              : qsTr("ANALYSING…"))
                         color: parent.ink; font.bold: true; font.pixelSize: trackViewRoot.fs(10); font.letterSpacing: trackViewRoot.fs(10) * 0.1
                     }
                 }

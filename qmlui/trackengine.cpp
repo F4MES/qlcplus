@@ -10660,6 +10660,20 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
         if (other.count() >= 2)
             ok = other;
     }
+    // TRACK_APP_NEXTTASTE_R608: a figure NEXT has thrown away on earlier nights steps aside now and then (its
+    // weight is the chance it stays on the menu) - soft too: two or more always stay
+    if (m_r608Taste.isEmpty() == false && m_r608State.isEmpty() == false)
+    {
+        QList<TrackFuncInfo *> other;
+        foreach (TrackFuncInfo *info, ok)
+        {
+            if (info->family.isEmpty()
+                || r608Skip(m_r608State + QStringLiteral("|f|") + group + QLatin1Char('|') + info->family) == false)
+                other.append(info);
+        }
+        if (other.count() >= 2)
+            ok = other;
+    }
 
     // Composition also applies to real show programmes, not just the masks.
     // Foundation/support favour broad, slow pictures; only the rhythmic lead
@@ -12170,6 +12184,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     // R509_COLOUR_HOOK_BEAT (runde 509, COLOUR): the white kick - a subtle tint of the wash on the hardest
     // kicks of a 90 %+ drop (Tobias: "lad vaere med at overgoere det") (r509_colour.inc.cpp)
     r509ColourKickBeat(beat, isDrop, dropBar, beatInBar, fader, hold, isCalm, still);
+    r607WhiteBeat(beat);                 // TRACK_APP_WHITEBUDGET_R607: this beat's white on the budget
+    r608Beat(state, beat);               // TRACK_APP_NEXTTASTE_R608: the section the draws below are for
 
     // R509_WANDER_HOOK_BEAT (runde 509, WANDER): in a long groove, some of the time, a warm spot
     // wanders round the room on the wash (Tobias: "men kun nogle gange") (r509_wander.inc.cpp)
@@ -14360,7 +14376,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // often than not - and on the strobes, every time (below), which
             // is the "white pulsing on the strobes almost constantly" of
             // 2026-09-15.
-            bool allowWhite = m_accentWasWhite == false && rng->bounded(4) == 0 && m_r598NoWhite == false;   // TRACK_APP_FADERS_R598
+            bool allowWhite = m_accentWasWhite == false && rng->bounded(4) == 0 && m_r598NoWhite == false   // TRACK_APP_FADERS_R598
+                              && r607WhiteOk();   // TRACK_APP_WHITEBUDGET_R607
             m_accentPick = accentFor(m_colour, allowWhite);
             m_accentWasWhite = (m_accentPick == QStringLiteral("white"));
             // R513_COLOUR_ACCENT_HOOK (r513, Tobias 10-28: "bare lav det som du synes er bedst"): a returning
@@ -14456,7 +14473,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         foreach (const QString &c, m_palette)
         {
             if (c != m_colour && partnerOk(c, false)
-                && (m_r598NoWhite == false || c != QStringLiteral("white")))   // TRACK_APP_FADERS_R598
+                && (m_r598NoWhite == false || c != QStringLiteral("white"))   // TRACK_APP_FADERS_R598
+                && (r607WhiteOk() || c != QStringLiteral("white")))           // TRACK_APP_WHITEBUDGET_R607
                 pool << c;
         }
         m_partnerPick = pool.isEmpty() ? QString() : pool.at(int(rng->bounded(int(pool.count()))));
@@ -15100,9 +15118,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             TrackMove candidate = drawMove(key, tier, isBuild, energy, key == base, prog);
             // R483_NEXT_PATTERN_DRAW: ... nor a pattern NEXT threw away in this section
             for (int attempt = 0; attempt < 4 && candidate.pattern != ENGINE_PAT_STATIC
-                 && (history.contains(candidate.pattern) || nextPats.contains(candidate.pattern)); attempt++)
+                 && (history.contains(candidate.pattern) || nextPats.contains(candidate.pattern)
+                     || r608Skip(r608PatKey(key, candidate.pattern))); attempt++)   // TRACK_APP_NEXTTASTE_R608
             {
-                if (history.contains(candidate.pattern) == false)
+                if (history.contains(candidate.pattern) == false && nextPats.contains(candidate.pattern))
                     nextPatSkip = true;
                 candidate = drawMove(key, tier, isBuild, energy, key == base, prog);
             }
@@ -18149,6 +18168,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                 // R509_DRAMA_WHITE (runde 509, DRAMA): in the warm-up the gap is longer (3 min / the night's weight)
                 && r509DramaWhiteOk()
                 && (m_whiteLandMs < 0 || m_clock.elapsed() - m_whiteLandMs >= 180000)
+                && r607WhiteOk()          // TRACK_APP_WHITEBUDGET_R607
                 // ... and not under a colour tile: a tile is ONE colour (runde
                 // 205), as the echo, the accent and the partner already hold -
                 // the BLUE tile at 90 % landed a drop on white strobes (runde 283)
@@ -18505,6 +18525,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // R497_A1_ROLL_CHOP (runde 497, forslag 7): never faster than the bar's measured roll
         // (r497_roll.inc.cpp) - the DJ's loop below keeps its own
         chop = r497RollChop(chop);
+        // TRACK_APP_BUILDTAPS_R606: his drumming in this build sets the roll from here to the drop
+        chop = r606Chop(chop, chopOk, isBuild, toDrop, fader);
         // R521_ROLL32_CALL (runde 521): ... and where the bar plays 32nds, the last two bars into the drop
         // stab them - only where a stab is planned already, from 70 %, never under the DJ's loop
         chop = r521Roll32Chop(chop, fader, toDrop, loopNow);
@@ -21098,6 +21120,11 @@ void TrackEngine::nextRemember()
     if (m_nextFiled && m_nextRejState == m_lastState && m_nextRejTitle == m_trackTitle)
         return;
     m_nextFiled = true;
+    // TRACK_APP_NEXTTASTE_R608: what was on stage is a little less likely - in this kind of section - from now on
+    // and on the nights after (the look he stops at gives a little back, r608Beat)
+    r608Nudge(0.92, QStringLiteral("next"));
+    m_r608Watch = true;
+    m_r608LandAt = -1;
     // R483_NEXT_MEM (Tobias 10-20, "3"). Night 10-17/18: 263 NEXT, 122 of them in drops with the
     // whole cast (bars or animation laser + Minis + wash + strobes), 57 within 4 s of the one
     // before. NEXT already changes the colour (94 %) and the patterns (83 % of the groups), but
@@ -30147,7 +30174,8 @@ void TrackEngine::dropFormBeat(int beat, int secStart, int secEnd, const QString
             QRandomGenerator dice(quint32(qHash(m_trackTitle)) ^ quint32(beat) * 2246822519u);
             // STORM in white or the room's colour (never white under his tiles - a tile is one colour)
             m_formWhite = form == DF_STORM && m_override.isEmpty() && m_overrideSet.count() < 2
-                       && dice.bounded(2) == 0;
+                       && dice.bounded(2) == 0
+                       && r607WhiteOk();          // TRACK_APP_WHITEBUDGET_R607
             // R489_EX_WHOLE_LAND (Tobias 10-22: "paa 100% skal det strobe paa hele baren
             // (8 oejne) og saa vaere tilfaeldigt paa barene, ligesom paa strobe-lamperne"):
             // the storm's stop is one random WHOLE bar at a time, every storm drop - the
@@ -39748,6 +39776,10 @@ void TrackEngine::r497RollBeat(int beat, int beatInBar, bool isBuild, bool isDro
     m_r497RollTitle = m_trackTitle;
     const int was = m_r497RollTier;
     m_r497RollTier = r497RollMeasure(barStart);
+    // TRACK_APP_BUILDTAPS_R606: the rate he drummed in this build is the build's roll - the walks and the strobe
+    // riser take it as their ceiling too
+    if (m_r606Tier > 0 && m_r606Title == m_trackTitle)
+        m_r497RollTier = m_r606Tier;
     if (m_r497RollTier > 0 && m_r497RollTier != m_r497RollLogged)
     {
         m_r497RollLogged = m_r497RollTier;
@@ -39756,6 +39788,65 @@ void TrackEngine::r497RollBeat(int beat, int beatInBar, bool isBuild, bool isDro
     }
     if (m_r497RollTier != was)
         crumb(QStringLiteral("r497 roll %1: %2").arg(barStart).arg(m_r497RollTier));
+}
+
+void TrackEngine::r606Tap()
+{
+    // TRACK_APP_BUILDTAPS_R606 (Tobias 11-14: forslag 4, "Dine BLACKOUT-tryk i builds saetter rullens tempo"): the
+    // night of 11-13/14 had 812 of his 1894 BLACKOUT taps in builds, in short runs - he drums the build. Three taps
+    // or more, each within a beat and a half of the one before: their median gap is the rate - a beat or so
+    // quarters, half a beat eighths, a quarter beat sixteenths. Only in a build (not a DROP HIT's dark, not a
+    // stood beat clock); a new run in the same build sets it again
+    if (m_hitDark || m_testTrack || m_beatMs <= 0.0 || m_lastState != QStringLiteral("build"))
+        return;
+    const qint64 now = m_clock.elapsed();
+    if (m_r606Title != m_trackTitle)
+    {
+        m_r606Taps.clear();
+        m_r606Tier = -1;
+        m_r606Title = m_trackTitle;
+    }
+    if (m_r606Taps.isEmpty() == false && now - m_r606Taps.last() > qint64(1.5 * m_beatMs))
+        m_r606Taps.clear();              // a pause: a new run
+    m_r606Taps.append(now);
+    m_r606LastMs = now;
+    while (m_r606Taps.count() > 9)
+        m_r606Taps.removeFirst();
+    if (m_r606Taps.count() < 3)
+        return;
+    QList<qreal> gaps;
+    for (int i = 1; i < m_r606Taps.count(); i++)
+        gaps << qreal(m_r606Taps.at(i) - m_r606Taps.at(i - 1)) / m_beatMs;
+    std::sort(gaps.begin(), gaps.end());
+    const qreal g = gaps.at(gaps.count() / 2);
+    const int tier = g <= 0.375 ? 16 : (g <= 0.75 ? 8 : 4);
+    if (tier != m_r606Tier)
+    {
+        m_r606Tier = tier;
+        logSignal(QStringLiteral("sig:build-taps:%1:%2").arg(tier).arg(int(qRound(g * 100.0))));
+    }
+}
+
+int TrackEngine::r606Chop(int chop, bool chopOk, bool isBuild, int toDrop, qreal fader)
+{
+    // TRACK_APP_BUILDTAPS_R606: from his last tap on, the build stabs at his rate on every beat to the drop (the
+    // black beat before it stays the engine's) - as the build's own stabs, from 60 % (R522_CHOP_SPREAD), never under
+    // HOLD/CALM/FLASH/BLACKOUT or the music's own dark (chopOk). While he still drums, his taps are the stabs
+    const bool scope = isBuild || (toDrop > 0 && toDrop <= 8);
+    if (scope == false || m_r606Title != m_trackTitle)
+    {
+        if (m_r606Tier > 0 || m_r606Taps.isEmpty() == false)
+        {
+            m_r606Tier = -1;
+            m_r606Taps.clear();
+        }
+        return chop;
+    }
+    if (m_r606Tier <= 0 || chopOk == false || toDrop == 1 || fader < 0.60)
+        return chop;
+    if (m_r606LastMs >= 0 && m_clock.elapsed() - m_r606LastMs < qint64(m_beatMs))
+        return chop;                     // he is drumming now
+    return m_r606Tier >= 16 ? 3 : (m_r606Tier >= 8 ? 2 : 1);
 }
 
 int TrackEngine::r497RollChop(int chop) const
@@ -40322,6 +40413,8 @@ void TrackEngine::r497TapEdge(bool on)
     }
     m_r497TapLastMs = now;
     m_r497TapCredit = 0.0;
+    if (on)
+        r606Tap();                       // TRACK_APP_BUILDTAPS_R606: in a build, his taps set the roll
     if (on)
     {
         m_r497TapOnMs = -1;
@@ -43124,7 +43217,8 @@ void TrackEngine::r509PauseArm(int beat, const QString &state, qreal fader)
             && m_r509PauseHits - m_r509PauseWhiteAt >= R509_PAUSE_WHITE_EVERY - 1   // the last white and three in colour before it
             && (m_whiteLandMs < 0 || now - m_whiteLandMs >= R509_PAUSE_WHITE_MS)
             && (m_r509PauseWhiteMs < 0 || now - m_r509PauseWhiteMs >= R509_PAUSE_WHITE_MS)
-            && m_mixing == false;
+            && m_mixing == false
+            && r607WhiteOk();             // TRACK_APP_WHITEBUDGET_R607
         if (whiteOk == false && len >= 2 && m_r509PauseInDrop && fader >= R509_PAUSE_WHITE_FADER - 1e-9)
             crumb(QStringLiteral("r509 pause %1 not white: back %2 of %3, %4 hits since white, %5 s since a white landing")
                   .arg(beat).arg(int(backLevel)).arg(m_r509PauseBefore).arg(m_r509PauseHits - m_r509PauseWhiteAt)
@@ -45403,6 +45497,8 @@ void TrackEngine::r509ColourKickBeat(int beat, bool isDrop, int dropBar, int bea
         why = QStringLiteral("energy");
     else if (hold || isCalm || still)
         why = QStringLiteral("hold");
+    else if (r607WhiteOk() == false)
+        why = QStringLiteral("budget");  // TRACK_APP_WHITEBUDGET_R607
     else if (r509ColourKickFree(key) == false)
         why = QStringLiteral("his");
     else if (m_r509KickKey.isEmpty() == false && key != m_r509KickKey)
@@ -49190,4 +49286,179 @@ QVariantMap TrackEngine::roomShape() const
              << QVariant(box(0.757, 0.878, 0.280, 0.364)) << QVariant(box(0.696, 0.887, 0.793, 0.872)));
     s.insert(QStringLiteral("dj"), box(0.236, 0.771, 0.0, 0.067));          // the booth's arc
     return s;
+}
+
+/* =====================================================================
+ *  TRACK_APP_WHITEBUDGET_R607 (Tobias 11-14, forslag 6: "et hvid-budget"). The night of 11-13/14 the engine's own
+ *  white came from five places - the white kick tint on the wash (37 drops), the storm in white (two drops,
+ *  74 s), the white landings, the pause's white hit and the white partner/accent - besides his own FLASH (140
+ *  taps), and "man kan ikke faa hvid vaek". Each beat the engine's white on stage is counted:
+ *    a storm in white: the whole beat; a white partner or accent of the engine's own in a drop (not his tiles'):
+ *    half (some groups wear it); a white landing or a pause's white hit: a beat; a kick tint: a quarter (35 %, half
+ *    a beat).
+ *  More than 30 s of it in the last 10 minutes: the engine draws no new white - no storm in white, no white
+ *  landing or pause hit, no white accent or partner, and the kick tint stops (why "budget") - until it is under
+ *  20 s again. What is on stage plays out (a storm drawn white stays white); his FLASH, his tiles, the closing's
+ *  white and the white of a programme he picked are not counted and not touched.
+ *  Log: sig:white-budget:over:<s> / sig:white-budget:ok:<s>.
+ * ===================================================================== */
+
+#define R607_WINDOW_MS   600000
+#define R607_OVER_MS     30000
+#define R607_UNDER_MS    20000
+
+void TrackEngine::r607WhiteBeat(int beat)
+{
+    if (beat == m_r607LastBeat || m_beatMs <= 0.0)
+        return;
+    m_r607LastBeat = beat;
+    const qint64 now = m_clock.elapsed();
+    const qint64 since = m_r607LastMs;
+    m_r607LastMs = now;
+    const bool his = m_override.isEmpty() == false || m_overrideSet.count() >= 2;
+    const bool drop = m_lastState == QStringLiteral("drop");
+    qreal beats = 0.0;
+    if (m_formNow == DF_STORM && m_formWhite)
+        beats += 1.0;
+    else if (his == false && drop && (m_partnerPick == QStringLiteral("white") || m_accentPick == QStringLiteral("white")))
+        beats += 0.5;
+    if (since >= 0 && m_whiteLandMs > since)
+        beats += 1.0;
+    if (since >= 0 && m_r509PauseWhiteMs > since)
+        beats += 1.0;
+    if (m_r509KickBeat == beat && m_r509KickKey.isEmpty() == false)
+        beats += 0.25;
+    if (beats > 0.0)
+        m_r607Spent.append(qMakePair(now, qint64(beats * m_beatMs)));
+    // QLC_TRACK_WHITE_BUDGET_MS: another budget (tests) - the way back at two thirds of it
+    static const qint64 overMs = qEnvironmentVariableIntValue("QLC_TRACK_WHITE_BUDGET_MS") > 0
+                                 ? qEnvironmentVariableIntValue("QLC_TRACK_WHITE_BUDGET_MS") : R607_OVER_MS;
+    static const qint64 underMs = overMs == R607_OVER_MS ? R607_UNDER_MS : overMs * 2 / 3;
+    qint64 sum = 0;
+    while (m_r607Spent.isEmpty() == false && now - m_r607Spent.first().first > R607_WINDOW_MS)
+        m_r607Spent.removeFirst();
+    for (const QPair<qint64, qint64> &s : std::as_const(m_r607Spent))
+        sum += s.second;
+    if (m_r607Over == false && sum > overMs)
+    {
+        m_r607Over = true;
+        logSignal(QStringLiteral("sig:white-budget:over:%1").arg(sum / 1000));
+    }
+    else if (m_r607Over && sum < underMs)
+    {
+        m_r607Over = false;
+        logSignal(QStringLiteral("sig:white-budget:ok:%1").arg(sum / 1000));
+    }
+}
+
+/* =====================================================================
+ *  TRACK_APP_NEXTTASTE_R608 (Tobias 11-14, forslag 2: "NEXT laerer din smag over flere naetter"). The night of
+ *  11-13/14: 105 NEXT, no thumb at all - NEXT is the only verdict he gives. R483 remembers what NEXT threw away
+ *  only inside the section and the track. Now, per kind of section (drop, break, build, groove ...):
+ *    - NEXT: every group's programme family and pattern on stage get x0.92 (never under 0.40);
+ *    - the look he stops at (16 beats on, the same section and track, no NEXT since) gets x1.03 (never over 1.50);
+ *    - the weight is the chance the family / pattern stays on the menu when it is drawn (1 and over: always) - the
+ *      menu is never emptied (two families left at least, four tries at a pattern, as R483's own rules);
+ *    - each new night every weight goes 10 % of the way back to 1 (as the colour taste, R578), and one within 2 %
+ *      of 1 is forgotten.
+ *  QSettings trackengine/r608Taste (a map) and trackengine/r608Night - so EXPORT/IMPORT and the daily backup carry
+ *  it. Log: sig:next-taste:<next|kept>:<keys>.
+ * ===================================================================== */
+
+void TrackEngine::r608Load()
+{
+    if (m_r608Loaded)
+        return;
+    m_r608Loaded = true;
+    QSettings s;
+    m_r608Taste = s.value(QStringLiteral("trackengine/r608Taste")).toMap();
+    const QString night = QDateTime::currentDateTime().addSecs(-12 * 3600).date().toString(Qt::ISODate);
+    if (s.value(QStringLiteral("trackengine/r608Night")).toString() == night)
+        return;
+    QVariantMap kept;
+    for (auto it = m_r608Taste.constBegin(); it != m_r608Taste.constEnd(); ++it)
+    {
+        bool okw = false;
+        const qreal w = it.value().toDouble(&okw);
+        if (okw == false || std::isfinite(w) == false)
+            continue;
+        const qreal back = 1.0 + (qBound(0.40, w, 1.50) - 1.0) * 0.90;
+        if (qAbs(back - 1.0) >= 0.02)
+            kept.insert(it.key(), back);
+    }
+    m_r608Taste = kept;
+    s.setValue(QStringLiteral("trackengine/r608Taste"), m_r608Taste);
+    s.setValue(QStringLiteral("trackengine/r608Night"), night);
+}
+
+QString TrackEngine::r608PatKey(const QString &group, int pattern) const
+{
+    return m_r608State + QStringLiteral("|p|") + group + QLatin1Char('|') + QString::number(pattern);
+}
+
+bool TrackEngine::r608Skip(const QString &key) const
+{
+    if (m_r608State.isEmpty())
+        return false;
+    const auto it = m_r608Taste.constFind(key);
+    if (it == m_r608Taste.constEnd())
+        return false;
+    const qreal w = it.value().toDouble();
+    return w < 1.0 && QRandomGenerator::global()->generateDouble() > w;
+}
+
+void TrackEngine::r608Nudge(qreal factor, const QString &why)
+{
+    r608Load();
+    if (m_r608State.isEmpty() || m_testTrack)
+        return;
+    int n = 0;
+    foreach (const QString &key, m_cast)
+    {
+        QStringList keys;
+        const quint32 fid = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
+        if (m_funcs.contains(fid) && m_funcs.value(fid).family.isEmpty() == false)
+            keys << m_r608State + QStringLiteral("|f|") + key + QLatin1Char('|') + m_funcs.value(fid).family;
+        const int pat = m_moves.contains(key) ? m_moves.value(key).pattern : ENGINE_PAT_STATIC;
+        if (pat != ENGINE_PAT_STATIC)
+            keys << r608PatKey(key, pat);
+        for (const QString &k : std::as_const(keys))
+        {
+            const qreal w = qBound(0.40, m_r608Taste.value(k, 1.0).toDouble() * factor, 1.50);
+            if (qAbs(w - 1.0) < 0.02)
+                m_r608Taste.remove(k);
+            else
+                m_r608Taste.insert(k, w);
+            n++;
+        }
+    }
+    if (n == 0)
+        return;
+    QSettings().setValue(QStringLiteral("trackengine/r608Taste"), m_r608Taste);
+    logSignal(QStringLiteral("sig:next-taste:%1:%2").arg(why).arg(n));
+}
+
+void TrackEngine::r608Beat(const QString &state, int beat)
+{
+    r608Load();
+    m_r608State = state;
+    if (m_r608Watch == false || m_forceNext)
+        return;
+    if (m_r608LandAt < 0)
+    {
+        m_r608LandAt = beat;
+        m_r608LandTitle = m_trackTitle;
+        m_r608LandState = state;
+        return;
+    }
+    if (m_r608LandTitle != m_trackTitle || m_r608LandState != state || beat < m_r608LandAt)
+    {
+        m_r608Watch = false;             // the section or the track moved on first: no verdict
+        return;
+    }
+    if (beat - m_r608LandAt >= 16)
+    {
+        m_r608Watch = false;
+        r608Nudge(1.03, QStringLiteral("kept"));
+    }
 }
