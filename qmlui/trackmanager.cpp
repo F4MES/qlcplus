@@ -3500,7 +3500,7 @@ static bool remoteHeldOn(TrackEngine *e, const QString &what)
     if (what == QLatin1String("haze"))
         return e->haze() > e->hazeRest() + 0.001;   // R484_HZ_PHONE_ON: held = over its rest
     if (what == QLatin1String("flashc"))
-        return e->flashingColour();                 // TRACK_APP_FLASHCOLOUR_R610
+        return e->flashColourHeld();                // TRACK_APP_BUGROUND_R612 (was flashingColour, R610)
     return e->flashing();
 }
 

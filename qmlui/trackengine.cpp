@@ -9709,24 +9709,73 @@ void TrackEngine::setFlashColour(bool pressed)
     // colour. FLASH WHITE held already: that one stays. Let go: as FLASH WHITE let go
     if (pressed)
     {
+        m_r612Colour = true;             // TRACK_APP_BUGROUND_R612: held - FLASH WHITE let go hands it over
         if (m_flash)
             return;
         m_r610Hue = flashHue();
         m_r610On = true;
         qualitySignal(QStringLiteral("sig:flash-colour:") + m_r610Hue);
+        m_r612Inner = true;
         setFlash(true);
+        m_r612Inner = false;
         emit liveChanged();
         return;
     }
+    m_r612Colour = false;
     if (m_r610On && m_flash)
-        setFlash(false);
+    {
+        // TRACK_APP_BUGROUND_R612: FLASH WHITE still held - it goes on white, not dark
+        if (m_r612White)
+            r612Swap(false);
+        else
+        {
+            m_r612Inner = true;
+            setFlash(false);
+            m_r612Inner = false;
+        }
+    }
     m_r610Hue.clear();
     m_r610On = false;
     emit liveChanged();
 }
 
+void TrackEngine::r612Swap(bool colour)
+{
+    // TRACK_APP_BUGROUND_R612 (bred fejlrunde 11-14): the flash goes on as the hand that still holds it - FLASH
+    // COLOUR held when FLASH WHITE (or a DROP HIT's white) lets go flashes its colour, FLASH WHITE held when FLASH
+    // COLOUR lets go flashes white. Off and on in one call: nothing reaches the DMX in between
+    m_r612Inner = true;
+    setFlash(false);
+    if (colour)
+    {
+        m_r610Hue = flashHue();
+        m_r610On = true;
+    }
+    setFlash(true);
+    m_r612Inner = false;
+    crumb(QStringLiteral("r612 flash goes on %1").arg(colour ? m_r610Hue : QStringLiteral("white")));
+}
+
 void TrackEngine::setFlash(bool pressed)
 {
+    // TRACK_APP_BUGROUND_R612 (bred fejlrunde 11-14): three hands can hold the flash - FLASH WHITE (this call from
+    // the desk, the phone, a pad), FLASH COLOUR and a DROP HIT's white. FLASH WHITE let go while another still holds
+    // it no longer cuts it: the hit's white runs to the hit's end, a held FLASH COLOUR takes over in its colour
+    if (m_r612Inner == false)
+    {
+        m_r612White = pressed;
+        if (pressed == false && m_flash)
+        {
+            if (m_hitFlashOwn)
+                return;
+            if (m_r612Colour)
+            {
+                if (m_r610On == false)
+                    r612Swap(true);
+                return;
+            }
+        }
+    }
     if (pressed == m_flash)
         return;
     m_flash = pressed;
@@ -10705,7 +10754,8 @@ quint32 TrackEngine::motionFor(const QString &group, const QString &colour,
     }
     // TRACK_APP_NEXTTASTE_R608: a figure NEXT has thrown away on earlier nights steps aside now and then (its
     // weight is the chance it stays on the menu) - soft too: two or more always stay
-    if (m_r608Taste.isEmpty() == false && m_r608State.isEmpty() == false)
+    if (m_r608Taste.isEmpty() == false && m_r608State.isEmpty() == false
+        && m_groups.value(group).patternDevice == false)    // TRACK_APP_BUGROUND_R612: not his LAB rotation
     {
         QList<TrackFuncInfo *> other;
         foreach (TrackFuncInfo *info, ok)
@@ -15162,7 +15212,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // R483_NEXT_PATTERN_DRAW: ... nor a pattern NEXT threw away in this section
             for (int attempt = 0; attempt < 4 && candidate.pattern != ENGINE_PAT_STATIC
                  && (history.contains(candidate.pattern) || nextPats.contains(candidate.pattern)
-                     || r608Skip(r608PatKey(key, candidate.pattern))); attempt++)   // TRACK_APP_NEXTTASTE_R608
+                     || (m_groups.value(key).patternDevice == false   // TRACK_APP_BUGROUND_R612
+                         && r608Skip(r608PatKey(key, candidate.pattern)))); attempt++)   // TRACK_APP_NEXTTASTE_R608
             {
                 if (history.contains(candidate.pattern) == false && nextPats.contains(candidate.pattern))
                     nextPatSkip = true;
@@ -18569,7 +18620,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // (r497_roll.inc.cpp) - the DJ's loop below keeps its own
         chop = r497RollChop(chop);
         // TRACK_APP_BUILDTAPS_R606: his drumming in this build sets the roll from here to the drop
-        chop = r606Chop(chop, chopOk, isBuild, toDrop, fader);
+        chop = r606Chop(chop, chopOk, isBuild, isDrop ? -1 : toDrop, fader);   // TRACK_APP_BUGROUND_R612
         // R521_ROLL32_CALL (runde 521): ... and where the bar plays 32nds, the last two bars into the drop
         // stab them - only where a stab is planned already, from 70 %, never under the DJ's loop
         chop = r521Roll32Chop(chop, fader, toDrop, loopNow);
@@ -23318,6 +23369,9 @@ void TrackEngine::release()
     m_fillLast = -8;
     m_lookState.clear();
     m_flash = false;
+    m_r610Hue.clear();                   // TRACK_APP_BUGROUND_R612: the next FLASH is white
+    m_r610On = false;
+    m_r612White = m_r612Colour = false;
     // and the flag with them, or the next tick() would put the masks straight
     // back and the Track page would still show BLACKOUT lit
     m_blackout = false;
@@ -24976,6 +25030,9 @@ void TrackEngine::stopAll()
     m_andBass = false;           // R463_PLUCK_RESET
     m_pluckSlots = 0;
     m_flash = false;
+    m_r610Hue.clear();                   // TRACK_APP_BUGROUND_R612: the next FLASH is white
+    m_r610On = false;
+    m_r612White = m_r612Colour = false;
     m_flashHeld.clear();
     padFlashClear();                     // R469_GROUP_FLASH         // release() clears it; without this the next
                                  // beat skips the whole out-of-cast teardown
@@ -29024,7 +29081,9 @@ void TrackEngine::hitWhite(bool on)
     {
         if (m_flash == false)
         {
+            m_r612Inner = true;          // TRACK_APP_BUGROUND_R612: the hit's hand, not his
             setFlash(true);
+            m_r612Inner = false;
             m_hitFlashOwn = true;
         }
         foreach (const QString &key, m_groupOrder)
@@ -29045,8 +29104,18 @@ void TrackEngine::hitWhite(bool on)
     if (m_hitFlashOwn)
     {
         m_hitFlashOwn = false;
-        if (m_flash)
-            setFlash(false);
+        // TRACK_APP_BUGROUND_R612: his finger on FLASH WHITE keeps it; on FLASH COLOUR it goes on in the colour
+        if (m_flash && m_r612White == false)
+        {
+            if (m_r612Colour)
+                r612Swap(true);
+            else
+            {
+                m_r612Inner = true;
+                setFlash(false);
+                m_r612Inner = false;
+            }
+        }
     }
 }
 
@@ -39875,6 +39944,7 @@ int TrackEngine::r606Chop(int chop, bool chopOk, bool isBuild, int toDrop, qreal
     // TRACK_APP_BUILDTAPS_R606: from his last tap on, the build stabs at his rate on every beat to the drop (the
     // black beat before it stays the engine's) - as the build's own stabs, from 60 % (R522_CHOP_SPREAD), never under
     // HOLD/CALM/FLASH/BLACKOUT or the music's own dark (chopOk). While he still drums, his taps are the stabs
+    // TRACK_APP_BUGROUND_R612: in a drop toDrop comes as -1 (the drop is no build) - the taps are forgotten there
     const bool scope = isBuild || (toDrop > 0 && toDrop <= 8);
     if (scope == false || m_r606Title != m_trackTitle)
     {
@@ -49458,6 +49528,8 @@ void TrackEngine::r608Nudge(qreal factor, const QString &why)
     int n = 0;
     foreach (const QString &key, m_cast)
     {
+        if (m_groups.value(key).patternDevice)
+            continue;                    // TRACK_APP_BUGROUND_R612: the animation laser runs his LAB rotation
         QStringList keys;
         const quint32 fid = m_active.value(QStringLiteral("mot:") + key, Function::invalidId());
         if (m_funcs.contains(fid) && m_funcs.value(fid).family.isEmpty() == false)

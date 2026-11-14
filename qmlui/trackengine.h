@@ -1246,6 +1246,7 @@ public:
     bool flashing() const;
     Q_INVOKABLE void setFlash(bool pressed);
     bool flashingColour() const { return m_flash && m_r610On; }     // TRACK_APP_FLASHCOLOUR_R610
+    bool flashColourHeld() const { return m_r612Colour; }          // TRACK_APP_BUGROUND_R612: a hand on it
     QString flashHue() const;
     Q_INVOKABLE void setFlashColour(bool pressed);
     bool blackout() const;
@@ -2474,6 +2475,12 @@ private:
     // TRACK_APP_FLASHCOLOUR_R610: the hand's flash in a colour - the hue while it is held ("" = FLASH WHITE)
     QString m_r610Hue;
     bool m_r610On = false;
+    // TRACK_APP_BUGROUND_R612: who holds the flash - FLASH WHITE, FLASH COLOUR (a DROP HIT's own white is
+    // m_hitFlashOwn); m_r612Inner while the engine itself presses or lets go
+    bool m_r612White = false;
+    bool m_r612Colour = false;
+    bool m_r612Inner = false;
+    void r612Swap(bool colour);
     QString m_lastState;
     QString m_report;
     QStringList m_warnings;
