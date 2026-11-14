@@ -554,6 +554,46 @@ jobs:
           # library (needs pthread_cond_timedwait64).
           cp -f /mingw64/bin/libwinpthread-1.dll /c/qlcplus/
 
+      # TRACK_APP_LOADGUARD_R600 (the lys-pc's log of 11-14): every build from R588 to R599 was green here and
+      # still stopped at its first start on the lys-pc (0xC0000139 - a function missing from a shipped DLL), so
+      # the launcher went back to R572 each time. Nothing here ever started the build. Two checks now, before
+      # anything is packed: every import against the DLLs in the folder, and one real start with a clean PATH
+      - name: Every import is in the shipped DLLs
+        if: ${{ matrix.task == 'build-v5' }}
+        shell: pwsh
+        run: python trackbridge/check_imports.py C:\qlcplus
+
+      - name: Windows can start the build
+        if: ${{ !cancelled() && matrix.task == 'build-v5' }}
+        shell: pwsh
+        run: |
+          $exe = 'C:\qlcplus\qlcplus-qml.exe'
+          if (-not (Test-Path $exe)) { Write-Host 'no build to start'; exit 1 }
+          # as TRACK's launcher: no dialog for a missing DLL or function - the exit code says it
+          Add-Type -Namespace TrackGuard -Name Native -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetErrorMode(uint uMode);'
+          [TrackGuard.Native]::SetErrorMode(0x8003) | Out-Null
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $exe
+          $psi.Arguments = '--version'
+          $psi.WorkingDirectory = 'C:\qlcplus'
+          $psi.UseShellExecute = $false
+          # a PC without MSYS2 or Qt: only Windows' own folders beside the build's
+          $psi.EnvironmentVariables['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
+          $psi.EnvironmentVariables['QT_COMMAND_LINE_PARSER_NO_GUI_MESSAGE_BOXES'] = '1'
+          $p = [System.Diagnostics.Process]::Start($psi)
+          if (-not $p.WaitForExit(30000)) {
+            $p.Kill()
+            Write-Host 'still running after 30 s: Windows started it'
+            exit 0
+          }
+          $hex = '{0:X8}' -f $p.ExitCode
+          Write-Host "exit code 0x$hex"
+          if ($hex -in @('C0000139', 'C0000135', 'C0000138', 'C000007B', 'C0000142')) {
+            Write-Host 'Windows could not start the build: a DLL, or a function in one, is missing (see the step above)'
+            exit 1
+          }
+          exit 0
+
       - name: Build installation package
         shell: msys2 {0}
         run: |
