@@ -28202,14 +28202,28 @@ bool TrackEngine::sendMake(const QStringList &ids)
     m_sendResult = tr("Packing %1 files ...").arg(copied + int(jobs.count()));
     emit sendChanged();
     QSharedPointer<QAtomicInt> done(new QAtomicInt(copied));
-    QThread *worker = QThread::create([jobs, done]() {
-        for (int i = 0; i < jobs.count(); i++)
+    // TRACK_APP_NOFUTURE_R600 (the log of 11-14: every build since R588 stopped at its first start on the
+    // lys-pc, code 0xC0000139, and the launcher went back to R572): QThread::create() is built on std::async,
+    // and that asks the C++ runtime for names the libstdc++-6.dll shipped beside TRACK (Qt's own) does not
+    // have - Windows refuses to start a program like that. A plain QThread with run() asks for nothing new
+    struct R600Copy : public QThread
+    {
+        QList<QPair<QString, QString> > jobs;
+        QSharedPointer<QAtomicInt> done;
+        void run() override
         {
-            QFile::remove(jobs.at(i).second);
-            if (QFile::copy(jobs.at(i).first, jobs.at(i).second))
-                done->fetchAndAddRelaxed(1);
+            for (int i = 0; i < jobs.count(); i++)
+            {
+                QFile::remove(jobs.at(i).second);
+                if (QFile::copy(jobs.at(i).first, jobs.at(i).second))
+                    done->fetchAndAddRelaxed(1);
+            }
         }
-    });
+    };
+    R600Copy *r600Copy = new R600Copy;
+    r600Copy->jobs = jobs;
+    r600Copy->done = done;
+    QThread *worker = r600Copy;
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, worker, [worker]() { worker->wait(30000); });
     connect(worker, &QThread::finished, this, [this, worker, done, ids, stamp, folder, zip]() {
     worker->deleteLater();
