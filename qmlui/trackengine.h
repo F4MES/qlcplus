@@ -3222,6 +3222,12 @@ public:
     void r497MelodyHeadsBeat(int beat, int secStart, bool isBreak, bool hold, bool quiet);
     qreal r497MelodyHeadsShape(const QString &group, Function *func, const TrackSweep &sw, int &width, int &height);
     void r497MelodyHeadsY(const QString &group, Function *func, const TrackSweep &sw);
+    // TRACK_APP_HEADSLIFT_R613: over 80 % on the slider the heads' figure rides higher - the lift it wants now
+    // (EFX y units, signed the way that lifts) and the lift on the EFX (walks a unit a beat)
+    qreal r613LiftFor(const QString &group, const TrackSweep &sw) const;
+    void r613LiftStep(const QString &group, Function *func, const TrackSweep &sw, qreal want);
+    QHash<QString, qreal> m_r613Lift;
+    QHash<QString, int> m_r613Sign;      // the way that lifts, fixed per figure (the aims sit round straight down)
     // R488_DX_DECL: the drop forms (track_runtime/dropforms.inc.cpp, runde 488)
     int m_formPlan = 0;                  // the form decided for the coming drop flag
     int m_formPlanFor = -1;              // ... that flag

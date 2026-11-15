@@ -130,6 +130,7 @@ static quint32 nameScatter(const QString &name)
 #define ENGINE_STROBE_LAND_ON 0.45    // R480_STROBE_BAR: no landing flash on the strobe lamps under this (the bar time)
 // runde 344, Tobias 10-03: "animationslaseren skal foerst komme i spil ved 70%"
 #define ENGINE_ANI_ON         0.70
+#define R613_DROPCAP_OFF      0.80      // TRACK_APP_HEADSLIFT_R613: no drop cap (R532) from here on the slider
 #define ENGINE_DARK_BARS      4
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
@@ -3111,7 +3112,9 @@ void TrackEngine::genFlash(bool on, const QString &colour)
             // full: the button, and since runde 344 the only automatic hit
             // left - the drop's landing - "100% paa droppet" (it followed the
             // slider from 0.70, runde 292)
-            setDimmer(key, 1.0);
+            // TRACK_APP_HEADSLIFT_R613 (Tobias 11-15: "halv lysstyrke paa flash color knappen"): FLASH COLOUR at
+            // half the lamps' full - still over MASTER and the trim, as the button always is. FLASH WHITE stays full
+            setDimmer(key, (colour.isEmpty() && m_r610Hue.isEmpty() == false) ? 0.50 : 1.0);
             m_pulseDepth.insert(key, keepDepth);
             m_breathe.insert(key, keepBreath);
         }
@@ -8278,7 +8281,7 @@ QStringList TrackEngine::planDropCast(qreal fader) const
     const int whole = int(want);
     const bool r540Armed = (m_hitKind > 0 || m_hitAmokOwed)   // R540_HIT_PLAN: PLAN shows what his armed hit lands on the next drop
                          && m_nextDropBeat > 0 && qAbs(r533PlanAt() - m_nextDropBeat) <= 8;
-    const int budget = qMin(r540Armed ? 4 : r532DropCap(r533PlanAt(), fader),   // R533_PLAN_DROPCAP: the boundary being planned
+    const int budget = qMin((r540Armed || fader >= R613_DROPCAP_OFF - 1e-9) ? 4 : r532DropCap(r533PlanAt(), fader),   // R533_PLAN_DROPCAP + R613
                             qBound(0, whole + (dice.bounded(1000) < int((want - whole) * 1000.0) ? 1 : 0), 4));   // R532_CAP_DROPPLAN
     QSet<QString> set;
     if (base.isEmpty() == false)
@@ -13788,10 +13791,13 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     if ((isDrop || (preDrop && (m_formWild && isBuild) == false)) && hold == false && isCalm == false && r540Hit == false)
     {
         const int dropAt = isDrop ? secStart : (nextState == QStringLiteral("drop") && beatsToNext > 0 ? beat + beatsToNext : -1);
-        const int cap = r532DropCap(dropAt, fader);
+        // TRACK_APP_HEADSLIFT_R613 (Tobias 11-15: "fjern drop budgettet fra 80 energi og op"): from 80 % on the slider
+        // every drop gets all the slider gives, as the track's big one (the base sitting a drop out, R533, as before)
+        const bool r613Free = fader >= R613_DROPCAP_OFF - 1e-9;
+        const int cap = r613Free ? 4 : r532DropCap(dropAt, fader);
         effects = qMin(effects, cap);
         if (isDrop && sectionChanged && m_testTrack == false)
-            logSignal(QStringLiteral("sig:drop-cap:%1@%2").arg(cap >= 4 ? QStringLiteral("big") : (cap == 1 ? QStringLiteral("lean") : QStringLiteral("two"))).arg(secStart));
+            logSignal(QStringLiteral("sig:drop-cap:%1@%2").arg(r613Free ? QStringLiteral("free80") : cap >= 4 ? QStringLiteral("big") : (cap == 1 ? QStringLiteral("lean") : QStringLiteral("two"))).arg(secStart));
     }
     else if (isDrop == false && preDrop == false && (m_formWild && isBuild) == false)
         effects = qMin(effects, 2);
@@ -20211,6 +20217,9 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     // LANGSOM bevaegelse paa basen") - one in five used to stand still at
     // the bottom of the fader, and a still base in a quiet room is a photo.
     qreal moveP = tier == 0 ? 1.0 : (tier == 2 ? 0.90 + 0.10 * e : 0.85 + 0.15 * e);
+    // TRACK_APP_HEADSLIFT_R613 (Tobias 11-15: "for smaa/kedelige"): the heads stand still less often
+    if (laser == false && tier > 0)
+        moveP = tier == 2 ? 0.97 + 0.03 * e : 0.95 + 0.05 * e;
     if (build)
         moveP = 0.90 + 0.10 * prog;
     if (chance(moveP) == false)
@@ -20278,6 +20287,8 @@ TrackSweep TrackEngine::drawSweep(int tier, bool build, qreal prog, qreal energy
     sw.width = qBound(6, int(size), 127);
     // 4 units of tilt is eight degrees - a circle that reads as a flat line
     sw.height = qBound(10, int(size * (0.45 + 0.55 * rng->generateDouble())), 28);
+    if (laser == false && sw.tier > 0)   // TRACK_APP_HEADSLIFT_R613: up to 34 units of tilt (was 28)
+        sw.height = qBound(12, int(qRound(sw.height * 1.20)), 34);
     if (sw.shape == int(EFX::Line) || sw.shape == int(EFX::Line2))
         sw.rotation = pick(QList<int>() << 0 << 0 << 90 << 30 << 150 << 60 << 120 << 15 << 165);
     else if (sw.shape == int(EFX::Eight) || sw.shape == int(EFX::Leaf)
@@ -20618,14 +20629,25 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         pace *= r493GenrePace();         // R493_A2_G_PACE: melodic/minimal a little slower (heads only)
         // TRACK_APP_HEADS80_R572: from 80 % the figure grows and quickens with the slider (not a break's)
         const qreal hot = (sw.tier >= 1 && sw.drawnF >= 0.0) ? std::sqrt(qBound(0.0, (sw.drawnF - 0.50) / 0.50, 1.0)) : 0.0;   // TRACK_APP_EVEN_R572: most of it by 80 % (was TRACK_APP_HEADS85_R572)
-        const int hotTilt = 28 + int(qRound(16.0 * hot));   // TRACK_APP_HEADS80B_R572: 44 at 100 %, pan/tilt +50 %
-        width = qBound(6, int(qRound(sw.width * grow * (1.0 + 0.50 * hot))), 127);
-        height = qBound(4, int(qRound(sw.height * grow * (1.0 + 0.50 * hot))), hotTilt);
+        // TRACK_APP_HEADSLIFT_R613 (Tobias 11-15: the heads' moves "for smaa/kedelige"): a fifth bigger in every
+        // section but a break (the break keeps its own big, slow figure), and the tilt's ceiling 34 -> 52 at 100 %
+        const qreal r613Big = sw.tier >= 1 ? 1.20 : 1.0;
+        const int hotTilt = (sw.tier >= 1 ? 34 : 28) + int(qRound(18.0 * hot));   // TRACK_APP_HEADS80B_R572 (was 28 + 16)
+        width = qBound(6, int(qRound(sw.width * grow * (r613Big + 0.50 * hot))), 127);
+        height = qBound(4, int(qRound(sw.height * grow * (r613Big + 0.50 * hot))), hotTilt);
         // R497_A4_HOOK_SHAPE (runde 497, A4): in a kickless break the wash figure's size and centre
         // follow the melody (r497_melodyheads.inc.cpp); the lift counts in the reach below and can
         // never loosen it. Nothing of it outside such a break: the values pass through as they are
         const qreal mhOff = r497MelodyHeadsShape(group, efx, sw, width, height);
-        dy = sw.dy + int(qRound(mhOff));
+        // TRACK_APP_HEADSLIFT_R613: over 80 % the figure's centre rides higher (r613LiftFor)
+        // the way up is read once a figure: the heads' aims sit round straight down, and read every beat it
+        // flipped with each new aim under a running figure (the lift walked to and fro)
+        const bool r613Run = m_active.value(slot, Function::invalidId()) == fid && efx->isRunning()
+                          && efx->stopped() == false && m_sweepShown.value(group) == sw;
+        if (r613Run == false || m_r613Sign.contains(group) == false)
+            m_r613Sign.insert(group, r497MelodyHeadsSign(group));
+        const qreal r613Want = r613LiftFor(group, sw);
+        dy = sw.dy + int(qRound(mhOff)) + int(qRound(r613Want));
         const qreal mhReach = qMax(0.0, qAbs(qreal(sw.dy) + mhOff) - qAbs(qreal(sw.dy)));
         // Over the horizon by ENERGY (runde 211, Tobias: "Heads maa gerne gaa
         // over vandret, jo mere energi, jo oftere maa de gaa over vandret").
@@ -20639,7 +20661,8 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // gulvet"). 60 %: 37 steps, 70 %: 55, 80 %: 84, 90 %: 127.
         const qreal rad = qreal(sw.rotation) * 3.14159265358979 / 180.0;
         const qreal reach = qAbs(width * std::sin(rad)) + qAbs(height * std::cos(rad)) + qAbs(sw.dy)
-                            + mhReach;   // R497_A4_HOOK_REACH: the melody's lift counts too (A4)
+                            + mhReach    // R497_A4_HOOK_REACH: the melody's lift counts too (A4)
+                            + qAbs(r613Want);   // TRACK_APP_HEADSLIFT_R613: and the lift
         // On the SLIDER (runde 271): "30 %" and "free at 95 %" are the
         // number on the screen, like the other hard lines (tick, m_faderNow).
         // `e` is the section-scaled energy: slider 95 in a quiet groove read
@@ -20812,7 +20835,11 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         // R497_A4_HOOK_Y (runde 497, A4): the running wash figure's centre follows the melody's
         // lift, a fraction of a unit a beat (only once the layer has moved it)
         if (laser == false)
+        {
+            // TRACK_APP_HEADSLIFT_R613: the running figure's lift follows the slider, a unit a beat
+            r613LiftStep(group, efx, sw, r613LiftFor(group, sw));
             r497MelodyHeadsY(group, efx, sw);
+        }
         // R493_A3_EASE_SIZE: the wash heads' figure resizes softly (soft movement)
         if (sw.shape >= 0 && r493EaseEfxSize(group, efx, width, height))
             return false;
@@ -20869,6 +20896,12 @@ bool TrackEngine::applySweep(const QString &group, const TrackSweep &sw, qreal b
         r503SafeAim(group, Function::invalidId());   // R503_SAFE_AIM_RECONF: the dark beat - the new figure moves the mirror
     efx->setAlgorithm(sw.shape < 0 ? EFX::Circle : EFX::Algorithm(sw.shape));
     efx->setYOffset(qBound(0, 127 + dy, 255));     // the centre before the size
+    if (laser == false)                            // TRACK_APP_HEADSLIFT_R613: a new figure starts lifted
+    {
+        m_r613Lift.insert(group, sw.shape >= 0 ? qreal(qRound(r613LiftFor(group, sw))) : 0.0);
+        if (qAbs(m_r613Lift.value(group)) >= 1.0)
+            crumb(QStringLiteral("r613 lift %1: %2 (new figure, y %3)").arg(group).arg(m_r613Lift.value(group)).arg(efx->yOffset()));
+    }
     efx->setWidth(sw.shape < 0 ? 0 : width);
     efx->setHeight(sw.shape < 0 ? 0 : height);
     efx->setRotation(sw.rotation);
@@ -40767,6 +40800,9 @@ void TrackEngine::r497TapChop(qint64 now, bool &inStab, qint64 &next) const
  * are the engine's own again. The trail (crumbs) has its value per beat while it is away.
  * ------------------------------------------------------------------------------------------ */
 
+#define R613_LIFT_FROM   0.80    // TRACK_APP_HEADSLIFT_R613: the slider the heads start to lift at
+#define R613_LIFT_MAX    16.0    // ... and the lift at 100 % (EFX tilt units)
+#define R613_LIFT_STEP   1.0     // ... a beat, at most, while a figure runs
 #define R497_MH_SIZE     0.25    // the figure's size, +- at the top of the slider
 #define R497_MH_TILT     6.0     // the centre's lift, +- tilt units (EFX y offset) at the top
 #define R497_MH_STEP_K   0.04    // a beat, at most: the size factor
@@ -40943,6 +40979,39 @@ qreal TrackEngine::r497MelodyHeadsShape(const QString &group, Function *func, co
     return off;
 }
 
+qreal TrackEngine::r613LiftFor(const QString &group, const TrackSweep &sw) const
+{
+    // TRACK_APP_HEADSLIFT_R613 (Tobias 11-15: "80 energi skal loefte sig hoejere" - "sigt hoejere op"): from 80 % on
+    // the slider the heads' figure rides higher, up to 16 tilt units at 100 % - away from straight down, the way the
+    // group's aim leans (as the melody's lift, R497 A4). Never on the lasers, a still group, his held aim or the ball
+    const TrackGroup &g = m_groups.value(group);
+    if (g.heads == false || g.lasers || g.patternDevice || sw.shape < 0 || positionHeld(group))
+        return 0.0;
+    const qreal up = qBound(0.0, (m_faderNow - R613_LIFT_FROM) / (1.0 - R613_LIFT_FROM), 1.0);
+    if (up <= 0.0)
+        return 0.0;
+    return R613_LIFT_MAX * up * qreal(m_r613Sign.value(group, 1));
+}
+
+void TrackEngine::r613LiftStep(const QString &group, Function *func, const TrackSweep &sw, qreal want)
+{
+    EFX *efx = qobject_cast<EFX *>(func);
+    if (efx == nullptr || sw.shape < 0)
+        return;
+    const qreal was = m_r613Lift.value(group, 0.0);
+    if (qAbs(want) < 1e-6 && qAbs(was) < 1e-6)
+        return;                          // never lifted: the engine's own centre, untouched
+    const qreal now = qBound(was - R613_LIFT_STEP, want, was + R613_LIFT_STEP);
+    m_r613Lift.insert(group, now);
+    if (int(qRound(now)) != int(qRound(was)) && (int(qRound(now)) % 4 == 0 || qAbs(now - want) < 1e-6))
+        crumb(QStringLiteral("r613 lift %1: %2").arg(group).arg(qRound(now)));
+    const auto mh = m_r497Mh.constFind(group);
+    const qreal mhOff = mh != m_r497Mh.constEnd() ? mh->appliedOff : 0.0;
+    const qreal y = qBound(0.0, 127.0 + qreal(sw.dy) + mhOff + now, 255.0);
+    if (qAbs(efx->getAttributeValue(EFX::YOffset) - y) > 1e-4)
+        efx->adjustAttribute(y, EFX::YOffset);
+}
+
 void TrackEngine::r497MelodyHeadsY(const QString &group, Function *func, const TrackSweep &sw)
 {
     // R497_A4_MH_Y: the running wash figure's centre, a fraction of a unit at a time (the EFX
@@ -40953,7 +41022,7 @@ void TrackEngine::r497MelodyHeadsY(const QString &group, Function *func, const T
         return;
     if (qAbs(it->appliedOff) < 1e-6 && qAbs(it->writtenOff) < 1e-6)
         return;                             // never ours: the engine's own centre, untouched
-    const qreal y = qBound(0.0, 127.0 + qreal(sw.dy) + it->appliedOff, 255.0);
+    const qreal y = qBound(0.0, 127.0 + qreal(sw.dy) + it->appliedOff + m_r613Lift.value(group, 0.0), 255.0);   // R613
     if (qAbs(efx->getAttributeValue(EFX::YOffset) - y) > 1e-4)
         efx->adjustAttribute(y, EFX::YOffset);
     it->writtenOff = it->appliedOff;
