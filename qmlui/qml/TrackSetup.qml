@@ -2522,7 +2522,16 @@ Rectangle
             property bool armUpdate: false
             property bool armBack: false
             Timer { id: readerArm; interval: 4000; onTriggered: { readerRow.armUpdate = false; readerRow.armBack = false } }
-            Text { text: qsTr("CDJ READER"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4 }
+            Text { text: qsTr("CDJ READER"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.4
+                // TRACK_APP_GLITCH_R614: his hidden joke mode - a long-press on this label (only he knows) toggles it.
+                // Nothing on screen; while on, the SETUP button shows a small amber dot
+                MouseArea
+                {
+                    anchors.fill: parent
+                    pressAndHoldInterval: 1600
+                    onPressAndHold: if (trackEngine && typeof trackEngine.setGlitch === "function") trackEngine.setGlitch(!trackEngine.glitch)
+                }
+            }
             Text
             {
                 objectName: "readerText"

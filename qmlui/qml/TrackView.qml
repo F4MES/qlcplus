@@ -1598,6 +1598,15 @@ Rectangle
                     icon: "setupSwitch"
                     text: trackViewRoot.setupOpen ? qsTr("CLOSE") : qsTr("SETUP")
                     onTapped: { trackViewRoot.setupOpen = !trackViewRoot.setupOpen; trackViewRoot.helpOpen = false }
+                    // TRACK_APP_GLITCH_R614: armed mark - a small amber dot on SETUP, enough for him, nothing a guest sees
+                    Rectangle
+                    {
+                        visible: !!trackEngine && trackEngine.glitch === true
+                        width: Math.round(8 * trackViewRoot.ks); height: width; radius: width / 2
+                        color: "#E0A43B"
+                        anchors.top: parent.top; anchors.right: parent.right
+                        anchors.topMargin: Math.round(6 * trackViewRoot.ks); anchors.rightMargin: Math.round(6 * trackViewRoot.ks)
+                    }
                 }
             }
         }

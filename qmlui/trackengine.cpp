@@ -130,7 +130,8 @@ static quint32 nameScatter(const QString &name)
 #define ENGINE_STROBE_LAND_ON 0.45    // R480_STROBE_BAR: no landing flash on the strobe lamps under this (the bar time)
 // runde 344, Tobias 10-03: "animationslaseren skal foerst komme i spil ved 70%"
 #define ENGINE_ANI_ON         0.70
-#define R613_DROPCAP_OFF      0.80      // TRACK_APP_HEADSLIFT_R613: no drop cap (R532) from here on the slider
+#define R613_DROPCAP_OFF      0.80
+#define R614_RAMP_MS          qint64(6) * 3600 * 1000   // TRACK_APP_GLITCH_R614: subtle -> fully broken over ~6 h (a night)      // TRACK_APP_HEADSLIFT_R613: no drop cap (R532) from here on the slider
 #define ENGINE_DARK_BARS      4
 #define ENGINE_COLOUR_PREFIX  QStringLiteral("TRACK Colour: ")
 #define ENGINE_POS_PREFIX     QStringLiteral("TRACK Pos: ")
@@ -11697,6 +11698,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         return;
     }
     crumb(QStringLiteral("beat ") + QString::number(beat) + QLatin1Char(' ') + state);   // R435_CRUMBS
+    if (r614GlitchHold(beat))            // TRACK_APP_GLITCH_R614: a freeze/blackout window holds this frame
+        return;
+    r614GlitchRestore();                 // put back last beat's wrong colour/aim before the engine redraws
     m_hazeBeatMs = m_clock.elapsed();                // R467_HAZE_NAG: music is playing
     micBeat(state, sectionChanged, bpm);             // R467_MIC_CHECK
     // R470_COLOUR_MEMORY (R472_COLMEM_FROM: by the section's start - R475_MEMBY_REALSTART: its
@@ -18808,6 +18812,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         .arg(QString(m_hold ? tr("  HOLD") : QString()) + (still ? tr("  STILL") : QString())
              + (m_blackout ? tr("  BLACKOUT") : QString()) + (m_mixing ? tr("  MIX") : QString())
              + (m_fullAuto ? tr("  FULL AUTO") : QString()));
+    r614GlitchMess(beat);                // TRACK_APP_GLITCH_R614: wrong colours / wrong head aims, flickered clean
     emit liveChanged();
 }
 
@@ -41010,6 +41015,188 @@ void TrackEngine::r613LiftStep(const QString &group, Function *func, const Track
     const qreal y = qBound(0.0, 127.0 + qreal(sw.dy) + mhOff + now, 255.0);
     if (qAbs(efx->getAttributeValue(EFX::YOffset) - y) > 1e-4)
         efx->adjustAttribute(y, EFX::YOffset);
+}
+
+void TrackEngine::r614Load()
+{
+    if (m_glitchLoaded)
+        return;
+    m_glitchLoaded = true;
+    QSettings s;
+    m_glitch = s.value(QStringLiteral("trackengine/glitchOn"), false).toBool();
+    m_glitchSince = s.value(QStringLiteral("trackengine/glitchSince"), 0).toLongLong();
+    if (m_glitch && m_glitchSince <= 0)
+        m_glitchSince = QDateTime::currentMSecsSinceEpoch();
+}
+
+qreal TrackEngine::r614Severity() const
+{
+    // TRACK_APP_GLITCH_R614: 0 when just armed, 1 after ~a night - persisted epoch, so a restart keeps climbing
+    if (m_glitch == false || m_glitchSince <= 0)
+        return 0.0;
+    const qint64 el = QDateTime::currentMSecsSinceEpoch() - m_glitchSince;
+    if (el <= 0)
+        return 0.0;
+    // QLC_TRACK_GLITCH_RAMP_MS: compress the night for tests
+    const qint64 ramp = qEnvironmentVariableIntValue("QLC_TRACK_GLITCH_RAMP_MS") > 0
+                        ? qint64(qEnvironmentVariableIntValue("QLC_TRACK_GLITCH_RAMP_MS")) : R614_RAMP_MS;
+    return qBound(0.0, qreal(el) / qreal(ramp), 1.0);
+}
+
+void TrackEngine::setGlitch(bool on)
+{
+    // TRACK_APP_GLITCH_R614: his hidden gesture. On: stamp the night's start. Off: put everything back clean - his
+    // wish is that nothing else (SHOW OFF, a restart) ever clears it
+    r614Load();
+    if (on == m_glitch)
+        return;
+    m_glitch = on;
+    QSettings s;
+    if (on)
+    {
+        m_glitchSince = QDateTime::currentMSecsSinceEpoch();
+        s.setValue(QStringLiteral("trackengine/glitchSince"), m_glitchSince);
+        logSignal(QStringLiteral("sig:glitch:on"));
+    }
+    else
+    {
+        r614GlitchRestore();             // the last beat's wrong colour/aim
+        if (m_glitchHoldBlack)
+            m_glitchHoldBlack = false;
+        m_glitchHoldMs = -1;
+        reapplyLevels();                 // a blackout flicker's zeroed dimmers back to the real room
+        logSignal(QStringLiteral("sig:glitch:off"));
+    }
+    s.setValue(QStringLiteral("trackengine/glitchOn"), on);
+    emit liveChanged();
+}
+
+void TrackEngine::r614GlitchRestore()
+{
+    // TRACK_APP_GLITCH_R614: re-run the colour / aim the engine had before last beat's mess, so a group flickers
+    // wrong-right-wrong rather than drifting - and the room is clean the moment he turns it off
+    if (m_glitchColOld.isEmpty() == false)
+    {
+        for (auto it = m_glitchColOld.constBegin(); it != m_glitchColOld.constEnd(); ++it)
+            if (it.value() != Function::invalidId() && m_funcs.contains(it.value()))
+                run(QStringLiteral("col:") + it.key(), it.value(), 1.0, 0, true);
+        m_glitchColOld.clear();
+    }
+    if (m_glitchPosOld.isEmpty() == false)
+    {
+        for (auto it = m_glitchPosOld.constBegin(); it != m_glitchPosOld.constEnd(); ++it)
+        {
+            const quint32 fid = it.value() != Function::invalidId() ? it.value() : homePosition(it.key());
+            if (fid != Function::invalidId() && m_funcs.contains(fid))
+                run(QStringLiteral("pos:") + it.key(), fid, 1.0, 0, true);
+        }
+        m_glitchPosOld.clear();
+    }
+}
+
+bool TrackEngine::r614GlitchHold(int beat)
+{
+    // TRACK_APP_GLITCH_R614: a freeze (hold the frame) or a blackout flicker (dimmers to 0). Never under his FLASH or
+    // a real BLACKOUT - his hand always punches through. Returns true while the window holds this frame
+    r614Load();
+    const qint64 now = m_clock.elapsed();
+    if (m_glitchHoldMs >= 0)
+    {
+        if (now < m_glitchHoldMs && m_glitch)
+            return true;
+        m_glitchHoldMs = -1;
+        if (m_glitchHoldBlack)
+        {
+            m_glitchHoldBlack = false;
+            reapplyLevels();             // the room's real levels back
+        }
+        return false;
+    }
+    if (m_glitch == false || m_testTrack || m_beatMs <= 0.0 || m_flash || m_blackout)
+        return false;
+    if (beat == m_glitchBeat)
+        return false;
+    m_glitchBeat = beat;
+    const qreal sev = r614Severity();
+    QRandomGenerator *rng = QRandomGenerator::global();
+    auto chance = [&](qreal pr) { return rng->bounded(1000) < int(qBound(0.0, pr, 1.0) * 1000.0); };
+    if (chance(0.07 * sev))              // blackout flicker: rarer, short (dimmers only, so reapplyLevels restores)
+    {
+        foreach (const QString &key, m_cast)
+        {
+            const TrackGroup &g = m_groups.value(key);
+            if (g.hasDimmer == false || g.patternDevice)
+                continue;
+            setDimmer(key, 0.0);
+        }
+        m_glitchHoldBlack = true;
+        m_glitchHoldMs = now + qint64(m_beatMs * (0.35 + 0.55 * rng->generateDouble()));
+        crumb(QStringLiteral("r614 blackout"));
+        return true;
+    }
+    if (chance(0.01 + 0.11 * sev))       // freeze: hold the last frame 1-3 beats
+    {
+        m_glitchHoldBlack = false;
+        const int b = 1 + int(rng->bounded(1 + int(2.0 * sev + 0.5)));
+        m_glitchHoldMs = now + qint64(m_beatMs * b);
+        crumb(QStringLiteral("r614 freeze %1").arg(b));
+        return true;
+    }
+    return false;
+}
+
+void TrackEngine::r614GlitchMess(int beat)
+{
+    // TRACK_APP_GLITCH_R614: wrong, clashing colours and movingheads driving to the wrong aim. Both put back next beat
+    // (r614GlitchRestore) so they flicker and so OFF is clean. Heads only - the lasers keep their safety lines
+    Q_UNUSED(beat);
+    if (m_glitch == false || m_testTrack || m_glitchHoldMs >= 0 || m_flash || m_blackout)
+        return;
+    const qreal sev = r614Severity();
+    QRandomGenerator *rng = QRandomGenerator::global();
+    auto chance = [&](qreal pr) { return rng->bounded(1000) < int(qBound(0.0, pr, 1.0) * 1000.0); };
+    if (m_palette.isEmpty() == false && chance(0.03 + 0.55 * sev))
+    {
+        foreach (const QString &key, m_cast)
+        {
+            const TrackGroup &g = m_groups.value(key);
+            if (g.generatable() == false || g.rgb == false)
+                continue;
+            if (chance(0.25 + 0.60 * sev) == false)
+                continue;
+            const QString hue = m_palette.at(int(rng->bounded(m_palette.count())));
+            const quint32 fid = colourFunction(key, hue);
+            if (fid == Function::invalidId())
+                continue;
+            const quint32 old = m_active.value(QStringLiteral("col:") + key, Function::invalidId());
+            if (old == fid)
+                continue;
+            if (m_glitchColOld.contains(key) == false)
+                m_glitchColOld.insert(key, old);
+            run(QStringLiteral("col:") + key, fid, 1.0, 0, true);
+        }
+    }
+    if (chance(0.02 + 0.45 * sev))
+    {
+        foreach (const QString &key, m_cast)
+        {
+            const TrackGroup &g = m_groups.value(key);
+            if (g.heads == false || g.lasers || g.patternDevice)
+                continue;
+            if (chance(0.30 + 0.50 * sev) == false)
+                continue;
+            const QList<TrackFuncInfo *> pool = candidates(ENGINE_ROLE_POSITION, key);
+            if (pool.isEmpty())
+                continue;
+            const quint32 fid = pool.at(int(rng->bounded(pool.count())))->id;
+            const quint32 old = m_active.value(QStringLiteral("pos:") + key, Function::invalidId());
+            if (fid == Function::invalidId() || fid == old)
+                continue;
+            if (m_glitchPosOld.contains(key) == false)
+                m_glitchPosOld.insert(key, old);
+            run(QStringLiteral("pos:") + key, fid, 1.0, 0, true);
+        }
+    }
 }
 
 void TrackEngine::r497MelodyHeadsY(const QString &group, Function *func, const TrackSweep &sw)

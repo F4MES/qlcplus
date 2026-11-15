@@ -510,6 +510,7 @@ class TrackEngine : public QObject
     Q_PROPERTY(bool flashing READ flashing NOTIFY liveChanged)
     /** TRACK_APP_FLASHCOLOUR_R610: FLASH COLOUR - held, and the colour it flashes (the look's partner, else the room's) */
     Q_PROPERTY(bool flashingColour READ flashingColour NOTIFY liveChanged)
+    Q_PROPERTY(bool glitch READ glitch NOTIFY liveChanged)   // TRACK_APP_GLITCH_R614
     Q_PROPERTY(QString flashHue READ flashHue NOTIFY liveChanged)
     /** Everything the engine drives at zero - colours, chases, parts - while
      *  the engine keeps following the track underneath, so releasing it
@@ -3225,8 +3226,28 @@ public:
     // TRACK_APP_HEADSLIFT_R613: over 80 % on the slider the heads' figure rides higher - the lift it wants now
     // (EFX y units, signed the way that lifts) and the lift on the EFX (walks a unit a beat)
     qreal r613LiftFor(const QString &group, const TrackSweep &sw) const;
+    // TRACK_APP_GLITCH_R614 (Tobias 11-15, mockup approved): a hidden joke mode - the show "breaks" on purpose,
+    // worse the longer it runs (across the whole night). Armed only by a long-press hidden in SETTINGS, toggled by
+    // him alone, survives SHOW OFF and a restart, cleared only by his gesture. A pure output layer: freeze/blackout
+    // flicker (held frames / zeroed dimmers), wrong colours and wrong head aims - all put back clean when it is off.
+    bool glitch() const { return m_glitch; }
+    Q_INVOKABLE void setGlitch(bool on);
+    void r614Load();
+    qreal r614Severity() const;
+    bool r614GlitchHold(int beat);
+    void r614GlitchMess(int beat);
+    void r614GlitchRestore();
     void r613LiftStep(const QString &group, Function *func, const TrackSweep &sw, qreal want);
     QHash<QString, qreal> m_r613Lift;
+    // TRACK_APP_GLITCH_R614
+    bool m_glitch = false;
+    bool m_glitchLoaded = false;
+    int m_glitchBeat = -1;
+    qint64 m_glitchSince = 0;             // epoch ms when armed (persisted) - the night-long ramp
+    qint64 m_glitchHoldMs = -1;           // m_clock.elapsed() a freeze/blackout window runs to
+    bool m_glitchHoldBlack = false;       // the window is a blackout (restore levels on end)
+    QHash<QString, quint32> m_glitchColOld;   // group -> colour fid to put back next beat / on off
+    QHash<QString, quint32> m_glitchPosOld;   // group -> head aim fid to put back next beat / on off
     QHash<QString, int> m_r613Sign;      // the way that lifts, fixed per figure (the aims sit round straight down)
     // R488_DX_DECL: the drop forms (track_runtime/dropforms.inc.cpp, runde 488)
     int m_formPlan = 0;                  // the form decided for the coming drop flag
