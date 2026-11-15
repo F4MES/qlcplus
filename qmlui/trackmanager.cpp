@@ -3004,6 +3004,18 @@ void TrackManager::midiAutoPatch()
         }, Qt::QueuedConnection);
     }
     const QStringList ins = midi->inputs();
+    // TRACK_APP_MIDIFIX_R615 (Tobias 11-15: MIDI virker fortsat ikke - the night's log showed only "LoopBe Internal
+    // MIDI", never the MIDimix): log the whole list QLC+ sees each time it changes, so what Windows actually offers is
+    // known from the zip
+    if (m_engine != nullptr)
+    {
+        const QString seen = ins.join(QStringLiteral(" | "));
+        if (seen != m_midiListSeen)
+        {
+            m_midiListSeen = seen;
+            m_engine->noteMidi(QStringLiteral("list:") + (ins.isEmpty() ? QStringLiteral("(none)") : seen));
+        }
+    }
     // TRACK_APP_MIDIFIX_R575 (review): the plugin lists the devices it found at the start - a MIDImix that was not
     // there yet (cold boot, a hub waking, a cable in later) was never seen. With no controller listed (nothing but
     // virtual ports), the plugin looks again: every 30 s ten times, then every 5 min. Never while a controller is
@@ -3077,8 +3089,19 @@ void TrackManager::midiAutoPatch()
             pick = i;
     if (pick < 0 && midiU >= 0 && io->inputPatch(quint32(midiU))->input() < quint32(ins.count()))
         pick = int(io->inputPatch(quint32(midiU))->input());
+    // TRACK_APP_MIDIFIX_R615: only virtual ports (LoopBe, loopMIDI, rtpMIDI ...) and no real controller - do not bind
+    // one as the controller (R571C's intent; the old pick = 0 opened LoopBe all night). Leave MIDI unpatched and keep
+    // looking - his MIDimix is picked the moment Windows lists it
     if (pick < 0)
-        pick = 0;
+    {
+        if (m_midiOwnU >= 0)
+            midiOwnReset();
+        m_midiOwnU = -1;
+        m_midiOwnName.clear();
+        if (m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("virtual-only:%1").arg(ins.count()));
+        return;
+    }
     // ours already, and still that device on that number: nothing to do
     if (m_midiOwnU >= 0)
     {
@@ -3800,6 +3823,7 @@ QString TrackManager::remoteState()
         last.insert(QStringLiteral("closeMin"), e->lastTrackCloseMin());
         last.insert(QStringLiteral("closeAt"), e->lastTrackCloseAt());
         o.insert(QStringLiteral("last"), last);
+        o.insert(QStringLiteral("glitch"), e->glitch());   // TRACK_APP_GLITCHMOB_R615: the phone's hidden toggle state
     }
     return QStringLiteral("TRACKSTATE|") + QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
@@ -3937,6 +3961,8 @@ QString TrackManager::remoteCommand(const QString &line)
         e->setFlashColour(on);
         remoteHeld(QStringLiteral("flashc"), on, a);
     }
+    else if (cmd == QStringLiteral("glitch"))   // TRACK_APP_GLITCHMOB_R615: his hidden joke mode, from the phone too
+        e->setGlitch(a.value(1) == QStringLiteral("1"));
     // ---- LOOK
     else if (cmd == QStringLiteral("section"))
         setOverrideState(a.value(1) == overrideState() ? QString() : a.value(1));

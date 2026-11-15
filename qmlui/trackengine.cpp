@@ -31662,11 +31662,12 @@ void TrackEngine::toggleLastTrack()
         }
         return;
     }
-    if (m_lastShown == false || m_showOnNow == false || m_testTrack || m_trackTitle.isEmpty())
-        return;                          // TRACK_APP_FIX_R574: no curve is no reason - the fader / the stop ends it
-    // R464_NO_START: not over the start scene - tick() draws nothing under it, so no
-    // outro, and the start look came back over the house light
-    if (m_startScene)
+    if (m_lastShown == false || m_showOnNow == false || m_testTrack)
+        return;                          // TRACK_APP_LASTFIX_R615: no track is no reason - a stopped deck ends the night too
+    // R464_NO_START: not over the start scene - tick() draws nothing under it, so no outro, and the start look came
+    // back over the house light. TRACK_APP_LASTFIX_R615: with no track (end of night) the start scene IS what he is
+    // ending from, so the house light wins over it
+    if (m_startScene && m_trackTitle.isEmpty() == false)
     {
         logSignal(QStringLiteral("sig:last-track-refused-start-scene"));
         return;
@@ -31680,6 +31681,13 @@ void TrackEngine::toggleLastTrack()
     m_lastWhiteP = -1.0;
     m_airOffMs = -1;
     setLastStage(1);
+    // TRACK_APP_LASTFIX_R615: no track playing (the deck is stopped at the end of the night) - there is no outro to
+    // fade the white over, so go straight to the house light now: white up, haze and fan to 0, the show's lamps dark
+    if (m_trackTitle.isEmpty())
+    {
+        logSignal(QStringLiteral("sig:last-track-no-deck-house"));
+        enterHouse();
+    }
 }
 
 void TrackEngine::lastTrackBeat(const QString &state, int beat, int secStart, qreal bpm)
@@ -32187,8 +32195,13 @@ void TrackEngine::lastTrackTick(bool showOn)
     else if (QDateTime(QDate::currentDate().addDays(QTime::currentTime().hour() < 20 ? -1 : 0), QTime(20, 0))
                  .secsTo(QDateTime::currentDateTime()) >= qint64(closingMinutes() - ENGINE_LAST_SHOW_MIN) * 60)
         m_lastWindowLatched = true;
+    // TRACK_APP_LASTFIX_R615 (Tobias 11-15: LAST TRACK fra telefonen virkede ikke ved nattens slut): the deck had
+    // stopped and no track was loaded, so the button was hidden and could not be armed - and the haze never went off
+    // with the closing. The closing window (or its latch) is end-of-night on its own; it no longer needs a track.
+    // QLC_TRACK_LAST_FORCE forces the window open for tests.
+    const bool lastForce = qEnvironmentVariableIsSet("QLC_TRACK_LAST_FORCE");
     const bool shown = m_lastStage > 0
-                    || (showOn && (window || m_lastWindowLatched) && m_testTrack == false && m_trackTitle.isEmpty() == false);
+                    || (showOn && (window || m_lastWindowLatched || lastForce) && m_testTrack == false);
     if (shown != m_lastShown)
     {
         m_lastShown = shown;

@@ -281,7 +281,7 @@ html.standalone #app{padding-top:calc(env(safe-area-inset-top) + 16px)}
       <div class="fader" data-f="fan"><div class="fill" style="background:#6A8496"></div><div class="grip"></div><div class="name" style="color:#141418">FAN SPEED</div><div class="val"></div></div>
       <div class="lbl" id="updL">QLC+</div><!-- TRACK_APP_PHONE_R549 -->
       <div class="upd" id="upd"><div><b id="updT">QLC+</b><small id="updS"></small></div><button id="updB">UPDATE</button></div>
-      <div class="note">The same controls as the desk - the last touch wins. A held button lets go by itself if the phone loses the Wi-Fi.</div>
+      <div class="note" id="deskNote">The same controls as the desk - the last touch wins. A held button lets go by itself if the phone loses the Wi-Fi.<span id="glDot" style="display:none;margin-left:6px;width:7px;height:7px;border-radius:50%;background:#e0a43b;vertical-align:middle"></span></div>
     </div>
   </div>
 
@@ -457,6 +457,17 @@ function aimOpen(v) {
   });
 });
 $('last').onclick = () => sureTap('last', $('last'), ((S && S.last && S.last.stage) > 0) ? 'last|0' : 'last|1');
+// TRACK_APP_GLITCHMOB_R615: his hidden joke mode on the phone too - a long-press (1.6 s) on the desk note toggles it,
+// nothing else visible; while on, a small amber dot sits in that note. Only he knows where it is.
+(function () {
+  const el = $('deskNote'); if (!el) return;
+  let t = null;
+  const clear = () => { if (t) { clearTimeout(t); t = null; } };
+  el.addEventListener('pointerdown', () => { clear(); t = setTimeout(() => { t = null; if (S) send('glitch|' + (S.glitch ? 0 : 1)); }, 1600); });
+  el.addEventListener('pointerup', clear);
+  el.addEventListener('pointercancel', clear);
+  el.addEventListener('pointerleave', clear);
+})();
 
 /* ---------------- held buttons: BLACKOUT, STUTTER, FLASH WHITE ---------------- */
 // as the desk: down = on (or, when it is on, off); up ON the button = let go;
@@ -834,6 +845,7 @@ function render() {
   const lastShown = !!L.shown && !S.test;
   last.style.display = lastShown ? 'flex' : 'none';
   $('link').style.display = lastShown ? 'none' : 'flex';
+  { const gd = $('glDot'); if (gd) gd.style.display = (S && S.glitch) ? 'inline-block' : 'none'; }   // TRACK_APP_GLITCHMOB_R615
   last.className = 'chip last' + (L.stage > 0 ? ' on' : '') + (sure.last ? ' sure' : '');
   $('lasttitle').textContent = sure.last ? 'SURE?' : 'LAST TRACK';
   let sub;
@@ -1203,6 +1215,7 @@ function mockApply(cmd) {
     hazeAuto: () => S.hazeAuto = true,   // R484_HZ_PHONE_MOCK
     trim: () => S.trims[a[1]] = a[2] / 100, group: () => S.groups.find(g => g.key === a[1]).enabled = a[2] === '1',
     gflash: () => { const i = S.gflash.indexOf(a[1]); if (a[2] === '1' && i < 0) S.gflash.push(a[1]); if (a[2] !== '1' && i >= 0) S.gflash.splice(i, 1); },
+    glitch: () => S.glitch = S.glitch ? 0 : 1,
     last: () => S.last.stage = S.last.stage > 0 ? 0 : 1, hazelater: () => S.hazeNag = 0, ratemark: () => {}, rate: () => {}};
   if (m[c]) { m[c](); render(); }
 }
@@ -1213,7 +1226,7 @@ if (q.get('mock')) {
   S = {upd: {latest: '473', installed: '472', avail: true, found: true, st: 0}, show: true, title: 'Calvin Who - Midnight Session (Extended)', state: 'build', override: '', beat: 129, beats: 392, playing: true,
     bpm: 126, tempo: 'LINK', connected: true, test: false, energy: 72,
     markers: [{b: 1, t: 'intro'}, {b: 33, t: 'normal'}, {b: 81, t: 'break'}, {b: 97, t: 'build'}, {b: 165, t: 'drop'}, {b: 229, t: 'break'}, {b: 261, t: 'build'}, {b: 293, t: 'drop'}, {b: 357, t: 'outro'}],
-    roomAuto: false, calm: 0, hold: false, blackout: false, stutter: false, stutterRate: 2, hitKind: 3, hitLast: 3, flash: false,
+    roomAuto: false, calm: 0, hold: false, blackout: false, stutter: false, stutterRate: 2, hitKind: 3, hitLast: 3, flash: false, glitch: +(q.get('glitch') || 0),
     colour: q.get('colour') || 'blue', overrides: [], colourMode: 1, palette: ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white'], position: '', speed: 0,
     master: 0.8, haze: q.get('nag') ? 0 : 0.4, hazeLimit: 70, hazeAuto: q.get('hazeauto') === '1' /* R484_HZ_PHONE_MOCK_S */, fan: 0.6, hazeNag: +(q.get('nag') || 0),
     groups: [{key: 'Laserbars', enabled: true}, {key: 'Strobes All', enabled: true}, {key: 'Shark Zoom Wash', enabled: true, base: true},

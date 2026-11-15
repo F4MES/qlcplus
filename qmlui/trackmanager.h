@@ -631,6 +631,7 @@ private:
     QSet<quint32> m_midiDeadSeen;        // TRACK_APP_MIDI_R571: universes whose MIDI patch pointed at nothing
     int m_midiOwnU = -1;                 // TRACK_APP_MIDI_R571B: the universe TRACK patched the controller on
     QString m_midiOwnName;               // ... and the device
+    QString m_midiListSeen;              // TRACK_APP_MIDIFIX_R615: the last MIDI input list logged
     QString m_midiFailName;              // the device that would not open (logged once)
     QString m_midiSeenList;              // TRACK_APP_MIDI_R571C: the MIDI inputs last logged
     bool m_midiRawHooked = false;        // TRACK_APP_MIDI_R571D: TRACK hears the MIDI plugin itself
