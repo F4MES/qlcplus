@@ -2425,6 +2425,9 @@ private:
     int m_r536For = -1;
     bool m_r536Active = false;
     bool m_r536Silent = false;           // TRACK_APP_STABSILENT_R616: a DEAD-silent stab break (isolated hits in true silence - Latch x Positive)
+    QHash<int, int> m_r618Kick;          // TRACK_APP_BREAKKICK_R618: a break's lone kicks, beat -> the kick's quarter bit
+    bool m_r618On = false;               // ... the kick hits fire this beat (slider, switch, cast)
+    bool m_r618StabsOk = true;           // ... R536's own stabs fire this beat (the strobes may stand in for the kicks alone)
     bool m_r536Live = false;
     int m_r536Head = -1;
     qint64 m_r536Start = -1;

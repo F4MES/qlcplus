@@ -4413,7 +4413,14 @@ QString TrackEngine::r535DropType(int from, int to) const
                                          // ikke have stabs"): over a quarter of the break's beats a voice (R358's
                                          // test, per beat) - no stabs at any slider. 10 tracks: the dead-silent stab
                                          // breaks 0-17 %, Jamback Positive's sung break 33 %
-#define R536_SILENT_FADER  0.75          // ... Tobias 11-16: a complete-silence stab break stabs from 75 %, not 80 %
+#define R536_SILENT_FADER  0.75
+#define R618_FADER         0.75          // TRACK_APP_BREAKKICK_R618 (Tobias 11-16: "noget der rammer, hvis der er kick i et
+                                         // break"): a lone kick in a break hits every strobe head once, from 75 %
+#define R618_KICK          51            // ... a kick (the raw curve, as the engine's other kick tests)
+#define R618_BEFORE        4             // ... no kick in the 4 beats before it
+#define R618_AFTER         2             // ... nor the 2 after, inside the break: a lone kick, not a groove
+#define R618_SKIP          2             // ... the break's first 2 beats carry the drop's kick out - not his
+#define R618_KICKFRAC      0.25          // ... an otherwise kickless break: a running kick already pulses the break          // ... Tobias 11-16: a complete-silence stab break stabs from 75 %, not 80 %
 
 bool TrackEngine::breakStabs() const
 {
@@ -4459,6 +4466,43 @@ void TrackEngine::r536Section(int secStart, int secEnd)
         return;
     const int a = qBound(1, secStart, n);
     const int e = qBound(a + 1, secEnd > secStart ? secEnd : a + 64, n + 1);
+    // TRACK_APP_BREAKKICK_R618 (Tobias 11-16): the break's lone kicks - mid-break ones (a phrase marked by one kick:
+    // Latch 432/464/480) and the pickup a beat or two before the drop (Latch 80, 688). 10 tracks: 28 in 56 breaks.
+    // The hit lands on the quarter the lows hit (onsetLow), the downbeat without that data
+    m_r618Kick.clear();
+    {
+        int kicks = 0;
+        for (int b = a; b < e; b++)
+            if (m_audKick.at(b - 1) >= R618_KICK)
+                kicks++;
+        if (qreal(kicks) <= R618_KICKFRAC * qreal(e - a))
+        {
+            for (int b = a + R618_SKIP; b < e; b++)
+            {
+                if (m_audKick.at(b - 1) < R618_KICK)
+                    continue;
+                bool lone = true;
+                for (int p = qMax(a, b - R618_BEFORE); p < b && lone; p++)
+                    lone = m_audKick.at(p - 1) < R618_KICK;
+                for (int p = b + 1; p < qMin(e, b + 1 + R618_AFTER) && lone; p++)
+                    lone = m_audKick.at(p - 1) < R618_KICK;
+                if (lone == false)
+                    continue;
+                int q = 0, best = -1;
+                for (int k = 0; k < 4; k++)
+                    if (onsetLow(b, k) > best)
+                    {
+                        best = onsetLow(b, k);
+                        q = k;
+                    }
+                if (best < 8)
+                    q = 0;               // no clear low onset: the downbeat
+                m_r618Kick.insert(b, 1 << q);
+            }
+        }
+        if (m_r618Kick.isEmpty() == false && m_testTrack == false)
+            logSignal(QStringLiteral("sig:break-kicks:%1@%2").arg(m_r618Kick.count()).arg(secStart));
+    }
     QVector<int> lv;
     for (int b = a; b < e; b++)
         lv << m_audLevel.at(b - 1);
@@ -4531,9 +4575,11 @@ void TrackEngine::r536Section(int secStart, int secEnd)
 
 qreal TrackEngine::r536PartOut(const QString &group, int index) const
 {
-    if (lightsOutFor(group) || index != m_r536Head || m_r536Start < 0 || m_beatMs <= 0.0)
+    const bool kickAll = m_r536Head == -2;   // TRACK_APP_BREAKKICK_R618: a lone kick lights every head
+    if (lightsOutFor(group) || (index != m_r536Head && kickAll == false) || m_r536Start < 0 || m_beatMs <= 0.0)
         return 0.0;
-    const qreal dur = qMax(45.0, m_beatMs * 0.25 * 0.60);
+    const qreal dur = kickAll ? qMax(70.0, m_beatMs * 0.25 * 0.90)    // ... a little longer than a stab
+                              : qMax(45.0, m_beatMs * 0.25 * 0.60);
     if (qreal(m_clock.elapsed() - m_r536Start) >= dur)
         return 0.0;
     return qBound(0.0, (0.55 + 0.45 * m_r536Strength) * trimOf(group) * masterOut(), 1.0);
@@ -4553,7 +4599,9 @@ bool TrackEngine::r536StabFrame(qint64 now)
         m_r536FiredBeat = m_lastBeat;
         m_r536Fired = 0;
     }
-    const int mask = m_r536Map.value(m_lastBeat, 0);
+    const int stabMask = m_r618StabsOk ? m_r536Map.value(m_lastBeat, 0) : 0;   // TRACK_APP_BREAKKICK_R618
+    const int kickMask = m_r618On ? m_r618Kick.value(m_lastBeat, 0) : 0;
+    const int mask = stabMask | kickMask;
     const int q = int(qBound(0.0, qreal(now - m_beatStartMs) / m_beatMs, 0.999) * 4.0);
     for (int k = 0; k <= q; k++)
     {
@@ -4562,6 +4610,16 @@ bool TrackEngine::r536StabFrame(qint64 now)
         m_r536Fired |= 1 << k;
         if (k < q)
             continue;                    // a quarter already gone by: no blink late
+        if ((kickMask & (1 << k)) != 0)
+        {
+            // TRACK_APP_BREAKKICK_R618: the kick - every strobe head at once, full (still under trim and MASTER),
+            // in the break's colour
+            m_r536Head = -2;
+            m_r536Start = now;
+            m_r536Strength = 1.0;
+            crumb(QStringLiteral("r618 kick hit %1.%2").arg(m_lastBeat).arg(k));
+            continue;
+        }
         const quint32 h = (qHash(m_trackTitle) ^ (quint32(m_lastBeat * 4 + k) * 2654435761u)) * 2246822519u;
         int head = int((h >> 8) % quint32(n));
         if (head == m_r536Head && n > 1)
@@ -14110,6 +14168,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         {
             m_r536Map.clear();
             m_r536Active = false;
+            m_r618Kick.clear();          // TRACK_APP_BREAKKICK_R618
         }
     }
     m_r536Key = r536StrobeKey();
@@ -14133,6 +14192,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                  && m_groupOff.contains(m_r536Key) == false;
     const bool r536Want = m_r536Active && isBreak && breakStabs()
                        && m_faderReal >= (m_r536Silent ? R536_SILENT_FADER : R536_FADER) - 1e-9   // TRACK_APP_STABSILENT_R616
+                       && m_r536Key.isEmpty() == false && eligible.contains(m_r536Key) && m_groupOff.contains(m_r536Key) == false
+                       && hold == false && isCalm == false && still == false && m_mixing == false && m_blackout == false;
+    // TRACK_APP_BREAKKICK_R618: the lone kicks of a break hit the strobes from 75 % - the same switch, guards and
+    // strobe group as the break stabs; the strobes stand dark between the hits as they do between the stabs
+    const bool r618Want = m_r618Kick.isEmpty() == false && isBreak && breakStabs()
+                       && m_faderReal >= R618_FADER - 1e-9
                        && m_r536Key.isEmpty() == false && eligible.contains(m_r536Key) && m_groupOff.contains(m_r536Key) == false
                        && hold == false && isCalm == false && still == false && m_mixing == false && m_blackout == false;
     QSet<QString> castSet;
@@ -14170,7 +14235,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
-    if (r536Want)
+    if (r536Want || r618Want)            // TRACK_APP_BREAKKICK_R618: or its lone kicks
         castSet.insert(m_r536Key);       // R536_CAST: dark between the stabs (r536PartOut)
     // R533_LIGHT: without the base something else must light the room - the Minis in a break, the bars /
     // the animation laser / the strobes in a drop; none of them in the cast (a group off for the night,
@@ -16885,7 +16950,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     // R536_LIVE: the strobes are the stabs' while they stand in this beat's cast (his set, a pad, the roof ...
     // may have taken them)
-    m_r536Live = r536Want && castSet.contains(m_r536Key);
+    m_r536Live = (r536Want || r618Want) && castSet.contains(m_r536Key);   // TRACK_APP_BREAKKICK_R618: or the lone kicks
+    m_r618StabsOk = r536Want;            // TRACK_APP_BREAKKICK_R618: at 75-80 % a fuller break's strobes are the kicks' alone
+    m_r618On = r618Want;
     // R534_RELEASE: a programme held on its step is let go when its group leaves the cast (or HOLD/CALM)
     foreach (const QString &key, m_r534Held.keys())
         if (castSet.contains(key) == false || hold || isCalm)
@@ -18784,8 +18851,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         if (m_hatsOut) ev << "hats-out";
         if (closing < 1.0) ev << "closing";
         if (m_kickGone >= 4 && isBreak == false) ev << "kick-gone";
-        if (m_r536Live && m_r536Map.contains(beat))   // R536_EV: this beat's break stabs (bits 0-3)
+        if (m_r536Live && m_r618StabsOk && m_r536Map.contains(beat))   // R536_EV: this beat's break stabs (bits 0-3)
             ev << QString("stab%1").arg(m_r536Map.value(beat));
+        if (m_r536Live && m_r618On && m_r618Kick.contains(beat))      // TRACK_APP_BREAKKICK_R618: a lone kick's hit
+            ev << QString("kickhit%1").arg(m_r618Kick.value(beat));
         if (m_r535Prof.isEmpty() == false)       // R535_EV: the bar's music profile (log only)
             ev << QStringLiteral("prof-") + m_r535Prof + (m_r535Type.isEmpty() ? QString() : QStringLiteral("-") + m_r535Type);
         if (m_curveBreak) ev << "curve-break";          // runde 192
