@@ -4417,10 +4417,15 @@ QString TrackEngine::r535DropType(int from, int to) const
 #define R618_FADER         0.75          // TRACK_APP_BREAKKICK_R618 (Tobias 11-16: "noget der rammer, hvis der er kick i et
                                          // break"): a lone kick in a break hits every strobe head once, from 75 %
 #define R618_KICK          51            // ... a kick (the raw curve, as the engine's other kick tests)
-#define R618_BEFORE        4             // ... no kick in the 4 beats before it
-#define R618_AFTER         2             // ... nor the 2 after, inside the break: a lone kick, not a groove
 #define R618_SKIP          2             // ... the break's first 2 beats carry the drop's kick out - not his
-#define R618_KICKFRAC      0.25          // ... an otherwise kickless break: a running kick already pulses the break          // ... Tobias 11-16: a complete-silence stab break stabs from 75 %, not 80 %
+#define R619_CHAIN         4             // TRACK_APP_BREAKKICKS_R619 (Tobias 11-16: "ramme hvert enkelt kick i breaket ... 4+
+                                         // kicks i traek skal det ikke ramme"): EVERY kick of a break hits, except a
+                                         // steady kick - 4+ kicks at one even spacing of 1 or 2 beats (a running kick or
+                                         // a half-time one; it already pulses the break). Phrase kicks a bar or more
+                                         // apart, rolls of 2-3 and broken patterns all hit. (R536_SILENT_FADER above:
+                                         // Tobias 11-16, a complete-silence stab break stabs from 75 %, not 80 %)
+#define R619_GAPMAX        2             // ... the spacings that make a steady kick
+#define R619_SECOND        10            // ... a second kick in the same beat, half a beat away, at this low onset
 
 bool TrackEngine::breakStabs() const
 {
@@ -4471,22 +4476,27 @@ void TrackEngine::r536Section(int secStart, int secEnd)
     // The hit lands on the quarter the lows hit (onsetLow), the downbeat without that data
     m_r618Kick.clear();
     {
-        int kicks = 0;
-        for (int b = a; b < e; b++)
-            if (m_audKick.at(b - 1) >= R618_KICK)
-                kicks++;
-        if (qreal(kicks) <= R618_KICKFRAC * qreal(e - a))
+        // TRACK_APP_BREAKKICKS_R619: every kick of the break, the steady ones left out. A steady kick is a chain of
+        // R619_CHAIN+ kicks at one spacing of 1 or 2 beats, found over the whole break (its first beats too). 10 tracks:
+        // 63 hits in 56 breaks; Fabrication's and Rossi's running kicks and This Groove's half-time kick give none
+        auto kickAt = [&](int b) { return b >= a && b < e && m_audKick.at(b - 1) >= R618_KICK; };
+        QSet<int> steady;
+        for (int gap = 1; gap <= R619_GAPMAX; gap++)
+            for (int b = a; b < e; b++)
+            {
+                if (kickAt(b) == false || kickAt(b - gap))
+                    continue;            // not a chain's first kick
+                int len = 1;
+                while (kickAt(b + len * gap))
+                    len++;
+                if (len >= R619_CHAIN)
+                    for (int i = 0; i < len; i++)
+                        steady.insert(b + i * gap);
+            }
         {
             for (int b = a + R618_SKIP; b < e; b++)
             {
-                if (m_audKick.at(b - 1) < R618_KICK)
-                    continue;
-                bool lone = true;
-                for (int p = qMax(a, b - R618_BEFORE); p < b && lone; p++)
-                    lone = m_audKick.at(p - 1) < R618_KICK;
-                for (int p = b + 1; p < qMin(e, b + 1 + R618_AFTER) && lone; p++)
-                    lone = m_audKick.at(p - 1) < R618_KICK;
-                if (lone == false)
+                if (kickAt(b) == false || steady.contains(b))
                     continue;
                 int q = 0, best = -1;
                 for (int k = 0; k < 4; k++)
@@ -4497,7 +4507,12 @@ void TrackEngine::r536Section(int secStart, int secEnd)
                     }
                 if (best < 8)
                     q = 0;               // no clear low onset: the downbeat
-                m_r618Kick.insert(b, 1 << q);
+                int bits = 1 << q;
+                // TRACK_APP_BREAKKICKS_R619: a second kick in the beat, half a beat away (never closer: half-beat steps)
+                const int q2 = q < 2 ? q + 2 : q - 2;
+                if (best >= 8 && onsetLow(b, q2) >= R619_SECOND)
+                    bits |= 1 << q2;
+                m_r618Kick.insert(b, bits);
             }
         }
         if (m_r618Kick.isEmpty() == false && m_testTrack == false)
@@ -14235,7 +14250,10 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         }
     }
 
-    if (r536Want || r618Want)            // TRACK_APP_BREAKKICK_R618: or its lone kicks
+    // TRACK_APP_BREAKKICKS_R619: the kicks take the strobes on a kick's beat alone - never in the build-up's 4 beats
+    // before a drop while the strobes are part of it
+    const bool r619Kick = r618Want && m_r618Kick.contains(beat) && !(preDrop && castSet.contains(m_r536Key));
+    if (r536Want || r619Kick)            // TRACK_APP_BREAKKICK_R618: or its kicks (R619: on the kick's beat)
         castSet.insert(m_r536Key);       // R536_CAST: dark between the stabs (r536PartOut)
     // R533_LIGHT: without the base something else must light the room - the Minis in a break, the bars /
     // the animation laser / the strobes in a drop; none of them in the cast (a group off for the night,
@@ -16950,9 +16968,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
 
     // R536_LIVE: the strobes are the stabs' while they stand in this beat's cast (his set, a pad, the roof ...
     // may have taken them)
-    m_r536Live = (r536Want || r618Want) && castSet.contains(m_r536Key);   // TRACK_APP_BREAKKICK_R618: or the lone kicks
+    m_r536Live = (r536Want || r619Kick) && castSet.contains(m_r536Key);   // TRACK_APP_BREAKKICK_R618/R619: or a kick's beat
     m_r618StabsOk = r536Want;            // TRACK_APP_BREAKKICK_R618: at 75-80 % a fuller break's strobes are the kicks' alone
-    m_r618On = r618Want;
+    m_r618On = r619Kick && !(preDrop && darkGroups.contains(m_r536Key));   // TRACK_APP_BREAKKICKS_R619: the blink stays dark
     // R534_RELEASE: a programme held on its step is let go when its group leaves the cast (or HOLD/CALM)
     foreach (const QString &key, m_r534Held.keys())
         if (castSet.contains(key) == false || hold || isCalm)
