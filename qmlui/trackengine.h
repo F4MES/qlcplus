@@ -2424,6 +2424,7 @@ private:
     QHash<int, int> m_r536Map;
     int m_r536For = -1;
     bool m_r536Active = false;
+    bool m_r536Silent = false;           // TRACK_APP_STABSILENT_R616: a DEAD-silent stab break (isolated hits in true silence - Latch x Positive)
     bool m_r536Live = false;
     int m_r536Head = -1;
     qint64 m_r536Start = -1;

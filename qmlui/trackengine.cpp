@@ -4405,6 +4405,11 @@ QString TrackEngine::r535DropType(int from, int to) const
 #define R536_GAP        26               // a near-silent beat: under 10 %
 #define R536_MID        10
 #define R536_HIGH       9
+#define R536_SILENT_FRAC   0.35          // TRACK_APP_STABSILENT_R616: a good part of the break is DEAD air (below the
+                                         // gap) - stabs punctuating quiet (Latch x Positive measured 39-64 %), not a
+                                         // vocal filling the beats. The sharp-stab detection (a gap before each stab)
+                                         // is the real vocal guard; this only keeps the lower floor off fuller breaks
+#define R536_SILENT_FADER  0.75          // ... Tobias 11-16: a complete-silence stab break stabs from 75 %, not 80 %
 
 bool TrackEngine::breakStabs() const
 {
@@ -4442,6 +4447,7 @@ void TrackEngine::r536Section(int secStart, int secEnd)
 {
     m_r536Map.clear();
     m_r536Active = false;
+    m_r536Silent = false;                // TRACK_APP_STABSILENT_R616
     m_r536Head = -1;
     m_r536Start = -1;
     const int n = int(m_audLevel.count());
@@ -4484,8 +4490,19 @@ void TrackEngine::r536Section(int secStart, int secEnd)
         }
     }
     m_r536Active = stabs >= 2;
+    // TRACK_APP_STABSILENT_R616 (Tobias 11-16): a Latch x Positive break is isolated stabs in TRUE silence - most of
+    // its beats are DEAD air (below the gap). A quiet vocal fills the beats, so few are dead. The dead-air FRACTION is
+    // what separates them (the median does not: Latch's own stabs pull it up). Only the dead-silent ones fire from the
+    // lower slider - a vocal break is never dropped below the 80 % floor by this
+    int dead = 0;
+    for (int v : lv)
+        if (v < R536_GAP)
+            dead++;
+    const qreal deadFrac = lv.isEmpty() ? 0.0 : qreal(dead) / qreal(lv.count());
+    m_r536Silent = m_r536Active && deadFrac >= R536_SILENT_FRAC;
     if (m_r536Active && m_testTrack == false)
-        logSignal(QStringLiteral("sig:break-stabs:%1@%2").arg(stabs).arg(secStart));
+        logSignal(QStringLiteral("sig:break-stabs:%1@%2:dead%3%4").arg(stabs).arg(secStart).arg(int(deadFrac * 100))
+                  .arg(m_r536Silent ? QStringLiteral(":silent") : QString()));
 }
 
 qreal TrackEngine::r536PartOut(const QString &group, int index) const
@@ -14085,7 +14102,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                  && landBurstNow() == false && dropBar >= 2 && hold == false && isCalm == false && still == false
                  && m_mixing == false && m_blackout == false && m_flash == false && m_r536Key.isEmpty() == false
                  && m_groupOff.contains(m_r536Key) == false;
-    const bool r536Want = m_r536Active && isBreak && breakStabs() && m_faderReal >= R536_FADER - 1e-9
+    const bool r536Want = m_r536Active && isBreak && breakStabs()
+                       && m_faderReal >= (m_r536Silent ? R536_SILENT_FADER : R536_FADER) - 1e-9   // TRACK_APP_STABSILENT_R616
                        && m_r536Key.isEmpty() == false && eligible.contains(m_r536Key) && m_groupOff.contains(m_r536Key) == false
                        && hold == false && isCalm == false && still == false && m_mixing == false && m_blackout == false;
     QSet<QString> castSet;
