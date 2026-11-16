@@ -4407,8 +4407,12 @@ QString TrackEngine::r535DropType(int from, int to) const
 #define R536_HIGH       9
 #define R536_SILENT_FRAC   0.35          // TRACK_APP_STABSILENT_R616: a good part of the break is DEAD air (below the
                                          // gap) - stabs punctuating quiet (Latch x Positive measured 39-64 %), not a
-                                         // vocal filling the beats. The sharp-stab detection (a gap before each stab)
-                                         // is the real vocal guard; this only keeps the lower floor off fuller breaks
+                                         // vocal filling the beats. TRACK_APP_REVIEWFIX_R617: the vocal guard is
+                                         // R536_VOCAL_MAX below - the gap test alone let a sung break stab
+#define R536_VOCAL_MAX     0.25          // TRACK_APP_REVIEWFIX_R617 (Tobias 11-16: "stille men vokal ... der skal vi
+                                         // ikke have stabs"): over a quarter of the break's beats a voice (R358's
+                                         // test, per beat) - no stabs at any slider. 10 tracks: the dead-silent stab
+                                         // breaks 0-17 %, Jamback Positive's sung break 33 %
 #define R536_SILENT_FADER  0.75          // ... Tobias 11-16: a complete-silence stab break stabs from 75 %, not 80 %
 
 bool TrackEngine::breakStabs() const
@@ -4499,10 +4503,30 @@ void TrackEngine::r536Section(int secStart, int secEnd)
         if (v < R536_GAP)
             dead++;
     const qreal deadFrac = lv.isEmpty() ? 0.0 : qreal(dead) / qreal(lv.count());
+    // TRACK_APP_REVIEWFIX_R617: the vocal guard R616 only claimed. A beat sings as R358_VOCAL hears it - the mids
+    // from 55 % of the track's top, no kick, the highs under half, the music not silent. Over R536_VOCAL_MAX of the
+    // break: a sung break, no stabs (Tobias: "stille men vokal ... der skal vi ikke have stabs")
+    qreal vocalFrac = 0.0;
+    if (m_audMid.count() == n && m_audHigh.count() == n)
+    {
+        int sung = 0;
+        for (int b = a; b < e; b++)
+            if (m_audMid.at(b - 1) >= 0.55 * 255.0 && m_audKick.at(b - 1) < 51 && m_audHigh.at(b - 1) < 128
+                && m_audLevel.at(b - 1) >= 0.15 * 255.0)
+                sung++;
+        vocalFrac = qreal(sung) / qreal(e - a);
+    }
+    const bool sungBreak = m_r536Active && vocalFrac > R536_VOCAL_MAX;
+    if (sungBreak)
+    {
+        m_r536Active = false;
+        m_r536Map.clear();
+    }
     m_r536Silent = m_r536Active && deadFrac >= R536_SILENT_FRAC;
-    if (m_r536Active && m_testTrack == false)
-        logSignal(QStringLiteral("sig:break-stabs:%1@%2:dead%3%4").arg(stabs).arg(secStart).arg(int(deadFrac * 100))
-                  .arg(m_r536Silent ? QStringLiteral(":silent") : QString()));
+    if ((m_r536Active || sungBreak) && m_testTrack == false)
+        logSignal(QStringLiteral("sig:break-stabs:%1@%2:dead%3:vocal%4%5").arg(stabs).arg(secStart).arg(int(deadFrac * 100))
+                  .arg(int(vocalFrac * 100))
+                  .arg(sungBreak ? QStringLiteral(":sung-off") : (m_r536Silent ? QStringLiteral(":silent") : QString())));
 }
 
 qreal TrackEngine::r536PartOut(const QString &group, int index) const
@@ -11716,7 +11740,12 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     }
     crumb(QStringLiteral("beat ") + QString::number(beat) + QLatin1Char(' ') + state);   // R435_CRUMBS
     if (r614GlitchHold(beat))            // TRACK_APP_GLITCH_R614: a freeze/blackout window holds this frame
+    {
+        // TRACK_APP_REVIEWFIX_R617: a section change inside the freeze was lost - the drop after it drew as the
+        // section before. Owed to the next drawn beat, as the docTimer guard above does
+        m_sectionOwed = m_sectionOwed || sectionChanged;
         return;
+    }
     r614GlitchRestore();                 // put back last beat's wrong colour/aim before the engine redraws
     m_hazeBeatMs = m_clock.elapsed();                // R467_HAZE_NAG: music is playing
     micBeat(state, sectionChanged, bpm);             // R467_MIC_CHECK
@@ -41143,7 +41172,8 @@ bool TrackEngine::r614GlitchHold(int beat)
         }
         return false;
     }
-    if (m_glitch == false || m_testTrack || m_beatMs <= 0.0 || m_flash || m_blackout)
+    if (m_glitch == false || m_testTrack || m_beatMs <= 0.0 || m_flash || m_blackout
+        || m_lastStage > 0)              // TRACK_APP_REVIEWFIX_R617: not over LAST TRACK's closing / the house light
         return false;
     if (beat == m_glitchBeat)
         return false;
@@ -41181,7 +41211,8 @@ void TrackEngine::r614GlitchMess(int beat)
     // TRACK_APP_GLITCH_R614: wrong, clashing colours and movingheads driving to the wrong aim. Both put back next beat
     // (r614GlitchRestore) so they flicker and so OFF is clean. Heads only - the lasers keep their safety lines
     Q_UNUSED(beat);
-    if (m_glitch == false || m_testTrack || m_glitchHoldMs >= 0 || m_flash || m_blackout)
+    if (m_glitch == false || m_testTrack || m_glitchHoldMs >= 0 || m_flash || m_blackout
+        || m_lastStage > 0)              // TRACK_APP_REVIEWFIX_R617: not over LAST TRACK's closing / the house light
         return;
     const qreal sev = r614Severity();
     QRandomGenerator *rng = QRandomGenerator::global();

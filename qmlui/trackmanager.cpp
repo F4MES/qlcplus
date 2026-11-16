@@ -3089,19 +3089,10 @@ void TrackManager::midiAutoPatch()
             pick = i;
     if (pick < 0 && midiU >= 0 && io->inputPatch(quint32(midiU))->input() < quint32(ins.count()))
         pick = int(io->inputPatch(quint32(midiU))->input());
-    // TRACK_APP_MIDIFIX_R615: only virtual ports (LoopBe, loopMIDI, rtpMIDI ...) and no real controller - do not bind
-    // one as the controller (R571C's intent; the old pick = 0 opened LoopBe all night). Leave MIDI unpatched and keep
-    // looking - his MIDimix is picked the moment Windows lists it
+    // TRACK_APP_REVIEWFIX_R617: R571C - a virtual port only when nothing else (R615's unpatch-and-log every 5 s is
+    // undone: it reversed that and changed nothing; the MIDimix is still picked first the moment Windows lists it)
     if (pick < 0)
-    {
-        if (m_midiOwnU >= 0)
-            midiOwnReset();
-        m_midiOwnU = -1;
-        m_midiOwnName.clear();
-        if (m_engine != nullptr)
-            m_engine->noteMidi(QStringLiteral("virtual-only:%1").arg(ins.count()));
-        return;
-    }
+        pick = 0;
     // ours already, and still that device on that number: nothing to do
     if (m_midiOwnU >= 0)
     {
