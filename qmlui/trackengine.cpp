@@ -366,6 +366,12 @@ TrackEngine::TrackEngine(Doc *doc, QObject *parent)
 
 TrackEngine::~TrackEngine()
 {
+    if (m_casProc != nullptr)            // TRACK_APP_CASAMBI_R620: the helper goes quietly - the lamps stay as they are
+    {
+        m_casProc->disconnect(this);
+        delete m_casProc;
+        m_casProc = nullptr;
+    }
     r497TapSave(true);                   // R544_TAPS_FLUSH_END: the last taps of the night (2-minute writes)
     qualityFinish(QStringLiteral("shutdown"));
     stopAll();
@@ -32285,6 +32291,7 @@ void TrackEngine::lastTrackTick(bool showOn)
 {
     // from closingTick(), every 200 ms
     m_showOnNow = showOn;
+    casambiTick();                       // TRACK_APP_CASAMBI_R620: the restaurant's Casambi lights with LAST TRACK
     if (showOn == false && m_lastStage > 0)
     {
         // SHOW OFF ends it (release() has taken the light)
@@ -49981,4 +49988,115 @@ void TrackEngine::r608Beat(const QString &state, int beat)
         m_r608Watch = false;
         r608Nudge(1.03, QStringLiteral("kept"));
     }
+}
+
+/* =====================================================================
+ *  TRACK_APP_CASAMBI_R620 - the restaurant's Casambi lights follow LAST TRACK
+ *
+ *  Tobias 11-16: "kun bruge det til last track hvor den skal skrue alle enheder langsomt op til 100%
+ *  henover last-track" / "checke hvilket niveau lamperne staar paa fra starten og starte derfra" /
+ *  "Hvis det ikke virker virker det vel bare ikke".
+ *
+ *  Armed, TRACK starts casambi/casambi_helper.exe (beside TRACK-engine.exe, Python + casambi-bt, built
+ *  in CI) with Documents/QLC+/casambi.json - no file, no Casambi (sig:casambi:off). It is fed LAST
+ *  TRACK's own white curve (lastWhiteNow, 1 = the house light) as "p <0..1>" on stdin; each lamp goes
+ *  from its own level up to 100 %, never down. Undone before the house light: "undo" (every lamp back);
+ *  undone after it or SHOW OFF after the night: "quit" (the room stays lit). Its lines are logged as
+ *  sig:casambi:<line>. Nothing here touches the rig: no file, no helper, a crash, no Bluetooth - the
+ *  helper is simply not there.
+ * ===================================================================== */
+#include <QProcess>
+#include <QFile>
+#include <QStandardPaths>
+#include <QCoreApplication>
+
+void TrackEngine::casambiTick()
+{
+    QProcess *proc = qobject_cast<QProcess *>(m_casProc);
+    if (m_lastStage == 0)
+    {
+        if (m_casArmed)
+        {
+            m_casArmed = false;
+            if (proc != nullptr && proc->state() != QProcess::NotRunning)
+            {
+                const bool undo = m_casPeak < 3;
+                proc->write(undo ? "undo\n" : "quit\n");
+                logSignal(undo ? QStringLiteral("sig:casambi:send-undo") : QStringLiteral("sig:casambi:send-quit"));
+            }
+            m_casPeak = 0;
+        }
+        return;
+    }
+    if (m_casArmed == false)
+    {
+        m_casArmed = true;
+        m_casPeak = 0;
+        m_casSent = -1.0;
+        m_casSentMs = -1;
+        if (m_testTrack == false && proc == nullptr)
+            casambiStart();
+        proc = qobject_cast<QProcess *>(m_casProc);
+    }
+    m_casPeak = qMax(m_casPeak, m_lastStage);
+    if (proc == nullptr || proc->state() == QProcess::NotRunning)
+        return;
+    const qreal p = m_lastStage >= 3 ? 1.0 : qBound(0.0, lastWhiteNow(), 1.0);
+    const qint64 now = m_clock.elapsed();
+    if (m_casSent < 0.0 || p - m_casSent >= 0.005 || (p >= 1.0 && m_casSent < 1.0) || now - m_casSentMs >= 5000)
+    {
+        proc->write(QStringLiteral("p %1\n").arg(p, 0, 'f', 3).toLatin1());
+        m_casSent = p;
+        m_casSentMs = now;
+    }
+}
+
+void TrackEngine::casambiStart()
+{
+    const QString cfg = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                      + QStringLiteral("/QLC+/casambi.json");
+    if (QFile::exists(cfg) == false)
+    {
+        logSignal(QStringLiteral("sig:casambi:off"));
+        return;
+    }
+    const QString exe = QCoreApplication::applicationDirPath() + QStringLiteral("/casambi/casambi_helper.exe");
+    if (QFile::exists(exe) == false)
+    {
+        logSignal(QStringLiteral("sig:casambi:no-helper"));
+        return;
+    }
+    QProcess *proc = new QProcess(this);
+    proc->setProcessChannelMode(QProcess::MergedChannels);
+#ifdef Q_OS_WIN
+    proc->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *a) {
+        a->flags |= 0x08000000;          // CREATE_NO_WINDOW: no console window over the desk
+    });
+#endif
+    m_casProc = proc;
+    connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
+        while (proc->canReadLine())
+        {
+            QString line = QString::fromUtf8(proc->readLine()).trimmed().left(100);
+            line.replace(QLatin1Char(' '), QLatin1Char('_'));
+            if (line.isEmpty() == false)
+                logSignal(QStringLiteral("sig:casambi:") + line);
+        }
+    });
+    connect(proc, &QProcess::finished, this, [this, proc](int code, QProcess::ExitStatus) {
+        logSignal(QStringLiteral("sig:casambi:exit:%1").arg(code));
+        if (m_casProc == proc)
+            m_casProc = nullptr;
+        proc->deleteLater();
+    });
+    connect(proc, &QProcess::errorOccurred, this, [this, proc](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart)
+            return;
+        logSignal(QStringLiteral("sig:casambi:failed-to-start"));
+        if (m_casProc == proc)
+            m_casProc = nullptr;
+        proc->deleteLater();
+    });
+    proc->start(exe, QStringList() << cfg);
+    logSignal(QStringLiteral("sig:casambi:start"));
 }

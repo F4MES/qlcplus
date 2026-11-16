@@ -53,6 +53,32 @@ jobs:
           if ($errs.Count -gt 0) { $errs | ForEach-Object { Write-Host $_.ToString() }; exit 1 }
           Write-Host "tools/get-track-app.cmd: no parse errors"
 
+  # TRACK_APP_CASAMBI_R620 (Tobias 11-16): the Casambi helper for LAST TRACK - Python + casambi-bt 0.3.2 as one exe,
+  # started once with --selftest (every module is in it). Its failure never stops TRACK's release (continue-on-error):
+  # TRACK-app.zip then goes without it and LAST TRACK leaves the restaurant's lights alone
+  casambi-helper:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build casambi_helper.exe
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check casambi-bt==0.3.2 pyinstaller==6.11.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pyinstaller --onefile --noupx --name casambi_helper --collect-submodules bleak --collect-submodules winrt --collect-submodules CasambiBt trackbridge/casambi/casambi_helper.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\dist\casambi_helper.exe --selftest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item .\dist\casambi_helper.exe | Format-List Name, Length
+      - uses: actions/upload-artifact@v7
+        with:
+          name: casambi-helper
+          path: dist/casambi_helper.exe
+
   build-linux:
     #if: false
     runs-on: ubuntu-22.04
@@ -689,7 +715,7 @@ jobs:
   # touched from this branch (release-rig runs only for track-layout).
   release-track-app:
     if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/track-app' }}
-    needs: [build-windows, trackbridge-smoke]
+    needs: [build-windows, trackbridge-smoke, casambi-helper]   # TRACK_APP_CASAMBI_R620 (continue-on-error: never a stop)
     runs-on: ubuntu-22.04
     name: TRACK app release (track-app)
     permissions:
@@ -703,6 +729,13 @@ jobs:
         with:
           name: TRACK-app-base
           path: dl
+
+      - name: Download the Casambi helper (TRACK_APP_CASAMBI_R620)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: casambi-helper
+          path: dl-casambi
 
       # R548_RUNTIME (Tobias 11-04: "den skal kunne deployes paa en ren pc og saa bare virke fra
       # start"): Java (Eclipse Temurin JRE 21, pinned) and beat-link (BLT 8.0.0's own jar, unmodified)
@@ -730,7 +763,7 @@ jobs:
           # TRACK_APP_BUILDNOTE_R601: the commit's subject - its R-number is shown on TRACK's page
           python3 trackbridge/make_release.py --base dl/TRACK-app-base.zip --rev "$REV" \
               --jre rt-in/jre.zip --blt rt-in/beat-link-trigger.jar --out rel \
-              --label "$(git log -1 --format=%s)"
+              --label "$(git log -1 --format=%s)" --casambi dl-casambi/casambi_helper.exe
           ls -la rel
 
       - name: Publish track-app-latest

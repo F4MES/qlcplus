@@ -3660,6 +3660,15 @@ private:
     bool m_closingLidWas = false;          // R513_OLD_CLOSING_LIDWAS: LAST TRACK's lid ruled on the last closingTick
     // R458_LAST_TRACK (track_runtime/lasttrack.inc.cpp)
     int m_lastStage = 0;                   // 0 off, 1 armed, 2 outro, 3 house light, 4 dark
+    // TRACK_APP_CASAMBI_R620 (Tobias 11-16: the restaurant's Casambi lights "skrue alle enheder langsomt op til 100%
+    // henover last-track", each from its own level): casambi/casambi_helper.exe, fed LAST TRACK's curve on stdin
+    QObject *m_casProc = nullptr;          // ... the helper (a QProcess), while it runs
+    bool m_casArmed = false;               // ... this LAST TRACK has had its helper started (or its reason logged)
+    int m_casPeak = 0;                     // ... the furthest stage it reached: undone before the house light = lamps back
+    qreal m_casSent = -1.0;                // ... the last progress sent
+    qint64 m_casSentMs = -1;
+    void casambiTick();
+    void casambiStart();
     QString m_lastTitle;                   // the track that was made the last
     int m_lastOutro = -1;                  // its OUTRO flag, once played
     int m_lastBeatNow = 0;

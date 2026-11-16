@@ -90,7 +90,7 @@ def round_of(label):
     return 'R' + m.group(1) if m else ''
 
 
-def build_app(base, rev, rid, target, rnd=''):
+def build_app(base, rev, rid, target, rnd='', casambi=''):
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as out, zipfile.ZipFile(base) as src:
         names = set(src.namelist())
         assert 'qlcplus-qml.exe' in names, 'no qlcplus-qml.exe in the portable folder'
@@ -112,6 +112,13 @@ def build_app(base, rev, rid, target, rnd=''):
         if rnd:
             put(out, 'track-app-round.txt', rnd + '\n')     # TRACK_APP_BUILDNOTE_R601: the page's foot line
         put(out, 'runtime.txt', rid + '\n')
+        # TRACK_APP_CASAMBI_R620: the restaurant's Casambi lights with LAST TRACK - its helper beside TRACK-engine.exe.
+        # A build without it (its CI job failed) is still a whole TRACK: LAST TRACK just leaves Casambi alone
+        if casambi and Path(casambi).is_file():
+            put(out, 'casambi/casambi_helper.exe', Path(casambi).read_bytes())
+            print('casambi helper: %s' % casambi)
+        else:
+            print('casambi helper: none')
         put(out, 'TRACK-README.md', (HERE / 'README.md').read_bytes())
         # R549 (Tobias 11-04: "QLC skal fjernes fra navne, logoer osv"): TRACK's logo for its window and shortcut
         put(out, 'track.png', (HERE / 'branding' / 'track.png').read_bytes())
@@ -130,6 +137,7 @@ def main():
     ap.add_argument('--blt', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--label', default='', help="the commit's subject - its R-number goes with the build")
+    ap.add_argument('--casambi', default='', help='casambi_helper.exe (TRACK_APP_CASAMBI_R620), left out when missing')
     a = ap.parse_args()
     if not re.fullmatch(r'[0-9a-f]{6,40}', a.rev):
         raise SystemExit('odd rev: %r' % a.rev)
@@ -141,7 +149,7 @@ def main():
     app = out / 'TRACK-app.zip'
     rnd = round_of(a.label)
     print('round: %s (from %r)' % (rnd or '-', a.label))     # TRACK_APP_BUILDNOTE_R601: in the CI log
-    build_app(a.base, a.rev, rid, app, rnd)
+    build_app(a.base, a.rev, rid, app, rnd, a.casambi)
     rsha, rsize = sha_size(rt)
     asha, asize = sha_size(app)
     manifest = {'rev': a.rev,
