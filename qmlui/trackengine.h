@@ -1764,6 +1764,22 @@ protected:
     bool r509BarsFrame(qint64 now);                     // the pulse timer
     void r509BarsStart();                               // tick(), the beat drawn
     void r509BarsStop(const QString &why);
+    // TRACK_APP_BARSFORMS_R621 (Tobias 11-17: "Lav 4, 2, 5"): the laser bars' HELIX and SCISSOR drop figures and
+    // the CEILING (lysloftet) that lifts in a break and comes down through the build
+    void r621DropBeat(int beat, int secStart, bool isDrop, int dropBar, qreal fader, bool hold, bool isCalm, bool still);
+    bool r621Whole(const QString &key) const;           // no AUTO programme on the bars while ours holds them
+    void r621Move(const QString &key, TrackMove &mv) const;   // ... the still, whole picture under it
+    bool r621ShelfBar(quint32 fxi) const;               // a bar on the wine shelf (turned, facing the wall)
+    bool r621EyeScenes();                               // the helix's eye scenes in the bars' colour
+    void r621ShowEyes(int pos);                         // the helix's eye picture on show (-1: none)
+    bool r621EyesFrame(qint64 now);                     // the pulse timer: the eyes step on the music
+    void r621EyesStart();                               // the beat drawn: the colour checked, the timer
+    void r621EyesStop(const QString &why);
+    void r621CeilCast(QSet<QString> &castSet);          // the ceiling keeps the bars on stage
+    bool r621CeilAim(const QString &key, QSet<QString> &darkGroups, bool inCast, bool isBreak, bool isBuild,
+                     bool isDrop, int beat, int secStart, qreal fader, bool isCalm, bool still);
+    quint32 r621CeilScene(const QString &key, quint32 home, int units);
+    void r621Reset();
     void r509BarsBeat(QSet<QString> &castSet, const QStringList &eligible, const QString &state, int beat,
                       int secStart, int secEnd, bool isDrop, bool isBuild, const QString &nextState,
                       int beatsToNext, qreal fader, qreal kick, bool hold, bool isCalm, bool still,
@@ -2428,6 +2444,28 @@ private:
     QHash<int, int> m_r618Kick;          // TRACK_APP_BREAKKICK_R618: a break's lone kicks, beat -> the kick's quarter bit
     bool m_r618On = false;               // ... the kick hits fire this beat (slider, switch, cast)
     bool m_r618StabsOk = true;           // ... R536's own stabs fire this beat (the strobes may stand in for the kicks alone)
+    // TRACK_APP_BARSFORMS_R621: the bars' helix / scissor (drawn per drop) and the ceiling (drawn per break)
+    int m_r621Form = 0;                  // this drop's bar figure: 0 none, 1 helix, 2 scissor
+    int m_r621For = -1;                  // ... the drop it was drawn for
+    int m_r621Last = 0;                  // ... the last drop's (never the same twice running)
+    bool m_r621Live = false;             // ... it shapes the bars' figure on this beat (drawSweep)
+    QString m_r621Track;
+    bool m_r621Eyes = false;             // the helix's eye chase holds the bars on this beat
+    bool m_r621Scissor = false;          // the scissor holds the bars whole on this beat (all six lit, the kick's pulse)
+    QVector<quint32> m_r621EyeIds;
+    QString m_r621EyeCache;
+    int m_r621EyeShown = -1;
+    int m_r621Step = 0;
+    int m_r621StepBeat = -1;
+    int m_r621StepBits = 0;
+    int m_r621CeilStage = 0;             // 0 none, 1 up / holding, 2 coming down, 4 abort (dark), 5 home (dark beat)
+    int m_r621CeilFor = -1;
+    int m_r621CeilUnits = 0;
+    int m_r621CeilBeat = -1;
+    qint64 m_r621CeilMs = 0;
+    qint64 m_r621CeilStartMs = 0;
+    QString m_r621CeilKey;
+    QString m_r621CeilTrack;
     bool m_r536Live = false;
     int m_r536Head = -1;
     qint64 m_r536Start = -1;
