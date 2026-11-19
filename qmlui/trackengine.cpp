@@ -4474,6 +4474,8 @@ void TrackEngine::r536Section(int secStart, int secEnd)
     m_r536Silent = false;                // TRACK_APP_STABSILENT_R616
     m_r536Head = -1;
     m_r536Start = -1;
+    m_r618Kick.clear();                  // TRACK_APP_REVIEWFIX_R622: before the return below - a track without the
+                                         // curves kept the last track's kicks and hit on its beats
     const int n = int(m_audLevel.count());
     if (n == 0 || m_audKick.count() != n || m_onsetMid.count() != n || m_onsetHigh.count() != n)
         return;
@@ -4487,10 +4489,13 @@ void TrackEngine::r536Section(int secStart, int secEnd)
         // TRACK_APP_BREAKKICKS_R619: every kick of the break, the steady ones left out. A steady kick is a chain of
         // R619_CHAIN+ kicks at one spacing of 1 or 2 beats, found over the whole break (its first beats too). 10 tracks:
         // 63 hits in 56 breaks; Fabrication's and Rossi's running kicks and This Groove's half-time kick give none
-        auto kickAt = [&](int b) { return b >= a && b < e && m_audKick.at(b - 1) >= R618_KICK; };
+        // TRACK_APP_REVIEWFIX_R622: the chain is read from 8 beats before the break - a flag a few beats early left
+        // the drop's last kicks inside the break as "lone" ones (3 in a row is no chain of 4)
+        const int lo = qMax(1, a - 8);
+        auto kickAt = [&](int b) { return b >= lo && b < e && m_audKick.at(b - 1) >= R618_KICK; };
         QSet<int> steady;
         for (int gap = 1; gap <= R619_GAPMAX; gap++)
-            for (int b = a; b < e; b++)
+            for (int b = lo; b < e; b++)
             {
                 if (kickAt(b) == false || kickAt(b - gap))
                     continue;            // not a chain's first kick
@@ -14463,7 +14468,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
         // (r509_bars.inc.cpp). Never under his saved look, his DROP HIT or a laser pad (r509BarsBusy).
         r509BarsBeat(castSet, eligible, state, beat, secStart, secEnd, isDrop, isBuild, nextState, beatsToNext,
                      fader, kick, hold, isCalm, still, silent, forceNext);
-        r621CeilCast(castSet);           // TRACK_APP_BARSFORMS_R621: the ceiling keeps the bars on stage, no ani laser
+        r621CeilCast(castSet, eligible); // TRACK_APP_BARSFORMS_R621: the ceiling keeps the bars on stage, no ani laser
         // R515_MELBARS_HOOK_BEAT (runde 515, MELBARS): in a kickless melodic break where the engine has the bars on
         // stage, a drawn share walks a window of two whole bars with the melody (r515_melbars.inc.cpp) - never
         // puts the bars in the cast, never with an animation laser, never under his hand
@@ -15517,7 +15522,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
                             secStart, fader, isCalm, still))
             continue;
         // TRACK_APP_BARSFORMS_R621: the ceiling owns the bars' aim while it runs (up in the break, down in the build)
-        if (r621CeilAim(key, darkGroups, inCast, isBreak, isBuild, isDrop, beat, secStart, fader, isCalm, still))
+        if (r621CeilAim(key, darkGroups, inCast, isBreak, isBuild, isDrop, beat, secStart, fader, isCalm, still,
+                        nextState))
             continue;
         // lasers move only in a dark beat at a break; heads move at break or
         // drop starts, and half the time at other section changes - every
@@ -44748,6 +44754,36 @@ bool TrackEngine::r621ShelfBar(quint32 fxi) const
     return dmx == 357 || dmx == 395;
 }
 
+QString TrackEngine::r621Busy(const QString &key, bool running) const
+{
+    // TRACK_APP_REVIEWFIX_R622: who else has the bars, for the helix / scissor / ceiling. R621 asked r509BarsBusy,
+    // whose "his" counts HOLD, every BLACKOUT / FLASH tap and any held flash - the drop landing's flash on the
+    // STROBES too. So a running helix lost its eyes at every tap and strobe burst, and the ceiling aborted (dark,
+    // home) on the first BLACKOUT tap - he taps it as a rhythm, thousands a night (R494). Now as the roof and the
+    // ball (r493HisTakes): a RUNNING one ends only with a real pick; the taps, HOLD, the ball's two heads and a DJ
+    // loop leave it standing. All of them still keep a NEW one from starting
+    if (key.isEmpty())
+        return QStringLiteral("no-bars");
+    const bool his = running
+        ? (m_forceOn || savedActive() || m_lastStage != 0 || m_labActive || m_slabActive || m_clabActive
+           || m_fullAuto == false || m_startScene || m_hitAmokFrom >= 0 || m_testTimer.isActive())
+        : (r493HisPicks() || m_hold);
+    if (his || m_positionMode.isEmpty() == false || m_hitKind != 0 || m_hitAmokOwed || m_groupOff.contains(key)
+        || m_groupTrim.value(key, 1.0) <= 0.01)
+        return QStringLiteral("his");
+    for (const QString &k : m_padFlash)
+        if (m_groups.value(k).lasers || m_groups.value(k).patternDevice)
+            return QStringLiteral("his");
+    for (const QString &k : m_flashHeld)
+        if (m_groups.value(k).lasers || m_groups.value(k).patternDevice)
+            return QStringLiteral("his");
+    if (m_r493RoofOn || m_barsAloneNow || m_riseStage != 0)
+        return QStringLiteral("room");
+    if (running == false && (m_r493DiscoPhase != 0 || djLoopOn()))
+        return QStringLiteral("room");
+    return QString();
+}
+
 void TrackEngine::r621DropBeat(int beat, int secStart, bool isDrop, int dropBar, qreal fader, bool hold, bool isCalm,
                                bool still)
 {
@@ -44757,15 +44793,33 @@ void TrackEngine::r621DropBeat(int beat, int secStart, bool isDrop, int dropBar,
         m_r621Track = m_trackTitle;
         m_r621For = -1;
         m_r621Form = 0;
+        if (m_r621CeilStage == 0)
+            m_r621CeilFor = -1;          // TRACK_APP_REVIEWFIX_R622: a new track's break at the same beat is a new break
     }
-    const QString busy = key.isEmpty() ? QStringLiteral("no-bars") : r509BarsBusy(key);
-    const bool free = busy.isEmpty() || busy == QStringLiteral("r621");
+    // TRACK_APP_REVIEWFIX_R622: the ceiling's watchdog. Its state machine only runs from the aim loop, and the loop
+    // leaves the bars out when they are switched OFF or his position holds them - the ceiling then stood "running"
+    // for good: the bars kept in the cast, whole and still, the countdown and the arpeggio locked out. Two beats
+    // without a visit and it lets go (the engine's own aim code has the bars - it re-aims them dark)
+    if (m_r621CeilStage != 0 && ++m_r621CeilMiss >= 2)
+    {
+        m_r621CeilStage = 0;
+        m_r621CeilKey.clear();
+        m_r621CeilMiss = 0;
+        if (m_testTrack == false)
+            logSignal(QStringLiteral("sig:bars-ceiling:abort:lost"));
+    }
+    const bool free = r621Busy(key, false).isEmpty();
+    const bool freeRun = r621Busy(key, true).isEmpty();
     // decided on the drop's first beat the bars are free (the countdown into it lets go on its first beat or two)
     if (isDrop && secStart != m_r621For && (free || beat - secStart >= 4 || beat < secStart))
     {
         m_r621For = secStart;
         int form = 0;
-        if (key.isEmpty() == false && free && m_formNow == DF_CLASSIC && fader >= R621_FADER - 1e-9 && hold == false
+        // TRACK_APP_REVIEWFIX_R622: ... and not beside a form that landed in this drop - the bloom, the rush and the
+        // kick wave leave m_formNow classic (they are the wash's), and the helix came on top of them
+        const bool formHere = m_formLandBeat >= secStart && m_formTrack == m_trackTitle && m_formLast != DF_CLASSIC;
+        if (key.isEmpty() == false && free && m_formNow == DF_CLASSIC && formHere == false
+            && fader >= R621_FADER - 1e-9 && hold == false
             && isCalm == false && still == false && m_mixing == false && m_hitAmokFrom < 0 && savedActive() == false)
         {
             const qreal r = QRandomGenerator::global()->generateDouble();
@@ -44785,15 +44839,22 @@ void TrackEngine::r621DropBeat(int beat, int secStart, bool isDrop, int dropBar,
             logSignal(QStringLiteral("sig:bars-form:%1@%2").arg(form == 1 ? QStringLiteral("helix") : QStringLiteral("scissor")).arg(secStart));
     }
     m_r621Live = isDrop && secStart == m_r621For && m_r621Form != 0 && m_formNow == DF_CLASSIC
-              && beat - secStart < R621_BEATS && beat >= secStart && free && hold == false && isCalm == false
+              && beat - secStart < R621_BEATS && beat >= secStart && freeRun && isCalm == false   // R622: HOLD keeps it
               && still == false && m_faderReal >= R621_FADER - 0.05;
+    // TRACK_APP_REVIEWFIX_R622: the whole bars and the eyes only with the FIGURE on show. A bar figure is never
+    // redrawn while it runs, so in a drop straight out of a groove the old figure stayed - and the bars were held
+    // whole and still for 16 bars (the drop's own programme gone) with no scissor to see, the eyes with no wave
+    const bool figure = m_active.contains(QStringLiteral("efx:") + key)
+                     && m_sweepShown.value(key).laserForm == (m_r621Form == 1 ? 4 : 5);
     // the scissor: all six bars whole (the crossing needs wall and shelf lit together), the kick's pulse kept
-    m_r621Scissor = m_r621Live && m_r621Form == 2 && dropBar >= 1 && m_cast.contains(key)
-                 && m_blackout == false && m_flashHeld.contains(key) == false;
+    // (R622: a BLACKOUT / FLASH held over a beat line no longer ends them - dark is the dimmers', and the eyes
+    // started again from their first place after every one)
+    m_r621Scissor = m_r621Live && m_r621Form == 2 && dropBar >= 1 && m_cast.contains(key) && figure
+                 && m_flashHeld.contains(key) == false;
     // the helix's eyes: whole bars on the colour scene, two eyes a bar stepping on the music
-    bool eyes = m_r621Live && m_r621Form == 1 && dropBar >= 1 && m_cast.contains(key)
-             && m_groups.value(key).fixtures.count() >= 5 && m_blackout == false && m_flash == false
-             && m_flashHeld.contains(key) == false;
+    bool eyes = m_r621Live && m_r621Form == 1 && dropBar >= 1 && m_cast.contains(key) && figure
+             && m_groups.value(key).fixtures.count() >= 5
+             && m_flashHeld.contains(key) == false;   // TRACK_APP_REVIEWFIX_R622
     if (eyes)
         eyes = m_r621Eyes ? m_faderReal >= R621_EYES_OFF - 1e-9 : m_faderReal >= R621_EYES_ON - 1e-9;
     if (m_r621Eyes && eyes == false)
@@ -45021,9 +45082,12 @@ void TrackEngine::r621EyesStop(const QString &why)
     m_r621Eyes = false;
 }
 
-void TrackEngine::r621CeilCast(QSet<QString> &castSet)
+void TrackEngine::r621CeilCast(QSet<QString> &castSet, const QStringList &eligible)
 {
-    if ((m_r621CeilStage != 1 && m_r621CeilStage != 2) || m_r621CeilKey.isEmpty())
+    // TRACK_APP_REVIEWFIX_R622: only bars that may be cast at all tonight (not OFF, not LAST TRACK's outro) - read
+    // here every beat, for the draw and the running ceiling (r621CeilAim)
+    m_r621BarsOk = eligible.contains(dropFormBars());
+    if ((m_r621CeilStage != 1 && m_r621CeilStage != 2) || m_r621CeilKey.isEmpty() || m_r621BarsOk == false)
         return;
     castSet.insert(m_r621CeilKey);
     foreach (const QString &k, castSet.values())
@@ -45083,7 +45147,8 @@ quint32 TrackEngine::r621CeilScene(const QString &key, quint32 home, int units)
 }
 
 bool TrackEngine::r621CeilAim(const QString &key, QSet<QString> &darkGroups, bool inCast, bool isBreak, bool isBuild,
-                              bool isDrop, int beat, int secStart, qreal fader, bool isCalm, bool still)
+                              bool isDrop, int beat, int secStart, qreal fader, bool isCalm, bool still,
+                              const QString &nextState)
 {
     // from tick()'s aim loop, for the bars. TRUE: the ceiling owns their aim this beat (the engine's own skipped)
     Q_UNUSED(fader)
@@ -45092,27 +45157,31 @@ bool TrackEngine::r621CeilAim(const QString &key, QSet<QString> &darkGroups, boo
         return false;
     if (m_r621CeilStage != 0 && m_r621CeilKey != key)
         return false;
+    m_r621CeilMiss = 0;                  // TRACK_APP_REVIEWFIX_R622: the aim loop came by (the watchdog in r621DropBeat)
+    // TRACK_APP_REVIEWFIX_R622: his pad / a held flash on the bars while the ceiling stands - nothing moves under
+    // it (the abort went home a beat later with the pad still holding them lit: up to 16 units at once)
+    if ((m_r621CeilStage == 1 || m_r621CeilStage == 2) && (m_flashHeld.contains(key) || m_padFlash.contains(key)))
+        return true;
     const QString slot = QStringLiteral("pos:") + key;
     const quint32 home = homePosition(key);
-    const QString busy = r509BarsBusy(key);
-    const bool free = busy.isEmpty() || busy == QStringLiteral("r621");
+    const QString busy = r621Busy(key, m_r621CeilStage != 0);   // TRACK_APP_REVIEWFIX_R622 (was r509BarsBusy: every tap)
     const int lead = m_nextDropBeat - beat;
     QString wrong;
     if (isCalm || still)
         wrong = QStringLiteral("calm");
-    else if (m_blackout)
-        wrong = QStringLiteral("blackout");
     else if (m_faderReal < R621_CEIL_FADER)
         wrong = QStringLiteral("energy");
-    else if (home == Function::invalidId() || m_groupOff.contains(key))
+    else if (home == Function::invalidId() || m_groupOff.contains(key) || m_r621BarsOk == false)
         wrong = QStringLiteral("bars");
-    else if (free == false)
+    else if (busy.isEmpty() == false)
         wrong = busy;
     else if (inCast == false && m_r621CeilStage != 0)
         wrong = QStringLiteral("cast");      // (the draw takes the bars in itself, from the next beat)
     else if (isDrop || (isBreak == false && isBuild == false))
         wrong = QStringLiteral("section");
-    else if (m_trackTitle != m_r621CeilTrack || m_nextDropBeat <= beat)
+    // TRACK_APP_REVIEWFIX_R622: the track only of a RUNNING ceiling - read at the draw too, it was the track of the
+    // last draw, so the first break seen of every new track could never draw one
+    else if (m_nextDropBeat <= beat || (m_r621CeilStage != 0 && m_trackTitle != m_r621CeilTrack))
         wrong = QStringLiteral("drop");
     auto abort = [&](const QString &why) {
         dropFormRiseDark(key, darkGroups);
@@ -45160,7 +45229,12 @@ bool TrackEngine::r621CeilAim(const QString &key, QSet<QString> &darkGroups, boo
             m_r621CeilTrack = m_trackTitle;
             const bool risePlan = (m_formPlan == DF_RISE || m_formPlan == DF_INVRISE) && m_formPlanTitle == m_trackTitle
                                && m_formPlanFor == m_nextDropBeat;
+            // TRACK_APP_REVIEWFIX_R622: only where the break runs into its drop (straight, or through a build) - with
+            // a groove between them the ceiling was cut dark at the groove's first beat; and not on bars he keeps
+            // taking out of his breaks (R433's learned taste)
+            const bool intoDrop = nextState == QStringLiteral("drop") || nextState == QStringLiteral("build");
             if (wrong.isEmpty() == false || m_hold || r493HazeOn() == false || lead < R621_CEIL_HAZE_MIN
+                || intoDrop == false || tasteOut(QStringLiteral("break"), key)
                 || lead > R621_CEIL_LEAD_MAX || risePlan || m_riseStage != 0 || m_r515MbOn || r509BarsLive()
                 || r552PinAim(key) || m_position.value(key, Function::invalidId()) != home
                 || m_active.value(slot, Function::invalidId()) != home)
@@ -45257,6 +45331,7 @@ void TrackEngine::r621Reset()
     m_r621Live = false;
     m_r621Form = 0;
     m_r621Scissor = false;
+    m_r621CeilMiss = 0;                  // TRACK_APP_REVIEWFIX_R622
     m_r621CeilStage = 0;
     m_r621CeilKey.clear();
 }
@@ -47980,6 +48055,8 @@ QString TrackEngine::r514GradBusy(const QString &key, quint32 splitScene, quint3
             return QStringLiteral("pad");             // his laser pad (it takes the other laser type)
     if (r509BarsLive())
         return QStringLiteral("bars-count-arp");     // r509: their own masks and eye pairs
+    if (m_r621Eyes || (m_r621Live && m_r621Form == 1))
+        return QStringLiteral("helix");              // TRACK_APP_REVIEWFIX_R622: the helix's eyes are on these channels
     if (m_r493RoofOn)
         return QStringLiteral("roof");
     if (layerGroup(key) || autoFadeGroup(key) || (m_mixGlide && key == m_mixGlideKey))
@@ -50627,10 +50704,19 @@ void TrackEngine::casambiTick()
         m_casPeak = 0;
         m_casSent = -1.0;
         m_casSentMs = -1;
-        if (m_testTrack == false && proc == nullptr)
-            casambiStart();
+        m_casTried = false;              // TRACK_APP_REVIEWFIX_R622
+    }
+    // TRACK_APP_REVIEWFIX_R622: started when the last helper is gone. LAST TRACK undone and armed again within the
+    // few seconds the old helper takes to put the lamps back found it still running, started none - and the old one
+    // exits after its undo: that LAST TRACK had no Casambi at all. The "p" lines went to a helper that had left
+    if (m_casTried == false && m_testTrack == false && proc == nullptr)
+    {
+        m_casTried = true;
+        casambiStart();
         proc = qobject_cast<QProcess *>(m_casProc);
     }
+    else if (m_casTried == false)
+        return;                          // the old helper is still undoing (or a test track): nothing to it
     m_casPeak = qMax(m_casPeak, m_lastStage);
     if (proc == nullptr || proc->state() == QProcess::NotRunning)
         return;

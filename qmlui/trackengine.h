@@ -1775,9 +1775,11 @@ protected:
     bool r621EyesFrame(qint64 now);                     // the pulse timer: the eyes step on the music
     void r621EyesStart();                               // the beat drawn: the colour checked, the timer
     void r621EyesStop(const QString &why);
-    void r621CeilCast(QSet<QString> &castSet);          // the ceiling keeps the bars on stage
+    void r621CeilCast(QSet<QString> &castSet, const QStringList &eligible);   // the ceiling keeps the bars on stage
     bool r621CeilAim(const QString &key, QSet<QString> &darkGroups, bool inCast, bool isBreak, bool isBuild,
-                     bool isDrop, int beat, int secStart, qreal fader, bool isCalm, bool still);
+                     bool isDrop, int beat, int secStart, qreal fader, bool isCalm, bool still,
+                     const QString &nextState);
+    QString r621Busy(const QString &key, bool running) const;   // TRACK_APP_REVIEWFIX_R622: who else has the bars
     quint32 r621CeilScene(const QString &key, quint32 home, int units);
     void r621Reset();
     void r509BarsBeat(QSet<QString> &castSet, const QStringList &eligible, const QString &state, int beat,
@@ -2459,6 +2461,8 @@ private:
     int m_r621StepBeat = -1;
     int m_r621StepBits = 0;
     int m_r621CeilStage = 0;             // 0 none, 1 up / holding, 2 coming down, 4 abort (dark), 5 home (dark beat)
+    int m_r621CeilMiss = 0;              // TRACK_APP_REVIEWFIX_R622: beats the aim loop has not come by the ceiling's bars
+    bool m_r621BarsOk = false;           // ... the bars may be cast tonight (eligible), read every beat
     int m_r621CeilFor = -1;
     int m_r621CeilUnits = 0;
     int m_r621CeilBeat = -1;
@@ -3702,6 +3706,7 @@ private:
     // henover last-track", each from its own level): casambi/casambi_helper.exe, fed LAST TRACK's curve on stdin
     QObject *m_casProc = nullptr;          // ... the helper (a QProcess), while it runs
     bool m_casArmed = false;               // ... this LAST TRACK has had its helper started (or its reason logged)
+    bool m_casTried = false;               // TRACK_APP_REVIEWFIX_R622: ... casambiStart() has run for this LAST TRACK
     int m_casPeak = 0;                     // ... the furthest stage it reached: undone before the house light = lamps back
     qreal m_casSent = -1.0;                // ... the last progress sent
     qint64 m_casSentMs = -1;
