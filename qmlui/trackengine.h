@@ -634,6 +634,11 @@ class TrackEngine : public QObject
     // R458_LAST_TRACK: 0 off, 1 armed, 2 outro, 3 house light, 4 dark
     Q_PROPERTY(int lastTrack READ lastTrack NOTIFY lastTrackChanged)
     Q_PROPERTY(bool lastTrackShown READ lastTrackShown NOTIFY lastTrackChanged)
+    // TRACK_APP_HAZECLOSE_R626: the "hazer is off" warning 2 min after closing (no LAST TRACK ran), the minutes to
+    // its own SHOW OFF, and the hazer's level CONTINUE gives back
+    Q_PROPERTY(bool hazeCloseWarn READ hazeCloseWarn NOTIFY liveChanged)
+    Q_PROPERTY(int hazeCloseLeftMin READ hazeCloseLeftMin NOTIFY liveChanged)
+    Q_PROPERTY(int hazeCloseFrom READ hazeCloseFrom NOTIFY liveChanged)
     Q_PROPERTY(int lastTrackLeft READ lastTrackLeft NOTIFY lastTrackChanged)
     Q_PROPERTY(int lastTrackCloseMin READ lastTrackCloseMin NOTIFY lastTrackChanged)
     Q_PROPERTY(QString lastTrackCloseAt READ lastTrackCloseAt NOTIFY lastTrackChanged)
@@ -864,6 +869,15 @@ public:
     QString lastTrackCloseAt() const;
     /** a tap (after SURE? on the page): arm, or undo at any stage */
     Q_INVOKABLE void toggleLastTrack();
+    /** TRACK_APP_HAZECLOSE_R626: the closing warning - CONTINUE gives the hazer back where it was for the rest of
+     *  the night; STOP SHOW is the page's SHOW OFF */
+    bool hazeCloseWarn() const { return m_r626Warn == 1; }
+    int hazeCloseLeftMin() const;
+    int hazeCloseFrom() const { return qRound(qMax(0, m_r626From) * 100.0 / 255.0); }
+    Q_INVOKABLE void hazeCloseContinue();
+    /** TRACK_APP_HAZECLOSE_R626: TrackManager asks every 200 ms - the engine wants SHOW OFF (the warning's 30 min
+     *  without an answer, LAST TRACK dark for 15 min). Taken once */
+    bool r626TakeShowOff() { const bool w = m_r626WantOff; m_r626WantOff = false; return w; }
     /** every 200 ms from closingTick(): the window, the house fade, the haze */
     void lastTrackTick(bool showOn);
     /* ---- R467_HAZE_NAG (track_runtime/hazenag.inc.cpp) ---- */
@@ -1373,6 +1387,11 @@ public:
     /** 1.0 all night, sliding to 0 over the last five minutes before closing (the
      *  closing sequence, runde 211), 0 after until 06:00 */
     qreal closingCap() const;
+    /** TRACK_APP_HAZECLOSE_R626: the evening a moment belongs to (its 20:00 - before 20:00 it is yesterday's), and
+     *  the night's closing moment: that 20:00 plus the hours the house is open (7, New Year's night 8), in REAL
+     *  seconds - the same hours open on the nights the clocks change */
+    static QDateTime r626Evening(const QDateTime &now);
+    static QDateTime r626CloseAt(const QDateTime &now);
     qreal masterOut() const;
     /** The ENERGY percent the clock last handed to TrackManager. */
     Q_INVOKABLE int roomPercent() const;
@@ -3701,6 +3720,27 @@ private:
     bool m_closingOn = false;              // the closing sequence (SETTINGS_ENGINE_CLOSING) - R458_CLOSING_OFF
     qreal m_closingDim = 1.0;              // closingCap() as last applied to the light (closingTick)
     bool m_closingLidWas = false;          // R513_OLD_CLOSING_LIDWAS: LAST TRACK's lid ruled on the last closingTick
+    // TRACK_APP_HAZECLOSE_R626: the hazer goes off at closing every night, whatever else is on
+    void r626HazeClose(bool showOn);
+    int r626HazeOut() const;
+    qint64 r626Ms(qint64 ms) const;        // QLC_TRACK_R626_FAST: the warning's minutes as seconds (the simulator)
+    int m_r626Warn = 0;                    // 0 none, 1 shown, 2 CONTINUE, 3 over (LAST TRACK, SHOW OFF, its 30 min)
+    qint64 m_r626ShutMs = -1;              // the hazer reached nought at closing
+    qint64 m_r626WarnMs = -1;              // the warning came up
+    int m_r626WarnMin = -1;                // its minutes left, last told the page
+    bool m_r626Continue = false;           // CONTINUE: the hazer his again for the rest of the night
+    bool m_r626WantOff = false;            // SHOW OFF wanted (TrackManager takes it)
+    QString m_r626LastNight;               // LAST TRACK ran on this night (from 02:00)
+    qint64 m_r626DarkMs = -1;              // LAST TRACK's DARK began
+    bool m_r626DarkOffDone = false;        // ... and its SHOW OFF 15 min later was asked
+    bool m_r626Lid = false;                // from 5 min before closing to noon: the hazer is the closing's
+    bool m_r626Shut = false;               // ... closed: its channels held at nought
+    QString m_r626Night;                   // the evening it ran for
+    int m_r626From = -1;                   // the hazer's output (0-255) as the 5 minutes began
+    int m_r626Cap = -1;                    // the ceiling last set on its channels (-1 none yet)
+    qint64 m_r626HandMs = -1;              // his hand on HAZE after closing: a test, for 10 minutes
+    qint64 m_r626CapMs = -1;               // the ceiling last written
+    QList<QPair<quint32, int> > m_r626Capped;   // (universe, address) it stands on - let go if the hazer moves
     // R458_LAST_TRACK (track_runtime/lasttrack.inc.cpp)
     int m_lastStage = 0;                   // 0 off, 1 armed, 2 outro, 3 house light, 4 dark
     // TRACK_APP_CASAMBI_R620 (Tobias 11-16: the restaurant's Casambi lights "skrue alle enheder langsomt op til 100%

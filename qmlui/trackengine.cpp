@@ -7600,6 +7600,14 @@ void TrackEngine::setHaze(qreal level)
     if (by == QStringLiteral("hand") && m_hazeAuto)
         setHazeAuto(false);
     level = qBound(0.0, level, 1.0);
+    // TRACK_APP_HAZECLOSE_R626: after closing a finger on HAZE is a test - it runs for 10 minutes, then off again
+    if (by == QStringLiteral("hand") && m_r626Shut && level > 0.0)
+    {
+        if (m_r626HandMs < 0)
+            logSignal(QStringLiteral("sig:haze-close:test"));
+        m_r626HandMs = m_clock.elapsed();
+        r626HazeClose(m_showOnNow);      // the ceiling up before the value is written
+    }
     // R484_HZ_ENGINE_CAP (Tobias 10-20: "... ryger tilbage til 70 naar man slipper faderen"):
     // only a finger takes the haze over its rest - AUTO, LAST TRACK's fade and undo, the
     // closing and SHOW OFF never set more than the saved limit
@@ -22545,7 +22553,29 @@ int TrackEngine::closingMinutes()
     if (QTime::currentTime().hour() < 20)
         d = d.addDays(-1);
     bool newYear = d.month() == 12 && d.day() == 31;
-    return ((newYear ? 5 : 3) + 24 - 20) * 60;
+    return ((newYear ? 4 : 3) + 24 - 20) * 60;   // TRACK_APP_HAZECLOSE_R626: New Year's night 04:00 (Tobias 11-21)
+}
+
+QDateTime TrackEngine::r626Evening(const QDateTime &now)
+{
+    // TRACK_APP_HAZECLOSE_R626: the night is named by its evening; 20:00 exists once on every day of the year (the
+    // clocks change at 02:00 / 03:00)
+    QDate d = now.date();
+    if (now.time().hour() < 20)
+        d = d.addDays(-1);
+    return QDateTime(d, QTime(20, 0));
+}
+
+QDateTime TrackEngine::r626CloseAt(const QDateTime &now)
+{
+    // TRACK_APP_HAZECLOSE_R626: the evening's 20:00 plus the hours open - 7 (03:00), New Year's night 8 (04:00:
+    // Tobias 11-21 "Kl 04 nytaar!!") -
+    // added as REAL seconds. A normal night: 03:00. The October night (03:00 summer time = 02:00 winter time): the
+    // first 03:00, seven hours after 20:00 - no hour more. The March night (02:00 winter time = 03:00 summer time):
+    // 04:00 summer time, seven hours after 20:00 - no hour less
+    const QDateTime ev = r626Evening(now);
+    const bool newYear = ev.date().month() == 12 && ev.date().day() == 31;
+    return ev.addSecs(qint64(newYear ? 8 : 7) * 3600);
 }
 
 qreal TrackEngine::closingCap() const
@@ -22581,18 +22611,16 @@ qreal TrackEngine::closingCap() const
     // on the closing minute)
     if (minutes >= 600)
         return 1.0;
-    if (minutes >= close)
-        return 0.0;
+    Q_UNUSED(close)
+    // TRACK_APP_HAZECLOSE_R626: closed by the real hours open (r626CloseAt), not by the wall clock's minutes - on the
+    // March night the wall clock's 03:00 came an hour early
     // The last minutes count REAL seconds to closing time, which is a
     // local wall time that exists exactly once on both change-over nights.
     // On the wall clock the October night ran the slide twice (02:20-02:59
     // CEST, then the clock fell back to 02:00 and the lid sprang open) and the
     // March night never ran it (01:59 CET, then 03:00 CEST = closed) (runde 209).
-    QDate night = QDate::currentDate();
-    if (now.hour() < 20)
-        night = night.addDays(-1);
-    const qint64 left = QDateTime::currentDateTime()
-                            .secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 4, 0)));
+    const QDateTime nowDt = QDateTime::currentDateTime();
+    const qint64 left = nowDt.secsTo(r626CloseAt(nowDt));   // TRACK_APP_HAZECLOSE_R626
     if (left <= 0)
         return 0.0;
     // five minutes, not forty (runde 211): the lid starts at 02:55 and is shut
@@ -22633,6 +22661,7 @@ void TrackEngine::closingTick(bool showOn)
     // be the old show's, as in the pulse and fade timers.
     if (m_docTimer.isActive())
         return;
+    r626HazeClose(showOn);               // TRACK_APP_HAZECLOSE_R626: the hazer off at closing - before AUTO and the rest
     lastTrackTick(showOn);                           // R458_LAST_TRACK
     r587StrobeCaps(false);               // TRACK_APP_STROBECAP_R587: SHOW OFF, a lab, the start scene - within 200 ms
     r588Backup();                        // TRACK_APP_FIX_R588: the day's backup, at a quiet moment
@@ -22673,7 +22702,7 @@ void TrackEngine::closingTick(bool showOn)
             applyGroupOff();
         emit liveChanged();
     }
-    if (dim < 1.0 && m_haze > 0.0 && lastLid == false)
+    if (dim < 1.0 && m_haze > 0.0 && lastLid == false && m_r626Lid == false)   // TRACK_APP_HAZECLOSE_R626
     {
         atmosNext(QStringLiteral("closing"));   // R475_ATMOS_CLOSING: the log's "by"
         setHaze(0.0);
@@ -22681,7 +22710,7 @@ void TrackEngine::closingTick(bool showOn)
     // Runde 221: haze set from a Virtual Console or MIDI fader never passed
     // through m_haze, so the closing left the hazer running. Once, as the
     // closing starts: the haze scene at nought over whatever set it.
-    else if (closingStarts && lastLid == false)
+    else if (closingStarts && lastLid == false && m_r626Lid == false)   // TRACK_APP_HAZECLOSE_R626
     {
         ensureTable();
         applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
@@ -31731,11 +31760,8 @@ qint64 TrackEngine::lastTrackSecsToClose() const
     // local wall time that exists once on both nights the clocks change. The wall
     // clock's minutes showed the button at 02:50 summer time and hid it for an hour
     // at 03:00 = 02:00 (25 Oct).
-    QDate night = QDate::currentDate();
-    if (QTime::currentTime().hour() < 20)
-        night = night.addDays(-1);
-    const int close = closingMinutes();
-    return QDateTime::currentDateTime().secsTo(QDateTime(night.addDays(1), QTime(close / 60 - 4, 0)));
+    const QDateTime now = QDateTime::currentDateTime();
+    return now.secsTo(r626CloseAt(now));   // TRACK_APP_HAZECLOSE_R626: the real hours open
 }
 
 bool TrackEngine::lastTrackHolds() const
@@ -32539,12 +32565,13 @@ void TrackEngine::hazeNagTick(bool showOn)
         m_hazeZeroMs = 0;
         m_hazeQuietUntil = -1;
     }
-    else if (night && music && m_lastStage == 0 && m_closingDim >= 1.0)   // R472_HAZE_CLOSE: the closing zeroes it
+    else if (night && music && m_lastStage == 0 && m_closingDim >= 1.0 && m_r626Lid == false)   // R472_HAZE_CLOSE (R626)
     {
         m_hazeZeroMs += dt;
     }
     // while the music pauses (a gap between tracks, a pause) the count holds
-    const bool watch = showOn && zero && night && music && m_lastStage == 0 && m_closingDim >= 1.0;
+    const bool watch = showOn && zero && night && music && m_lastStage == 0 && m_closingDim >= 1.0
+                    && m_r626Lid == false;   // TRACK_APP_HAZECLOSE_R626
     int nag = 0;
     if (watch && m_hazeZeroMs >= qint64(ENGINE_HAZE_NAG_MIN) * 60000
         && (m_hazeQuietUntil < 0 || now >= m_hazeQuietUntil))
@@ -32672,8 +32699,13 @@ void TrackEngine::hazeAutoTick(bool showOn)
     // rest of the night. The closing OFF: the DJ decides, both hold as before. His hand on HAZE still turns AUTO off
     // TRACK_APP_FIX_R593 (own review): ... until noon, where AUTO switches itself off - "closed" ran on to 20:00,
     // so AUTO armed before the doors open (a test at 19:00) was pulled to 0 instead of holding as it always did
-    const bool closed = m_closingOn && m >= closingMinutes() && m < 16 * 60;
-    if (i >= ENGINE_CLOCK_POINTS && closed == false)
+    // TRACK_APP_HAZECLOSE_R626: the hazer belongs to r626HazeClose() from 5 min before closing to noon - AUTO
+    // stepping it back up towards the 02:45 point fought the closing's ramp. The fan: the closing sequence ON, from
+    // the real closing moment (r626CloseAt), as before
+    const bool closedHaze = m_r626Lid && m_r626Continue == false;
+    const QDateTime nowDt = QDateTime::currentDateTime();
+    const bool closed = m_closingOn && nowDt >= r626CloseAt(nowDt) && m < 16 * 60;
+    if (i >= ENGINE_CLOCK_POINTS && closed == false && closedHaze == false)
         return;                          // outside the row: both hold
     atmosRowLoad();
     // one step toward a point's value; the bottom 3 % is off, as on the sliders
@@ -32687,7 +32719,7 @@ void TrackEngine::hazeAutoTick(bool showOn)
             next = 0;
         return next;
     };
-    const int wantH = closed ? 0 : m_atmosRowH.value(i, -1);
+    const int wantH = closedHaze ? -1 : (closed ? 0 : m_atmosRowH.value(i, -1));   // TRACK_APP_HAZECLOSE_R626
     if (wantH >= 0 && m_hazeChannels.isEmpty() == false)
     {
         const int at = int(qRound(m_haze * 100.0));
@@ -50783,4 +50815,250 @@ void TrackEngine::casambiStart()
     });
     proc->start(exe, QStringList() << cfg);
     logSignal(QStringLiteral("sig:casambi:start"));
+}
+
+/* =====================================================================
+ * TRACK_APP_HAZECLOSE_R626 (Tobias 11-21: "Du maa gerne soerge for at hazeren specifikt altid bliver slukket, saa
+ * den skal bare altid koere paa lukkesekvens og selv koere ned til 0 fra 2:55" ... "Det er ULTRA vigtigt hazeren
+ * bliver slukket korrekt").
+ *
+ * Every night, whatever is switched on or off - the closing sequence, ENERGY by clock, Haze AUTO, SHOW ON / OFF,
+ * LAST TRACK pressed or not, a deck playing or stopped - the hazer goes from what it gives at 02:55 to nought at
+ * 03:00 (New Year's night 03:55 -> 04:00), in a straight line, and stays at nought until noon. Two layers:
+ *  1. TRACK's own HAZE (desk, phone, AUTO, MIDI) is taken down with it, and its scene written at nought;
+ *  2. a ceiling on the hazer's DMX channels in the universe (R587's): whatever else writes them - a Virtual
+ *     Console fader, a programme of the show file, an LTP value left standing - nothing gets past it.
+ * The closing moment is the evening's 20:00 plus the hours open in REAL seconds (r626CloseAt): the October night
+ * closes at the first 03:00 (summer time), the March night at 04:00 summer time - the same seven hours.
+ * After closing a finger on HAZE (a test) lets it run for 10 minutes; then it is off again.
+ * The fan is not touched here (Tobias: the hazer).
+ * Log: sig:haze-close:start:<output 0-255>:<s left> | :off | :test | :test-over | :cap:<n>
+ * ===================================================================== */
+int TrackEngine::r626HazeOut() const
+{
+    // what the hazer gives now: the highest of its haze channels on the wire, or TRACK's own HAZE if higher
+    int out = int(qRound(qBound(0.0, m_haze, 1.0) * 255.0));
+    if (m_doc == nullptr || m_doc->inputOutputMap() == nullptr)
+        return out;
+    for (const QPair<quint32, quint32> &hc : m_hazeChannels)
+    {
+        Fixture *fxi = m_doc->fixture(hc.first);
+        if (fxi == nullptr)
+            continue;
+        Universe *uni = m_doc->inputOutputMap()->universe(fxi->universe());
+        if (uni != nullptr)
+            out = qMax(out, int(uni->postGMValue(int(fxi->address() + hc.second))));
+    }
+    return out;
+}
+
+qint64 TrackEngine::r626Ms(qint64 ms) const
+{
+    static const bool fast = qEnvironmentVariableIsSet("QLC_TRACK_R626_FAST");
+    return fast ? ms / 60 : ms;
+}
+
+int TrackEngine::hazeCloseLeftMin() const
+{
+    if (m_r626Warn != 1 || m_r626WarnMs < 0)
+        return 0;
+    const qint64 left = r626Ms(qint64(30) * 60000) - (m_clock.elapsed() - m_r626WarnMs);
+    return int(qMax(qint64(0), (left + 59999) / 60000));
+}
+
+void TrackEngine::hazeCloseContinue()
+{
+    // TRACK_APP_HAZECLOSE_R626 (Tobias 11-21: "mulighed for at fortsaette hvor den slap"): the hazer back where it
+    // was at 02:55, his for the rest of the night - LAST TRACK and SHOW OFF still take it to nought
+    if (m_r626Warn != 1)
+        return;
+    m_r626Warn = 2;
+    m_r626Continue = true;
+    m_r626HandMs = -1;
+    logSignal(QStringLiteral("sig:haze-close:continue:%1").arg(m_r626From));
+    r626HazeClose(m_showOnNow);          // the ceiling up first
+    if (m_r626From > 0)
+    {
+        atmosNext(QStringLiteral("continue"));
+        setHaze(qreal(m_r626From) / 255.0);
+    }
+    emit liveChanged();
+}
+
+void TrackEngine::r626HazeClose(bool showOn)
+{
+    if (m_doc == nullptr || m_doc->inputOutputMap() == nullptr)
+        return;
+    const QDateTime now = QDateTime::currentDateTime();
+    const QDateTime evening = r626Evening(now);
+    const qint64 left = now.secsTo(r626CloseAt(now));        // to closing, real seconds
+    const qint64 open = evening.secsTo(now);                 // since the evening's 20:00
+    const bool lid = left < qint64(ENGINE_CLOSING_SECS) && open < qint64(16) * 3600;   // 02:55 ... 12:00
+    const qint64 ms = m_clock.elapsed();
+    const QString night = evening.date().toString(Qt::ISODate);
+    // LAST TRACK ran this night (from 02:00 - its window opens at 02:50): no warning at closing
+    if (m_lastStage > 0 && open >= qint64(6) * 3600 && open < qint64(16) * 3600)
+        m_r626LastNight = night;
+    // Tobias 11-21 ("Ellers skal den selv saette show off efter last-track 15 minutter efter last-track er
+    // faerdig"): LAST TRACK's house light ends in DARK with the show still ON - 15 min later the show goes OFF
+    if (m_lastStage == 4)
+    {
+        if (m_r626DarkMs < 0)
+            m_r626DarkMs = ms;
+        if (m_r626DarkOffDone == false && showOn && ms - m_r626DarkMs >= r626Ms(qint64(15) * 60000))
+        {
+            m_r626DarkOffDone = true;
+            m_r626WantOff = true;
+            logSignal(QStringLiteral("sig:last-track:auto-show-off"));
+        }
+    }
+    else
+    {
+        m_r626DarkMs = -1;
+        m_r626DarkOffDone = false;
+    }
+    int cap = 255;
+    if (lid)
+    {
+        ensureTable();
+        if (m_r626Night != night)
+        {
+            // the 5 minutes begin - or TRACK started inside them, or after closing (a restart, a crash)
+            m_r626Night = night;
+            m_r626From = r626HazeOut();
+            m_r626Shut = false;
+            m_r626HandMs = -1;
+            m_r626ShutMs = -1;
+            m_r626Warn = 0;
+            m_r626WarnMs = -1;
+            m_r626Continue = false;
+            logSignal(QStringLiteral("sig:haze-close:start:%1:%2").arg(m_r626From).arg(qMax(qint64(0), left)));
+        }
+        if (m_r626Continue)
+            cap = 255;                   // CONTINUE: his hazer for the rest of the night
+        else if (left > 0)
+        {
+            // the straight line from 02:55's output to nought at 03:00 - TRACK's HAZE follows it down (never up)
+            const qreal f = qreal(left) / qreal(ENGINE_CLOSING_SECS);
+            cap = qBound(0, int(std::ceil(qreal(m_r626From) * f)), 255);
+            const qreal want = std::floor(qreal(m_r626From) * f / 255.0 * 100.0) / 100.0;
+            if (m_haze > want + 0.009)      // a step of 1 % (the wire is held by the ceiling below, every 200 ms)
+            {
+                atmosNext(QStringLiteral("closing"));
+                setHaze(want);
+            }
+        }
+        else
+        {
+            // (QLC_TRACK_R626_TEST_MS: a shorter test for the simulator)
+            static const qint64 testMs = qEnvironmentVariableIntValue("QLC_TRACK_R626_TEST_MS") > 0
+                                       ? qint64(qEnvironmentVariableIntValue("QLC_TRACK_R626_TEST_MS")) : qint64(10) * 60000;
+            const bool test = m_r626HandMs >= 0 && ms - m_r626HandMs < testMs;
+            if (m_r626HandMs >= 0 && test == false)
+            {
+                m_r626HandMs = -1;
+                m_r626Shut = false;      // shut again below, as at closing
+                logSignal(QStringLiteral("sig:haze-close:test-over"));
+            }
+            if (test)
+                cap = 255;               // his test: the hazer is his for 10 minutes
+            else
+            {
+                cap = 0;
+                if (m_r626Shut == false)
+                {
+                    m_r626Shut = true;
+                    if (m_r626ShutMs < 0)
+                        m_r626ShutMs = ms;
+                    if (m_haze > 0.0)
+                    {
+                        atmosNext(QStringLiteral("closing"));
+                        setHaze(0.0);
+                    }
+                    // the HAZE scene at nought too (a VC or MIDI fader on it never passed through m_haze)
+                    applyAtmos(m_hazeScene, m_hazeChannels, 0.0);
+                    logSignal(QStringLiteral("sig:haze-close:off"));
+                }
+                else if (m_haze > 0.0)
+                {
+                    // TRACK's own HAZE back up after closing without a finger (a restore, an undo): down again
+                    atmosNext(QStringLiteral("closing"));
+                    setHaze(0.0);
+                }
+            }
+        }
+        // Tobias 11-21: the warning - 2 minutes after the hazer reached nought at closing, only when no LAST TRACK
+        // ran, the show ON. CONTINUE or STOP SHOW; nothing for 30 minutes: SHOW OFF by itself
+        if (m_r626Warn == 0 && m_r626ShutMs >= 0 && ms - m_r626ShutMs >= r626Ms(qint64(2) * 60000) && showOn
+            && m_r626Continue == false && m_r626LastNight != night && m_lastStage == 0)
+        {
+            m_r626Warn = 1;
+            m_r626WarnMs = ms;
+            m_r626WarnMin = -1;
+            logSignal(QStringLiteral("sig:haze-close:warn"));
+        }
+        if (m_r626Warn == 1)
+        {
+            if (m_lastStage > 0 || showOn == false)
+            {
+                m_r626Warn = 3;          // LAST TRACK or SHOW OFF answered it
+                logSignal(QStringLiteral("sig:haze-close:warn-end:%1").arg(showOn ? QStringLiteral("last-track")
+                                                                                   : QStringLiteral("show-off")));
+                emit liveChanged();
+            }
+            else if (ms - m_r626WarnMs >= r626Ms(qint64(30) * 60000))
+            {
+                m_r626Warn = 3;
+                m_r626WantOff = true;
+                logSignal(QStringLiteral("sig:haze-close:auto-show-off"));
+                emit liveChanged();
+            }
+            else if (hazeCloseLeftMin() != m_r626WarnMin)
+            {
+                m_r626WarnMin = hazeCloseLeftMin();
+                emit liveChanged();      // the minutes on the warning
+            }
+        }
+    }
+    else
+    {
+        m_r626Shut = false;
+        m_r626HandMs = -1;
+        if (m_r626Warn == 1)
+            emit liveChanged();
+        m_r626Warn = 0;
+        m_r626Continue = false;
+    }
+    m_r626Lid = lid;
+    // the ceiling on the hazer's channels - written when it changes, and once a second anyway (a show loaded since,
+    // a universe the channels moved to)
+    if (cap == m_r626Cap && m_r626CapMs >= 0 && ms - m_r626CapMs < 1000)
+        return;
+    if (cap != m_r626Cap && (cap == 0 || cap == 255 || m_r626Cap == 255))
+        logSignal(QStringLiteral("sig:haze-close:cap:%1").arg(cap));
+    m_r626Cap = cap;
+    m_r626CapMs = ms;
+    QList<QPair<quint32, int> > at;
+    for (const QPair<quint32, quint32> &hc : m_hazeChannels)
+    {
+        Fixture *fxi = m_doc->fixture(hc.first);
+        if (fxi == nullptr)
+            continue;
+        Universe *uni = m_doc->inputOutputMap()->universe(fxi->universe());
+        if (uni == nullptr)
+            continue;
+        uni->setTrackCap(int(fxi->address() + hc.second), uchar(cap));
+        at << qMakePair(fxi->universe(), int(fxi->address() + hc.second));
+    }
+    // a show loaded since with the hazer elsewhere (or none): the channels it stood on before are let go - never a
+    // ceiling left on another lamp
+    for (const QPair<quint32, int> &old : m_r626Capped)
+    {
+        if (at.contains(old))
+            continue;
+        Universe *uni = m_doc->inputOutputMap()->universe(old.first);
+        if (uni != nullptr)
+            uni->setTrackCap(old.second, 255);
+    }
+    m_r626Capped = at;
 }

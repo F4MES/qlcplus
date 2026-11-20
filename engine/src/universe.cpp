@@ -639,7 +639,12 @@ void Universe::updatePostGMValue(int channel)
 void Universe::setTrackCap(int channel, uchar cap)
 {
     if (channel >= 0 && channel < UNIVERSE_SIZE)
+    {
         m_trackCap[channel] = cap;
+        // TRACK_APP_HAZECLOSE_R626: what stands there now, under the new ceiling too (an LTP value is not written again)
+        if (channel < m_postGMValues->size() && uchar(m_postGMValues->at(channel)) > cap)
+            (*m_postGMValues)[channel] = static_cast<char>(cap);
+    }
 }
 
 int Universe::trackCapHits() const

@@ -1382,6 +1382,8 @@ void TrackManager::slotEnergyTick()
         m_stopSinceMs = 0;
         runEngine(false);
     }
+    if (m_engine != nullptr && m_engine->r626TakeShowOff() && m_autoRun)   // TRACK_APP_HAZECLOSE_R626
+        setAutoRun(false);
     if (m_engine != nullptr)
         m_engine->closingTick(m_autoRun);         // R211_CLOSING_TICK R213_SHOW_ON
 

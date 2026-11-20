@@ -4798,6 +4798,100 @@ Rectangle
         }
     }
 
+    // TRACK_APP_HAZECLOSE_R626: the closing warning - the hazer went off at closing and no LAST TRACK ran. Over
+    // the track card, blinking; the top bar (the clock, SHOW ON) stays. CONTINUE = the hazer back where it was;
+    // STOP SHOW (two taps) = SHOW OFF; nothing for 30 min = SHOW OFF by itself (the engine)
+    Rectangle
+    {
+        id: hazeWarn
+        objectName: "hazeWarn"
+        visible: !!trackEngine && trackEngine.hazeCloseWarn === true
+        z: 70
+        readonly property real moved: trackViewRoot.width + trackViewRoot.height + waveCard.x + waveCard.y + waveCard.width + waveCard.height
+        readonly property point at: { var dep = moved; return waveCard.mapToItem(trackViewRoot, 0, 0) }
+        x: at.x; y: at.y
+        width: waveCard.width; height: waveCard.height
+        radius: waveCard.radius
+        color: "#2A0909"
+        border.width: Math.max(3, Math.round(4 * trackViewRoot.ks))
+        border.color: "#F05050"
+        property bool blink: false
+        property bool armStop: false
+        Timer { interval: 600; repeat: true; running: hazeWarn.visible; onTriggered: hazeWarn.blink = !hazeWarn.blink
+                onRunningChanged: if (!running) { hazeWarn.blink = false; hazeWarn.armStop = false } }
+        Timer { id: hazeWarnArm; interval: 4000; onTriggered: hazeWarn.armStop = false }
+        Rectangle { anchors.fill: parent; radius: parent.radius; color: "#C42A2A"; opacity: hazeWarn.blink ? 0.6 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 200 } } }
+        MouseArea { anchors.fill: parent }           // nothing under it takes a finger
+        Column
+        {
+            anchors.centerIn: parent
+            spacing: Math.round(10 * trackViewRoot.ks)
+            Text
+            {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("HAZER OFF  ·  CLOSING TIME")
+                color: "#FFFFFF"; font.bold: true
+                font.pixelSize: trackViewRoot.fs(34); font.letterSpacing: trackViewRoot.fs(34) * 0.12
+            }
+            Text
+            {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: trackEngine ? qsTr("LAST TRACK was not pressed. The show switches off by itself in %1 min.")
+                                    .arg(trackEngine.hazeCloseLeftMin) : ""
+                color: "#FFE0E0"; font.bold: true; font.pixelSize: trackViewRoot.fs(16)
+            }
+            Row
+            {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: Math.round(16 * trackViewRoot.ks)
+                Rectangle
+                {
+                    objectName: "hazeWarnContinue"
+                    width: Math.max(260, Math.round(280 * trackViewRoot.ks)); height: Math.max(trackViewRoot.touchH, Math.round(58 * trackViewRoot.ks))
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: contIn.down ? "#34343C" : "#1C1C21"
+                    border.width: 2; border.color: "#F2F2F5"
+                    Text
+                    {
+                        anchors.centerIn: parent
+                        text: trackEngine && trackEngine.hazeCloseFrom > 0
+                              ? qsTr("CONTINUE  ·  HAZE %1 %").arg(trackEngine.hazeCloseFrom) : qsTr("CONTINUE")
+                        color: "#FFFFFF"; font.bold: true
+                        font.pixelSize: trackViewRoot.fs(16); font.letterSpacing: trackViewRoot.fs(16) * 0.1
+                    }
+                    TouchInput { id: contIn; onReleasedAt: (x, y, inside) => { if (inside && trackEngine) trackEngine.hazeCloseContinue() } }
+                }
+                Rectangle
+                {
+                    objectName: "hazeWarnStop"
+                    width: Math.max(260, Math.round(280 * trackViewRoot.ks)); height: Math.max(trackViewRoot.touchH, Math.round(58 * trackViewRoot.ks))
+                    radius: Math.round(10 * trackViewRoot.ks)
+                    color: stopIn.down ? "#B03030" : "#E23B3B"
+                    border.width: hazeWarn.armStop ? 3 : 0; border.color: "#FFFFFF"
+                    Text
+                    {
+                        anchors.centerIn: parent
+                        text: hazeWarn.armStop ? qsTr("SURE? STOP SHOW") : qsTr("STOP SHOW")
+                        color: "#FFFFFF"; font.bold: true
+                        font.pixelSize: trackViewRoot.fs(16); font.letterSpacing: trackViewRoot.fs(16) * 0.1
+                    }
+                    TouchInput
+                    {
+                        id: stopIn
+                        onReleasedAt: (x, y, inside) => {
+                            if (inside === false || trackManager === null)
+                                return
+                            if (hazeWarn.armStop === false) { hazeWarn.armStop = true; hazeWarnArm.restart(); return }
+                            hazeWarn.armStop = false
+                            trackManager.autoRun = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // R443_PLAN_LANE: the next section's card - tap a name = in / out (the
     // RIG's plan), ENGINE DECIDES, FORGET FOR THIS TRACK. On the page, not in
     // the track card: on a small screen it reaches down over RIG and LOOK.
