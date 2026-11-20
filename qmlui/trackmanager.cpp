@@ -3443,12 +3443,14 @@ void TrackManager::midiScanVc()
     {
         m.warn = used.value((quint64(m.universe) << 32) | (m.channel & 0xFFFF));
         // TRACK_APP_OWNMIDI_R623: its own port is handed on to the universe the show's MIDI patch stood on
-        if (r623Own(m.universe) == false || m_r623Qlc.isEmpty())
+        if (r623Own(m.universe) == false)
             continue;
-        const QString base = r594MidiBase(m.device);
-        for (auto it = m_r623Qlc.constBegin(); it != m_r623Qlc.constEnd(); ++it)
-            if (it.value() == base)
-                m.warn = used.value((quint64(it.key()) << 32) | (m.channel & 0xFFFF));
+        for (auto it = m_r623Qlc.constBegin(); it != m_r623Qlc.constEnd(); ++it)   // TRACK_APP_VCHANDON_R624
+        {
+            const QString w = used.value((quint64(*it) << 32) | (m.channel & 0xFFFF));
+            if (w.isEmpty() == false)
+                m.warn = w;
+        }
     }
 }
 
@@ -6706,9 +6708,10 @@ void TrackManager::r623Tick()
         }
         const QString name = ip->inputName();
         io->setInputPatch(u, QStringLiteral("None"), QString(), QLCIOPlugin::invalidLine());
-        // ... and what its controller sends is handed on to this universe (r623Drain): a Virtual Console widget
-        // on one of its controls reacts as it did
-        m_r623Qlc.insert(u, r594MidiBase(name));
+        // ... and what the controller sends is handed on to this universe (r623Drain): a Virtual Console widget
+        // on one of its controls reacts as it did. TRACK_APP_VCHANDON_R624: whatever name the patch had - a show
+        // saves it by place ("None", line 1), and the controller is the one TRACK has open
+        m_r623Qlc.insert(u);
         if (m_engine != nullptr)
             m_engine->noteMidi(QStringLiteral("own:unpatched:u%1:%2").arg(u + 1).arg(name));
     }
@@ -6777,9 +6780,8 @@ void TrackManager::r623Drain()
         midiInput(quint32(R623_BASE + m.port), channel, uchar(value), QString());
         // the universe the show's own MIDI patch stood on hears its controller as before (QLC+'s Virtual Console)
         if (m_r623Qlc.isEmpty() == false && m_doc != nullptr && m_doc->inputOutputMap() != nullptr)
-            for (auto it = m_r623Qlc.constBegin(); it != m_r623Qlc.constEnd(); ++it)
-                if (it.value() == m_r623Bases.at(m.port))
-                    emit m_doc->inputOutputMap()->inputValueChanged(it.key(), channel, uchar(value), QString());
+            for (auto it = m_r623Qlc.constBegin(); it != m_r623Qlc.constEnd(); ++it)   // TRACK_APP_VCHANDON_R624
+                emit m_doc->inputOutputMap()->inputValueChanged(*it, channel, uchar(value), QString());
     }
     if (first)
         r623Sync();

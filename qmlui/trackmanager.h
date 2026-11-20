@@ -692,7 +692,7 @@ private:
     QVector<int> m_r623States;           // 2 refused) and whether it has spoken since it opened
     QVector<bool> m_r623Heard;
     QStringList m_r623Bases;             // ... its name as r594MidiBase has it
-    QHash<quint32, QString> m_r623Qlc;   // the QLC+ universes the show's MIDI patch stood on -> that controller
+    QSet<quint32> m_r623Qlc;             // TRACK_APP_VCHANDON_R624: the QLC+ universes the show's MIDI patch stood on
     QString m_r623Listen;                // the MIDI page's line
     bool m_r623Ok = false;               // ... and its dot: a controller is open
     QString m_r623PortsSaid;             // logged last
