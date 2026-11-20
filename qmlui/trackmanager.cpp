@@ -39,6 +39,41 @@ static QObject *trackAppObject();          // TRACK_APP_PHONE_R549 (with the upd
 #include <functional>
 #include <QPointer>
 void r599InstallDevFilter(std::function<void()> hit);   // TRACK_APP_MIDIHEAL_R599 (the end of this file)
+#include <string>
+#include <vector>
+#include <QSysInfo>
+// TRACK_APP_OWNMIDI_R623: TRACK's own MIDI input (the code is at the end of this file)
+namespace r623 {
+struct Port
+{
+    std::wstring name;
+    int state = 0;                       // 0 not open, 1 open, 2 Windows refused it
+    unsigned err = 0;
+    unsigned long long msgs = 0;
+    bool present = false;
+    bool virt = false;                   // a loopback / network port: no controller
+};
+struct Msg
+{
+    int port = 0;
+    unsigned char status = 0;
+    unsigned char d1 = 0;
+    unsigned char d2 = 0;
+};
+bool isVirtual(const std::wstring &name);
+bool available();
+void start(std::function<void()> wake);
+void stop();
+std::vector<Port> ports();
+std::vector<Msg> take();
+unsigned serial();
+void reopen();
+void askUsb();
+std::wstring usb();
+std::wstring service();
+void fakeList(const std::vector<std::wstring> &names);
+void fakeMsg(int port, int status, int d1, int d2);
+}
 #include "qlcioplugin.h"
 #include "qlcinputprofile.h"
 #include "qlcinputchannel.h"
@@ -213,6 +248,7 @@ TrackManager::~TrackManager()
         && QCoreApplication::instance()->property("trackRemote").value<QObject *>() == this)
         QCoreApplication::instance()->setProperty("trackRemote", QVariant());
     stopLook();
+    r623::stop();                        // TRACK_APP_OWNMIDI_R623: Windows' MIDI threads say nothing more to us
     if (m_server != nullptr)
         m_server->close();
 }
@@ -2096,6 +2132,7 @@ void TrackManager::midiLoad()
             continue;
         m_midiMaps.append(m);
     }
+    r623Rehome();                        // TRACK_APP_OWNMIDI_R623: each map to where its controller is now
 }
 
 void TrackManager::midiSave()
@@ -2271,8 +2308,8 @@ QString TrackManager::midiSource(quint32 universe, quint32 channel, bool shortFo
     }
     if (shortForm)
         return tag;
-    InputPatch *ip = m_doc != nullptr && m_doc->inputOutputMap() != nullptr
-                   ? m_doc->inputOutputMap()->inputPatch(universe) : nullptr;
+    InputPatch *ip = r623Own(universe) == false && m_doc != nullptr && m_doc->inputOutputMap() != nullptr
+                   ? m_doc->inputOutputMap()->inputPatch(universe) : nullptr;   // TRACK_APP_OWNMIDI_R623
     QString text = what;
     if (ip == nullptr || ip->pluginName() == QLatin1String("MIDI"))
     {
@@ -2290,6 +2327,11 @@ QString TrackManager::midiSource(quint32 universe, quint32 channel, bool shortFo
     }
     else
         text = QStringLiteral("Input %1").arg(channel);
+    if (r623Own(universe))               // TRACK_APP_OWNMIDI_R623: TRACK's own port - the controller's name, no universe
+    {
+        const QString name = r623Name(universe);
+        return name.isEmpty() ? text : text + midiDot() + name;
+    }
     return text + midiDot() + QStringLiteral("universe %1").arg(universe + 1);
 }
 
@@ -2303,6 +2345,21 @@ static QString r594MidiBase(QString name)
 
 int TrackManager::midiFind(quint32 universe, quint32 channel)
 {
+    if (r623Own(universe))
+    {
+        // TRACK_APP_OWNMIDI_R623: TRACK's own port. The map is its controller's by name - another controller can
+        // stand at the place in Windows' list where this one was learned (r623Rehome moves a map with its controller)
+        const int port = int(universe) - 1000;
+        const QString base = port < m_r623Bases.count() ? m_r623Bases.at(port) : QString();
+        for (int i = 0; i < m_midiMaps.count(); i++)
+        {
+            const MidiMap &m = m_midiMaps.at(i);
+            if (m.universe == universe && m.channel == channel
+                && (m.device.isEmpty() || r594MidiBase(m.device) == base))
+                return i;
+        }
+        return -1;
+    }
     for (int i = 0; i < m_midiMaps.count(); i++)
         if (m_midiMaps.at(i).universe == universe && m_midiMaps.at(i).channel == channel)
             return i;
@@ -2318,7 +2375,7 @@ int TrackManager::midiFind(quint32 universe, quint32 channel)
         // on another universe, and his learned buttons and faders stayed with the old name and did nothing
         if (m.channel != channel || r594MidiBase(m.device) != r594MidiBase(ip->inputName()))
             continue;
-        InputPatch *was = m_doc->inputOutputMap()->inputPatch(m.universe);
+        InputPatch *was = r623Own(m.universe) ? nullptr : m_doc->inputOutputMap()->inputPatch(m.universe);
         if (was != nullptr && was != ip && r594MidiBase(was->inputName()) == r594MidiBase(m.device))
             continue;                    // still there: a second one of the same kind
         m.universe = universe;
@@ -2356,6 +2413,8 @@ void TrackManager::midiInput(quint32 universe, quint32 channel, uchar value, con
     Q_UNUSED(key)
     if (m_engine == nullptr)
         return;
+    if (m_r623Started && m_r623Qlc.contains(universe))
+        return;                          // TRACK_APP_OWNMIDI_R623: its own input, handed on to the Virtual Console
     if (m_midiFromRaw == false && m_midiPatchWorks == false && trackAppObject() != nullptr
         && int(universe) == m_midiOwnU)  // TRACK_APP_MIDIFIX_R574: another port's patch says nothing about ours
     {
@@ -2767,7 +2826,7 @@ void TrackManager::midiLearnHeard(quint32 universe, quint32 channel, int raw)
     const QString target = m_midiTarget;
     const int kind = midiKind(target);
     const quint32 c = channel & 0x0FFF;
-    InputPatch *ip = m_doc->inputOutputMap()->inputPatch(universe);
+    InputPatch *ip = r623Own(universe) ? nullptr : m_doc->inputOutputMap()->inputPatch(universe);   // TRACK_APP_OWNMIDI_R623
     // an endless encoder sends steps, not a place: not in this round
     if (ip != nullptr && ip->profile() != nullptr)
     {
@@ -2834,7 +2893,7 @@ void TrackManager::midiLearnHeard(quint32 universe, quint32 channel, int raw)
     MidiMap m;
     m.universe = universe;
     m.channel = channel;
-    m.device = ip != nullptr ? ip->inputName() : QString();
+    m.device = r623Own(universe) ? r623Name(universe) : (ip != nullptr ? ip->inputName() : QString());
     m.target = target;
     m.kind = kind;
     m.lastRaw = raw;
@@ -2953,6 +3012,13 @@ void TrackManager::midiAutoPatch()
     // else the input the show's MIDI patch names, else the first - is patched by TRACK itself once, so the patch
     // is wired to the input map whatever happened when the show loaded (a device missing, busy or at another
     // number), and again when the devices change. A failure (another program holds the device) is tried again
+    if (r623Active())
+    {
+        // TRACK_APP_OWNMIDI_R623 (Tobias 11-20): the TRACK app reads its controller itself - none of the patching,
+        // rescanning and opening below. (Without winmm, or with QLC_TRACK_OLDMIDI=1: all of it as before)
+        r623Tick();
+        return;
+    }
     if (trackAppObject() == nullptr || m_doc == nullptr || m_doc->inputOutputMap() == nullptr
         || m_doc->ioPluginCache() == nullptr)
         return;
@@ -3168,6 +3234,12 @@ void TrackManager::r599DevSettle()
     if (since < 0 || trackAppObject() == nullptr || m_doc == nullptr || m_doc->ioPluginCache() == nullptr)
         return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const bool own = r623Active();       // TRACK_APP_OWNMIDI_R623
+    if (own)
+    {
+        m_r623UsbMs = now;
+        r623::askUsb();                  // what is on USB now - for the page's line and the log
+    }
     // a pad under his finger: not now (twenty seconds at most - a release that got lost holds nothing up)
     bool held = false;
     for (int i = 0; i < m_midiMaps.count(); i++)
@@ -3181,13 +3253,27 @@ void TrackManager::r599DevSettle()
     }
     m_r599Waits = 0;
     // heard since the change: its handle is alive, whatever else came or went
-    if (m_midiOwnU >= 0 && m_midiLastMs >= since)
+    if ((m_midiOwnU >= 0 || own) && m_midiLastMs >= since)
+    {
+        if (own)
+            m_r599Reopens = 0;
         return;
+    }
     // a PC whose devices change all the time (a loose plug elsewhere): 20 s, a minute, five minutes apart
     const qint64 gap = m_r599Reopens <= 0 ? 20000 : (m_r599Reopens == 1 ? 60000 : 300000);
     if (m_r599ReopenMs >= 0 && now - m_r599ReopenMs < gap)
         return;
     m_r599Reopens++;
+    if (own)
+    {
+        // TRACK_APP_OWNMIDI_R623: its own ports are let go and opened again - a handle from before the change can be
+        // dead with the device still in Windows' list (a port Windows refuses is asked for again every 2 s)
+        m_r599ReopenMs = now;
+        if (m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("own:reopen:devchange"));
+        r623::reopen();
+        return;
+    }
     r599Reopen(QStringLiteral("devchange"));
 }
 
@@ -3254,6 +3340,15 @@ void TrackManager::midiOpenIfDeaf(QLCIOPlugin *midi, quint32 line)
 void TrackManager::midiRefresh()
 {
     midiInit();
+    if (r623Active())
+    {
+        // TRACK_APP_OWNMIDI_R623: the page says what TRACK's own input sees (r623Sync)
+        m_midiListen = m_r623Started ? m_r623Listen : QStringLiteral("Looking for a MIDI controller ...");
+        m_r590MidiOk = m_r623Ok;
+        midiScanVc();
+        emit midiChanged();
+        return;
+    }
     // where QLC+ hears input: every universe with an input patched
     QStringList where;
     if (m_doc != nullptr && m_doc->inputOutputMap() != nullptr)
@@ -3345,7 +3440,16 @@ void TrackManager::midiScanVc()
         }
     }
     for (MidiMap &m : m_midiMaps)
+    {
         m.warn = used.value((quint64(m.universe) << 32) | (m.channel & 0xFFFF));
+        // TRACK_APP_OWNMIDI_R623: its own port is handed on to the universe the show's MIDI patch stood on
+        if (r623Own(m.universe) == false || m_r623Qlc.isEmpty())
+            continue;
+        const QString base = r594MidiBase(m.device);
+        for (auto it = m_r623Qlc.constBegin(); it != m_r623Qlc.constEnd(); ++it)
+            if (it.value() == base)
+                m.warn = used.value((quint64(it.key()) << 32) | (m.channel & 0xFFFF));
+    }
 }
 
 /* ------------------------------------------------------- for the pages */
@@ -3371,7 +3475,8 @@ QVariantList TrackManager::midiMappings() const
         QVariantMap row;
         row.insert(QStringLiteral("t"), m.target);
         row.insert(QStringLiteral("n"), names.value(m.target, m.target.section(QLatin1Char(':'), -1).toUpper()));
-        row.insert(QStringLiteral("f"), midiSource(m.universe, m.channel, false));
+        row.insert(QStringLiteral("f"), r623Own(m.universe) ? r623MapSource(m)   // TRACK_APP_OWNMIDI_R623
+                                                             : midiSource(m.universe, m.channel, false));
         // TRACK_APP_MIDIMAP_R611: where it sits on the controller drawing (SETUP > MIDI > MAP) - CC n / note n, -1 none
         {
             const quint32 c = m.channel & 0x0FFF;
@@ -6534,4 +6639,872 @@ void r599InstallDevFilter(std::function<void()> hit)
 void r599InstallDevFilter(std::function<void()>)
 {
 }
+#endif
+
+/* ------------------------------------------------ TRACK_APP_OWNMIDI_R623: TRACK's own MIDI input, the show's side */
+
+#define R623_BASE 1000                   // its ports are "universes" 1000 + Windows' place for them: never QLC+'s
+
+bool TrackManager::r623Active() const
+{
+    // the TRACK app on Windows (or the test's stand-in). QLC_TRACK_OLDMIDI=1: QLC+'s MIDI plugin, as before R623
+    static const bool old = qEnvironmentVariableIsSet("QLC_TRACK_OLDMIDI");
+    return old == false && trackAppObject() != nullptr && r623::available();
+}
+
+QString TrackManager::r623Name(quint32 universe) const
+{
+    const int k = int(universe) - R623_BASE;
+    return k >= 0 && k < m_r623Names.count() && m_r623States.at(k) >= 0 ? m_r623Names.at(k) : QString();
+}
+
+QString TrackManager::r623MapSource(const MidiMap &m) const
+{
+    // a row of the MIDI list: the control, and the controller it was learned on - there or not
+    QString text = midiSource(quint32(R623_BASE + 63), m.channel, false);
+    if (m.device.isEmpty())
+        return text;
+    const bool there = r594MidiBase(r623Name(m.universe)) == r594MidiBase(m.device);
+    return text + midiDot() + m.device + (there ? QString() : QStringLiteral(" (not connected)"));
+}
+
+void TrackManager::r599Hook()
+{
+    if (m_r599Filter)
+        return;
+    m_r599Filter = true;
+    m_r599DevTimer.setSingleShot(true);
+    connect(&m_r599DevTimer, &QTimer::timeout, this, &TrackManager::r599DevSettle);
+    QPointer<TrackManager> self(this);
+    r599InstallDevFilter([self]() {
+        if (self.isNull() == false)
+            QMetaObject::invokeMethod(self.data(), [self]() {
+                if (self.isNull() == false)
+                    self->r599DevChanged();
+            }, Qt::QueuedConnection);
+    });
+}
+
+void TrackManager::r623Tick()
+{
+    if (m_doc == nullptr || m_doc->inputOutputMap() == nullptr)
+        return;
+    r599Hook();
+    // QLC+'s own MIDI patch lets go of the controller: Windows gives a MIDI input to one opener at a time, and the
+    // show's patch had it from the moment the show loaded. (Nothing is written to the show: the patch is gone for
+    // this run only.) A show loaded later brings its patch back - looked at every time
+    InputOutputMap *io = m_doc->inputOutputMap();
+    for (quint32 u = 0; u < io->universesCount(); u++)
+    {
+        InputPatch *ip = io->inputPatch(u);
+        if (ip == nullptr || ip->plugin() == nullptr)
+            continue;
+        if (ip->pluginName() != QLatin1String("MIDI"))
+        {
+            m_r623Qlc.remove(u);         // another plugin's input stands here now: its own
+            continue;
+        }
+        const QString name = ip->inputName();
+        io->setInputPatch(u, QStringLiteral("None"), QString(), QLCIOPlugin::invalidLine());
+        // ... and what its controller sends is handed on to this universe (r623Drain): a Virtual Console widget
+        // on one of its controls reacts as it did
+        m_r623Qlc.insert(u, r594MidiBase(name));
+        if (m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("own:unpatched:u%1:%2").arg(u + 1).arg(name));
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_r623Started == false)
+    {
+        m_r623Started = true;
+        m_midiPatchTimer.setInterval(2000);
+        if (m_midiOwnU >= 0)
+            midiOwnReset();
+        m_midiOwnU = -1;
+        m_midiOwnName.clear();
+        if (m_engine != nullptr)
+            m_engine->noteMidi(QStringLiteral("own:start:%1:%2:midisrv-%3")
+                               .arg(QSysInfo::prettyProductName(), QSysInfo::kernelVersion(),
+                                    QString::fromStdWString(r623::service())));
+        // Windows' threads say "look" - the look itself is here, on the show's thread
+        r623::start([this]() { QMetaObject::invokeMethod(this, "r623Drain", Qt::QueuedConnection); });
+        r623::askUsb();
+        m_r623UsbMs = now;
+    }
+    r623Drain();
+    // no controller: the USB bus is read again once a minute - it tells a pulled cable from a missing driver
+    if (m_r623Ok == false && now - m_r623UsbMs >= 60000)
+    {
+        m_r623UsbMs = now;
+        r623::askUsb();
+    }
+}
+
+void TrackManager::r623Drain()
+{
+    if (m_r623Started == false || m_engine == nullptr)
+        return;
+    if (r623::serial() != m_r623Serial)
+        r623Sync();
+    const std::vector<r623::Msg> msgs = r623::take();
+    bool first = false;
+    for (const r623::Msg &m : msgs)
+    {
+        // QLC+'s own numbers (midiprotocol.cpp, OMNI): what was learned through its plugin means the same here
+        const int cmd = m.status & 0xF0;
+        quint32 channel = 0;
+        int data = 0;
+        if (cmd == 0x80)      { channel = 128 + m.d1; data = 0; }
+        else if (cmd == 0x90) { channel = 128 + m.d1; data = m.d2; }
+        else if (cmd == 0xA0) { channel = 256 + m.d1; data = m.d2; }
+        else if (cmd == 0xB0) { channel = m.d1;       data = m.d2; }
+        else if (cmd == 0xC0) { channel = 384 + m.d1; data = 127; }
+        else if (cmd == 0xD0) { channel = 512;        data = m.d1; }
+        else if (cmd == 0xE0) { channel = 513;        data = -1; }
+        else
+            continue;
+        const int value = data < 0 ? ((int(m.d2) << 1) | ((int(m.d1) >> 6) & 1)) : (data == 127 ? 255 : data << 1);
+        channel |= quint32(m.status & 0x0F) << 12;
+        if (m.port >= m_r623Names.count())
+            r623Sync();                  // a port opened this instant
+        if (m.port < 0 || m.port >= m_r623Names.count())
+            continue;
+        if (m_r623Heard.at(m.port) == false)
+        {
+            m_r623Heard[m.port] = true;
+            first = true;
+            m_engine->noteMidi(QStringLiteral("own:first:%1:%2").arg(m_r623Names.at(m.port)).arg(channel));
+        }
+        midiInput(quint32(R623_BASE + m.port), channel, uchar(value), QString());
+        // the universe the show's own MIDI patch stood on hears its controller as before (QLC+'s Virtual Console)
+        if (m_r623Qlc.isEmpty() == false && m_doc != nullptr && m_doc->inputOutputMap() != nullptr)
+            for (auto it = m_r623Qlc.constBegin(); it != m_r623Qlc.constEnd(); ++it)
+                if (it.value() == m_r623Bases.at(m.port))
+                    emit m_doc->inputOutputMap()->inputValueChanged(it.key(), channel, uchar(value), QString());
+    }
+    if (first)
+        r623Sync();
+}
+
+static QString r623UsbHint(const QString &usb)
+{
+    // "akai:<what is there> | remembered-not-connected:N | usb-audio:<...>" (r623::usb)
+    if (usb.startsWith(QLatin1String("akai:")) == false)
+        return QString();
+    const QString akai = usb.mid(5).section(QStringLiteral(" | "), 0, 0);
+    if (akai == QLatin1String("none"))
+        return QStringLiteral("USB: no AKAI controller connected (cable, USB port or its power?)");
+    const int at = akai.indexOf(QLatin1String(" PROBLEM "));
+    if (at >= 0)
+        return QStringLiteral("USB sees the AKAI, Windows reports problem %1 with it")
+               .arg(akai.mid(at + 9).section(QLatin1Char(';'), 0, 0).trimmed());
+    return QStringLiteral("USB sees the AKAI, but Windows gives it no MIDI port (driver / Windows MIDI service)");
+}
+
+void TrackManager::r623Sync()
+{
+    m_r623Serial = r623::serial();
+    const std::vector<r623::Port> ports = r623::ports();
+    QStringList names, bases, said, listed, hear, fail;
+    QVector<int> states;
+    bool any = false;                    // a controller in Windows' list
+    for (int k = 0; k < int(ports.size()); k++)
+    {
+        const r623::Port &p = ports[size_t(k)];
+        const QString name = QString::fromStdWString(p.name);
+        const int state = p.present ? p.state : -1;
+        names << name;
+        bases << r594MidiBase(name);
+        states << state;
+        if (k >= m_r623Heard.count())
+            m_r623Heard << false;
+        if (state != 1)
+        {
+            m_r623Heard[k] = false;
+            // it was open and is not (pulled out, a hub asleep): a pad it held never sends its release (R588)
+            if (k < m_r623States.count() && m_r623States.at(k) == 1)
+                for (MidiMap &m : m_midiMaps)
+                    if (m.armed && m.universe == quint32(R623_BASE + k))
+                        midiRelease(m);
+        }
+        if (state < 0)
+            continue;
+        listed << name;
+        said << name + (state == 1 ? QStringLiteral(":open") : state == 2 ? QStringLiteral(":refused-%1").arg(p.err)
+                                                                          : QStringLiteral(":closed"));
+        // a virtual port is a controller only once it has spoken
+        if (p.virt && m_r623Heard.at(k) == false)
+            continue;
+        any = true;
+        if (state == 1)
+            hear << name + (m_r623Heard.at(k) ? QString() : QStringLiteral(" (nothing heard from it yet)"));
+        else if (state == 2)
+            fail << QStringLiteral("Could not open %1 - %2").arg(name, p.err == 4 ? QStringLiteral("another program has it")
+                                                                      : QStringLiteral("Windows error %1").arg(p.err));
+    }
+    m_r623Names = names;
+    m_r623Bases = bases;
+    m_r623States = states;
+    r623Rehome();
+
+    const QString usb = QString::fromStdWString(r623::usb());
+    QString text;
+    if (hear.isEmpty() == false)
+        text = QStringLiteral("Listening on ") + hear.join(QStringLiteral(", "));
+    if (fail.isEmpty() == false)
+        text = fail.join(midiDot()) + (text.isEmpty() ? QString() : midiDot() + text);
+    if (any == false)
+    {
+        text = QStringLiteral("No MIDI controller") + midiDot()
+             + (listed.isEmpty() ? QStringLiteral("Windows lists no MIDI device")
+                                 : QStringLiteral("Windows lists only ") + listed.join(QStringLiteral(", ")));
+        const QString hint = r623UsbHint(usb);
+        if (hint.isEmpty() == false)
+            text += midiDot() + hint;
+    }
+    const bool ok = hear.isEmpty() == false;
+    if (m_engine != nullptr)
+    {
+        const QString line = said.isEmpty() ? QStringLiteral("none") : said.join(QLatin1Char('|'));
+        if (line != m_r623PortsSaid)
+            m_engine->noteMidi(QStringLiteral("own:ports:") + line);
+        m_r623PortsSaid = line;
+        if (usb.isEmpty() == false && usb != m_r623UsbSaid)
+        {
+            m_engine->noteMidi(QStringLiteral("own:usb:") + usb);
+            m_r623UsbSaid = usb;
+        }
+    }
+    if (m_r623Ok && ok == false)
+    {
+        m_r623UsbMs = QDateTime::currentMSecsSinceEpoch();
+        r623::askUsb();                  // the controller went: is it still on USB?
+    }
+    if (text != m_r623Listen || ok != m_r623Ok)
+    {
+        m_r623Listen = text;
+        m_r623Ok = ok;
+        midiRefresh();
+    }
+}
+
+void TrackManager::r623Rehome()
+{
+    // A map belongs to its controller by NAME: Windows' place for it changes from start to start (and what was
+    // learned through QLC+'s plugin sits on a QLC+ universe). Each map follows its controller to where it is now
+    if (m_r623Started == false)
+        return;
+    bool changed = false;
+    for (MidiMap &m : m_midiMaps)
+    {
+        if (m.device.isEmpty())
+            continue;                    // learned before controllers had names: midiFind hands it over
+        const QString base = r594MidiBase(m.device);
+        if (r623Own(m.universe) && r594MidiBase(r623Name(m.universe)) == base)
+            continue;                    // where it is
+        int to = -1;
+        for (int k = 0; k < m_r623Names.count() && to < 0; k++)
+            if (m_r623States.at(k) >= 0 && r594MidiBase(m_r623Names.at(k)) == base)
+                to = k;
+        if (to < 0)
+            continue;                    // not there now (or another plugin's input): left as it is
+        if (m.armed)
+            midiRelease(m);
+        m.universe = quint32(R623_BASE + to);
+        changed = true;
+    }
+    if (changed)
+        midiSave();
+}
+
+/* =====================================================================
+ * TRACK_APP_OWNMIDI_R623 - TRACK's own MIDI input (the end of trackmanager.cpp)
+ *
+ * Tobias 11-20: "tage en runde i MIDI og proeve at finde ud af hvad fanden der er galt. Evt. maa vi bygge et helt
+ * nyt midi system hvis det QLC har ikke er godt nok?"
+ *
+ * What the logs said (to-claude 11-07, 11-14, 11-15): the MIDI Mix was in Windows' list only on two evenings
+ * (11-06, 11-13, both on builds older than the R574 fixes) and not once on 11-14 - only "LoopBe Internal MIDI",
+ * through 50 rescans and nine fresh starts. And never one value from it. QLC+'s MIDI plugin cannot say why: it
+ * looks at Windows' devices once, when the program starts; a look again throws every device away; it opens by
+ * the device's place in the list; and all of it runs on the show's own thread.
+ *
+ * So the TRACK app (Windows) reads its controller itself:
+ *  - a thread of its own looks at Windows' MIDI inputs every 2 s (WinMM), opens every one that is there and lets
+ *    go of the ones that left - a controller plugged in mid-show plays within 2 s, no restart. Every Windows call
+ *    (the look, open, close - a close on a pulled device can hang) is on that thread, never on the show's;
+ *  - the messages come in on Windows' MIDI thread into a queue; the show's thread drains it (r623Drain) and feeds
+ *    MIDI LEARN / the map exactly as QLC+'s plugin did (the same channel numbers, OMNI, 0-255);
+ *  - and it says WHY when there is no controller: the USB bus is read (SetupAPI) for the AKAI (VID_09E8) and any
+ *    USB audio / MIDI device, with Windows' own problem code - "not on USB at all" (cable, port, power) is told
+ *    from "on USB, but Windows made no MIDI port of it" (driver / the MIDI service) and from "listed, open, silent".
+ * winmm / setupapi / cfgmgr32 are loaded at run time (no new link libraries); without them r623::available() is
+ * false and QLC+'s plugin path stays as it was. QLC_TRACK_OLDMIDI=1 keeps the old path too.
+ * ===================================================================== */
+namespace r623 {
+// A virtual port (a loopback, the network, Windows' own synth) is no controller: it is opened only when no other
+// input is there (R571C) - what another program sends through it never lands in MIDI LEARN next to a controller
+bool isVirtual(const std::wstring &name)
+{
+    std::wstring l = name;
+    for (wchar_t &c : l)
+        if (c >= L'A' && c <= L'Z')
+            c = wchar_t(c - L'A' + L'a');
+    static const wchar_t *marks[] = { L"loopbe", L"loopmidi", L"virtual", L"microsoft", L"rtpmidi", L"network" };
+    for (const wchar_t *m : marks)
+        if (l.find(m) != std::wstring::npos)
+            return true;
+    return false;
+}
+}
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#include <mmsystem.h>
+#include <setupapi.h>
+#include <cfgmgr32.h>
+#include <atomic>
+
+namespace r623 {
+namespace {
+
+typedef void (*AnyFn)(void);
+typedef UINT (WINAPI *FnNum)(void);
+typedef MMRESULT (WINAPI *FnCaps)(UINT_PTR, LPMIDIINCAPSW, UINT);
+typedef MMRESULT (WINAPI *FnOpen)(LPHMIDIIN, UINT, DWORD_PTR, DWORD_PTR, DWORD);
+typedef MMRESULT (WINAPI *FnHandle)(HMIDIIN);
+typedef MMRESULT (WINAPI *FnId)(HMIDIIN, LPUINT);
+
+struct Api
+{
+    bool tried = false;
+    bool ok = false;
+    FnNum num = nullptr;
+    FnCaps caps = nullptr;
+    FnOpen open = nullptr;
+    FnHandle start = nullptr;
+    FnHandle reset = nullptr;
+    FnHandle close = nullptr;
+    FnId id = nullptr;
+};
+
+AnyFn sym(HMODULE dll, const char *name)
+{
+    return dll != nullptr ? reinterpret_cast<AnyFn>(GetProcAddress(dll, name)) : nullptr;
+}
+
+Api &api()
+{
+    static Api a;
+    if (a.tried == false)
+    {
+        a.tried = true;
+        HMODULE dll = LoadLibraryW(L"winmm.dll");
+        a.num = reinterpret_cast<FnNum>(sym(dll, "midiInGetNumDevs"));
+        a.caps = reinterpret_cast<FnCaps>(sym(dll, "midiInGetDevCapsW"));
+        a.open = reinterpret_cast<FnOpen>(sym(dll, "midiInOpen"));
+        a.start = reinterpret_cast<FnHandle>(sym(dll, "midiInStart"));
+        a.reset = reinterpret_cast<FnHandle>(sym(dll, "midiInReset"));
+        a.close = reinterpret_cast<FnHandle>(sym(dll, "midiInClose"));
+        a.id = reinterpret_cast<FnId>(sym(dll, "midiInGetID"));
+        a.ok = a.num != nullptr && a.caps != nullptr && a.open != nullptr && a.start != nullptr
+            && a.reset != nullptr && a.close != nullptr && a.id != nullptr;
+    }
+    return a;
+}
+
+const int MaxPorts = 32;
+struct Dev
+{
+    std::wstring name;
+    HMIDIIN handle = nullptr;
+    UINT id = 0;
+    int state = 0;                       // 0 not open, 1 open, 2 Windows refused it
+    unsigned err = 0;
+    bool present = false;
+    int deadTrust = 3;                   // a handle Windows calls unknown is opened again - 3 times, then believed no more
+};
+
+// (on the heap and never freed: Windows' MIDI thread and the worker can outlive the program's own clean-up)
+std::vector<Dev> &g_devs = *new std::vector<Dev>;                    // the worker thread's only
+std::vector<std::wstring> &g_last = *new std::vector<std::wstring>;  // ... Windows' list at the last look
+std::atomic<unsigned long long> g_counts[MaxPorts];
+CRITICAL_SECTION g_lock;                 // the queue, the snapshot, the USB text
+CRITICAL_SECTION g_wakeLock;             // the wake and the end of the program never meet
+std::vector<Msg> &g_queue = *new std::vector<Msg>;
+std::vector<Port> &g_snap = *new std::vector<Port>;
+std::wstring &g_usb = *new std::wstring;
+std::atomic<unsigned> g_serial(0);
+std::atomic<bool> g_pending(false);
+std::atomic<bool> g_force(false);
+std::atomic<bool> g_usbAsk(false);
+std::atomic<bool> g_quit(false);
+std::function<void()> &g_wake = *new std::function<void()>;
+HANDLE g_poke = nullptr;
+HANDLE g_thread = nullptr;
+bool g_started = false;
+
+void wakeShow()
+{
+    if (g_pending.exchange(true))
+        return;
+    EnterCriticalSection(&g_wakeLock);
+    if (g_quit == false && g_wake)
+        g_wake();
+    LeaveCriticalSection(&g_wakeLock);
+}
+
+// Windows' MIDI thread: nothing but the queue. The clock and active sensing are no controls
+void CALLBACK midiProc(HMIDIIN, UINT msg, DWORD_PTR inst, DWORD_PTR p1, DWORD_PTR)
+{
+    if (msg != MIM_DATA || g_quit)
+        return;
+    const int port = int(inst);
+    const unsigned char status = static_cast<unsigned char>(p1 & 0xFF);
+    if (port < 0 || port >= MaxPorts || status < 0x80 || status >= 0xF0)
+        return;
+    g_counts[port]++;
+    Msg m;
+    m.port = port;
+    m.status = status;
+    m.d1 = static_cast<unsigned char>((p1 >> 8) & 0x7F);
+    m.d2 = static_cast<unsigned char>((p1 >> 16) & 0x7F);
+    EnterCriticalSection(&g_lock);
+    if (g_queue.size() < 8192)
+        g_queue.push_back(m);
+    LeaveCriticalSection(&g_lock);
+    wakeShow();
+}
+
+bool look(bool force)
+{
+    Api &a = api();
+    std::vector<std::wstring> names;
+    const UINT n = a.num();
+    for (UINT i = 0; i < n && i < 64; i++)
+    {
+        MIDIINCAPSW caps;
+        ZeroMemory(&caps, sizeof(caps));
+        if (a.caps(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR)
+            names.push_back(std::wstring(caps.szPname));
+        else
+            names.push_back(std::wstring(L"?"));
+    }
+    bool changed = names != g_last;
+    g_last = names;
+    for (Dev &d : g_devs)
+        d.present = false;
+    for (size_t i = 0; i < names.size(); i++)
+    {
+        int at = -1;
+        for (size_t k = 0; k < g_devs.size() && at < 0; k++)
+            if (g_devs[k].present == false && g_devs[k].name == names[i])
+                at = int(k);
+        if (at < 0)
+        {
+            if (int(g_devs.size()) >= MaxPorts)
+                continue;
+            Dev d;
+            d.name = names[i];
+            g_devs.push_back(d);
+            at = int(g_devs.size()) - 1;
+        }
+        g_devs[size_t(at)].present = true;
+        g_devs[size_t(at)].id = UINT(i);
+    }
+    bool anyReal = false;
+    for (const Dev &d : g_devs)
+        anyReal = anyReal || (d.present && isVirtual(d.name) == false);
+    for (size_t k = 0; k < g_devs.size(); k++)
+    {
+        Dev &d = g_devs[k];
+        const bool want = d.present && (anyReal == false || isVirtual(d.name) == false);
+        if (d.handle != nullptr)
+        {
+            // a handle Windows no longer knows (the device went and came back): closed, opened again below
+            UINT id = 0;
+            bool dead = a.id(d.handle, &id) != MMSYSERR_NOERROR;
+            if (dead && d.deadTrust <= 0)
+                dead = false;
+            else if (dead)
+                d.deadTrust--;
+            if (want == false || force || dead)
+            {
+                a.reset(d.handle);
+                a.close(d.handle);
+                d.handle = nullptr;
+                d.state = 0;
+                changed = true;
+            }
+        }
+        if (want == false)
+        {
+            if (d.state != 0)
+                changed = true;
+            d.state = 0;
+            if (d.present == false)
+                d.deadTrust = 3;
+            continue;
+        }
+        if (d.handle == nullptr)
+        {
+            HMIDIIN h = nullptr;
+            const MMRESULT rc = a.open(&h, d.id, reinterpret_cast<DWORD_PTR>(&midiProc), DWORD_PTR(k), CALLBACK_FUNCTION);
+            if (rc == MMSYSERR_NOERROR && h != nullptr)
+            {
+                a.start(h);
+                d.handle = h;
+                if (d.state != 1)
+                    changed = true;
+                d.state = 1;
+                d.err = 0;
+            }
+            else
+            {
+                if (d.state != 2 || d.err != unsigned(rc))
+                    changed = true;
+                d.state = 2;
+                d.err = unsigned(rc);
+            }
+        }
+    }
+    return changed;
+}
+
+std::wstring upper(std::wstring s)
+{
+    for (wchar_t &c : s)
+        if (c >= L'a' && c <= L'z')
+            c = wchar_t(c - L'a' + L'A');
+    return s;
+}
+
+// The USB bus, by SetupAPI: the AKAI (VID_09E8) and every USB audio / MIDI device that is there now, each with
+// Windows' own problem code; and how many AKAI devices Windows remembers that are not there
+std::wstring usbLook()
+{
+    typedef HDEVINFO (WINAPI *FnGet)(const GUID *, PCWSTR, HWND, DWORD);
+    typedef BOOL (WINAPI *FnEnum)(HDEVINFO, DWORD, PSP_DEVINFO_DATA);
+    typedef BOOL (WINAPI *FnProp)(HDEVINFO, PSP_DEVINFO_DATA, DWORD, PDWORD, PBYTE, DWORD, PDWORD);
+    typedef BOOL (WINAPI *FnDestroy)(HDEVINFO);
+    typedef DWORD (WINAPI *FnStatus)(PULONG, PULONG, DWORD, ULONG);
+    HMODULE s = LoadLibraryW(L"setupapi.dll");
+    HMODULE c = LoadLibraryW(L"cfgmgr32.dll");
+    FnGet get = reinterpret_cast<FnGet>(sym(s, "SetupDiGetClassDevsW"));
+    FnEnum en = reinterpret_cast<FnEnum>(sym(s, "SetupDiEnumDeviceInfo"));
+    FnProp prop = reinterpret_cast<FnProp>(sym(s, "SetupDiGetDeviceRegistryPropertyW"));
+    FnDestroy destroy = reinterpret_cast<FnDestroy>(sym(s, "SetupDiDestroyDeviceInfoList"));
+    FnStatus status = reinterpret_cast<FnStatus>(sym(c, "CM_Get_DevNode_Status"));
+    if (status == nullptr)
+        status = reinterpret_cast<FnStatus>(sym(s, "CM_Get_DevNode_Status"));
+    if (get == nullptr || en == nullptr || prop == nullptr || destroy == nullptr)
+        return std::wstring(L"usb: cannot be read");
+    std::wstring akai, other;
+    int akaiNow = 0, akaiGone = 0, otherNow = 0;
+    for (int pass = 0; pass < 2; pass++)
+    {
+        HDEVINFO di = get(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | (pass == 0 ? DIGCF_PRESENT : 0));
+        if (di == INVALID_HANDLE_VALUE)
+            continue;
+        for (DWORD i = 0; i < 20000; i++)
+        {
+            SP_DEVINFO_DATA dd;
+            ZeroMemory(&dd, sizeof(dd));
+            dd.cbSize = sizeof(dd);
+            if (en(di, i, &dd) == FALSE)
+                break;
+            wchar_t hw[512];
+            ZeroMemory(hw, sizeof(hw));
+            if (prop(di, &dd, SPDRP_HARDWAREID, nullptr, reinterpret_cast<PBYTE>(hw), sizeof(hw) - 2 * sizeof(wchar_t), nullptr) == FALSE)
+                continue;
+            const std::wstring id = upper(std::wstring(hw));
+            if (id.compare(0, 4, L"USB\\") != 0)
+                continue;
+            const bool isAkai = id.find(L"VID_09E8") != std::wstring::npos;
+            if (pass == 1)
+            {
+                if (isAkai)
+                    akaiGone++;
+                continue;
+            }
+            wchar_t cls[64];
+            ZeroMemory(cls, sizeof(cls));
+            prop(di, &dd, SPDRP_CLASS, nullptr, reinterpret_cast<PBYTE>(cls), sizeof(cls) - sizeof(wchar_t), nullptr);
+            const bool media = upper(std::wstring(cls)) == L"MEDIA";
+            if (isAkai == false && media == false)
+                continue;
+            wchar_t name[160];
+            ZeroMemory(name, sizeof(name));
+            if (prop(di, &dd, SPDRP_FRIENDLYNAME, nullptr, reinterpret_cast<PBYTE>(name), sizeof(name) - sizeof(wchar_t), nullptr) == FALSE
+                || name[0] == 0)
+                prop(di, &dd, SPDRP_DEVICEDESC, nullptr, reinterpret_cast<PBYTE>(name), sizeof(name) - sizeof(wchar_t), nullptr);
+            std::wstring line = std::wstring(name[0] != 0 ? name : L"(no name)");
+            const size_t vid = id.find(L"VID_");
+            if (vid != std::wstring::npos)
+                line += L" [" + id.substr(vid, 17) + L"]";
+            ULONG st = 0, problem = 0;
+            if (status != nullptr && status(&st, &problem, dd.DevInst, 0) == 0)
+                line += problem == 0 ? std::wstring(L" ok") : (L" PROBLEM " + std::to_wstring(problem));
+            else
+                line += L" status?";
+            std::wstring &into = isAkai ? akai : other;
+            int &count = isAkai ? akaiNow : otherNow;
+            if (count < 4)
+                into += (into.empty() ? L"" : L"; ") + line;
+            count++;
+        }
+        destroy(di);
+    }
+    // (the second pass counted every AKAI device Windows knows, the ones that are there too)
+    akaiGone = akaiGone > akaiNow ? akaiGone - akaiNow : 0;
+    std::wstring out = L"akai:" + (akaiNow > 0 ? akai : std::wstring(L"none"))
+                     + L" | remembered-not-connected:" + std::to_wstring(akaiGone)
+                     + L" | usb-audio:" + (otherNow > 0 ? other : std::wstring(L"none"));
+    return out;
+}
+
+void publish()
+{
+    std::vector<Port> snap;
+    for (size_t k = 0; k < g_devs.size(); k++)
+    {
+        Port p;
+        p.name = g_devs[k].name;
+        p.state = g_devs[k].state;
+        p.err = g_devs[k].err;
+        p.present = g_devs[k].present;
+        p.virt = isVirtual(g_devs[k].name);
+        snap.push_back(p);
+    }
+    EnterCriticalSection(&g_lock);
+    g_snap = snap;
+    LeaveCriticalSection(&g_lock);
+    g_serial++;
+    g_pending = false;                   // the show hears of it even with a wake still on its way
+    wakeShow();
+}
+
+DWORD WINAPI worker(LPVOID)
+{
+    bool first = true;
+    while (g_quit == false)
+    {
+        bool changed = look(g_force.exchange(false)) || first;
+        first = false;
+        if (g_usbAsk.exchange(false))
+        {
+            const std::wstring usb = usbLook();
+            EnterCriticalSection(&g_lock);
+            if (usb != g_usb)
+            {
+                g_usb = usb;
+                changed = true;
+            }
+            LeaveCriticalSection(&g_lock);
+        }
+        if (changed)
+            publish();
+        WaitForSingleObject(g_poke, 2000);
+    }
+    // the program ends: the handles let go (a hang here holds nothing up - stop() waits a second at most)
+    Api &a = api();
+    for (Dev &d : g_devs)
+    {
+        if (d.handle != nullptr)
+        {
+            a.reset(d.handle);
+            a.close(d.handle);
+            d.handle = nullptr;
+        }
+    }
+    return 0;
+}
+
+} // namespace
+
+bool available()
+{
+    return api().ok;
+}
+
+void start(std::function<void()> wake)
+{
+    if (g_started || api().ok == false)
+        return;
+    g_started = true;
+    InitializeCriticalSection(&g_lock);
+    InitializeCriticalSection(&g_wakeLock);
+    g_wake = wake;
+    g_poke = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_thread = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
+}
+
+void stop()
+{
+    if (g_started == false || g_thread == nullptr)
+        return;
+    EnterCriticalSection(&g_wakeLock);
+    g_quit = true;                       // no wake after this line
+    LeaveCriticalSection(&g_wakeLock);
+    SetEvent(g_poke);
+    WaitForSingleObject(g_thread, 1000);
+}
+
+std::vector<Port> ports()
+{
+    std::vector<Port> out;
+    if (g_started == false)
+        return out;
+    EnterCriticalSection(&g_lock);
+    out = g_snap;
+    LeaveCriticalSection(&g_lock);
+    for (size_t k = 0; k < out.size() && k < size_t(MaxPorts); k++)
+        out[k].msgs = g_counts[k];
+    return out;
+}
+
+std::vector<Msg> take()
+{
+    std::vector<Msg> out;
+    if (g_started == false)
+        return out;
+    g_pending = false;
+    EnterCriticalSection(&g_lock);
+    out.swap(g_queue);
+    LeaveCriticalSection(&g_lock);
+    return out;
+}
+
+unsigned serial()
+{
+    return g_serial;
+}
+
+void reopen()
+{
+    if (g_started == false)
+        return;
+    g_force = true;
+    SetEvent(g_poke);
+}
+
+void askUsb()
+{
+    if (g_started == false)
+        return;
+    g_usbAsk = true;
+    SetEvent(g_poke);
+}
+
+std::wstring usb()
+{
+    std::wstring out;
+    if (g_started == false)
+        return out;
+    EnterCriticalSection(&g_lock);
+    out = g_usb;
+    LeaveCriticalSection(&g_lock);
+    return out;
+}
+
+std::wstring service()
+{
+    // Windows' new MIDI service (Windows 11 24H2+): there or not, running or not
+    SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (scm == nullptr)
+        return std::wstring(L"unknown");
+    std::wstring out = L"absent";
+    SC_HANDLE svc = OpenServiceW(scm, L"midisrv", SERVICE_QUERY_STATUS);
+    if (svc != nullptr)
+    {
+        SERVICE_STATUS st;
+        ZeroMemory(&st, sizeof(st));
+        if (QueryServiceStatus(svc, &st))
+            out = st.dwCurrentState == SERVICE_RUNNING ? L"running" : (st.dwCurrentState == SERVICE_STOPPED ? L"stopped" : L"starting");
+        else
+            out = L"there";
+        CloseServiceHandle(svc);
+    }
+    CloseServiceHandle(scm);
+    return out;
+}
+
+void fakeList(const std::vector<std::wstring> &) {}
+void fakeMsg(int, int, int, int) {}
+
+} // namespace r623
+#else
+namespace r623 {
+namespace {
+// not Windows: QLC+'s plugin path stays. QLC_TRACK_R623_FAKE=1 gives the harness a controller to plug in
+std::vector<Port> g_fake;
+std::vector<Msg> g_fakeQueue;
+std::function<void()> g_fakeWake;
+unsigned g_fakeSerial = 0;
+}
+
+bool available() { return qEnvironmentVariableIsSet("QLC_TRACK_R623_FAKE"); }
+void start(std::function<void()> wake) { g_fakeWake = wake; }
+void stop() { g_fakeWake = nullptr; }
+std::vector<Port> ports() { return g_fake; }
+std::vector<Msg> take() { std::vector<Msg> out; out.swap(g_fakeQueue); return out; }
+unsigned serial() { return g_fakeSerial; }
+void reopen() {}
+void askUsb() {}
+std::wstring usb() { return std::wstring(L"akai:none | remembered-not-connected:0 | usb-audio:none"); }
+std::wstring service() { return std::wstring(L"absent"); }
+
+void fakeList(const std::vector<std::wstring> &names)
+{
+    // the ports keep their place (as on Windows): one that left is "not present", a new one is added
+    for (Port &p : g_fake)
+    {
+        p.present = false;
+        p.state = 0;
+    }
+    for (const std::wstring &n : names)
+    {
+        const bool refused = n.size() > 0 && n[0] == L'!';
+        const std::wstring name = refused ? n.substr(1) : n;
+        int at = -1;
+        for (size_t k = 0; k < g_fake.size() && at < 0; k++)
+            if (g_fake[k].present == false && g_fake[k].name == name)
+                at = int(k);
+        if (at < 0)
+        {
+            Port p;
+            p.name = name;
+            g_fake.push_back(p);
+            at = int(g_fake.size()) - 1;
+        }
+        g_fake[size_t(at)].present = true;
+        g_fake[size_t(at)].state = refused ? 2 : 1;
+        g_fake[size_t(at)].err = refused ? 4 : 0;
+        g_fake[size_t(at)].virt = isVirtual(name);
+    }
+    bool anyReal = false;
+    for (const Port &p : g_fake)
+        anyReal = anyReal || (p.present && p.virt == false);
+    for (Port &p : g_fake)
+        if (p.present && p.virt && anyReal)
+            p.state = 0;                 // as on Windows: a virtual port only when nothing else is there
+    g_fakeSerial++;
+    if (g_fakeWake)
+        g_fakeWake();
+}
+
+void fakeMsg(int port, int status, int d1, int d2)
+{
+    if (port < 0 || port >= int(g_fake.size()) || g_fake[size_t(port)].state != 1)
+        return;
+    g_fake[size_t(port)].msgs++;
+    Msg m;
+    m.port = port;
+    m.status = static_cast<unsigned char>(status);
+    m.d1 = static_cast<unsigned char>(d1);
+    m.d2 = static_cast<unsigned char>(d2);
+    g_fakeQueue.push_back(m);
+    if (g_fakeWake)
+        g_fakeWake();
+}
+
+} // namespace r623
 #endif

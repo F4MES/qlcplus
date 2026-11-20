@@ -296,6 +296,8 @@ public:
     Q_INVOKABLE void midiClear(const QString &target);
     Q_INVOKABLE void midiClearAll();
     Q_INVOKABLE void midiRefresh();
+    /** TRACK_APP_OWNMIDI_R623: TRACK's own MIDI input has something (messages, a port that came or went) */
+    Q_INVOKABLE void r623Drain();
     /** R486_MI_ALL_AUTO: ALL AUTO, as the page's allAuto() */
     Q_INVOKABLE void allAuto();
     /** InputOutputMap::inputValueChanged, queued to the GUI thread */
@@ -674,6 +676,28 @@ private:
     void r599Reopen(const QString &why);
     // TRACK_APP_MIDIFIX_R574: another controller / number is another start - what was heard is forgotten
     void midiOwnReset() { m_midiPatchWorks = false; m_midiRawCount = 0; m_midiOpenTries = 0; m_midiOpenState = -1; r588MidiLetGo(); }
+    // TRACK_APP_OWNMIDI_R623 (Tobias 11-20: "evt. maa vi bygge et helt nyt midi system"): the TRACK app reads its
+    // controller itself (the end of trackmanager.cpp). Its ports are universes 1000.. - never one of QLC+'s
+    static bool r623Own(quint32 universe) { return universe >= 1000 && universe < 1064; }
+    bool r623Active() const;
+    QString r623Name(quint32 universe) const;
+    QString r623MapSource(const MidiMap &m) const;
+    void r623Tick();
+    void r623Sync();
+    void r623Rehome();
+    void r599Hook();
+    bool m_r623Started = false;
+    unsigned m_r623Serial = 0xFFFFFFFFu;  // the port list last looked at
+    QStringList m_r623Names;             // by port: the name, the state (-1 not in Windows' list, 0 closed, 1 open,
+    QVector<int> m_r623States;           // 2 refused) and whether it has spoken since it opened
+    QVector<bool> m_r623Heard;
+    QStringList m_r623Bases;             // ... its name as r594MidiBase has it
+    QHash<quint32, QString> m_r623Qlc;   // the QLC+ universes the show's MIDI patch stood on -> that controller
+    QString m_r623Listen;                // the MIDI page's line
+    bool m_r623Ok = false;               // ... and its dot: a controller is open
+    QString m_r623PortsSaid;             // logged last
+    QString m_r623UsbSaid;
+    qint64 m_r623UsbMs = 0;              // the USB bus last read
     bool m_midiLearn = false;
     bool m_midiCanUndo = false;
     bool m_midiDirty = false;
