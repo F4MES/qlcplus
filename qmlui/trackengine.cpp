@@ -51034,7 +51034,7 @@ void TrackEngine::r626HazeClose(bool showOn)
     // a universe the channels moved to)
     if (cap == m_r626Cap && m_r626CapMs >= 0 && ms - m_r626CapMs < 1000)
         return;
-    if (cap != m_r626Cap && (cap == 0 || cap == 255 || m_r626Cap == 255))
+    if (cap != m_r626Cap && m_r626Cap >= 0 && (cap == 0 || cap == 255 || m_r626Cap == 255))   // TRACK_APP_HELPDJ_R627
         logSignal(QStringLiteral("sig:haze-close:cap:%1").arg(cap));
     m_r626Cap = cap;
     m_r626CapMs = ms;

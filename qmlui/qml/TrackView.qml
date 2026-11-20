@@ -663,6 +663,9 @@ Rectangle
         property bool fit: false              // TRACK_APP_FIX_R570: the text ends with "..." inside the tile
         property alias input: btnInput
         property bool touchInputEnabled: true
+        // TRACK_APP_HELPDJ_R627: an AUTO that is off - that part runs by hand - glows green, slowly, until it is on
+        // again (ALL AUTO itself only shows while one is off: it does not glow too)
+        readonly property bool r627Glow: autoKind && !active && enabled && objectName !== "allAuto"
         signal tapped()
         radius: Math.round(10 * trackViewRoot.ks)
         color: btnInput.down ? Qt.lighter(base, 1.35) : base
@@ -678,6 +681,25 @@ Rectangle
         border.width: ring ? 3 : 0       // R403_NO_LINES: the white ring - pinned by hand - is the one line
         border.color: "#FFFFFF"
         opacity: enabled ? 1.0 : 0.3
+        Rectangle
+        {
+            // TRACK_APP_HELPDJ_R627: the glow - a green frame and a faint green fill, breathing
+            objectName: btn.objectName !== "" ? btn.objectName + ":glow" : ""
+            anchors.fill: parent
+            radius: parent.radius
+            visible: btn.r627Glow
+            color: Qt.rgba(trackViewRoot.cGreen.r, trackViewRoot.cGreen.g, trackViewRoot.cGreen.b, 0.16)
+            border.width: Math.max(2, Math.round(3 * trackViewRoot.ks))
+            border.color: trackViewRoot.cGreen
+            opacity: trackViewRoot.animate ? 0.25 : 0.9
+            SequentialAnimation on opacity
+            {
+                running: btn.r627Glow && btn.visible && trackViewRoot.animate
+                loops: Animation.Infinite
+                NumberAnimation { to: 1.0; duration: 900; easing.type: Easing.InOutSine }
+                NumberAnimation { to: 0.25; duration: 900; easing.type: Easing.InOutSine }
+            }
+        }
         // R403_IDLE_BAR: at rest a colour or section tile is dark like the rest,
         // its colour a flat bar along the foot; ON fills the tile
         Rectangle
@@ -5217,6 +5239,65 @@ Rectangle
         font.pixelSize: trackViewRoot.fs(13)
         font.letterSpacing: (trackViewRoot.fs(13)) * 0.18
     }
+    // TRACK_APP_HELPDJ_R627: a label on the page - a dark plate, a gold edge, a bold name and one short line
+    component HelpTag: Rectangle
+    {
+        id: htag
+        property string head: ""
+        property string body: ""
+        property string arrow: ""            // a glyph before the text: \u25C0 \u25B6 \u25B2 \u25BC
+        property real px: trackViewRoot.fs(13)
+        property real headSpacing: 0.12      // the name's letter spacing (LIVE's narrow tiles: less)
+        color: Qt.rgba(0.05, 0.05, 0.065, 0.94)
+        radius: Math.round(8 * trackViewRoot.ks)
+        border.width: 2
+        border.color: "#E3B44F"
+        clip: true
+        Item
+        {
+            anchors.fill: parent
+            anchors.leftMargin: Math.round(10 * trackViewRoot.ks); anchors.rightMargin: anchors.leftMargin
+            Text
+            {
+                id: htagArrow
+                visible: htag.arrow !== ""
+                anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                text: htag.arrow
+                color: "#E3B44F"; font.bold: true; font.pixelSize: Math.round(htag.px * 1.4)
+            }
+            Column
+            {
+                anchors.left: htagArrow.visible ? htagArrow.right : parent.left
+                anchors.leftMargin: htagArrow.visible ? Math.round(8 * trackViewRoot.ks) : 0
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Math.round(2 * trackViewRoot.ks)
+                Text
+                {
+                    visible: htag.head !== ""
+                    width: parent.width
+                    wrapMode: Text.WordWrap       // FLASH COLOUR on a narrow tile: two lines, never "..."
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignHCenter
+                    text: htag.head
+                    color: "#E3B44F"; font.bold: true
+                    font.pixelSize: htag.px; font.letterSpacing: htag.px * htag.headSpacing
+                }
+                Text
+                {
+                    visible: htag.body !== ""
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignHCenter
+                    text: htag.body
+                    color: "#F2F2F5"; font.bold: true; font.pixelSize: htag.px
+                }
+            }
+        }
+    }
     component HelpFrame: Rectangle
     {
         color: "transparent"
@@ -5250,116 +5331,144 @@ Rectangle
         readonly property real colW: (width - 2 * pad - 3 * pad) / 4
         function rowY(i) { return deckY + deck.rowY(i) }
 
-        Rectangle { anchors.fill: parent; color: Qt.rgba(0.035, 0.035, 0.045, 0.95); radius: Math.round(14 * trackViewRoot.ks) }
+        // TRACK_APP_HELPDJ_R627: the page shows through - each label sits on what it explains
+        Rectangle { anchors.fill: parent; color: Qt.rgba(0.02, 0.02, 0.03, 0.74); radius: Math.round(14 * trackViewRoot.ks) }
         // a tap anywhere on the guide closes it
         TouchInput { onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.helpOpen = false } }
+        readonly property real tagH: Math.max(30, Math.round(trackViewRoot.rowH * 0.62))
+        readonly property real tagPx: trackViewRoot.fs(13)
 
-        // ---- the track, the top bar, the markers - and LIVE, beside it
-        HelpFrame { x: 0; y: 0; width: parent.width; height: helpOverlay.waveH }
-        Row
+        // ---- the track: one line - and the one thing a DJ does up there: LAST TRACK
+        Column
         {
-            x: helpOverlay.pad; y: helpOverlay.pad
-            spacing: helpOverlay.pad
-            Repeater
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: Math.max(helpOverlay.pad, (helpOverlay.waveH - height) / 2)
+            spacing: Math.round(10 * trackViewRoot.ks)
+            HelpTag
             {
-                model: [
-                    // R455_HELP (Tobias 10-14: "Opdater nu ogsaa vores Help knap, til alt det nye")
-                    { t: "TOP BAR", b: "<b>Section pill</b> - the section playing now; a white frame: pinned by hand.<br><b>Next</b> - the coming marker and how far away.<br><b>Four dots</b> - the beat in the bar; the first, white, is the downbeat.<br><b>START SHOW</b> starts the engine. <b>SHOW ON</b> stops on the second tap (SURE?).<br><b>SETUP</b> - groups, scenes and the rig.<br><b>TEST \u00B7 BPM</b> and <b>STOP TEST</b> - the test track is playing.<br><b>LAST TRACK</b> - from 10 min before closing: tap twice and this track ends the night (lasers out, a warm white grows to full white at the music's end or when the DJ's fader goes down; 5 min, haze down, then dark). Tap twice again to undo." },   // R479_LAST_WHITE_HELP
-                    // R511_UI_HELP_FIT: at 1366 x 768 this column and MARKERS & THUMBS ran into the deck below (6 / 35 px)
-                    // - said shorter (nothing on the page moves); + TYPE's drag (R502) said too
-                    { t: "THE TRACK", b: "<b>Coloured bands</b> - the sections, with their energy.<br><b>White line</b> - where the track is; the bright bars are played.<br><b>The countdown</b> - bars to the next section.<br><b>HIT</b> on a DROP flag - a hit is armed for that drop (<b>DROP HIT</b> in LIVE).<br>Warnings appear in the bar under the track." },
-                    { t: "MARKERS & THUMBS", b: "<b>MARKERS</b> opens the marker tools - <b>DONE</b> closes them.<br><b>+ TYPE</b>: a tap = a marker on the bar playing; dragged onto the track = the bar under your finger. Its tab under the track: tap = <b>RETYPE</b> / <b>DELETE</b>, drag = move. <b>UNDO</b> steps back.<br><b>Thumbs</b> rate this moment (up also saves the look); hold one to rate a single group. <b>SAVED</b>: recent looks - <b>NEXT TYPE</b> plays one in the next such section, <b>QUEUED</b> cancels, <b>ALL SAVED LOOKS</b> is the full list.<br><b>PLAN</b> shows every section's lamps under the section names: grey = ran, colour = on now, outlined = the engine's plan (thin: a guess), a red line = yours, <b>MEM</b> = yours last time. Tap the <b>next</b> section or a later one to pick its lamps (the next = RIG's plan) - not once it has begun." },   // R484_PL_HELP
-                    { t: "NO TRACK & TOUCH", b: "<b>No track</b> - the track says whether Beat Link Trigger is connected; <b>(i)</b> shows how to start it from its logo on the taskbar.<br><b>TEST</b> (bottom left of the empty track, <b>hold 1.5 s</b>) - with no track from the CDJs: a made-up track on a loop to try the page and the rig. Nothing is learned or logged; a real track takes over.<br>Several fingers work at once - hold <b>FLASH WHITE</b> while you pull <b>ENERGY</b>.<br><b>HELP</b> and <b>SETUP</b> close with the same button; a tap on the guide closes it too." }
-                ]
-                Column
-                {
-                    width: helpOverlay.colW
-                    spacing: Math.round(10 * trackViewRoot.ks)
-                    HelpTitle { text: modelData.t }
-                    HelpText { width: parent.width; text: modelData.b; verticalAlignment: Text.AlignTop }
-                }
+                objectName: "helpDj:track"
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(helpOverlay.width - 2 * helpOverlay.pad, Math.round(620 * trackViewRoot.ks))
+                height: helpOverlay.tagH * 1.25
+                head: qsTr("THE TRACK")
+                body: qsTr("The lights read the music by themselves - nothing to do here.")
+                px: helpOverlay.tagPx
+            }
+            HelpTag
+            {
+                objectName: "helpDj:last"
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(helpOverlay.width - 2 * helpOverlay.pad, Math.round(620 * trackViewRoot.ks))
+                height: helpOverlay.tagH * 1.25
+                arrow: "\u25B2"
+                head: qsTr("LAST SONG OF THE NIGHT")
+                body: qsTr("Tap LAST TRACK twice - up top, it shows from 02:50.")
+                px: helpOverlay.tagPx
             }
         }
 
-        // ---- RIG: one line on each kind of row
+        // ---- RIG: the lamps
         HelpFrame { x: 0; y: helpOverlay.deckY; width: trackViewRoot.rigW; height: trackViewRoot.deckH }
-        HelpTitle { x: rigCard.inX; y: helpOverlay.deckY + trackViewRoot.cardPad; text: "RIG     ·     WHAT IS IN THE SHOW"; width: rigCard.inW; elide: Text.ElideRight }
-        HelpText
+        HelpTag
         {
-            x: rigCard.inX; y: helpOverlay.rowY(0); width: rigCard.inW; height: trackViewRoot.rowH
-            text: "<b>MASTER DIMMER</b> - the ceiling for the whole rig."
-        }
-        HelpText
-        {
-            x: rigCard.inX; y: helpOverlay.rowY(1); width: rigCard.inW
-            height: 5 * trackViewRoot.rowH + 4 * trackViewRoot.g
-            verticalAlignment: Text.AlignTop
-            text: "<b>Toggle</b> - the group is in or out of tonight's show.<br><br><b>Fader</b> - the group's own ceiling; kept through a restart the same night (until noon).<br><br><b>The fader lights up</b> in the room's colour while the group is on stage; grey = in the show, not used right now.<br><br><b>The icon</b> is the group's flash: hold it = that group full white (lasers in the move they are in).<br><br><b>Tap a name</b> - in or out of the next section: <font color='#F05050'>▶ NEXT BREAK</font> (BUILD, DROP ...) is the engine's plan; a tap makes it yours for that whole section. The base has a toggle too.<br><br><b>ON / OFF ONLY</b> - a group that can only be switched."
-        }
-
-        // ---- LOOK: the explanation on each row, after its label
-        HelpFrame { x: lookCard.x; y: helpOverlay.deckY; width: lookCard.width; height: trackViewRoot.deckH }
-        HelpTitle
-        {
-            x: lookCard.x + lookCard.inX; y: helpOverlay.deckY + trackViewRoot.cardPad
-            text: "LOOK     ·     GREEN AUTO = THE ENGINE DECIDES"
-            width: lookCard.inW
-            elide: Text.ElideRight
+            x: rigCard.inX; y: helpOverlay.deckY + Math.round(trackViewRoot.cardPad * 0.35)
+            width: rigCard.inW; height: helpOverlay.tagH
+            head: qsTr("RIG  \u00B7  THE LAMPS"); px: helpOverlay.tagPx
         }
         Repeater
         {
             model: [
-                { l: "ENERGY",       b: "How hard the show plays - your hand takes over. <b>AUTO</b>: the clock moves it through the night. <b>ALL AUTO</b> (above, when one is off) puts them all back, including HAZE & FAN." },
-                { l: "SECTION",      b: "Force a section until the music reaches its next one - then it follows the music again. The one the music is in is filled. Tap it again or <b>AUTO</b> to let go now." },   // R429_SECTION_ONCE
-                { l: "POSITION",     b: "Hold the heads in one position. <b>AUTO</b>: the engine moves them." },
-                { l: "COLOUR",       b: "Tap colours to make your own mix - it holds until the next section, then <b>AUTO</b> again. <b>Filled</b>: in the mix. <b>Ring</b>: leading now. <b>AUTO</b>: the engine picks." },   // R512_TILES_HELP
-                { l: "COLOUR MODE",  b: "<b>FADE</b>: the mix glides over. <b>CHASE</b>: it steps on the kick. <b>SPEED</b>: the pace of moves and chases." },
-                { l: "HAZE MACHINE", b: "Haze and fan by hand. <b>HAZE</b> is elastic above HAZE LIMIT (SETUP, ADVANCED): hold above the thin line for extra haze, then release to return to the limit. <b>AUTO</b>: haze and fan follow HAZE & FAN BY CLOCK (SETUP, ADVANCED) - learned from your hand; your hand on either takes them back." }   // R484_HZ_HELP
+                { r: 0, a: "", t: qsTr("MASTER - all the light at once") },
+                { r: 1, a: "\u25C0", t: qsTr("switch: this group on / off tonight") },
+                { r: 2, a: "", t: qsTr("fader: how bright this group is") },
+                { r: 3, a: "\u25C0", t: qsTr("hold the icon: flash this group") }
             ]
-            Item
+            HelpTag
             {
-                x: lookCard.x + lookCard.inX
-                y: helpOverlay.rowY(index)
-                width: lookCard.inW
-                height: trackViewRoot.rowH
-                HelpTitle
-                {
-                    width: lookCard.labW + lookCard.colGap + lookCard.autoW
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.l
-                }
-                HelpText
-                {
-                    x: lookCard.cX - lookCard.inX
-                    width: parent.width - x
-                    height: parent.height
-                    text: modelData.b
-                }
+                objectName: "helpDj:rig:" + modelData.r
+                // on the fader side of the row, so the switch and the icon they point at stay in sight
+                x: rigCard.inX + (modelData.r === 0 ? rigCard.inW * 0.18 : rigCard.inW * 0.55)
+                width: rigCard.inW * (modelData.r === 0 ? 0.64 : 0.45)
+                y: helpOverlay.rowY(modelData.r) + (trackViewRoot.rowH - height) / 2
+                height: helpOverlay.tagH
+                arrow: modelData.a; body: modelData.t; px: helpOverlay.tagPx
             }
         }
 
-        // ---- LIVE: on each button
-        HelpFrame { x: liveCard.x; y: helpOverlay.deckY; width: liveCard.width; height: trackViewRoot.deckH }
-        HelpTitle { x: liveCard.x + liveCard.inX; y: helpOverlay.deckY + trackViewRoot.cardPad; text: "LIVE     ·     RIGHT NOW"; width: liveCard.inW; elide: Text.ElideRight }
+        // ---- LOOK: how the show feels
+        HelpFrame { x: lookCard.x; y: helpOverlay.deckY; width: lookCard.width; height: trackViewRoot.deckH }
+        HelpTag
+        {
+            x: lookCard.x + lookCard.inX; y: helpOverlay.deckY + Math.round(trackViewRoot.cardPad * 0.35)
+            width: lookCard.inW; height: helpOverlay.tagH
+            head: qsTr("LOOK  \u00B7  GREEN AUTO = THE LIGHTS DECIDE  \u00B7  A GLOWING AUTO = YOU HAVE IT - TAP TO GIVE IT BACK")
+            px: helpOverlay.tagPx
+        }
         Repeater
         {
             model: [
-                { y: 0, h: 1, b: "<b>NEXT</b> - a new look now. <b>UNDO</b> brings the previous look back in this section." },
-                { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again.  <b>CALM</b> - calmer for 16 bars; tap again to end it." },
-                { y: 2, h: 2, b: "<b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 while held; a quick tap locks it.  <b>DROP HIT</b> arms a hit on the next drop: a tap = the gold kind, or <b>FLSH</b> / <b>STRB</b> / <b>DARK</b>. Once, then off." },
-                { y: 3, h: 3, b: "<b>BLACKOUT</b> - dark while held. Slide off to lock; tap to release." },
-                { y: 4, h: 3, b: "<b>FLASH WHITE</b> - white while held. <b>FLASH COLOUR</b> - the same flash in the look's partner colour (else the room's), while held." }
-            ]   // TRACK_APP_LIVEB_R625: the rows as they are now
-            HelpText
+                { t: qsTr("ENERGY - how wild the show is: up for the peak, down to calm the room") },
+                { t: qsTr("SECTION - force BREAK, BUILD or DROP right now") },
+                { t: qsTr("HEADS - hold the moving heads in one position") },
+                { t: qsTr("COLOUR - tap colours to make your own mix") },
+                { t: qsTr("COLOUR MODE - FADE or CHASE between them, SPEED of the moves") },
+                { t: qsTr("HAZE - the haze machine and its fan") }
+            ]
+            HelpTag
             {
-                objectName: "liveHelp:" + modelData.y        // R455_HELP
-                x: liveCard.x + liveCard.inX
-                width: liveCard.inW
-                y: modelData.y < 3 ? helpOverlay.rowY(modelData.y)   // TRACK_APP_LIVEB_R625
-                                   : helpOverlay.deckY + liveCard.lowY + (modelData.y === 4 ? liveCard.lowH + trackViewRoot.g : 0)
-                height: modelData.h === 1 ? trackViewRoot.rowH : (modelData.h === 2 ? liveCard.bigH : liveCard.lowH)
-                text: modelData.b
+                objectName: "helpDj:look:" + index
+                x: lookCard.x + lookCard.cX
+                width: lookCard.cW - lookCard.inX
+                y: helpOverlay.rowY(index) + (trackViewRoot.rowH - height) / 2
+                height: helpOverlay.tagH
+                arrow: "\u25C0"; body: modelData.t; px: helpOverlay.tagPx
             }
+        }
+
+        // ---- LIVE: on each button, its name and what it does
+        HelpFrame { x: liveCard.x; y: helpOverlay.deckY; width: liveCard.width; height: trackViewRoot.deckH }
+        HelpTag
+        {
+            x: liveCard.x + liveCard.inX; y: helpOverlay.deckY + Math.round(trackViewRoot.cardPad * 0.35)
+            width: liveCard.inW; height: helpOverlay.tagH
+            head: qsTr("LIVE  \u00B7  PLAY IT"); px: helpOverlay.tagPx
+        }
+        Repeater
+        {
+            // x: 0 left half, 1 right half, 2 the whole width; y: the card's own rows (R625's layout)
+            model: [
+                { k: "undo",   c: 0, y: 0, n: qsTr("UNDO"),         t: qsTr("the last look back") },
+                { k: "next",   c: 1, y: 0, n: qsTr("NEXT LOOK"),    t: qsTr("a new look now") },
+                { k: "hold",   c: 0, y: 1, n: qsTr("HOLD"),         t: qsTr("freeze the look") },
+                { k: "calm",   c: 1, y: 1, n: qsTr("CALM"),         t: qsTr("calmer for 16 bars") },
+                { k: "stut",   c: 0, y: 2, n: qsTr("STUTTER"),      t: qsTr("hold: the light chops") },
+                { k: "hit",    c: 1, y: 2, n: qsTr("DROP HIT"),     t: qsTr("tap: a big hit on the next drop") },
+                { k: "bo",     c: 2, y: 3, n: qsTr("BLACKOUT"),     t: qsTr("hold: dark  \u00B7  slide off: stays dark") },
+                { k: "fw",     c: 0, y: 4, n: qsTr("FLASH WHITE"),  t: qsTr("hold: white") },
+                { k: "fc",     c: 1, y: 4, n: qsTr("FLASH COLOUR"), t: qsTr("hold: in colour") }
+            ]
+            HelpTag
+            {
+                objectName: "helpDj:live:" + modelData.k
+                readonly property real m: Math.round(4 * trackViewRoot.ks)
+                x: liveCard.x + liveCard.inX + (modelData.c === 1 ? liveCard.halfW + trackViewRoot.g : 0) + m
+                width: (modelData.c === 2 ? liveCard.inW : liveCard.halfW) - 2 * m
+                y: (modelData.y < 3 ? helpOverlay.rowY(modelData.y)
+                                    : helpOverlay.deckY + liveCard.lowY + (modelData.y === 4 ? liveCard.lowH + trackViewRoot.g : 0)) + m
+                height: (modelData.y < 2 ? trackViewRoot.rowH : (modelData.y === 2 ? liveCard.bigH : liveCard.lowH)) - 2 * m
+                visible: modelData.k !== "fc" || trackViewRoot.trackApp
+                head: modelData.n; body: modelData.t
+                px: trackViewRoot.fs(12); headSpacing: 0.04
+            }
+        }
+
+        // ---- how to close it
+        Text
+        {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: helpOverlay.deckY + trackViewRoot.deckH + Math.round((helpOverlay.height - helpOverlay.deckY - trackViewRoot.deckH - height) / 2)
+            text: qsTr("Tap anywhere to close")
+            color: "#E3B44F"; font.bold: true; font.pixelSize: trackViewRoot.fs(13); font.letterSpacing: trackViewRoot.fs(13) * 0.12
         }
     }
 
