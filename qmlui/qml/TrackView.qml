@@ -4047,7 +4047,12 @@ Rectangle
                 readonly property real inW: width - 2 * inX
                 // BLACKOUT and FLASH WHITE share the last three rows: one and a half
                 // each - FLASH "lidt mindre" (runde 389), BLACKOUT a bigger target
+                // (TRACK_APP_LIVEB_R625: STUTTER and DROP HIT keep this height)
                 readonly property real bigH: (3 * trackViewRoot.rowH + trackViewRoot.g) / 2
+                // TRACK_APP_LIVEB_R625: BLACKOUT (whole width) and the FLASH row share what is left under STUTTER |
+                // DROP HIT, half each
+                readonly property real lowY: deck.rowY(2) + bigH + trackViewRoot.g
+                readonly property real lowH: (deck.rowY(5) + trackViewRoot.rowH - lowY - trackViewRoot.g) / 2
                 // R420_STUTTER_TILE: BLACKOUT | STUTTER share BLACKOUT's row
                 readonly property real halfW: (inW - trackViewRoot.g) / 2
 
@@ -4072,7 +4077,7 @@ Rectangle
                 Btn
                 {
                     objectName: "hold"
-                    x: liveCard.inX; y: deck.rowY(1); width: liveCard.inW; height: trackViewRoot.rowH
+                    x: liveCard.inX; y: deck.rowY(1); width: liveCard.halfW; height: trackViewRoot.rowH   // TRACK_APP_LIVEB_R625
                     icon: "hold"
                     text: qsTr("HOLD")
                     tone: trackViewRoot.cGold
@@ -4082,7 +4087,8 @@ Rectangle
                 Btn
                 {
                     objectName: "calm"
-                    x: liveCard.inX; y: deck.rowY(2); width: liveCard.inW; height: trackViewRoot.rowH
+                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(1)   // TRACK_APP_LIVEB_R625: beside HOLD
+                    width: liveCard.halfW; height: trackViewRoot.rowH
                     icon: "calm"
                     text: (trackEngine && trackEngine.calmBarsLeft > 0) ? qsTr("CALM") + " " + trackEngine.calmBarsLeft : qsTr("CALM")
                     tone: trackViewRoot.cBlue
@@ -4099,7 +4105,7 @@ Rectangle
                     property bool armed: false          // this press is the one holding it
                     property bool on: trackEngine ? trackEngine.blackout : false
                     // R452_HIT_LIVE: BLACKOUT on the right, beside STUTTER (Tobias 10-14)
-                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(3); width: liveCard.halfW; height: liveCard.bigH
+                    x: liveCard.inX; y: liveCard.lowY; width: liveCard.inW; height: liveCard.lowH   // TRACK_APP_LIVEB_R625: the whole width
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#B03030" : (boIn.down ? "#1A1A1F" : "#0A0A0C")
                     Behavior on color { enabled: trackViewRoot.animate; ColorAnimation { duration: 120 } }     // R402_FADE
@@ -4162,7 +4168,7 @@ Rectangle
                     readonly property int tapMs: 250    // shorter than this = a tap, it locks
                     property bool on: trackEngine ? trackEngine.stutter : false
                     readonly property int rate: trackEngine ? trackEngine.stutterRate : 3
-                    x: liveCard.inX; y: deck.rowY(3)          // R452_HIT_LIVE: STUTTER on the left
+                    x: liveCard.inX; y: deck.rowY(2)          // R452_HIT_LIVE: STUTTER on the left (TRACK_APP_LIVEB_R625: row 2)
                     width: liveCard.halfW; height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#E0A030" : (stIn.down ? "#1A1A1F" : "#0A0A0C")
@@ -4284,7 +4290,7 @@ Rectangle
                     readonly property bool armed: trackEngine ? trackEngine.hitKind > 0 : false
                     readonly property int kind: trackEngine ? (trackEngine.hitKind > 0 ? trackEngine.hitKind : trackEngine.hitLast) : 1
                     readonly property string text: armed ? qsTr("HIT ARMED") : qsTr("DROP HIT")
-                    x: liveCard.inX; y: deck.rowY(3) + liveCard.bigH + trackViewRoot.g
+                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(2)   // TRACK_APP_LIVEB_R625: beside STUTTER
                     width: liveCard.halfW; height: liveCard.bigH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: armed ? "#E23B3B" : (hitIn.down ? "#1A1A1F" : "#0A0A0C")
@@ -4371,10 +4377,10 @@ Rectangle
                     objectName: "flash"
                     property bool on: trackEngine ? (trackEngine.flashing && trackEngine.flashingColour !== true) : false   // TRACK_APP_FLASHCOLOUR_R610
                     // R452_HIT_LIVE: the right half, beside DROP HIT
-                    x: liveCard.inX + liveCard.halfW + trackViewRoot.g; y: deck.rowY(3) + liveCard.bigH + trackViewRoot.g
-                    width: liveCard.halfW
-                    // TRACK_APP_FLASHCOLOUR_R610 (mockup approved 11-14): the upper half - FLASH COLOUR is the lower
-                    height: trackViewRoot.trackApp ? Math.round((liveCard.bigH - trackViewRoot.g * 0.6) / 2) : liveCard.bigH
+                    // TRACK_APP_LIVEB_R625: the bottom row, FLASH COLOUR beside it (the whole width outside the TRACK app)
+                    x: liveCard.inX; y: liveCard.lowY + liveCard.lowH + trackViewRoot.g
+                    width: trackViewRoot.trackApp ? liveCard.halfW : liveCard.inW
+                    height: liveCard.lowH
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? "#FFFFFF" : (flashIn.down ? "#34343C" : "#24242A")
                     scale: flashIn.down ? 0.975 : 1.0                                                        // R402_PRESS
@@ -4421,9 +4427,9 @@ Rectangle
                     visible: trackViewRoot.trackApp
                     readonly property bool on: trackEngine ? trackEngine.flashingColour === true : false
                     readonly property color hue: trackViewRoot.swatch(trackEngine && trackEngine.flashHue ? trackEngine.flashHue : "blue")
-                    x: flashTile.x; y: flashTile.y + flashTile.height + Math.round(trackViewRoot.g * 0.6)
+                    x: flashTile.x + flashTile.width + trackViewRoot.g; y: flashTile.y   // TRACK_APP_LIVEB_R625: beside FLASH WHITE
                     width: flashTile.width
-                    height: liveCard.bigH - flashTile.height - Math.round(trackViewRoot.g * 0.6)
+                    height: flashTile.height
                     radius: Math.round(10 * trackViewRoot.ks)
                     color: on ? hue : (flashColourIn.down ? "#34343C" : "#24242A")
                     scale: flashColourIn.down ? 0.975 : 1.0
@@ -5245,18 +5251,19 @@ Rectangle
         {
             model: [
                 { y: 0, h: 1, b: "<b>NEXT</b> - a new look now. <b>UNDO</b> brings the previous look back in this section." },
-                { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again." },
-                { y: 2, h: 1, b: "<b>CALM</b> - calmer for 16 bars; tap again to end it." },
-                { y: 3, h: 2, b: "<b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 while held; a quick tap locks it.  <b>BLACKOUT</b> - dark while held. Slide off to lock; tap to release." },
-                { y: 4, h: 2, b: "<b>DROP HIT</b> arms a hit on the next drop: a tap = the gold kind, or <b>FLSH</b> / <b>STRB</b> / <b>DARK</b>. Once, then off.  <b>FLASH WHITE</b> - white while held. <b>FLASH COLOUR</b> - the same flash in the look's partner colour (else the room's), while held." }
-            ]
+                { y: 1, h: 1, b: "<b>HOLD</b> - freeze the look until you tap it again.  <b>CALM</b> - calmer for 16 bars; tap again to end it." },
+                { y: 2, h: 2, b: "<b>STUTTER</b> - dark on every 1/4, 1/8 or 1/16 while held; a quick tap locks it.  <b>DROP HIT</b> arms a hit on the next drop: a tap = the gold kind, or <b>FLSH</b> / <b>STRB</b> / <b>DARK</b>. Once, then off." },
+                { y: 3, h: 3, b: "<b>BLACKOUT</b> - dark while held. Slide off to lock; tap to release." },
+                { y: 4, h: 3, b: "<b>FLASH WHITE</b> - white while held. <b>FLASH COLOUR</b> - the same flash in the look's partner colour (else the room's), while held." }
+            ]   // TRACK_APP_LIVEB_R625: the rows as they are now
             HelpText
             {
                 objectName: "liveHelp:" + modelData.y        // R455_HELP
                 x: liveCard.x + liveCard.inX
                 width: liveCard.inW
-                y: modelData.y < 4 ? helpOverlay.rowY(modelData.y) : helpOverlay.rowY(3) + liveCard.bigH + trackViewRoot.g
-                height: modelData.h === 1 ? trackViewRoot.rowH : liveCard.bigH
+                y: modelData.y < 3 ? helpOverlay.rowY(modelData.y)   // TRACK_APP_LIVEB_R625
+                                   : helpOverlay.deckY + liveCard.lowY + (modelData.y === 4 ? liveCard.lowH + trackViewRoot.g : 0)
+                height: modelData.h === 1 ? trackViewRoot.rowH : (modelData.h === 2 ? liveCard.bigH : liveCard.lowH)
                 text: modelData.b
             }
         }

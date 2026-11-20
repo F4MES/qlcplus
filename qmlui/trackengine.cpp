@@ -21160,9 +21160,14 @@ void TrackEngine::checkConflicts(const QSet<QString> &castSet)
     QStringList found;
     if (m_palette.isEmpty())
         found << tr("no colours found - the engine needs colour scenes, or RGB fixtures to make them from");
-    if (m_blendSkipped.isEmpty() == false)
-        found << tr("not used, built on an override/filter scene: %1")
-                 .arg(QStringList(m_blendSkipped.values()).join(", "));
+    if (m_blendSkipped != m_r625BlendSaid)   // TRACK_APP_LIVEB_R625: the log, not the bar
+    {
+        m_r625BlendSaid = m_blendSkipped;
+        QStringList names = m_blendSkipped.values();
+        std::sort(names.begin(), names.end());
+        if (names.isEmpty() == false)
+            logSignal(QStringLiteral("sig:blend-skipped:%1:%2").arg(names.count()).arg(names.join(QLatin1Char(';'))));
+    }
     // roles and groups only change with the table: counted once per table
     if (m_sharedLooks < 0)
     {
