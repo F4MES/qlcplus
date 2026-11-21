@@ -640,6 +640,9 @@ class TrackEngine : public QObject
     Q_PROPERTY(int hazeCloseLeftMin READ hazeCloseLeftMin NOTIFY liveChanged)
     Q_PROPERTY(int hazeCloseFrom READ hazeCloseFrom NOTIFY liveChanged)
     Q_PROPERTY(int lastTrackLeft READ lastTrackLeft NOTIFY lastTrackChanged)
+    // TRACK_APP_CASAMBIPAGE_R632: SETUP > CASAMBI - LAST TRACK LIGHTS on / off, the page's connection and lamps
+    Q_PROPERTY(bool casambiOn READ casambiOn WRITE setCasambiOn NOTIFY casambiChanged)
+    Q_PROPERTY(QVariantMap casambiPage READ casambiPage NOTIFY casambiChanged)
     Q_PROPERTY(int lastTrackCloseMin READ lastTrackCloseMin NOTIFY lastTrackChanged)
     Q_PROPERTY(QString lastTrackCloseAt READ lastTrackCloseAt NOTIFY lastTrackChanged)
     Q_PROPERTY(int lastTrackEnd READ lastTrackEndBeat NOTIFY lastTrackChanged)   // R479_LAST_WHITE_PROP: the music's end
@@ -875,6 +878,19 @@ public:
     int hazeCloseLeftMin() const;
     int hazeCloseFrom() const { return qRound(qMax(0, m_r626From) * 100.0 / 255.0); }
     Q_INVOKABLE void hazeCloseContinue();
+    /** TRACK_APP_CASAMBIPAGE_R632: SETUP > CASAMBI. casambiPage(): state (unset / idle / connecting / connected /
+     *  error / lasttrack), text, network, lamps [{id, name, model, level 0..1 or -1, online, failed}], connected,
+     *  running, lastRun */
+    bool casambiOn() const;
+    void setCasambiOn(bool on);
+    QVariantMap casambiPage() const;
+    Q_INVOKABLE void casambiPageOpen();
+    Q_INVOKABLE void casambiPageClose();
+    Q_INVOKABLE void casambiScan();
+    Q_INVOKABLE void casambiDisconnect();
+    Q_INVOKABLE void casambiSet(int id, qreal level);
+    Q_INVOKABLE void casambiAll();
+    Q_INVOKABLE void casambiBack();
     /** TRACK_APP_HAZECLOSE_R626: TrackManager asks every 200 ms - the engine wants SHOW OFF (the warning's 30 min
      *  without an answer, LAST TRACK dark for 15 min). Taken once */
     bool r626TakeShowOff() { const bool w = m_r626WantOff; m_r626WantOff = false; return w; }
@@ -1561,6 +1577,7 @@ signals:
     void settingsImported();             // MIDI_EDIT_IMPORT: consumers reload after successful import
     void tableChanged();
     void lastTrackChanged();             // R458_LAST_TRACK
+    void casambiChanged();               // TRACK_APP_CASAMBIPAGE_R632
     void hazeNagChanged();               // R467_HAZE_NAG
     void flashGroupsChanged();           // R469_GROUP_FLASH
     void syncChanged();                  // R470_SYNC
@@ -3753,6 +3770,31 @@ private:
     qint64 m_casSentMs = -1;
     void casambiTick();
     void casambiStart();
+    // TRACK_APP_CASAMBIPAGE_R632: SETUP > CASAMBI's own helper (--page), and what LAST TRACK's did last
+    static QString casambiConfig();
+    static QString casambiNetwork();
+    QObject *m_casPageProc = nullptr;
+    bool m_casPageWanted = false;
+    bool m_casPageQuitting = false;
+    bool m_casBusyWas = false;
+    QString m_casPageWhy;
+    QString m_casPageState = QStringLiteral("idle");
+    QString m_casPageText = QStringLiteral("Not connected - SCAN AGAIN connects");
+    QString m_casPageErr;
+    QString m_casPageSecs;
+    QMap<int, QVariantMap> m_casLamps;
+    QMap<QString, QString> m_casRun;
+    qint64 m_casRunMs = 0;
+    void casambiPageStart();
+    void casambiPageLetGo(const QString &why);
+    void casambiPageSend(const QByteArray &line);
+    void casambiPageLine(const QString &line);
+    void casambiRunLine(const QString &line);
+    void casambiRunEnd(int code);
+    void casambiRunSave(const QString &text);
+    /** LAST TRACK has (or is about to take) the Bluetooth connection: its helper runs, or it is armed with
+     *  LAST TRACK LIGHTS ON and its helper not started yet */
+    bool casambiLastBusy() const { return m_casProc != nullptr || (m_lastStage > 0 && m_casTried == false && casambiOn()); }
     QString m_lastTitle;                   // the track that was made the last
     int m_lastOutro = -1;                  // its OUTRO flag, once played
     int m_lastBeatNow = 0;

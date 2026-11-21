@@ -84,11 +84,15 @@ Rectangle
     readonly property bool trackApp: typeof trackAppCtl !== "undefined" && !!trackAppCtl && trackAppCtl.active === true
     property bool cacheOpen: false
     property bool roomOpen: false        // TRACK_APP_UI_R560: ROOM - the room map, over the lists
+    property bool casambiOpen: false     // TRACK_APP_CASAMBIPAGE_R632: CASAMBI - the restaurant's lights, over the lists
+    onRoomOpenChanged: if (roomOpen) casambiOpen = false
+    onCacheOpenChanged: if (cacheOpen) casambiOpen = false
+    onCasambiOpenChanged: if (casambiOpen) { roomOpen = false; cacheOpen = false }
     // TRACK_APP_FIX_R570: what opens under ROOM closes it
-    onLabMenuOpenChanged: if (labMenuOpen) roomOpen = false
-    onLearnedOpenChanged: if (learnedOpen) roomOpen = false
-    onMidiOpenChanged: if (midiOpen) roomOpen = false
-    onAdvancedOpenChanged: if (advancedOpen) roomOpen = false
+    onLabMenuOpenChanged: if (labMenuOpen) { roomOpen = false; casambiOpen = false }
+    onLearnedOpenChanged: if (learnedOpen) { roomOpen = false; casambiOpen = false }
+    onMidiOpenChanged: if (midiOpen) { roomOpen = false; casambiOpen = false }
+    onAdvancedOpenChanged: if (advancedOpen) { roomOpen = false; casambiOpen = false }
     onFullListChanged: if (fullList) roomOpen = false
     onFilterChanged: if (filter !== "") roomOpen = false
     // TRACK_APP_LIST_R557 (Tobias 11-04: "gemme listen over alle programmer under show all og maaske kun vise en
@@ -413,6 +417,20 @@ Rectangle
                 active: setupRoot.midiOpen
                 activeColor: "#4FA3E3"
                 onTapped: setupRoot.midiOpen = !setupRoot.midiOpen
+            }
+
+            // TRACK_APP_CASAMBIPAGE_R632: CASAMBI - the restaurant's room light: what TRACK sees, a hand on it,
+            // LAST TRACK LIGHTS on / off
+            TrackTile
+            {
+                objectName: "casambiTile"
+                visible: setupRoot.trackApp
+                Layout.preferredWidth: 96
+                Layout.preferredHeight: 34
+                label: qsTr("CASAMBI")
+                active: setupRoot.casambiOpen
+                activeColor: "#4FA3E3"
+                onTapped: setupRoot.casambiOpen = !setupRoot.casambiOpen
             }
 
             TrackTile
@@ -2825,6 +2843,244 @@ Rectangle
 
     // ------------------------------------------------- TRACK_APP_UI_R560: ROOM
     // Tobias 11-05: "byg ogsaa rummet i miniformat" - "kun et tab paa telefonen og saa i settings paa rigget". The room
+
+    // =====================================================================
+    // TRACK_APP_CASAMBIPAGE_R632 (Tobias 11-21, mockup approved "Super - byg nu siden"): SETUP > CASAMBI - LAST TRACK
+    // LIGHTS on / off, the connection (a test that TRACK can see the lamps), every lamp with a hand on it, ALL 100 %,
+    // BACK, and what LAST TRACK did the last time. The page holds its own connection only while it is open
+    // =====================================================================
+    Rectangle
+    {
+        id: casPanel
+        objectName: "casambiPanel"
+        visible: setupRoot.trackApp && setupRoot.casambiOpen && !!trackEngine && trackEngine.casambiPage !== undefined
+        x: 0; y: 56; width: parent.width; height: parent.height - 56
+        radius: setupRoot.radius
+        z: 40
+        color: setupRoot.color
+        MouseArea { anchors.fill: parent }          // nothing under it takes a finger
+        readonly property var page: visible && trackEngine ? trackEngine.casambiPage : ({})
+        readonly property var lamps: page.lamps !== undefined ? page.lamps : []
+        readonly property string cs: page.state !== undefined ? page.state : "idle"
+        readonly property bool connected: page.connected === true
+        readonly property bool on: !!trackEngine && trackEngine.casambiOn === true
+        readonly property real labW: 190
+        readonly property real btnW: 132
+        onVisibleChanged: { if (!trackEngine) return; if (visible) trackEngine.casambiPageOpen(); else trackEngine.casambiPageClose() }
+        Component.onDestruction: if (visible && trackEngine) trackEngine.casambiPageClose()
+
+        Text { x: 22; y: 16; text: qsTr("CASAMBI"); color: setupRoot.cText; font.bold: true; font.pixelSize: 16; font.letterSpacing: 1.6 }
+        Text
+        {
+            x: 130; y: 18; width: parent.width - 150; elide: Text.ElideRight
+            text: qsTr("The restaurant's room light over Bluetooth (network %1). TRACK only uses it for LAST TRACK - and here.")
+                  .arg(casPanel.page.network !== undefined ? casPanel.page.network : "PS")
+            color: setupRoot.cDim; font.pixelSize: 13
+        }
+
+        // LAST TRACK LIGHTS
+        Text { objectName: "casambiOnLabel"; x: 22; y: 62; width: casPanel.labW; text: qsTr("LAST TRACK LIGHTS"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.6 }
+        Text
+        {
+            x: 22 + casPanel.labW + 10; y: 62; width: parent.width - x - 2 * 100 - 30; elide: Text.ElideRight
+            text: qsTr("ON: over the last track every lamp goes slowly up from where it stands to 100 %. OFF: TRACK leaves Casambi alone.")
+            color: "#A0A0AA"; font.pixelSize: 13
+        }
+        TrackTile
+        {
+            objectName: "casambiOn"
+            x: parent.width - 22 - 100 - 10 - 100; y: 52; width: 100; height: 34
+            label: qsTr("ON"); active: casPanel.on; activeColor: "#E3B44F"
+            onTapped: if (trackEngine) trackEngine.casambiOn = true
+        }
+        TrackTile
+        {
+            objectName: "casambiOff"
+            x: parent.width - 22 - 100; y: 52; width: 100; height: 34
+            label: qsTr("OFF"); active: !casPanel.on; activeColor: "#E36B6B"
+            onTapped: if (trackEngine) trackEngine.casambiOn = false
+        }
+
+        // CONNECTION
+        Text { x: 22; y: 110; width: casPanel.labW; text: qsTr("CONNECTION"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.6 }
+        Rectangle
+        {
+            objectName: "casambiDot"
+            x: 22 + casPanel.labW + 10; y: 113; width: 10; height: 10; radius: 5
+            color: casPanel.cs === "connected" ? "#30C050"
+                 : casPanel.cs === "connecting" ? "#E3B44F"
+                 : (casPanel.cs === "error" || casPanel.cs === "unset") ? "#E0555A" : "#6E6E78"
+        }
+        Text
+        {
+            objectName: "casambiStatus"
+            x: 22 + casPanel.labW + 28; y: 110; width: parent.width - x - 2 * casPanel.btnW - 40; elide: Text.ElideRight
+            text: casPanel.page.text !== undefined ? casPanel.page.text : ""
+            color: casPanel.cs === "error" || casPanel.cs === "unset" ? "#F0A0A0" : "#C8C8D0"; font.pixelSize: 13
+        }
+        TrackTile
+        {
+            objectName: "casambiScan"
+            x: parent.width - 22 - casPanel.btnW - 10 - casPanel.btnW; y: 100; width: casPanel.btnW; height: 34
+            label: qsTr("SCAN AGAIN")
+            enabled: casPanel.cs !== "unset" && casPanel.cs !== "lasttrack" && casPanel.cs !== "connecting"
+            opacity: enabled ? 1 : 0.4
+            onTapped: if (trackEngine) trackEngine.casambiScan()
+        }
+        TrackTile
+        {
+            objectName: "casambiDisconnect"
+            x: parent.width - 22 - casPanel.btnW; y: 100; width: casPanel.btnW; height: 34
+            label: qsTr("DISCONNECT")
+            enabled: casPanel.page.running === true
+            opacity: enabled ? 1 : 0.4
+            onTapped: if (trackEngine) trackEngine.casambiDisconnect()
+        }
+
+        // LAMPS
+        Text { x: 22; y: 158; width: casPanel.labW; text: qsTr("LAMPS"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.6 }
+        Text
+        {
+            x: 22 + casPanel.labW + 10; y: 158; width: parent.width - x - 2 * casPanel.btnW - 40; elide: Text.ElideRight
+            text: qsTr("Drag a lamp to set it now - it changes in the room. BACK puts every lamp where it stood when the page connected.")
+            color: "#A0A0AA"; font.pixelSize: 13
+        }
+        TrackTile
+        {
+            objectName: "casambiAll"
+            x: parent.width - 22 - casPanel.btnW - 10 - casPanel.btnW; y: 148; width: casPanel.btnW; height: 34
+            label: qsTr("ALL 100 %")
+            enabled: casPanel.connected
+            opacity: enabled ? 1 : 0.4
+            onTapped: if (trackEngine) trackEngine.casambiAll()
+        }
+        TrackTile
+        {
+            objectName: "casambiBack"
+            x: parent.width - 22 - casPanel.btnW; y: 148; width: casPanel.btnW; height: 34
+            label: qsTr("BACK")
+            enabled: casPanel.connected
+            opacity: enabled ? 1 : 0.4
+            onTapped: if (trackEngine) trackEngine.casambiBack()
+        }
+
+        Flickable
+        {
+            id: casFlick
+            objectName: "casambiLamps"
+            x: 22; y: 198; width: parent.width - 44; height: parent.height - y - 44
+            clip: true
+            contentHeight: casGrid.height
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Grid
+            {
+                id: casGrid
+                columns: 4
+                spacing: 10
+                readonly property real cellW: (casFlick.width - 3 * spacing) / 4
+                Repeater
+                {
+                    model: casPanel.lamps.length    // a number: a lamp's word does not rebuild the tile under a finger
+                    Rectangle
+                    {
+                        id: lampTile
+                        objectName: "casambiLamp:" + index
+                        readonly property var lamp: casPanel.lamps[index] !== undefined ? casPanel.lamps[index] : ({})
+                        readonly property bool dead: lamp.online === false || lamp.failed === true
+                        readonly property real level: lamp.level !== undefined ? lamp.level : -1
+                        property real hand: -1
+                        property real sent: -1
+                        readonly property real shown: hand >= 0 ? hand : level
+                        width: casGrid.cellW; height: 82; radius: 10
+                        color: "#1E1E22"
+                        opacity: dead ? 0.45 : 1
+                        Text
+                        {
+                            x: 12; y: 10; width: parent.width - 24 - (deadTag.visible ? deadTag.width + 6 : 0); elide: Text.ElideRight
+                            textFormat: Text.StyledText
+                            text: "<b>" + String(lampTile.lamp.name !== undefined ? lampTile.lamp.name : "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                                  + "</b><font color='#7A7A84'>&nbsp;&nbsp;" + String(lampTile.lamp.model !== undefined ? lampTile.lamp.model : "").toLowerCase().replace(/</g, "&lt;") + "</font>"
+                            color: setupRoot.cText; font.pixelSize: 13
+                        }
+                        Text
+                        {
+                            id: deadTag
+                            visible: lampTile.dead
+                            anchors.right: parent.right; anchors.rightMargin: 10; y: 10
+                            text: lampTile.lamp.failed === true && lampTile.lamp.online !== false ? qsTr("DID NOT TAKE IT") : qsTr("NOT ANSWERING")
+                            color: "#E0555A"; font.bold: true; font.pixelSize: 10; font.letterSpacing: 1
+                        }
+                        Rectangle
+                        {
+                            id: lampFader
+                            x: 12; y: parent.height - 10 - height; width: parent.width - 24; height: 34; radius: 8
+                            color: lampTile.dead ? "#141416" : "#0A0A0D"
+                            clip: true
+                            Rectangle
+                            {
+                                visible: lampTile.shown > 0 && !lampTile.dead
+                                x: 3; y: 3; height: parent.height - 6
+                                width: (parent.width - 6) * Math.max(0, Math.min(1, lampTile.shown))
+                                radius: 6
+                                color: "#E8D8A8"
+                            }
+                            Text
+                            {
+                                anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter
+                                readonly property bool onFill: lampTile.shown > 0.86 && !lampTile.dead
+                                text: lampTile.dead && lampTile.lamp.online === false ? "-"
+                                    : lampTile.shown < 0 ? qsTr("level not known")
+                                    : Math.round(lampTile.shown * 100) + "%" + (lampTile.shown <= 0 ? qsTr(" \u00B7 off") : "")
+                                color: onFill ? "#2A1D05" : (lampTile.shown < 0 ? "#A0A0AA" : "#ECECF0")
+                                font.bold: lampTile.shown >= 0; font.pixelSize: 14
+                            }
+                            MouseArea
+                            {
+                                anchors.fill: parent
+                                enabled: casPanel.connected && lampTile.lamp.online !== false
+                                preventStealing: true
+                                function at(mx) { return Math.max(0, Math.min(1, (mx - 3) / (width - 6))) }
+                                function give(v)
+                                {
+                                    v = Math.round(v * 100) / 100
+                                    lampTile.hand = v
+                                    if (Math.abs(v - lampTile.sent) >= 0.01 && trackEngine && lampTile.lamp.id !== undefined)
+                                    {
+                                        lampTile.sent = v
+                                        trackEngine.casambiSet(lampTile.lamp.id, v)
+                                    }
+                                }
+                                onPressed: (mouse) => give(at(mouse.x))
+                                onPositionChanged: (mouse) => give(at(mouse.x))
+                                onReleased: { lampTile.hand = -1; lampTile.sent = -1 }
+                                onCanceled: { lampTile.hand = -1; lampTile.sent = -1 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Text
+        {
+            objectName: "casambiEmpty"
+            visible: casPanel.lamps.length === 0
+            x: 22; y: 210; width: parent.width - 44; wrapMode: Text.Wrap
+            text: casPanel.cs === "connecting" ? qsTr("The lamps show here once TRACK is connected.")
+                : casPanel.cs === "connected" ? qsTr("Connected, but the network told of no lamps.")
+                : qsTr("No lamps to show - see CONNECTION above.")
+            color: "#6E6E78"; font.pixelSize: 13
+        }
+        Text
+        {
+            objectName: "casambiLastRun"
+            x: 22; y: parent.height - 30; width: parent.width - 44; elide: Text.ElideRight
+            text: qsTr("LAST RUN: ") + (casPanel.page.lastRun ? casPanel.page.lastRun : qsTr("none yet"))
+                  + qsTr("  \u00B7  Names come from the Casambi app. The page holds the connection only while it is open (and lets go when LAST TRACK starts).")
+            color: "#8A8A94"; font.pixelSize: 12
+        }
+    }
+
     // map (rig_room.json) seen from above with the DJ at the bottom: every lamp lit as QLC+ sends it now
     // (trackEngine.roomNow(), read 4 times a second while it is open). Only reads - nothing here sends anything.
     Rectangle

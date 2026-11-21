@@ -373,6 +373,12 @@ TrackEngine::~TrackEngine()
         delete m_casProc;
         m_casProc = nullptr;
     }
+    if (m_casPageProc != nullptr)        // TRACK_APP_CASAMBIPAGE_R632: the page's helper too
+    {
+        m_casPageProc->disconnect(this);
+        delete m_casPageProc;
+        m_casPageProc = nullptr;
+    }
     r497TapSave(true);                   // R544_TAPS_FLUSH_END: the last taps of the night (2-minute writes)
     qualityFinish(QStringLiteral("shutdown"));
     stopAll();
@@ -50726,6 +50732,14 @@ void TrackEngine::r608Beat(const QString &state, int beat)
 void TrackEngine::casambiTick()
 {
     QProcess *proc = qobject_cast<QProcess *>(m_casProc);
+    {   // TRACK_APP_CASAMBIPAGE_R632: SETUP > CASAMBI says when LAST TRACK has the lights
+        const bool busy = casambiLastBusy();
+        if (busy != m_casBusyWas)
+        {
+            m_casBusyWas = busy;
+            emit casambiChanged();
+        }
+    }
     if (m_lastStage == 0)
     {
         if (m_casArmed)
@@ -50752,6 +50766,12 @@ void TrackEngine::casambiTick()
     // TRACK_APP_REVIEWFIX_R622: started when the last helper is gone. LAST TRACK undone and armed again within the
     // few seconds the old helper takes to put the lamps back found it still running, started none - and the old one
     // exits after its undo: that LAST TRACK had no Casambi at all. The "p" lines went to a helper that had left
+    // TRACK_APP_CASAMBIPAGE_R632: one Bluetooth connection at a time - SETUP > CASAMBI's lets go first
+    if (m_casTried == false && m_casPageProc != nullptr && casambiOn())
+    {
+        casambiPageLetGo(QStringLiteral("lasttrack"));
+        return;
+    }
     if (m_casTried == false && m_testTrack == false && proc == nullptr)
     {
         m_casTried = true;
@@ -50775,17 +50795,25 @@ void TrackEngine::casambiTick()
 
 void TrackEngine::casambiStart()
 {
-    const QString cfg = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-                      + QStringLiteral("/QLC+/casambi.json");
+    // TRACK_APP_CASAMBIPAGE_R632: LAST TRACK LIGHTS OFF (SETUP > CASAMBI) - TRACK leaves Casambi alone
+    if (casambiOn() == false)
+    {
+        logSignal(QStringLiteral("sig:casambi:disabled"));
+        casambiRunSave(QStringLiteral("LAST TRACK LIGHTS was OFF - Casambi not used"));
+        return;
+    }
+    const QString cfg = casambiConfig();
     if (QFile::exists(cfg) == false)
     {
         logSignal(QStringLiteral("sig:casambi:off"));
+        casambiRunSave(QStringLiteral("no casambi.json - Casambi not used"));
         return;
     }
     const QString exe = QCoreApplication::applicationDirPath() + QStringLiteral("/casambi/casambi_helper.exe");
     if (QFile::exists(exe) == false)
     {
         logSignal(QStringLiteral("sig:casambi:no-helper"));
+        casambiRunSave(QStringLiteral("the Casambi helper is not in this build"));
         return;
     }
     QProcess *proc = new QProcess(this);
@@ -50800,6 +50828,7 @@ void TrackEngine::casambiStart()
         while (proc->canReadLine())
         {
             QString line = QString::fromUtf8(proc->readLine()).trimmed().left(100);
+            casambiRunLine(line);        // TRACK_APP_CASAMBIPAGE_R632: LAST RUN
             line.replace(QLatin1Char(' '), QLatin1Char('_'));
             if (line.isEmpty() == false)
                 logSignal(QStringLiteral("sig:casambi:") + line);
@@ -50809,6 +50838,7 @@ void TrackEngine::casambiStart()
         logSignal(QStringLiteral("sig:casambi:exit:%1").arg(code));
         if (m_casProc == proc)
             m_casProc = nullptr;
+        casambiRunEnd(code);             // TRACK_APP_CASAMBIPAGE_R632: LAST RUN
         proc->deleteLater();
     });
     connect(proc, &QProcess::errorOccurred, this, [this, proc](QProcess::ProcessError e) {
@@ -50819,9 +50849,406 @@ void TrackEngine::casambiStart()
             m_casProc = nullptr;
         proc->deleteLater();
     });
+    m_casRun.clear();                    // TRACK_APP_CASAMBIPAGE_R632: LAST RUN starts here
+    m_casRunMs = QDateTime::currentMSecsSinceEpoch();
     proc->start(exe, QStringList() << cfg);
     logSignal(QStringLiteral("sig:casambi:start"));
 }
+
+#include <QPointer>
+#include <QTimer>
+#include <algorithm>
+
+/* =====================================================================
+ * TRACK_APP_CASAMBIPAGE_R632 (Tobias 11-21: "en casambi side under settings hvor man foerst og fremmest kan se
+ * hvilke lys den kan se (evt. styre dem derfra?) samt mulighed for at slaa casambi fra (saa den ikke bruger den
+ * til at taende ved last-track)" - "Saa vil det ogsaa fungere som en test om den faktisk kan se lysene".
+ * Mockup approved 11-21: "Super - byg nu siden").
+ *
+ *  - LAST TRACK LIGHTS ON / OFF ("trackengine/casambi-on", default ON): OFF = casambiStart() starts nothing
+ *    (sig:casambi:disabled); switched OFF while LAST TRACK's helper runs, it is told to go (the lamps stay).
+ *  - The page: its own helper (casambi_helper.exe <cfg> --page) while SETUP > CASAMBI is open - every lamp
+ *    with its name, level and whether it answers, a hand on each, ALL 100 %, BACK (where they stood when the
+ *    page connected). One Bluetooth connection at a time: the page's helper is told to go the moment LAST TRACK
+ *    is armed, and the page does not connect while LAST TRACK's helper runs.
+ *  - LAST RUN: what LAST TRACK's helper did the last time ("trackcasambi/lastrun", outside trackengine/: not in
+ *    EXPORT or the log's settings snapshot).
+ * Log: sig:casambi:lasttrack-on|off, :disabled, :page-start, :page:<line>, :page-exit:<code>
+ * ===================================================================== */
+
+#define R632_ON_KEY "trackengine/casambi-on"
+#define R632_RUN_KEY "trackcasambi/lastrun"
+
+QString TrackEngine::casambiConfig()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QStringLiteral("/QLC+/casambi.json");
+}
+
+QString TrackEngine::casambiNetwork()
+{
+    QFile f(casambiConfig());
+    if (f.open(QIODevice::ReadOnly) == false)
+        return QStringLiteral("PS");
+    const QString n = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("network")).toString();
+    return n.isEmpty() ? QStringLiteral("PS") : n;
+}
+
+bool TrackEngine::casambiOn() const
+{
+    return QSettings().value(QStringLiteral(R632_ON_KEY), true).toBool();
+}
+
+void TrackEngine::setCasambiOn(bool on)
+{
+    if (on == casambiOn())
+        return;
+    QSettings().setValue(QStringLiteral(R632_ON_KEY), on);
+    logSignal(on ? QStringLiteral("sig:casambi:lasttrack-on") : QStringLiteral("sig:casambi:lasttrack-off"));
+    QProcess *proc = qobject_cast<QProcess *>(m_casProc);
+    if (on == false && proc != nullptr && proc->state() != QProcess::NotRunning)
+    {
+        proc->write("quit\n");           // OFF in the middle of a LAST TRACK: the lamps stay where they are
+        logSignal(QStringLiteral("sig:casambi:send-quit"));
+    }
+    emit casambiChanged();
+}
+
+void TrackEngine::casambiRunSave(const QString &text)
+{
+    const QString line = QDateTime::currentDateTime().toString(QStringLiteral("dd-MM HH:mm"))
+                       + QStringLiteral(" LAST TRACK - ") + text;
+    QSettings().setValue(QStringLiteral(R632_RUN_KEY), line);
+    emit casambiChanged();
+}
+
+void TrackEngine::casambiRunLine(const QString &line)
+{
+    // LAST TRACK's helper, line by line: what LAST RUN will say
+    const QString w = line.section(QLatin1Char(' '), 0, 0);
+    if (w == QLatin1String("connected"))
+        m_casRun.insert(QStringLiteral("a"), QStringLiteral("connected in %1").arg(line.section(QLatin1Char(' '), 2, 2)
+                                                                                 .replace(QLatin1Char('s'), QStringLiteral(" s"))));
+    else if (w == QLatin1String("units"))
+        m_casRun.insert(QStringLiteral("b"), QStringLiteral("%1 lamps (%2 told their level)")
+                        .arg(line.section(QLatin1Char(' '), 1, 1), line.section(QLatin1Char(' '), 3, 3)));
+    else if (w == QLatin1String("full") && m_casRunMs > 0)
+    {
+        const qint64 s = (QDateTime::currentMSecsSinceEpoch() - m_casRunMs) / 1000;
+        m_casRun.insert(QStringLiteral("c"), QStringLiteral("all at 100 % after %1 min %2 s").arg(s / 60).arg(s % 60));
+    }
+    else if (w == QLatin1String("done"))
+        m_casRun.insert(QStringLiteral("d"), QStringLiteral("done"));
+    else if (w == QLatin1String("restored"))
+        m_casRun.insert(QStringLiteral("d"), QStringLiteral("undone, %1 lamps put back").arg(line.section(QLatin1Char(' '), 1, 1)));
+    else if (w == QLatin1String("quit"))
+        m_casRun.insert(QStringLiteral("d"), QStringLiteral("stopped"));
+    else if (w == QLatin1String("wrong-password"))
+        m_casRun.insert(QStringLiteral("e"), QStringLiteral("wrong password in casambi.json"));
+    else if (w == QLatin1String("other-network"))
+        m_casRun.insert(QStringLiteral("e"), QStringLiteral("found the network %1, not %2").arg(line.section(QLatin1Char(' '), 1), casambiNetwork()));
+    else if (w == QLatin1String("no-casambi-found") && m_casRun.contains(QStringLiteral("e")) == false)
+        m_casRun.insert(QStringLiteral("e"), QStringLiteral("no Casambi lamp heard over Bluetooth"));
+    else if (w == QLatin1String("bluetooth-error"))
+        m_casRun.insert(QStringLiteral("e"), QStringLiteral("Bluetooth error %1 - is Bluetooth on?").arg(line.section(QLatin1Char(' '), 1, 1)));
+    else if (w == QLatin1String("gave-up") && m_casRun.contains(QStringLiteral("e")) == false)
+        m_casRun.insert(QStringLiteral("e"), QStringLiteral("could not connect"));
+    else if (w == QLatin1String("crash"))
+        m_casRun.insert(QStringLiteral("e"), QStringLiteral("the helper stopped: ") + line.mid(6, 80));
+}
+
+void TrackEngine::casambiRunEnd(int code)
+{
+    QStringList parts;
+    for (const QString &k : { QStringLiteral("e"), QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("c"), QStringLiteral("d") })
+        if (m_casRun.contains(k))
+            parts << m_casRun.value(k);
+    if (parts.isEmpty())
+        parts << QStringLiteral("the helper ended (exit %1) without a word").arg(code);
+    casambiRunSave(parts.join(QStringLiteral(", ")));
+}
+
+QVariantMap TrackEngine::casambiPage() const
+{
+    QVariantMap m;
+    QString state = m_casPageState, text = m_casPageText;
+    const QString exe = QCoreApplication::applicationDirPath() + QStringLiteral("/casambi/casambi_helper.exe");
+    if (QFile::exists(casambiConfig()) == false)
+    {
+        state = QStringLiteral("unset");
+        text = QStringLiteral("Not set up: no casambi.json in Documents\\QLC+ - it holds {\"network\": \"PS\", \"password\": \"...\"}");
+    }
+    else if (QFile::exists(exe) == false)
+    {
+        state = QStringLiteral("unset");
+        text = QStringLiteral("The Casambi helper is not in this build (casambi\\casambi_helper.exe)");
+    }
+    else if (m_casPageProc == nullptr && casambiLastBusy())
+    {
+        state = QStringLiteral("lasttrack");
+        text = QStringLiteral("LAST TRACK has the lights now - SCAN AGAIN connects the page when it is done");
+    }
+    m.insert(QStringLiteral("state"), state);
+    m.insert(QStringLiteral("text"), text);
+    m.insert(QStringLiteral("network"), casambiNetwork());
+    QVariantList lamps;
+    QList<QVariantMap> rows = m_casLamps.values();
+    std::sort(rows.begin(), rows.end(), [](const QVariantMap &a, const QVariantMap &b) {
+        const int c = QString::localeAwareCompare(a.value(QStringLiteral("name")).toString(), b.value(QStringLiteral("name")).toString());
+        return c != 0 ? c < 0 : a.value(QStringLiteral("id")).toInt() < b.value(QStringLiteral("id")).toInt();
+    });
+    for (const QVariantMap &r : rows)
+        lamps << r;
+    m.insert(QStringLiteral("lamps"), lamps);
+    m.insert(QStringLiteral("connected"), m_casPageProc != nullptr && m_casPageState == QLatin1String("connected"));
+    m.insert(QStringLiteral("running"), m_casPageProc != nullptr);
+    m.insert(QStringLiteral("lastRun"), QSettings().value(QStringLiteral(R632_RUN_KEY)).toString());
+    return m;
+}
+
+void TrackEngine::casambiPageOpen()
+{
+    m_casPageWanted = true;
+    if (m_casPageProc == nullptr)
+        casambiPageStart();
+}
+
+void TrackEngine::casambiPageClose()
+{
+    m_casPageWanted = false;
+    casambiPageLetGo(QString());
+}
+
+void TrackEngine::casambiScan()
+{
+    QProcess *proc = qobject_cast<QProcess *>(m_casPageProc);
+    if (proc != nullptr && m_casPageState == QLatin1String("connected"))
+        proc->write("scan\n");
+    else if (proc == nullptr)
+        casambiPageStart();
+}
+
+void TrackEngine::casambiDisconnect()
+{
+    casambiPageLetGo(QString());
+}
+
+void TrackEngine::casambiPageSend(const QByteArray &line)
+{
+    QProcess *proc = qobject_cast<QProcess *>(m_casPageProc);
+    if (proc != nullptr && proc->state() == QProcess::Running && m_casPageState == QLatin1String("connected"))
+        proc->write(line);
+}
+
+void TrackEngine::casambiSet(int id, qreal level)
+{
+    const int v = int(qRound(qBound(0.0, level, 1.0) * 255.0));
+    casambiPageSend(QStringLiteral("set %1 %2\n").arg(id).arg(v).toLatin1());
+    if (m_casLamps.contains(id))         // the page shows the hand at once; the helper's word follows
+    {
+        m_casLamps[id].insert(QStringLiteral("level"), v / 255.0);
+        emit casambiChanged();
+    }
+}
+
+void TrackEngine::casambiAll()
+{
+    casambiPageSend("all 255\n");
+    logSignal(QStringLiteral("sig:casambi:page-all"));
+}
+
+void TrackEngine::casambiBack()
+{
+    casambiPageSend("back\n");
+    logSignal(QStringLiteral("sig:casambi:page-back"));
+}
+
+void TrackEngine::casambiPageLetGo(const QString &why)
+{
+    QProcess *proc = qobject_cast<QProcess *>(m_casPageProc);
+    if (proc == nullptr || m_casPageQuitting)
+        return;
+    m_casPageQuitting = true;
+    m_casPageWhy = why;
+    if (proc->state() == QProcess::Running)
+        proc->write("quit\n");
+    // a helper still looking for the network reads its stdin only once connected: it is ended after 3 s
+    QPointer<QProcess> p(proc);
+    QTimer::singleShot(3000, this, [p]() {
+        if (p.isNull() == false && p->state() != QProcess::NotRunning)
+            p->kill();
+    });
+}
+
+void TrackEngine::casambiPageStart()
+{
+    if (m_casPageProc != nullptr)
+        return;
+    const QString cfg = casambiConfig();
+    const QString exe = QCoreApplication::applicationDirPath() + QStringLiteral("/casambi/casambi_helper.exe");
+    if (QFile::exists(cfg) == false || QFile::exists(exe) == false || casambiLastBusy())
+    {
+        emit casambiChanged();           // casambiPage() says why
+        return;
+    }
+    QProcess *proc = new QProcess(this);
+    proc->setProcessChannelMode(QProcess::MergedChannels);
+#ifdef Q_OS_WIN
+    proc->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *a) {
+        a->flags |= 0x08000000;          // CREATE_NO_WINDOW
+    });
+#endif
+    m_casPageProc = proc;
+    m_casPageQuitting = false;
+    m_casPageWhy.clear();
+    m_casPageErr.clear();
+    m_casPageSecs.clear();
+    m_casLamps.clear();
+    m_casPageState = QStringLiteral("connecting");
+    m_casPageText = QStringLiteral("Looking for %1 over Bluetooth ...").arg(casambiNetwork());
+    connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
+        while (proc->canReadLine())
+        {
+            const QString line = QString::fromUtf8(proc->readLine()).trimmed();
+            if (line.isEmpty() == false && m_casPageProc == proc)
+                casambiPageLine(line);
+        }
+    });
+    connect(proc, &QProcess::finished, this, [this, proc](int code, QProcess::ExitStatus) {
+        logSignal(QStringLiteral("sig:casambi:page-exit:%1").arg(code));
+        if (m_casPageProc == proc)
+        {
+            m_casPageProc = nullptr;
+            if (m_casPageWhy == QLatin1String("lasttrack"))
+            {
+                m_casPageState = QStringLiteral("idle");
+                m_casPageText = QStringLiteral("LAST TRACK took the lights - the page let go");
+                m_casLamps.clear();      // what it showed is not where they are going
+            }
+            else if (m_casPageState != QLatin1String("error"))
+            {
+                m_casPageState = QStringLiteral("idle");
+                m_casPageText = m_casPageQuitting ? QStringLiteral("Not connected - SCAN AGAIN connects")
+                                                  : QStringLiteral("The connection ended (exit %1) - SCAN AGAIN connects").arg(code);
+            }
+            m_casPageQuitting = false;
+            emit casambiChanged();
+        }
+        proc->deleteLater();
+    });
+    connect(proc, &QProcess::errorOccurred, this, [this, proc](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart)
+            return;
+        logSignal(QStringLiteral("sig:casambi:page-failed-to-start"));
+        if (m_casPageProc == proc)
+        {
+            m_casPageProc = nullptr;
+            m_casPageState = QStringLiteral("error");
+            m_casPageText = QStringLiteral("The Casambi helper did not start");
+            emit casambiChanged();
+        }
+        proc->deleteLater();
+    });
+    proc->start(exe, QStringList() << cfg << QStringLiteral("--page"));
+    logSignal(QStringLiteral("sig:casambi:page-start"));
+    emit casambiChanged();
+}
+
+void TrackEngine::casambiPageLine(const QString &line)
+{
+    if (line.startsWith(QLatin1String("unit ")))
+    {
+        // unit <id>|<level 0-255 or ?>|<online 1/0>|<model>|<name>
+        const QStringList f = line.mid(5).split(QLatin1Char('|'));
+        if (f.count() < 5)
+            return;
+        bool ok = false;
+        const int id = f.at(0).toInt(&ok);
+        if (ok == false)
+            return;
+        QVariantMap r = m_casLamps.value(id);
+        r.insert(QStringLiteral("id"), id);
+        bool lv = false;
+        const int level = f.at(1).toInt(&lv);
+        r.insert(QStringLiteral("level"), lv ? qBound(0, level, 255) / 255.0 : -1.0);
+        r.insert(QStringLiteral("online"), f.at(2) == QLatin1String("1"));
+        r.insert(QStringLiteral("model"), f.at(3));
+        r.insert(QStringLiteral("name"), f.mid(4).join(QLatin1Char('/')));
+        r.remove(QStringLiteral("failed"));
+        m_casLamps.insert(id, r);
+        emit casambiChanged();
+        return;
+    }
+    QString l = line.startsWith(QLatin1String("page ")) ? line.mid(5) : line;
+    l.replace(QLatin1Char(' '), QLatin1Char('_'));
+    logSignal(QStringLiteral("sig:casambi:page:") + l.left(100));
+    if (line.startsWith(QLatin1String("units ")))
+    {
+        // units <n> known <m> offline <k>
+        const QStringList f = line.split(QLatin1Char(' '));
+        const int n = f.value(1).toInt(), known = f.value(3).toInt(), off = f.value(5).toInt();
+        m_casPageState = QStringLiteral("connected");
+        QStringList t;
+        t << (m_casPageSecs.isEmpty() ? QStringLiteral("Connected to %1").arg(casambiNetwork())
+                                      : QStringLiteral("Connected to %1 in %2").arg(casambiNetwork(), m_casPageSecs));
+        t << (n == 1 ? QStringLiteral("1 lamp") : QStringLiteral("%1 lamps").arg(n));
+        t << QStringLiteral("%1 tell their level").arg(known);
+        if (off > 0)
+            t << QStringLiteral("%1 not answering").arg(off);
+        if (n == 0)
+            t << QStringLiteral("the network has no lamps it knows of");
+        m_casPageText = t.join(QStringLiteral(" · "));
+        emit casambiChanged();
+        return;
+    }
+    const QString body = line.startsWith(QLatin1String("page ")) ? line.mid(5) : line;
+    const QString w = body.section(QLatin1Char(' '), 0, 0);
+    if (w == QLatin1String("connected"))
+    {
+        m_casPageSecs = body.section(QLatin1Char(' '), 2, 2).replace(QLatin1Char('s'), QStringLiteral(" s"));
+        m_casPageText = QStringLiteral("Connected to %1 in %2 - reading the lamps ...").arg(casambiNetwork(), m_casPageSecs);
+    }
+    else if (w == QLatin1String("no-casambi-found"))
+        m_casPageText = QStringLiteral("No Casambi lamp heard over Bluetooth yet (try %1 of 3) ...").arg(body.section(QLatin1Char(' '), 2, 2));
+    else if (w == QLatin1String("bluetooth-error"))
+        m_casPageErr = m_casPageText = QStringLiteral("Bluetooth error (%1) - is Bluetooth on?").arg(body.section(QLatin1Char(' '), 1, 1));
+    else if (w == QLatin1String("wrong-password"))
+        m_casPageErr = m_casPageText = QStringLiteral("Wrong password in casambi.json");
+    else if (w == QLatin1String("other-network"))
+        m_casPageErr = m_casPageText = QStringLiteral("Found the network %1, not %2").arg(body.section(QLatin1Char(' '), 1), casambiNetwork());
+    else if (w == QLatin1String("connect-failed"))
+        m_casPageText = QStringLiteral("Could not connect to one lamp (%1) - trying the next ...").arg(body.section(QLatin1Char(' '), 2, 2));
+    else if (w == QLatin1String("gave-up"))
+    {
+        m_casPageState = QStringLiteral("error");
+        m_casPageText = (m_casPageErr.isEmpty() ? QStringLiteral("No Casambi lamp heard over Bluetooth") : m_casPageErr)
+                      + QStringLiteral(" - gave up. SCAN AGAIN tries again");
+    }
+    else if (w == QLatin1String("lost"))
+    {
+        m_casPageState = QStringLiteral("connecting");
+        m_casPageText = QStringLiteral("Lost the connection - connecting again ...");
+    }
+    else if (w == QLatin1String("send-failed"))
+    {
+        const int id = body.section(QLatin1Char(' '), 1, 1).mid(1).toInt();
+        if (m_casLamps.contains(id))
+            m_casLamps[id].insert(QStringLiteral("failed"), true);
+    }
+    else if (w == QLatin1String("crash"))
+    {
+        m_casPageState = QStringLiteral("error");
+        m_casPageText = QStringLiteral("The helper stopped: ") + body.mid(6, 90);
+    }
+    else if (w == QLatin1String("no-config"))
+    {
+        m_casPageState = QStringLiteral("error");
+        m_casPageText = QStringLiteral("No casambi.json");
+    }
+    else
+        return;
+    emit casambiChanged();
+}
+
 
 /* =====================================================================
  * TRACK_APP_HAZECLOSE_R626 (Tobias 11-21: "Du maa gerne soerge for at hazeren specifikt altid bliver slukket, saa

@@ -21,7 +21,20 @@ Everything it does is one short line on stdout (TRACK logs it as sig:casambi:<li
 casambi.log beside the config. Whatever goes wrong here, TRACK and the rig are not touched.
 
     casambi_helper.exe <Documents/QLC+/casambi.json>      config: {"network": "PS", "password": "..."}
+    casambi_helper.exe <Documents/QLC+/casambi.json> --page   SETUP > CASAMBI (below)
     casambi_helper.exe --selftest                        CI: every module is in the exe
+
+TRACK_APP_CASAMBIPAGE_R632 (Tobias 11-21: "en casambi side under settings hvor man foerst og fremmest kan se
+hvilke lys den kan se (evt. styre dem derfra?)" - "Saa vil det ogsaa fungere som en test om den faktisk kan se
+lysene"). With --page the helper connects, tells every lamp and stays until told to go:
+
+    out  unit <id>|<level 0-255 or ?>|<online 1/0>|<model>|<name>     a lamp (again whenever it changes)
+    out  units <n> known <m> offline <k>                              after connecting and after "scan"
+    in   set <id> <0-255>      that lamp now                   in   all <0-255>    every lamp
+    in   back                  every lamp the page moved, back where it stood when the page connected
+    in   scan                  tell every lamp again           in   quit           go (the lamps stay as they are)
+
+The status lines (connected / no-casambi-found / wrong-password / ...) are LAST TRACK's.
 """
 import asyncio
 import json
@@ -248,6 +261,134 @@ class Helper:
                 await self.safe_disconnect(self.casa)
 
 
+class Page(Helper):
+    """TRACK_APP_CASAMBIPAGE_R632: SETUP > CASAMBI - every lamp, and a hand on them"""
+
+    def __init__(self, cfg_path: Path):
+        super().__init__(cfg_path)
+        self.pending: dict[int, int] = {}
+
+    def say(self, msg: str) -> None:
+        super().say('page ' + msg if msg.startswith('unit ') is False and msg.startswith('units ') is False
+                    else msg)
+
+    @staticmethod
+    def clean(s) -> str:
+        return ' '.join(str(s or '').replace('|', '/').split())[:60]
+
+    def tell(self, u) -> None:
+        d = u.state.dimmer if u.state is not None else None
+        model = getattr(getattr(u, 'unitType', None), 'model', '') or ''
+        print('unit %d|%s|%d|%s|%s' % (u.deviceId, '?' if d is None else int(d), 1 if u.online else 0,
+                                       self.clean(model), self.clean(u.name) or ('#%d' % u.deviceId)), flush=True)
+
+    def tell_all(self) -> None:
+        self.units = list(self.casa.units)
+        known = sum(1 for u in self.units if u.state is not None and u.state.dimmer is not None)
+        off = sum(1 for u in self.units if not u.online)
+        for u in self.units:
+            self.tell(u)
+        print('units %d known %d offline %d' % (len(self.units), known, off), flush=True)
+        self.logf.write('%s page units %d known %d offline %d\n' % (time.strftime('%Y-%m-%d %H:%M:%S'),
+                                                                   len(self.units), known, off))
+        self.logf.flush()
+
+    def on_unit(self, u) -> None:
+        try:
+            self.tell(u)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def take(self, cmd: str) -> bool:
+        """False: quit"""
+        parts = cmd.split()
+        if not parts:
+            return True
+        if parts[0] == 'quit':
+            return False
+        try:
+            if parts[0] == 'set' and len(parts) == 3:
+                self.pending[int(parts[1])] = max(0, min(255, int(parts[2])))
+            elif parts[0] == 'all' and len(parts) == 2:
+                lvl = max(0, min(255, int(parts[1])))
+                for u in self.units:
+                    if u.online:                          # a lamp that does not answer is left out
+                        self.pending[u.deviceId] = lvl
+            elif parts[0] == 'back':
+                for dev_id in sorted(self.changed):
+                    s = self.start.get(dev_id)
+                    if s is not None:
+                        self.pending[dev_id] = s
+            elif parts[0] == 'scan':
+                self.tell_all()
+        except ValueError:
+            pass
+        return True
+
+    async def run(self) -> int:
+        loop = asyncio.get_running_loop()
+        threading.Thread(target=self.read_stdin, args=(loop,), daemon=True).start()
+        self.say('start network=%s' % self.network)
+        if not await self.connect():
+            return 2
+        await asyncio.sleep(2.0)                          # the lamps report their levels
+        self.units = list(self.casa.units)
+        for u in self.units:                              # BACK's levels: as they stood when the page connected
+            self.start[u.deviceId] = u.state.dimmer if u.state is not None else None
+        self.tell_all()
+        try:
+            self.casa.registerUnitChangedHandler(self.on_unit)
+        except Exception:  # noqa: BLE001
+            pass
+        by_id = {u.deviceId: u for u in self.units}
+        try:
+            while True:
+                try:
+                    cmd = await asyncio.wait_for(self.cmds.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    cmd = ''
+                cmds = [cmd]
+                while not self.cmds.empty():
+                    cmds.append(self.cmds.get_nowait())
+                for c in cmds:
+                    if not self.take(c):
+                        self.say('quit')
+                        return 0
+                if self.casa is not None and not self.casa.connected:
+                    self.say('lost - reconnecting')
+                    await self.safe_disconnect(self.casa)
+                    self.casa = None
+                    if not await self.connect():
+                        return 3
+                    await asyncio.sleep(2.0)
+                    self.tell_all()
+                    try:
+                        self.casa.registerUnitChangedHandler(self.on_unit)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    by_id = {u.deviceId: u for u in self.units}
+                # the newest level per lamp, one lamp at a time; new commands are read between two lamps
+                while self.pending:
+                    dev_id, lvl = next(iter(self.pending.items()))
+                    del self.pending[dev_id]
+                    u = by_id.get(dev_id)
+                    if u is None:
+                        continue
+                    if await self.send(u, lvl):
+                        self.changed.add(dev_id)
+                        print('unit %d|%d|%d|%s|%s' % (dev_id, lvl, 1 if u.online else 0,
+                                                       self.clean(getattr(getattr(u, 'unitType', None), 'model', '')),
+                                                       self.clean(u.name) or ('#%d' % dev_id)), flush=True)
+                    await asyncio.sleep(SEND_GAP)
+                    while not self.cmds.empty():
+                        if not self.take(self.cmds.get_nowait()):
+                            self.say('quit')
+                            return 0
+        finally:
+            if self.casa is not None:
+                await self.safe_disconnect(self.casa)
+
+
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == '--selftest':
         return selftest()
@@ -261,6 +402,8 @@ def main() -> int:
     logging.basicConfig(level=logging.WARNING,
                         handlers=[logging.FileHandler(cfg.parent / 'casambi-debug.log', encoding='utf-8')])
     try:
+        if len(sys.argv) > 2 and sys.argv[2] == '--page':     # TRACK_APP_CASAMBIPAGE_R632
+            return asyncio.run(Page(cfg).run())
         return asyncio.run(Helper(cfg).run())
     except Exception as e:  # noqa: BLE001
         print('crash %s: %s' % (type(e).__name__, str(e)[:120]), flush=True)
