@@ -395,6 +395,12 @@ class Page(Helper):
 
 
 def main() -> int:
+    # R636: TRACK reads every line as UTF-8. On Windows a piped stdout is the ANSI code page (cp1252), and the
+    # lamps' Danish names came out as "Emh?tte" / "Glasv?g" / "s?jler"
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:  # noqa: BLE001
+        pass
     if len(sys.argv) > 1 and sys.argv[1] == '--selftest':
         return selftest()
     if len(sys.argv) < 2:

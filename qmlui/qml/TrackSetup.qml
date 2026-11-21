@@ -3027,8 +3027,12 @@ Rectangle
                             }
                             Text
                             {
-                                anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter
-                                readonly property bool onFill: lampTile.shown > 0.86 && !lampTile.dead
+                                // TRACK_APP_CASLABEL_R636: never half on the fill
+                                readonly property real fillEnd: 3 + (parent.width - 6) * Math.max(0, Math.min(1, lampTile.shown))
+                                readonly property real rightX: parent.width - width - 10
+                                readonly property bool onFill: !lampTile.dead && lampTile.shown > 0 && fillEnd + 10 > rightX
+                                x: onFill ? Math.max(8, fillEnd - width - 10) : rightX
+                                anchors.verticalCenter: parent.verticalCenter
                                 text: lampTile.dead && lampTile.lamp.online === false ? "-"
                                     : lampTile.shown < 0 ? qsTr("level not known")
                                     : Math.round(lampTile.shown * 100) + "%" + (lampTile.shown <= 0 ? qsTr(" \u00B7 off") : "")
