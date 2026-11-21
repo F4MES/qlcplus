@@ -665,7 +665,9 @@ Rectangle
         property bool touchInputEnabled: true
         // TRACK_APP_HELPDJ_R627: an AUTO that is off - that part runs by hand - glows green, slowly, until it is on
         // again (ALL AUTO itself only shows while one is off: it does not glow too)
+        // TRACK_APP_GLOWSKIP_R633: not ENERGY's or the haze machine's AUTO - they stay as they were
         readonly property bool r627Glow: autoKind && !active && enabled && objectName !== "allAuto"
+                                         && objectName !== "energyAuto" && objectName !== "hazeAuto"
         signal tapped()
         radius: Math.round(10 * trackViewRoot.ks)
         color: btnInput.down ? Qt.lighter(base, 1.35) : base
