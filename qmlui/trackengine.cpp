@@ -46619,6 +46619,7 @@ bool TrackEngine::r533BreakBaseOut(int s, int len, qreal fader) const
 #define R509_COLOUR_KICK_HARDER    26       // the bar's 3: 0.10 harder than its 1
 #define R509_COLOUR_KICK_LOUD      0.80     // the music at 0.80 of the track's top
 #define R509_COLOUR_KICK_PEAK      0.35     // a third of the way to white - a tint, not a white
+#define R642_WHITE_KICK_OFF        true     // TRACK_APP_NOWHITEKICK_R642: the wash's white kick never runs
 #define R509_COLOUR_KICK_HOLD      0.08     // of the beat at the peak
 #define R509_COLOUR_KICK_END       0.50     // ... back in the colour by half the beat
 #define R509_COLOUR_THEME_FLOOR    8        // a colour lives two bars (runde 157)
@@ -46738,7 +46739,9 @@ void TrackEngine::r509ColourKickBeat(int beat, bool isDrop, int dropBar, int bea
     // R509_COLOUR_HOOK_BEAT (tick(), after the kick wave): may this beat's kick tint the wash
     const QString key = r509ColourKickWash();
     QString why;
-    if (key.isEmpty())
+    if (R642_WHITE_KICK_OFF)             // TRACK_APP_NOWHITEKICK_R642: the white kick is off (a running one stops)
+        why = QStringLiteral("off");
+    else if (key.isEmpty())
         why = QStringLiteral("no-wash");
     else if (isDrop == false)
         why = QStringLiteral("drop-over");
