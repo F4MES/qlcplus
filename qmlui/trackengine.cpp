@@ -50849,6 +50849,7 @@ void TrackEngine::casambiStart()
             m_casProc = nullptr;
         proc->deleteLater();
     });
+    QSettings().remove(QStringLiteral("trackcasambi/lastscene"));   // TRACK_APP_ROOMLIGHT_R637: LAST TRACK moves the room
     m_casRun.clear();                    // TRACK_APP_CASAMBIPAGE_R632: LAST RUN starts here
     m_casRunMs = QDateTime::currentMSecsSinceEpoch();
     proc->start(exe, QStringList() << cfg);
@@ -51015,7 +51016,7 @@ void TrackEngine::casambiPageOpen()
 void TrackEngine::casambiPageClose()
 {
     m_casPageWanted = false;
-    casambiPageLetGo(QString());
+    casambiMaybeLetGo(0);                // TRACK_APP_ROOMLIGHT_R637: not while ROOM LIGHT or a tapped scene has it
 }
 
 void TrackEngine::casambiScan()
@@ -51103,6 +51104,8 @@ void TrackEngine::casambiPageStart()
     m_casPageErr.clear();
     m_casPageSecs.clear();
     m_casLamps.clear();
+    m_casScenesNew.clear();              // TRACK_APP_ROOMLIGHT_R637: the cache stands until the network's list comes
+    m_casScenesFresh = false;
     m_casPageState = QStringLiteral("connecting");
     m_casPageText = QStringLiteral("Looking for %1 over Bluetooth ...").arg(casambiNetwork());
     connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
@@ -51131,6 +51134,14 @@ void TrackEngine::casambiPageStart()
                                                   : QStringLiteral("The connection ended (exit %1) - SCAN AGAIN connects").arg(code);
             }
             m_casPageQuitting = false;
+            m_casScenesFresh = false;
+            if (m_casPendOn)             // TRACK_APP_ROOMLIGHT_R637: a scene that never got out
+            {
+                m_casPendOn = false;
+                logSignal(QStringLiteral("sig:casambi:scene-dropped:") + QString(m_casPendName).replace(QLatin1Char(' '), QLatin1Char('_')));
+                m_casRoomNote = QStringLiteral("%1 was not sent").arg(m_casPendName);
+                casambiNoteLater();
+            }
             emit casambiChanged();
         }
         proc->deleteLater();
@@ -51176,6 +51187,11 @@ void TrackEngine::casambiPageLine(const QString &line)
         r.remove(QStringLiteral("failed"));
         m_casLamps.insert(id, r);
         emit casambiChanged();
+        return;
+    }
+    if (line.startsWith(QLatin1String("scene")))          // TRACK_APP_ROOMLIGHT_R637: scene / scenes / scene-set / -failed
+    {
+        casambiSceneLine(line);
         return;
     }
     QString l = line.startsWith(QLatin1String("page ")) ? line.mid(5) : line;
@@ -51248,6 +51264,249 @@ void TrackEngine::casambiPageLine(const QString &line)
         return;
     emit casambiChanged();
 }
+
+/* =====================================================================
+ * TRACK_APP_ROOMLIGHT_R637 (Tobias 11-21, mockup approved "Ser perfekt ud. Byg det og goer saadan at den cacher
+ * scenerne, saadan at man hurtigt kan aabne og trykke paa en scene, og saa sender den scenen til netvaerket naar den
+ * har forbundet ... det smarteste bare er at ignorere hvis scenen ikke findes mere").
+ *
+ * ROOM LIGHT (the top bar): the restaurant's Casambi scenes for the DJ. The list is the last one the network gave
+ * ("trackcasambi/scenes" = id|name per line), so the window opens at once and a tap is taken at once; the helper
+ * (the page's: casambi_helper.exe --page) connects when the window opens, and a scene tapped before it is
+ * connected is sent the moment it is - checked against the network's own list first:
+ *   the same id and name - that scene; the name under another id - that one; neither - not sent ("no longer in
+ *   the network"), and the window shows the network's list from then on.
+ * LEVEL ("trackcasambi/roomlevel", 0..1): the scene's relative brightness; moved after a scene, it is sent again.
+ * The connection stays a minute after the window closes (a second tap is quick), then lets go; LAST TRACK takes it
+ * at once as before. Log: sig:casambi:scene-ask:<id>, :scene-set:<id>:<level>, :scene-gone:<name>,
+ * :scene-dropped:<name>
+ * ===================================================================== */
+
+#define R637_SCENES_KEY "trackcasambi/scenes"
+#define R637_LEVEL_KEY "trackcasambi/roomlevel"
+#define R637_LAST_KEY "trackcasambi/lastscene"
+
+void TrackEngine::casambiScenesLoad() const
+{
+    if (m_casScenesRead)
+        return;
+    m_casScenesRead = true;
+    m_casScenes.clear();
+    const QStringList rows = QSettings().value(QStringLiteral(R637_SCENES_KEY)).toString().split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString &r : rows)
+    {
+        bool ok = false;
+        const int id = r.section(QLatin1Char('|'), 0, 0).toInt(&ok);
+        if (ok)
+            m_casScenes.append(qMakePair(id, r.section(QLatin1Char('|'), 1)));
+    }
+}
+
+QVariantMap TrackEngine::casambiRoom() const
+{
+    casambiScenesLoad();
+    const QVariantMap page = casambiPage();
+    const QString state = page.value(QStringLiteral("state")).toString();
+    QVariantMap m;
+    m.insert(QStringLiteral("available"), state != QLatin1String("unset"));
+    m.insert(QStringLiteral("state"), state);
+    m.insert(QStringLiteral("network"), page.value(QStringLiteral("network")));
+    m.insert(QStringLiteral("connected"), page.value(QStringLiteral("connected")));
+    const QString last = QSettings().value(QStringLiteral(R637_LAST_KEY)).toString();   // id|name|ms
+    const int lastId = last.section(QLatin1Char('|'), 0, 0).toInt();
+    const QString lastName = last.section(QLatin1Char('|'), 1, 1);
+    const qint64 lastMs = last.section(QLatin1Char('|'), 2, 2).toLongLong();
+    const bool lastFresh = last.isEmpty() == false && QDateTime::currentMSecsSinceEpoch() - lastMs < qint64(12) * 3600 * 1000;
+    QVariantList scenes;
+    for (const QPair<int, QString> &s : m_casScenes)
+    {
+        QVariantMap r;
+        r.insert(QStringLiteral("id"), s.first);
+        r.insert(QStringLiteral("name"), s.second);
+        const bool cur = lastFresh && s.first == lastId && s.second == lastName;
+        r.insert(QStringLiteral("current"), cur);
+        r.insert(QStringLiteral("setAt"), cur ? QDateTime::fromMSecsSinceEpoch(lastMs).toString(QStringLiteral("HH:mm")) : QString());
+        r.insert(QStringLiteral("pending"), m_casPendOn && s.first == m_casPendId && s.second == m_casPendName);
+        scenes << r;
+    }
+    m.insert(QStringLiteral("scenes"), scenes);
+    m.insert(QStringLiteral("level"), casambiRoomLevel());
+    QString text;
+    const QString net = page.value(QStringLiteral("network")).toString();
+    if (state == QLatin1String("lasttrack"))
+        text = QStringLiteral("LAST TRACK has the lights - the scenes wait until it is done");
+    else if (state == QLatin1String("connected"))
+        text = QStringLiteral("Connected · %1 scenes · tap one and the room goes there").arg(m_casScenes.count());
+    else if (state == QLatin1String("connecting"))
+        text = m_casPendOn ? QStringLiteral("Connecting to %1 ... %2 goes as soon as TRACK is connected").arg(net, m_casPendName)
+                           : QStringLiteral("Connecting to %1 ... a scene can be tapped already").arg(net);
+    else
+        text = page.value(QStringLiteral("text")).toString();
+    if (m_casRoomNote.isEmpty() == false)
+        text = m_casRoomNote + QStringLiteral(" · ") + text;
+    if (m_casScenes.isEmpty() && state != QLatin1String("connected"))
+        text += QStringLiteral(" · the scenes show here once TRACK has been connected once");
+    m.insert(QStringLiteral("text"), text);
+    return m;
+}
+
+qreal TrackEngine::casambiRoomLevel() const
+{
+    return qBound(0.0, QSettings().value(QStringLiteral(R637_LEVEL_KEY), 1.0).toDouble(), 1.0);
+}
+
+void TrackEngine::setCasambiRoomLevel(qreal level)
+{
+    level = qBound(0.0, qRound(level * 100.0) / 100.0, 1.0);
+    if (qAbs(level - casambiRoomLevel()) < 0.001)
+        return;
+    QSettings().setValue(QStringLiteral(R637_LEVEL_KEY), level);
+    // the scene set last (this evening) again at the new level
+    const QString last = QSettings().value(QStringLiteral(R637_LAST_KEY)).toString();
+    if (last.isEmpty() == false && QDateTime::currentMSecsSinceEpoch() - last.section(QLatin1Char('|'), 2, 2).toLongLong() < qint64(12) * 3600 * 1000
+        && m_casPageProc != nullptr && m_casPageState == QLatin1String("connected"))
+        casambiPageSend(QStringLiteral("scene %1 %2\n").arg(last.section(QLatin1Char('|'), 0, 0).toInt())
+                        .arg(int(qRound(level * 255.0))).toLatin1());
+    emit casambiChanged();
+}
+
+void TrackEngine::casambiRoomOpen()
+{
+    m_casRoomWanted = true;
+    m_casRoomNote.clear();
+    m_casLetGoGen++;                     // a let-go waiting from the last close is off
+    if (m_casPageProc == nullptr)
+        casambiPageStart();
+    emit casambiChanged();
+}
+
+void TrackEngine::casambiRoomClose()
+{
+    m_casRoomWanted = false;
+    casambiMaybeLetGo(60000);            // a minute: a second tap is quick
+}
+
+void TrackEngine::casambiMaybeLetGo(int delayMs)
+{
+    const int gen = ++m_casLetGoGen;
+    QTimer::singleShot(qMax(0, delayMs), this, [this, gen]() {
+        if (gen != m_casLetGoGen || m_casPageWanted || m_casRoomWanted || m_casPendOn)
+            return;
+        casambiPageLetGo(QString());
+    });
+}
+
+void TrackEngine::casambiScene(int id, const QString &name)
+{
+    m_casRoomNote.clear();
+    logSignal(QStringLiteral("sig:casambi:scene-ask:%1").arg(id));
+    m_casPendOn = true;
+    m_casPendId = id;
+    m_casPendName = name;
+    if (m_casPageProc != nullptr && m_casPageState == QLatin1String("connected") && m_casScenesFresh)
+        casambiScenePending();
+    else if (m_casPageProc == nullptr)
+        casambiPageStart();              // connects; the scene goes once the network has told its scenes
+    emit casambiChanged();
+}
+
+void TrackEngine::casambiScenePending()
+{
+    // the network's own list (this connection's): the same id and name, else the same name, else it is gone
+    if (m_casPendOn == false)
+        return;
+    m_casPendOn = false;
+    int to = -1;
+    for (const QPair<int, QString> &s : m_casScenes)
+        if (s.first == m_casPendId && s.second == m_casPendName)
+            to = s.first;
+    if (to < 0)
+        for (const QPair<int, QString> &s : m_casScenes)
+            if (to < 0 && s.second == m_casPendName)
+                to = s.first;
+    if (to < 0)
+    {
+        logSignal(QStringLiteral("sig:casambi:scene-gone:") + QString(m_casPendName).replace(QLatin1Char(' '), QLatin1Char('_')));
+        m_casRoomNote = QStringLiteral("%1 is no longer in the Casambi network - not sent").arg(m_casPendName);
+        casambiNoteLater();
+    }
+    else
+    {
+        m_casSentScene = to;
+        m_casSentName = m_casPendName;
+        casambiPageSend(QStringLiteral("scene %1 %2\n").arg(to).arg(int(qRound(casambiRoomLevel() * 255.0))).toLatin1());
+    }
+    emit casambiChanged();
+    if (m_casRoomWanted == false && m_casPageWanted == false)
+        casambiMaybeLetGo(60000);
+}
+
+void TrackEngine::casambiNoteLater()
+{
+    // a note on ROOM LIGHT says its piece for 15 s
+    const QString note = m_casRoomNote;
+    QTimer::singleShot(15000, this, [this, note]() {
+        if (m_casRoomNote == note && note.isEmpty() == false)
+        {
+            m_casRoomNote.clear();
+            emit casambiChanged();
+        }
+    });
+}
+
+void TrackEngine::casambiSceneLine(const QString &line)
+{
+    // scene <id>|<name> ... scenes <n>: the network's list (this connection's) - the cache from now on
+    if (line.startsWith(QLatin1String("scene ")))
+    {
+        bool ok = false;
+        const int id = line.mid(6).section(QLatin1Char('|'), 0, 0).toInt(&ok);
+        if (ok)
+            m_casScenesNew.append(qMakePair(id, line.mid(6).section(QLatin1Char('|'), 1)));
+        return;
+    }
+    if (line.startsWith(QLatin1String("scenes ")))
+    {
+        casambiScenesLoad();
+        m_casScenes = m_casScenesNew;
+        m_casScenesNew.clear();
+        m_casScenesFresh = true;
+        std::sort(m_casScenes.begin(), m_casScenes.end(), [](const QPair<int, QString> &a, const QPair<int, QString> &b) {
+            const int c = QString::localeAwareCompare(a.second, b.second);
+            return c != 0 ? c < 0 : a.first < b.first;
+        });
+        QStringList rows;
+        for (const QPair<int, QString> &s : m_casScenes)
+            rows << QStringLiteral("%1|%2").arg(s.first).arg(s.second);
+        QSettings().setValue(QStringLiteral(R637_SCENES_KEY), rows.join(QLatin1Char('\n')));
+        logSignal(QStringLiteral("sig:casambi:scenes:%1").arg(m_casScenes.count()));
+        casambiScenePending();
+        emit casambiChanged();
+        return;
+    }
+    if (line.startsWith(QLatin1String("scene-set ")))
+    {
+        // scene-set <id> <level>: it went out
+        const int id = line.section(QLatin1Char(' '), 1, 1).toInt();
+        QString name = m_casSentName;
+        for (const QPair<int, QString> &s : m_casScenes)
+            if (s.first == id)
+                name = s.second;
+        QSettings().setValue(QStringLiteral(R637_LAST_KEY),
+                             QStringLiteral("%1|%2|%3").arg(id).arg(name).arg(QDateTime::currentMSecsSinceEpoch()));
+        logSignal(QStringLiteral("sig:casambi:scene-set:%1:%2").arg(id).arg(line.section(QLatin1Char(' '), 2, 2)));
+        emit casambiChanged();
+        return;
+    }
+    if (line.startsWith(QLatin1String("scene-failed ")))
+    {
+        m_casRoomNote = QStringLiteral("The scene did not go out (%1)").arg(line.section(QLatin1Char(' '), 2, 2));
+        casambiNoteLater();
+        logSignal(QStringLiteral("sig:casambi:scene-failed:") + line.section(QLatin1Char(' '), 1, 2).replace(QLatin1Char(' '), QLatin1Char(':')));
+        emit casambiChanged();
+    }
+}
+
 
 
 /* =====================================================================

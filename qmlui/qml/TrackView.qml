@@ -91,8 +91,8 @@ Rectangle
     readonly property var savedRecentRows: trackEngine ? trackEngine.recentSavedLooks : []
     readonly property bool savedRecentEmpty: savedRecentRows.length === 0
     onSavedFavoritesOpenChanged: if (savedFavoritesOpen) savedRecentOpen = false
-    onSetupOpenChanged: { savedRecentOpen = false; if (!setupOpen) savedFavoritesOpen = false }
-    onHelpOpenChanged: if (helpOpen) savedRecentOpen = false
+    onSetupOpenChanged: { savedRecentOpen = false; if (!setupOpen) savedFavoritesOpen = false; if (setupOpen) roomLightOpen = false }   // + R637
+    onHelpOpenChanged: { if (helpOpen) savedRecentOpen = false; if (helpOpen) roomLightOpen = false }   // + TRACK_APP_ROOMLIGHT_R637
     anchors.fill: parent
     color: "#0A0A0D"                    // R403_TONES: page, card, tile - parted by tone alone
 
@@ -158,6 +158,9 @@ Rectangle
 
     property bool setupOpen: false
     property bool helpOpen: false
+    // TRACK_APP_ROOMLIGHT_R637: ROOM LIGHT - the restaurant's Casambi scenes for the DJ
+    property bool roomLightOpen: false
+    readonly property var casRoom: trackApp && !!trackEngine && trackEngine.casambiRoom !== undefined ? trackEngine.casambiRoom : ({})
     // R436_SHOW_CHECK: the show file lacks what this build counts on
     readonly property bool oldShow: trackEngine && trackEngine.showMissing ? trackEngine.showMissing.length > 0 : false
     property bool oldShowOpen: false     // the chip asked for the dialog again
@@ -1595,6 +1598,22 @@ Rectangle
                         }
                     }
                     TouchInput { id: showIn; onReleasedAt: (x, y, inside) => { if (inside) showSwitch.tap() } }
+                }
+
+                // TRACK_APP_ROOMLIGHT_R637 (Tobias 11-21, mockup approved): ROOM LIGHT - beside START SHOW, only where
+                // Casambi is set up (casambi.json and the helper)
+                Btn
+                {
+                    objectName: "roomLightSwitch"
+                    visible: trackViewRoot.trackApp && trackViewRoot.casRoom.available === true
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.round(168 * trackViewRoot.ks)
+                    height: Math.max(48, Math.round(48 * trackViewRoot.ks))
+                    icon: "flash"
+                    text: qsTr("ROOM LIGHT")
+                    active: trackViewRoot.roomLightOpen
+                    tone: "#E8D8A8"
+                    onTapped: { trackViewRoot.roomLightOpen = !trackViewRoot.roomLightOpen; if (trackViewRoot.roomLightOpen) { trackViewRoot.setupOpen = false; trackViewRoot.helpOpen = false } }
                 }
 
                 // runde 393: the guide - between the show switch and SETUP
@@ -5106,6 +5125,178 @@ Rectangle
                     return ""
                 var c = Qt.createComponent("qrc:/TrackSetup.qml")
                 return "TrackSetup.qml failed to load:\n\n" + (c.status === Component.Error ? c.errorString() : "(no detail)")
+            }
+        }
+    }
+
+
+    // =====================================================================
+    // TRACK_APP_ROOMLIGHT_R637: ROOM LIGHT - the scenes as the Casambi app has them (the last list the network gave,
+    // so it opens at once), the active one lit with when it was set, LEVEL for the scene as a whole. A tap before
+    // TRACK is connected goes the moment it is; a scene the network no longer has is not sent
+    // =====================================================================
+    Rectangle
+    {
+        id: roomLight
+        objectName: "roomLight"
+        z: 250
+        anchors.fill: parent
+        visible: trackViewRoot.roomLightOpen && trackViewRoot.casRoom.available === true
+        color: Qt.rgba(0, 0, 0, 0.55)
+        TouchInput { onReleasedAt: (x, y, inside) => { if (inside) trackViewRoot.roomLightOpen = false } }   // outside the card: close
+        onVisibleChanged: { if (!trackEngine || trackEngine.casambiRoomOpen === undefined) return; if (visible) trackEngine.casambiRoomOpen(); else trackEngine.casambiRoomClose() }
+        readonly property var r: trackViewRoot.casRoom
+        readonly property var scenes: r.scenes !== undefined ? r.scenes : []
+        readonly property string st: r.state !== undefined ? r.state : ""
+        readonly property bool busy: st === "lasttrack"
+        Rectangle
+        {
+            id: roomCard
+            objectName: "roomLightCard"
+            readonly property real p: Math.round(26 * trackViewRoot.ks)
+            width: Math.min(parent.width - 2 * trackViewRoot.mx, Math.round(1180 * trackViewRoot.ks))
+            height: Math.min(parent.height - 2 * Math.round(60 * trackViewRoot.ks), Math.round(800 * trackViewRoot.ks))
+            anchors.centerIn: parent
+            radius: Math.round(16 * trackViewRoot.ks)
+            color: "#17171B"
+            border.width: 2
+            border.color: "#E8D8A8"
+            TouchInput { }                   // a tap on the card is not a tap outside it
+            Text
+            {
+                id: roomTitle
+                x: roomCard.p; y: roomCard.p
+                text: qsTr("ROOM LIGHT")
+                color: trackViewRoot.cText; font.bold: true; font.pixelSize: trackViewRoot.fs(20); font.letterSpacing: trackViewRoot.fs(20) * 0.12
+            }
+            Text
+            {
+                x: roomTitle.x + roomTitle.width + Math.round(16 * trackViewRoot.ks); anchors.baseline: roomTitle.baseline
+                width: roomClose.x - x - 12; elide: Text.ElideRight
+                text: qsTr("The restaurant's Casambi scenes (network %1) - as in the Casambi app").arg(roomLight.r.network !== undefined ? roomLight.r.network : "PS")
+                color: "#8A8A94"; font.pixelSize: trackViewRoot.fs(13)
+            }
+            Btn
+            {
+                id: roomClose
+                objectName: "roomLightClose"
+                anchors.right: parent.right; anchors.rightMargin: roomCard.p - 6; y: roomCard.p - 8
+                width: Math.round(130 * trackViewRoot.ks); height: Math.max(44, Math.round(48 * trackViewRoot.ks))
+                text: qsTr("CLOSE")
+                onTapped: trackViewRoot.roomLightOpen = false
+            }
+            Rectangle
+            {
+                x: roomCard.p; y: roomStatus.y + (roomStatus.height - height) / 2
+                width: Math.round(10 * trackViewRoot.ks); height: width; radius: width / 2
+                color: roomLight.st === "connected" ? "#30C050" : roomLight.st === "connecting" ? "#E3B44F"
+                     : (roomLight.st === "error" || roomLight.st === "unset") ? "#E0555A" : "#6E6E78"
+            }
+            Text
+            {
+                id: roomStatus
+                objectName: "roomLightStatus"
+                x: roomCard.p + Math.round(20 * trackViewRoot.ks); y: roomCard.p + Math.round(46 * trackViewRoot.ks)
+                width: roomCard.width - x - roomCard.p; elide: Text.ElideRight
+                text: roomLight.r.text !== undefined ? roomLight.r.text : ""
+                color: roomLight.st === "error" ? "#F0A0A0" : "#C8C8D0"; font.pixelSize: trackViewRoot.fs(14)
+            }
+            Flickable
+            {
+                id: roomFlick
+                objectName: "roomLightScenes"
+                x: roomCard.p; y: roomStatus.y + roomStatus.height + Math.round(22 * trackViewRoot.ks)
+                width: roomCard.width - 2 * roomCard.p
+                height: roomLevel.y - y - Math.round(22 * trackViewRoot.ks)
+                clip: true
+                contentHeight: roomGrid.height
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+                Grid
+                {
+                    id: roomGrid
+                    columns: 3
+                    spacing: Math.round(12 * trackViewRoot.ks)
+                    readonly property real cellW: (roomFlick.width - 2 * spacing) / 3
+                    Repeater
+                    {
+                        model: roomLight.scenes.length
+                        Rectangle
+                        {
+                            id: sceneTile
+                            objectName: "roomScene:" + index
+                            readonly property var s: roomLight.scenes[index] !== undefined ? roomLight.scenes[index] : ({})
+                            width: roomGrid.cellW; height: Math.round(110 * trackViewRoot.ks)
+                            radius: Math.round(12 * trackViewRoot.ks)
+                            color: s.current === true ? "#E8D8A8" : (s.pending === true ? "#3A3424" : (sceneIn.down ? "#2C2C34" : "#22222A"))
+                            border.width: s.pending === true ? 2 : 0
+                            border.color: "#E8D8A8"
+                            opacity: roomLight.busy ? 0.4 : 1
+                            scale: sceneIn.down ? 0.97 : 1.0
+                            Column
+                            {
+                                anchors.centerIn: parent
+                                width: parent.width - 20
+                                spacing: Math.round(6 * trackViewRoot.ks)
+                                Text
+                                {
+                                    width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                                    text: String(sceneTile.s.name !== undefined ? sceneTile.s.name : "").toUpperCase()
+                                    color: sceneTile.s.current === true ? "#2A1D05" : trackViewRoot.cText
+                                    font.bold: true; font.pixelSize: trackViewRoot.fs(18); font.letterSpacing: trackViewRoot.fs(18) * 0.08
+                                }
+                                Text
+                                {
+                                    width: parent.width; horizontalAlignment: Text.AlignHCenter
+                                    text: sceneTile.s.current === true ? qsTr("set %1").arg(sceneTile.s.setAt)
+                                        : sceneTile.s.pending === true ? qsTr("goes when connected ...") : ""
+                                    visible: text !== ""
+                                    color: sceneTile.s.current === true ? "#5A4A20" : "#C8B888"
+                                    font.pixelSize: trackViewRoot.fs(12)
+                                }
+                            }
+                            TouchInput
+                            {
+                                id: sceneIn
+                                enabled: !roomLight.busy
+                                onReleasedAt: (x, y, inside) => { if (inside && trackEngine && sceneTile.s.id !== undefined) trackEngine.casambiScene(sceneTile.s.id, sceneTile.s.name) }
+                            }
+                        }
+                    }
+                }
+            }
+            Text
+            {
+                visible: roomLight.scenes.length === 0
+                x: roomCard.p; y: roomFlick.y; width: roomFlick.width; wrapMode: Text.Wrap
+                text: qsTr("No scenes yet - they show here once TRACK has been connected to the network once.")
+                color: "#6E6E78"; font.pixelSize: trackViewRoot.fs(14)
+            }
+            Text
+            {
+                x: roomCard.p; anchors.verticalCenter: roomLevel.verticalCenter
+                text: qsTr("LEVEL"); color: "#E3B44F"; font.bold: true; font.pixelSize: trackViewRoot.fs(13); font.letterSpacing: trackViewRoot.fs(13) * 0.12
+            }
+            Fader
+            {
+                id: roomLevel
+                objectName: "roomLightLevel"
+                inputName: "roomLightLevelDrag"
+                x: roomCard.p + Math.round(150 * trackViewRoot.ks); width: roomCard.width - x - roomCard.p
+                y: roomNote.y - height - Math.round(22 * trackViewRoot.ks)
+                height: Math.round(56 * trackViewRoot.ks)
+                level: roomLight.r.level !== undefined ? roomLight.r.level : 1
+                fill: "#E8D8A8"; gripInk: "#FFF4D0"; valueOnFill: "#2A1D05"
+                enabled: !roomLight.busy
+                opacity: enabled ? 1 : 0.4
+                onSetLevel: (v) => { if (trackEngine) trackEngine.setCasambiRoomLevel(v) }
+            }
+            Text
+            {
+                id: roomNote
+                x: roomCard.p; y: roomCard.height - roomCard.p - height; width: roomCard.width - 2 * roomCard.p; wrapMode: Text.Wrap
+                text: qsTr("LEVEL dims the chosen scene as a whole (100 % = as saved in the app). While LAST TRACK runs, it has the lights and this waits.")
+                color: "#7A7A84"; font.pixelSize: trackViewRoot.fs(12)
             }
         }
     }

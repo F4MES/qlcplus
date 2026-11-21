@@ -643,6 +643,8 @@ class TrackEngine : public QObject
     // TRACK_APP_CASAMBIPAGE_R632: SETUP > CASAMBI - LAST TRACK LIGHTS on / off, the page's connection and lamps
     Q_PROPERTY(bool casambiOn READ casambiOn WRITE setCasambiOn NOTIFY casambiChanged)
     Q_PROPERTY(QVariantMap casambiPage READ casambiPage NOTIFY casambiChanged)
+    // TRACK_APP_ROOMLIGHT_R637: ROOM LIGHT - the Casambi scenes for the DJ (cached), the level, what it says
+    Q_PROPERTY(QVariantMap casambiRoom READ casambiRoom NOTIFY casambiChanged)
     Q_PROPERTY(int lastTrackCloseMin READ lastTrackCloseMin NOTIFY lastTrackChanged)
     Q_PROPERTY(QString lastTrackCloseAt READ lastTrackCloseAt NOTIFY lastTrackChanged)
     Q_PROPERTY(int lastTrackEnd READ lastTrackEndBeat NOTIFY lastTrackChanged)   // R479_LAST_WHITE_PROP: the music's end
@@ -891,6 +893,14 @@ public:
     Q_INVOKABLE void casambiSet(int id, qreal level);
     Q_INVOKABLE void casambiAll();
     Q_INVOKABLE void casambiBack();
+    /** TRACK_APP_ROOMLIGHT_R637: casambiRoom(): available, state, network, connected, scenes [{id, name, current,
+     *  setAt, pending}], level 0..1, text */
+    QVariantMap casambiRoom() const;
+    Q_INVOKABLE void casambiRoomOpen();
+    Q_INVOKABLE void casambiRoomClose();
+    Q_INVOKABLE void casambiScene(int id, const QString &name);
+    Q_INVOKABLE qreal casambiRoomLevel() const;
+    Q_INVOKABLE void setCasambiRoomLevel(qreal level);
     /** TRACK_APP_HAZECLOSE_R626: TrackManager asks every 200 ms - the engine wants SHOW OFF (the warning's 30 min
      *  without an answer, LAST TRACK dark for 15 min). Taken once */
     bool r626TakeShowOff() { const bool w = m_r626WantOff; m_r626WantOff = false; return w; }
@@ -3792,6 +3802,24 @@ private:
     void casambiRunLine(const QString &line);
     void casambiRunEnd(int code);
     void casambiRunSave(const QString &text);
+    // TRACK_APP_ROOMLIGHT_R637
+    mutable QList<QPair<int, QString>> m_casScenes;   // the cache ("trackcasambi/scenes"), then the network's own
+    mutable bool m_casScenesRead = false;
+    QList<QPair<int, QString>> m_casScenesNew;
+    bool m_casScenesFresh = false;         // m_casScenes is this connection's list
+    bool m_casRoomWanted = false;
+    bool m_casPendOn = false;              // a scene tapped, not sent yet
+    int m_casPendId = -1;
+    QString m_casPendName;
+    int m_casSentScene = -1;
+    QString m_casSentName;
+    QString m_casRoomNote;
+    int m_casLetGoGen = 0;
+    void casambiScenesLoad() const;
+    void casambiMaybeLetGo(int delayMs);
+    void casambiScenePending();
+    void casambiSceneLine(const QString &line);
+    void casambiNoteLater();
     /** LAST TRACK has (or is about to take) the Bluetooth connection: its helper runs, or it is armed with
      *  LAST TRACK LIGHTS ON and its helper not started yet */
     bool casambiLastBusy() const { return m_casProc != nullptr || (m_lastStage > 0 && m_casTried == false && casambiOn()); }

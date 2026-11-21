@@ -36,6 +36,8 @@ lysene"). With --page the helper connects, tells every lamp and stays until told
     in   set <id> <0-255>      that lamp now                   in   all <0-255>    every lamp
     in   back                  every lamp the page moved, back where it stood when the page connected
     in   scan                  tell every lamp again           in   quit           go (the lamps stay as they are)
+    out  scene <id>|<name> ... scenes <n>                              the network's scenes (R637, after the lamps)
+    in   scene <id> <0-255>    that scene at that relative level -> out  scene-set <id> <level> | scene-failed <id> <why>
 
 The status lines (connected / no-casambi-found / wrong-password / ...) are LAST TRACK's.
 """
@@ -272,6 +274,7 @@ class Page(Helper):
     def __init__(self, cfg_path: Path):
         super().__init__(cfg_path)
         self.pending: dict[int, int] = {}
+        self.pend_scene: tuple[int, int] | None = None      # R637: the newest scene asked for
 
     def say(self, msg: str) -> None:
         super().say('page ' + msg if msg.startswith('unit ') is False and msg.startswith('units ') is False
@@ -294,6 +297,11 @@ class Page(Helper):
         for u in self.units:
             self.tell(u)
         print('units %d known %d offline %d' % (len(self.units), known, off), flush=True)
+        # TRACK_APP_ROOMLIGHT_R637: the scenes made in the Casambi app (ROOM LIGHT's list)
+        scenes = list(getattr(self.casa, 'scenes', None) or [])
+        for s in scenes:
+            print('scene %d|%s' % (s.sceneId, self.clean(s.name) or ('#%d' % s.sceneId)), flush=True)
+        print('scenes %d' % len(scenes), flush=True)
         self.logf.write('%s page units %d known %d offline %d\n' % (time.strftime('%Y-%m-%d %H:%M:%S'),
                                                                    len(self.units), known, off))
         self.logf.flush()
@@ -326,6 +334,8 @@ class Page(Helper):
                         self.pending[dev_id] = s
             elif parts[0] == 'scan':
                 self.tell_all()
+            elif parts[0] == 'scene' and len(parts) == 3:        # R637
+                self.pend_scene = (int(parts[1]), max(0, min(255, int(parts[2]))))
         except ValueError:
             pass
         return True
@@ -389,6 +399,21 @@ class Page(Helper):
                         if not self.take(self.cmds.get_nowait()):
                             self.say('quit')
                             return 0
+                if self.pend_scene is not None:              # R637: the newest scene, after the lamps
+                    sid, lvl = self.pend_scene
+                    self.pend_scene = None
+                    sc = next((s for s in (getattr(self.casa, 'scenes', None) or []) if s.sceneId == sid), None)
+                    if sc is None:
+                        print('scene-failed %d gone' % sid, flush=True)
+                    else:
+                        try:
+                            await self.casa.switchToScene(sc, lvl)
+                            print('scene-set %d %d' % (sid, lvl), flush=True)
+                            self.logf.write('%s page scene-set %d %s %d\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), sid, self.clean(sc.name), lvl))
+                            self.logf.flush()
+                        except Exception as e:  # noqa: BLE001
+                            print('scene-failed %d %s' % (sid, type(e).__name__), flush=True)
+                    await asyncio.sleep(SEND_GAP)
         finally:
             if self.casa is not None:
                 await self.safe_disconnect(self.casa)
