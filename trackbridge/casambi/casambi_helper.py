@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""TRACK_APP_CASAMBI_R620 - the restaurant's Casambi lights follow LAST TRACK.
+"""TRACK_APP_CASAMBI_R620 - R635: built with casambi-bt-revamped (the same CasambiBt API; it also speaks the
+Classic protocol the restaurant's network uses - casambi-bt 0.3.2 refused it: UnsupportedProtocolVersion).
+
+ - the restaurant's Casambi lights follow LAST TRACK.
 
 Tobias 11-16: "kun bruge det til last track hvor den skal skrue alle enheder langsomt op til 100%
 henover last-track" - "Det skal formegentlig først checke hvilket niveau lamperne står på fra starten
@@ -59,6 +62,8 @@ def selftest() -> int:
         import bleak.backends.winrt.scanner  # noqa: F401
     import httpx  # noqa: F401
     import cryptography  # noqa: F401
+    import bleak_retry_connector  # noqa: F401   R635: casambi-bt-revamped (Classic networks) needs it
+    import anyio  # noqa: F401
     print('selftest ok', flush=True)
     return 0
 
@@ -121,7 +126,7 @@ class Helper:
                     await self.safe_disconnect(casa)
                     continue
                 except Exception as e:  # noqa: BLE001
-                    self.say('connect-failed %s %s' % (dev.address, type(e).__name__))
+                    self.say('connect-failed %s %s %s' % (dev.address, type(e).__name__, ' '.join(str(e).split())[:80]))
                     await self.safe_disconnect(casa)
                     continue
                 if casa.networkName.strip().lower() != self.network.strip().lower():

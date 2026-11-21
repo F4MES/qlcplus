@@ -67,9 +67,12 @@ jobs:
       - name: Build casambi_helper.exe
         shell: pwsh
         run: |
-          python -m pip install --disable-pip-version-check casambi-bt==0.3.2 pyinstaller==6.11.1
+          # R635 (2026-11-21): casambi-bt-revamped 0.4.3 - the same CasambiBt module and API, and it speaks Casambi
+          # Classic: the restaurant's network PS is Classic (protocol < 10), which casambi-bt 0.3.2 refuses
+          # (UnsupportedProtocolVersion on the lys-PC's first try)
+          python -m pip install --disable-pip-version-check casambi-bt-revamped==0.4.3 pyinstaller==6.11.1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pyinstaller --onefile --noupx --name casambi_helper --collect-submodules bleak --collect-submodules winrt --collect-submodules CasambiBt trackbridge/casambi/casambi_helper.py
+          pyinstaller --onefile --noupx --name casambi_helper --collect-submodules bleak --collect-submodules winrt --collect-submodules CasambiBt --collect-submodules bleak_retry_connector trackbridge/casambi/casambi_helper.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\dist\casambi_helper.exe --selftest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
