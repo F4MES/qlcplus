@@ -683,21 +683,20 @@ Rectangle
         opacity: enabled ? 1.0 : 0.3
         Rectangle
         {
-            // TRACK_APP_HELPDJ_R627: the glow - a green frame and a faint green fill, breathing
+            // TRACK_APP_HELPDJ_R627: the glow. TRACK_APP_GLOWFILL_R628: no frame (it read as ON) - the tile itself
+            // breathes: from as it is to a green tint and back
             objectName: btn.objectName !== "" ? btn.objectName + ":glow" : ""
             anchors.fill: parent
             radius: parent.radius
             visible: btn.r627Glow
-            color: Qt.rgba(trackViewRoot.cGreen.r, trackViewRoot.cGreen.g, trackViewRoot.cGreen.b, 0.16)
-            border.width: Math.max(2, Math.round(3 * trackViewRoot.ks))
-            border.color: trackViewRoot.cGreen
-            opacity: trackViewRoot.animate ? 0.25 : 0.9
+            color: Qt.rgba(trackViewRoot.cGreen.r, trackViewRoot.cGreen.g, trackViewRoot.cGreen.b, 0.34)
+            opacity: trackViewRoot.animate ? 0.0 : 0.55
             SequentialAnimation on opacity
             {
                 running: btn.r627Glow && btn.visible && trackViewRoot.animate
                 loops: Animation.Infinite
-                NumberAnimation { to: 1.0; duration: 900; easing.type: Easing.InOutSine }
-                NumberAnimation { to: 0.25; duration: 900; easing.type: Easing.InOutSine }
+                NumberAnimation { to: 1.0; duration: 1000; easing.type: Easing.InOutSine }
+                NumberAnimation { to: 0.0; duration: 1000; easing.type: Easing.InOutSine }
             }
         }
         // R403_IDLE_BAR: at rest a colour or section tile is dark like the rest,
