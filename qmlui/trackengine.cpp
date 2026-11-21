@@ -126,6 +126,7 @@ static quint32 nameScatter(const QString &name)
 #define ENGINE_TASTE_KEEP     0.90   // R435_TASTE_DECAY: what a night keeps of the lean
 #define ENGINE_CRUMBS_MAX     (2 * 1024 * 1024)   // R435_CRUMBS: rotate here
 #define ENGINE_BARS_AMOK      1.0   // runde 348: the laser bars go wild at 100 % only
+#define R629_BARS_DEPTH       0.99  // TRACK_APP_BARSPUMP_R629 (Tobias 11-21): a laser bar's pump, 100 % -> 1 %
 #define ENGINE_HWSTROBE_ON    0.55    // the hardware shutter's own line (runde 313)
 #define ENGINE_STROBE_LAND_ON 0.45    // R480_STROBE_BAR: no landing flash on the strobe lamps under this (the bar time)
 // runde 344, Tobias 10-03: "animationslaseren skal foerst komme i spil ved 70%"
@@ -18077,6 +18078,9 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // between beats (runde 198)
             if (g.strobes && depth > 0.0)
                 depth = 1.0;
+            // TRACK_APP_BARSPUMP_R629: the laser bars pump the whole way, 100 % down to about 1 %
+            if (g.lasers && g.patternDevice == false && depth > 0.0)
+                depth = R629_BARS_DEPTH;
             // A KICKLESS STRETCH ON THE BASE (runde 268). No kick is no pulse
             // beat, so the base sat on (1 - depth) for the whole passage: 8 %
             // of its level at the top of a drop, where that floor is meant for
@@ -18138,6 +18142,8 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
             // R358_BACKBEAT: claps or a snare on 2 and 4 - the strobes pulse
             // on THEM, not on the kick (a pulse never passes the level: MASTER
             // and the trim hold, runde 357)
+            if (g.lasers && g.patternDevice == false && depth > 0.0)
+                strength = 1.0;      // TRACK_APP_BARSPUMP_R629: every hit to full - a soft kick is not a half beam
             bool r506Hold = false;   // R506_HOLD_DECL: no hit on this beat, but the music as loud
             if (m_backbeat && g.strobes && depth > 0.0 && isBuild == false && preDrop == false
                 && (isDrop || tier == 1))
