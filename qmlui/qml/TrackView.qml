@@ -3518,7 +3518,8 @@ Rectangle
                         id: clockMark
                         objectName: "energyClockMark"
                         readonly property bool auto: trackEngine ? trackEngine.roomAuto === true : false
-                        readonly property int target: auto ? trackViewRoot.clockSoon : trackViewRoot.clockNow
+                        // TRACK_APP_CLOCKLINE_R631: always where AUTO puts the slider now (not 15 min on while in AUTO)
+                        readonly property int target: trackViewRoot.clockNow
                         visible: trackViewRoot.trackApp && target >= 0
                                  && (!auto || Math.abs(target - Math.round(energyFader.level * 100)) >= 2)
                         x: Math.max(2, Math.min(parent.width - 4, parent.width * Math.min(100, target) / 100 - 1))
