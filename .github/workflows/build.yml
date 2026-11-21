@@ -399,8 +399,12 @@ jobs:
           dir: "${{ github.workspace }}/qt/"
           modules: 'qt3d qtimageformats qtmultimedia qtserialport qtwebsockets'
 
+      # R634 (2026-11-21): setup-msys2@v2 moved to 3c51bf6 (MSYS2 installer 2026-11-20), whose MINGW64 package
+      # database no longer lists mingw-w64-x86_64-libusb ("target not found") - MSYS2 is retiring MINGW64. Pinned
+      # to the last commit that built (ec48f7c, installer 2026-09-27, libusb 1.0.30 from the mirror). The way out
+      # for good is UCRT64; until then this pin.
       - name: Update and install MSYS2 (64bit)
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
         with:
           msystem: mingw64
           release: true
