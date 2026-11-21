@@ -51490,7 +51490,7 @@ void TrackEngine::casambiScenePending()
 
 #define R639_DELAY_KEY "trackcasambi/showdelay"
 #define R639_PICK_KEY "trackcasambi/testlamps"
-#define R639_PERIOD 1200
+#define R639_PERIOD 3000                 // TRACK_APP_CASDELAY2S_R641: was 1200 - delays up to ~2.9 s
 #define R639_UP 255
 #define R639_DOWN 38
 
@@ -51631,7 +51631,7 @@ void TrackEngine::casambiTestStart(const QString &mode)
         return;
     }
     m_casTestText = mode == QLatin1String("tap")
-        ? QStringLiteral("Tap the moment the lamp goes UP - every 1.2 s. 10 taps")
+        ? QStringLiteral("Tap the moment the lamp goes UP - it is sent every 3 s. 10 taps")
         : QStringLiteral("The dot and the lamps should go up together - the lamps are sent SHOW DELAY early. - / + to tune");
     if (m_casTestTimer == nullptr)
     {
@@ -51641,7 +51641,7 @@ void TrackEngine::casambiTestStart(const QString &mode)
         connect(t, &QTimer::timeout, this, &TrackEngine::casambiTestTick);
         m_casTestTimer = t;
     }
-    m_casTestT0 = m_clock.elapsed() + 800;
+    m_casTestT0 = m_clock.elapsed() + 800 + (mode == QLatin1String("preview") ? casambiShowDelay() : 0);   // R641
     m_casTestK[0] = m_casTestK[1] = m_casTestK[2] = m_casTestK[3] = 0;
     m_casTestDot = false;
     m_casTestTimer->start();

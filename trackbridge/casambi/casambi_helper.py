@@ -401,7 +401,7 @@ class Page(Helper):
                     t0 = time.perf_counter()
                     await self.send(u, target)
                     try:
-                        await asyncio.wait_for(fut, 3.0)
+                        await asyncio.wait_for(fut, 6.0)      # R641: lamps up to a few seconds late
                         print('measure %d %d %d %d' % (gen, dev_id, i, int((time.perf_counter() - t0) * 1000)), flush=True)
                     except asyncio.TimeoutError:
                         print('measure %d %d %d timeout' % (gen, dev_id, i), flush=True)

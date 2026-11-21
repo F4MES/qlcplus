@@ -2953,6 +2953,7 @@ Rectangle
             id: delayRow
             x: 22 + casPanel.labW + 10; y: 196
             spacing: 8
+            TrackTile { objectName: "casambiDelayM250"; width: 64; height: 34; label: "-250"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.max(0, casPanel.delayMs - 250) }   // TRACK_APP_CASDELAY2S_R641
             TrackTile { objectName: "casambiDelayM50"; width: 64; height: 34; label: "-50"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.max(0, casPanel.delayMs - 50) }
             TrackTile { objectName: "casambiDelayM10"; width: 64; height: 34; label: "-10"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.max(0, casPanel.delayMs - 10) }
             Rectangle
@@ -2962,11 +2963,12 @@ Rectangle
             }
             TrackTile { objectName: "casambiDelayP10"; width: 64; height: 34; label: "+10"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.min(3000, casPanel.delayMs + 10) }
             TrackTile { objectName: "casambiDelayP50"; width: 64; height: 34; label: "+50"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.min(3000, casPanel.delayMs + 50) }
+            TrackTile { objectName: "casambiDelayP250"; width: 64; height: 34; label: "+250"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.min(3000, casPanel.delayMs + 250) }
         }
         Text
         {
             x: delayRow.x + delayRow.width + 18; y: 206; width: parent.width - x - 22; elide: Text.ElideRight
-            text: qsTr("Show programmes send this much early. Scenes, ROOM LIGHT, LAST TRACK and this page never wait.")
+            text: qsTr("Show programmes send this much early. Nothing manual waits.")
             color: "#A0A0AA"; font.pixelSize: 13
         }
         // DELAY TEST: the lamps it uses, and three ways to find the number
