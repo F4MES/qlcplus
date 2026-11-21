@@ -28422,6 +28422,11 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
             if ((tonight && h < 16) || (tonight == false && h >= 16 && h < 40))
                 out << fi.absoluteFilePath();
         }
+        // TRACK_APP_CASAMBINET_R638: the Casambi network as TRACK sees it, and the helper's own log
+        if (tonight)
+            foreach (const QString &name, QStringList() << "casambi-network.txt" << "casambi.log")
+                if (QFileInfo::exists(docs.absoluteFilePath(name)))
+                    out << docs.absoluteFilePath(name);
     }
     else if (id == QStringLiteral("mic"))
     {

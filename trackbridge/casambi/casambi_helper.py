@@ -268,6 +268,59 @@ class Helper:
                 await self.safe_disconnect(self.casa)
 
 
+def write_network(helper, casa) -> None:
+    """TRACK_APP_CASAMBINET_R638 (Tobias 11-21: "skal gerne skrive navnene/id'erne eller hvad du skal bruge i loggen
+    til dig selv, saa vi senere maaske kan bruge nogle af lamperne/grupperne til mere"): the network as TRACK sees
+    it, in Documents/QLC+/casambi-network.txt (SEND TO CLAUDE takes it) - lamps, groups, scenes, and the scenes /
+    groups exactly as the cached network data has them (is a scene's lamp level in there?). No key, no password:
+    the raw part is the "scenes" and "groups" lists only."""
+    try:
+        import glob
+        units = list(getattr(casa, 'units', None) or [])
+        groups = list(getattr(casa, 'groups', None) or [])
+        scenes = list(getattr(casa, 'scenes', None) or [])
+        net = getattr(casa, '_casaNetwork', None)
+        out = ['# Casambi network as TRACK sees it - %s - casambi_helper (no keys, no password)' % time.strftime('%Y-%m-%d %H:%M:%S'),
+               'network %s | protocol %s | revision %s' % (getattr(casa, 'networkName', '?'),
+                                                         getattr(net, 'protocolVersion', '?'), getattr(net, '_networkRevision', '?')),
+               '', 'UNITS (%d)' % len(units), 'id | name | model | manufacturer | mode | controls | online | level']
+        for u in sorted(units, key=lambda x: x.deviceId):
+            ut = getattr(u, 'unitType', None)
+            ctl = ','.join(str(getattr(getattr(c, 'type', None), 'name', '?')) for c in (getattr(ut, 'controls', None) or []))
+            d = u.state.dimmer if u.state is not None else None
+            out.append('%d | %s | %s | %s | %s | %s | %d | %s' % (u.deviceId, u.name, getattr(ut, 'model', ''), getattr(ut, 'manufacturer', ''),
+                                                              getattr(ut, 'mode', ''), ctl, 1 if u.online else 0, '?' if d is None else d))
+        out += ['', 'GROUPS (%d)' % len(groups), 'id | name | unit ids']
+        for g in groups:
+            out.append('%s | %s | %s' % (getattr(g, 'groudId', getattr(g, 'groupId', '?')), g.name,
+                                         ','.join(str(u.deviceId) for u in (getattr(g, 'units', None) or []))))
+        out += ['', 'SCENES (%d)' % len(scenes), 'id | name']
+        for s in scenes:
+            out.append('%d | %s' % (s.sceneId, s.name))
+        # the cached network data: its scenes and groups as they are
+        raw = None
+        for f in sorted(glob.glob(str(helper.store / '**' / '*.json'), recursive=True), key=lambda x: -Path(x).stat().st_mtime):
+            try:
+                d = json.loads(Path(f).read_text(encoding='utf-8'))
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(d, dict) and isinstance(d.get('network'), dict) and 'scenes' in d['network']:
+                raw = d['network']
+                break
+        out += ['', 'RAW (cached network data: "scenes" and "groups" only)']
+        if raw is None:
+            out.append('no cached network file found')
+        else:
+            out.append('network keys: ' + ', '.join(sorted(k for k in raw.keys())))
+            for key in ('scenes', 'groups'):
+                for item in raw.get(key) or []:
+                    out.append('%s: %s' % (key[:-1], json.dumps(item, ensure_ascii=False)[:2000]))
+        (helper.cfg_path.parent / 'casambi-network.txt').write_text('\n'.join(out) + '\n', encoding='utf-8')
+        print('network-file %d units %d groups %d scenes' % (len(units), len(groups), len(scenes)), flush=True)
+    except Exception as e:  # noqa: BLE001
+        print('network-file-failed %s' % type(e).__name__, flush=True)
+
+
 class Page(Helper):
     """TRACK_APP_CASAMBIPAGE_R632: SETUP > CASAMBI - every lamp, and a hand on them"""
 
@@ -351,6 +404,7 @@ class Page(Helper):
         for u in self.units:                              # BACK's levels: as they stood when the page connected
             self.start[u.deviceId] = u.state.dimmer if u.state is not None else None
         self.tell_all()
+        write_network(self, self.casa)                    # TRACK_APP_CASAMBINET_R638
         try:
             self.casa.registerUnitChangedHandler(self.on_unit)
         except Exception:  # noqa: BLE001
