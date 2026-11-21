@@ -51002,8 +51002,12 @@ QVariantMap TrackEngine::casambiPage() const
         const int c = QString::localeAwareCompare(a.value(QStringLiteral("name")).toString(), b.value(QStringLiteral("name")).toString());
         return c != 0 ? c < 0 : a.value(QStringLiteral("id")).toInt() < b.value(QStringLiteral("id")).toInt();
     });
-    for (const QVariantMap &r : rows)
+    const QList<int> picked = casambiPicked();   // TRACK_APP_CASDELAY_R639: the lamps the delay test uses
+    for (QVariantMap r : rows)
+    {
+        r.insert(QStringLiteral("picked"), picked.contains(r.value(QStringLiteral("id")).toInt()));
         lamps << r;
+    }
     m.insert(QStringLiteral("lamps"), lamps);
     m.insert(QStringLiteral("connected"), m_casPageProc != nullptr && m_casPageState == QLatin1String("connected"));
     m.insert(QStringLiteral("running"), m_casPageProc != nullptr);
@@ -51140,6 +51144,11 @@ void TrackEngine::casambiPageStart()
             }
             m_casPageQuitting = false;
             m_casScenesFresh = false;
+            if (m_casTestMode.isEmpty() == false)   // TRACK_APP_CASDELAY_R639: a test without its connection
+            {
+                m_casTestText = QStringLiteral("The connection went - test stopped");
+                casambiTestStop();
+            }
             if (m_casPendOn)             // TRACK_APP_ROOMLIGHT_R637: a scene that never got out
             {
                 m_casPendOn = false;
@@ -51192,6 +51201,11 @@ void TrackEngine::casambiPageLine(const QString &line)
         r.remove(QStringLiteral("failed"));
         m_casLamps.insert(id, r);
         emit casambiChanged();
+        return;
+    }
+    if (line.startsWith(QLatin1String("measure")))        // TRACK_APP_CASDELAY_R639: MEASURE's timings
+    {
+        casambiMeasureLine(line);
         return;
     }
     if (line.startsWith(QLatin1String("scene")))          // TRACK_APP_ROOMLIGHT_R637: scene / scenes / scene-set / -failed
@@ -51444,6 +51458,334 @@ void TrackEngine::casambiScenePending()
     emit casambiChanged();
     if (m_casRoomWanted == false && m_casPageWanted == false)
         casambiMaybeLetGo(60000);
+}
+
+
+/* =====================================================================
+ * TRACK_APP_CASDELAY_R639 (Tobias 11-21: "Vi overvejer at bruge Casambi til lidt forskellige ting i track i selve
+ * showet. Kan du lave noget smart saa vi baade kan teste delay'et (hvor vi kan vaelge de lamper vi vil teste - en
+ * eller flere) men ogsaa soerge for at det delay kun rammer ved showprogrammer vi bygger og ikke manuelle
+ * aendringer paa casambi (scener og justeringer under Casambi fanen)? Lav det under indstillinger, du bestemmer
+ * det hele.")
+ *
+ * SETUP > CASAMBI:
+ *  - SHOW DELAY ("trackcasambi/showdelay", ms): how early a SHOW programme's Casambi command leaves, so the lamp is
+ *    there on the beat. Only casambiShowLevel() - the show's own way to Casambi - reads it: a lamp dragged on the
+ *    page, ALL 100 % / BACK, a ROOM LIGHT scene and LAST TRACK all go at once, as before.
+ *  - PICK LAMPS ("trackcasambi/testlamps"): the lamps a test uses (one or more).
+ *  - MEASURE: per picked lamp, 10 level changes, each timed from the command until the lamp itself reports the
+ *    new level (the helper) - the way there and back, so an upper bound.
+ *  - TAP TEST: the picked lamps go up every 1.2 s (and down half way); a tap the moment they are seen going up.
+ *    The delay from TRACK's command to what the eye sees, median of the taps after the first two - the number
+ *    for SHOW DELAY (USE).
+ *  - PREVIEW: a dot on the screen lights on the beat and the picked lamps are sent through casambiShowLevel() -
+ *    SHOW DELAY early: they should come up with the dot. - / + while it runs.
+ *  A test puts the picked lamps back where they stood. LAST TRACK or a lost connection stops it.
+ * Log: sig:casambi:showdelay:<ms>, :test-start:<mode>:<lamps>, :test-result:<mode>:<ms>, :test-stop
+ * ===================================================================== */
+
+#define R639_DELAY_KEY "trackcasambi/showdelay"
+#define R639_PICK_KEY "trackcasambi/testlamps"
+#define R639_PERIOD 1200
+#define R639_UP 255
+#define R639_DOWN 38
+
+int TrackEngine::casambiShowDelay() const
+{
+    return qBound(0, QSettings().value(QStringLiteral(R639_DELAY_KEY), 0).toInt(), 3000);
+}
+
+void TrackEngine::setCasambiShowDelay(int ms)
+{
+    ms = qBound(0, ms, 3000);
+    if (ms == casambiShowDelay())
+        return;
+    QSettings().setValue(QStringLiteral(R639_DELAY_KEY), ms);
+    logSignal(QStringLiteral("sig:casambi:showdelay:%1").arg(ms));
+    emit casambiChanged();
+    emit casambiTestChanged();
+}
+
+QList<int> TrackEngine::casambiPicked() const
+{
+    QList<int> out;
+    for (const QString &s : QSettings().value(QStringLiteral(R639_PICK_KEY)).toString().split(QLatin1Char(','), Qt::SkipEmptyParts))
+    {
+        bool ok = false;
+        const int id = s.toInt(&ok);
+        if (ok && out.contains(id) == false)
+            out << id;
+    }
+    return out;
+}
+
+void TrackEngine::casambiPick(int id)
+{
+    QList<int> p = casambiPicked();
+    if (p.contains(id))
+        p.removeAll(id);
+    else
+        p << id;
+    QStringList s;
+    for (int i : p)
+        s << QString::number(i);
+    QSettings().setValue(QStringLiteral(R639_PICK_KEY), s.join(QLatin1Char(',')));
+    emit casambiChanged();
+    emit casambiTestChanged();
+}
+
+void TrackEngine::casambiShowLevel(const QList<int> &ids, int level, qint64 atMs)
+{
+    // TRACK_APP_CASDELAY_R639: the SHOW's way to Casambi - the command leaves SHOW DELAY before atMs (m_clock), so
+    // the lamps are there at atMs. Nothing manual comes this way
+    if (ids.isEmpty())
+        return;
+    QStringList s;
+    for (int i : ids)
+        s << QString::number(i);
+    const QByteArray line = QStringLiteral("now %1 %2\n").arg(qBound(0, level, 255)).arg(s.join(QLatin1Char(','))).toLatin1();
+    const qint64 wait = atMs - casambiShowDelay() - m_clock.elapsed();
+    if (wait <= 0)
+        casambiPageSend(line);
+    else
+        QTimer::singleShot(int(wait), Qt::PreciseTimer, this, [this, line]() { casambiPageSend(line); });
+}
+
+QVariantMap TrackEngine::casambiTest() const
+{
+    QVariantMap m;
+    m.insert(QStringLiteral("mode"), m_casTestMode);
+    m.insert(QStringLiteral("running"), m_casTestMode.isEmpty() == false);
+    m.insert(QStringLiteral("dot"), m_casTestDot);
+    m.insert(QStringLiteral("delay"), casambiShowDelay());
+    m.insert(QStringLiteral("picked"), casambiPicked().count());
+    m.insert(QStringLiteral("result"), m_casTestResult);
+    m.insert(QStringLiteral("resultMode"), m_casTestResultMode);
+    m.insert(QStringLiteral("taps"), m_casTestTaps.count());
+    m.insert(QStringLiteral("text"), m_casTestText);
+    QVariantList rows;
+    for (auto it = m_casMeasure.constBegin(); it != m_casMeasure.constEnd(); ++it)
+    {
+        QList<int> v = it.value();
+        QVariantMap r;
+        r.insert(QStringLiteral("name"), m_casLamps.value(it.key()).value(QStringLiteral("name"), QStringLiteral("#%1").arg(it.key())));
+        std::sort(v.begin(), v.end());
+        r.insert(QStringLiteral("n"), int(v.count()));
+        r.insert(QStringLiteral("timeouts"), m_casMeasureLost.value(it.key(), 0));
+        r.insert(QStringLiteral("median"), v.isEmpty() ? -1 : v.at(v.count() / 2));
+        r.insert(QStringLiteral("min"), v.isEmpty() ? -1 : v.first());
+        r.insert(QStringLiteral("max"), v.isEmpty() ? -1 : v.last());
+        rows << r;
+    }
+    m.insert(QStringLiteral("lamps"), rows);
+    return m;
+}
+
+void TrackEngine::casambiTestStart(const QString &mode)
+{
+    casambiTestStop();
+    const QList<int> ids = casambiPicked();
+    if (m_casPageProc == nullptr || m_casPageState != QLatin1String("connected"))
+    {
+        m_casTestText = QStringLiteral("Not connected - connect first (SCAN AGAIN)");
+        emit casambiTestChanged();
+        return;
+    }
+    if (ids.isEmpty())
+    {
+        m_casTestText = QStringLiteral("Pick the lamps first (PICK LAMPS, then tap them)");
+        emit casambiTestChanged();
+        return;
+    }
+    m_casTestMode = mode;
+    m_casTestIds = ids;
+    m_casTestTaps.clear();
+    m_casTestUps.clear();
+    m_casTestResult = -1;
+    m_casTestResultMode.clear();
+    m_casMeasure.clear();
+    m_casMeasureLost.clear();
+    m_casTestBack.clear();
+    for (int id : ids)                   // where they stand: put back when the test ends
+    {
+        const qreal l = m_casLamps.value(id).value(QStringLiteral("level"), -1.0).toDouble();
+        if (l >= 0.0)
+            m_casTestBack.insert(id, int(qRound(l * 255.0)));
+    }
+    QStringList s;
+    for (int i : ids)
+        s << QString::number(i);
+    logSignal(QStringLiteral("sig:casambi:test-start:%1:%2").arg(mode).arg(ids.count()));
+    if (mode == QLatin1String("measure"))
+    {
+        for (int id : ids)
+            m_casMeasure.insert(id, QList<int>());
+        m_casMeasureGen++;                // the helper's lines carry it: an old run's are not this one's
+        casambiPageSend(QStringLiteral("measure %1 10 %2\n").arg(m_casMeasureGen).arg(s.join(QLatin1Char(','))).toLatin1());
+        m_casTestText = QStringLiteral("MEASURE: 10 changes per lamp, each timed until the lamp itself reports it ...");
+        emit casambiTestChanged();
+        return;
+    }
+    m_casTestText = mode == QLatin1String("tap")
+        ? QStringLiteral("Tap the moment the lamp goes UP - every 1.2 s. 10 taps")
+        : QStringLiteral("The dot and the lamps should go up together - the lamps are sent SHOW DELAY early. - / + to tune");
+    if (m_casTestTimer == nullptr)
+    {
+        QTimer *t = new QTimer(this);
+        t->setTimerType(Qt::PreciseTimer);
+        t->setInterval(5);
+        connect(t, &QTimer::timeout, this, &TrackEngine::casambiTestTick);
+        m_casTestTimer = t;
+    }
+    m_casTestT0 = m_clock.elapsed() + 800;
+    m_casTestK[0] = m_casTestK[1] = m_casTestK[2] = m_casTestK[3] = 0;
+    m_casTestDot = false;
+    m_casTestTimer->start();
+    emit casambiTestChanged();
+}
+
+void TrackEngine::casambiTestTick()
+{
+    // the beat every R639_PERIOD ms from m_casTestT0: up at T, down half a period later. TAP sends on the beat
+    // itself; PREVIEW sends through casambiShowLevel() (SHOW DELAY early) and lights the dot on the beat
+    if (m_casTestMode.isEmpty() || m_casTestTimer == nullptr)
+        return;
+    if (m_casPageProc == nullptr || m_casPageState != QLatin1String("connected"))
+    {
+        m_casTestText = QStringLiteral("The connection went - test stopped");
+        casambiTestStop();
+        return;
+    }
+    const bool preview = m_casTestMode == QLatin1String("preview");
+    const qint64 lead = preview ? casambiShowDelay() : 0;
+    const qint64 now = m_clock.elapsed();
+    QStringList s;
+    for (int i : m_casTestIds)
+        s << QString::number(i);
+    const QString ids = s.join(QLatin1Char(','));
+    // 0 up command, 1 down command, 2 dot on, 3 dot off
+    for (int e = 0; e < 4; e++)
+    {
+        const qint64 base = m_casTestT0 + (e == 1 || e == 3 ? R639_PERIOD / 2 : 0) - (e < 2 ? lead : 0);
+        while (base + qint64(m_casTestK[e]) * R639_PERIOD <= now)
+        {
+            if (e == 0)
+            {
+                casambiPageSend(QStringLiteral("now %1 %2\n").arg(R639_UP).arg(ids).toLatin1());
+                m_casTestUps.append(now);
+                while (m_casTestUps.count() > 8)
+                    m_casTestUps.removeFirst();
+            }
+            else if (e == 1)
+                casambiPageSend(QStringLiteral("now %1 %2\n").arg(R639_DOWN).arg(ids).toLatin1());
+            else if (preview)
+            {
+                m_casTestDot = e == 2;
+                emit casambiTestChanged();
+            }
+            m_casTestK[e]++;
+        }
+    }
+}
+
+void TrackEngine::casambiTap()
+{
+    if (m_casTestMode != QLatin1String("tap"))
+        return;
+    const qint64 now = m_clock.elapsed();
+    qint64 up = -1;
+    for (qint64 u : m_casTestUps)
+        if (u <= now)
+            up = u;
+    if (up < 0 || now - up >= R639_PERIOD)
+        return;
+    m_casTestTaps.append(int(now - up));
+    if (m_casTestTaps.count() >= 10)
+    {
+        QList<int> v = m_casTestTaps.mid(2);   // the first two find the rhythm
+        std::sort(v.begin(), v.end());
+        m_casTestResult = v.at(v.count() / 2);
+        m_casTestResultMode = QStringLiteral("tap");
+        logSignal(QStringLiteral("sig:casambi:test-result:tap:%1").arg(m_casTestResult));
+        m_casTestText = QStringLiteral("Seen delay: %1 ms (the taps %2-%3 ms) - USE puts it in SHOW DELAY")
+                            .arg(m_casTestResult).arg(v.first()).arg(v.last());
+        casambiTestStop();
+        return;
+    }
+    m_casTestText = QStringLiteral("Tap the moment the lamp goes UP - %1 of 10 (last %2 ms)").arg(m_casTestTaps.count()).arg(m_casTestTaps.last());
+    emit casambiTestChanged();
+}
+
+void TrackEngine::casambiTestStop()
+{
+    if (m_casTestTimer != nullptr)
+        m_casTestTimer->stop();
+    const bool was = m_casTestMode.isEmpty() == false;
+    if (m_casTestMode == QLatin1String("measure"))
+        casambiPageSend("measure-stop\n");
+    else if (was)
+    {
+        // the picked lamps back where they stood (the page's own way: one after the other)
+        for (auto it = m_casTestBack.constBegin(); it != m_casTestBack.constEnd(); ++it)
+            casambiPageSend(QStringLiteral("set %1 %2\n").arg(it.key()).arg(it.value()).toLatin1());
+    }
+    if (was && m_casTestMode == QLatin1String("preview"))
+        m_casTestText = QStringLiteral("PREVIEW stopped - SHOW DELAY is %1 ms").arg(casambiShowDelay());
+    if (was)
+        logSignal(QStringLiteral("sig:casambi:test-stop"));
+    m_casTestMode.clear();
+    m_casTestDot = false;
+    emit casambiTestChanged();
+}
+
+void TrackEngine::casambiTestUse()
+{
+    if (m_casTestResult >= 0)
+        setCasambiShowDelay(m_casTestResult);
+}
+
+void TrackEngine::casambiMeasureLine(const QString &line)
+{
+    // measure <gen> <id> <i> <ms|timeout|offline> ... measure-done <gen> - only this run's, only while it runs
+    const QStringList f = line.split(QLatin1Char(' '));
+    if (m_casTestMode != QLatin1String("measure") || f.value(1).toInt() != m_casMeasureGen)
+        return;
+    if (f.value(0) == QLatin1String("measure-done"))
+    {
+        QList<int> all;
+        for (auto it = m_casMeasure.constBegin(); it != m_casMeasure.constEnd(); ++it)
+            all << it.value();
+        std::sort(all.begin(), all.end());
+        if (all.isEmpty() == false)
+        {
+            m_casTestResult = all.at(all.count() / 2);
+            m_casTestResultMode = QStringLiteral("measure");
+            logSignal(QStringLiteral("sig:casambi:test-result:measure:%1").arg(m_casTestResult));
+            m_casTestText = QStringLiteral("There and back: %1 ms (median of all) - the eye sees it sooner; TAP TEST gives the number to use")
+                                .arg(m_casTestResult);
+        }
+        else
+            m_casTestText = QStringLiteral("No lamp answered - MEASURE needs lamps that report their level");
+        m_casTestMode.clear();
+        emit casambiTestChanged();
+        return;
+    }
+    if (f.count() < 5)
+        return;
+    const int id = f.at(2).toInt();
+    bool ok = false;
+    const int ms = f.at(4).toInt(&ok);
+    if (ok)
+        m_casMeasure[id].append(ms);
+    else
+        m_casMeasureLost[id] = m_casMeasureLost.value(id, 0) + 1;
+    int done = 0;
+    for (auto it = m_casMeasure.constBegin(); it != m_casMeasure.constEnd(); ++it)
+        done += int(it.value().count());
+    for (auto it = m_casMeasureLost.constBegin(); it != m_casMeasureLost.constEnd(); ++it)
+        done += it.value();
+    m_casTestText = QStringLiteral("MEASURE: %1 of %2 timed ...").arg(done).arg(10 * m_casTestIds.count());
+    emit casambiTestChanged();
 }
 
 void TrackEngine::casambiNoteLater()

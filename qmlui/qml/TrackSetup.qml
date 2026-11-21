@@ -2866,7 +2866,15 @@ Rectangle
         readonly property bool on: !!trackEngine && trackEngine.casambiOn === true
         readonly property real labW: 190
         readonly property real btnW: 132
-        onVisibleChanged: { if (!trackEngine) return; if (visible) trackEngine.casambiPageOpen(); else trackEngine.casambiPageClose() }
+        // TRACK_APP_CASDELAY_R639: SHOW DELAY and the delay test
+        property bool pickMode: false
+        property bool testOpen: false
+        readonly property var t: visible && trackEngine && trackEngine.casambiTest !== undefined ? trackEngine.casambiTest : ({})
+        readonly property int delayMs: trackEngine && trackEngine.casambiShowDelay !== undefined ? trackEngine.casambiShowDelay : 0
+        function startTest(mode) { pickMode = false; testOpen = true; if (trackEngine) trackEngine.casambiTestStart(mode) }
+        function closeTest() { if (trackEngine && t.running) trackEngine.casambiTestStop(); testOpen = false }
+        onVisibleChanged: { if (!visible) { pickMode = false; closeTest() }   // + TRACK_APP_CASDELAY_R639
+                             if (!trackEngine) return; if (visible) trackEngine.casambiPageOpen(); else trackEngine.casambiPageClose() }
         Component.onDestruction: if (visible && trackEngine) trackEngine.casambiPageClose()
 
         Text { x: 22; y: 16; text: qsTr("CASAMBI"); color: setupRoot.cText; font.bold: true; font.pixelSize: 16; font.letterSpacing: 1.6 }
@@ -2937,6 +2945,74 @@ Rectangle
             onTapped: if (trackEngine) trackEngine.casambiDisconnect()
         }
 
+
+        // TRACK_APP_CASDELAY_R639: SHOW DELAY - only a show programme's Casambi command leaves this early
+        Text { x: 22; y: 206; width: casPanel.labW; text: qsTr("SHOW DELAY"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.6 }
+        Row
+        {
+            id: delayRow
+            x: 22 + casPanel.labW + 10; y: 196
+            spacing: 8
+            TrackTile { objectName: "casambiDelayM50"; width: 64; height: 34; label: "-50"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.max(0, casPanel.delayMs - 50) }
+            TrackTile { objectName: "casambiDelayM10"; width: 64; height: 34; label: "-10"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.max(0, casPanel.delayMs - 10) }
+            Rectangle
+            {
+                width: 110; height: 34; radius: 8; color: "#0A0A0D"
+                Text { objectName: "casambiDelayValue"; anchors.centerIn: parent; text: casPanel.delayMs + " ms"; color: "#E8D8A8"; font.bold: true; font.pixelSize: 16 }
+            }
+            TrackTile { objectName: "casambiDelayP10"; width: 64; height: 34; label: "+10"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.min(3000, casPanel.delayMs + 10) }
+            TrackTile { objectName: "casambiDelayP50"; width: 64; height: 34; label: "+50"; onTapped: if (trackEngine) trackEngine.casambiShowDelay = Math.min(3000, casPanel.delayMs + 50) }
+        }
+        Text
+        {
+            x: delayRow.x + delayRow.width + 18; y: 206; width: parent.width - x - 22; elide: Text.ElideRight
+            text: qsTr("Show programmes send this much early. Scenes, ROOM LIGHT, LAST TRACK and this page never wait.")
+            color: "#A0A0AA"; font.pixelSize: 13
+        }
+        // DELAY TEST: the lamps it uses, and three ways to find the number
+        Text { x: 22; y: 254; width: casPanel.labW; text: qsTr("DELAY TEST"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.6 }
+        Text
+        {
+            objectName: "casambiTestInfo"
+            x: 22 + casPanel.labW + 10; y: 254; width: testRow.x - x - 16; elide: Text.ElideRight
+            text: casPanel.pickMode ? qsTr("Tap the lamps to use (gold edge = picked) - PICK LAMPS again when done")
+                : (casPanel.t.picked > 0 ? qsTr("%1 lamp(s) picked · TAP TEST finds the number to use").arg(casPanel.t.picked)
+                                         : qsTr("No lamps picked yet - PICK LAMPS, then tap one or more"))
+            color: casPanel.pickMode ? "#E3B44F" : "#A0A0AA"; font.pixelSize: 13
+        }
+        Row
+        {
+            id: testRow
+            anchors.right: parent.right; anchors.rightMargin: 22; y: 244
+            spacing: 10
+            TrackTile
+            {
+                objectName: "casambiPickMode"; width: 120; height: 34
+                label: casPanel.pickMode ? qsTr("DONE") : qsTr("PICK LAMPS")
+                active: casPanel.pickMode; activeColor: "#E3B44F"
+                enabled: casPanel.connected && !casPanel.t.running; opacity: enabled ? 1 : 0.4
+                onTapped: casPanel.pickMode = !casPanel.pickMode
+            }
+            TrackTile
+            {
+                objectName: "casambiTapTest"; width: 110; height: 34; label: qsTr("TAP TEST")
+                enabled: casPanel.connected && casPanel.t.picked > 0 && !casPanel.t.running; opacity: enabled ? 1 : 0.4
+                onTapped: casPanel.startTest("tap")
+            }
+            TrackTile
+            {
+                objectName: "casambiMeasure"; width: 110; height: 34; label: qsTr("MEASURE")
+                enabled: casPanel.connected && casPanel.t.picked > 0 && !casPanel.t.running; opacity: enabled ? 1 : 0.4
+                onTapped: casPanel.startTest("measure")
+            }
+            TrackTile
+            {
+                objectName: "casambiPreview"; width: 110; height: 34; label: qsTr("PREVIEW")
+                enabled: casPanel.connected && casPanel.t.picked > 0 && !casPanel.t.running; opacity: enabled ? 1 : 0.4
+                onTapped: casPanel.startTest("preview")
+            }
+        }
+
         // LAMPS
         Text { x: 22; y: 158; width: casPanel.labW; text: qsTr("LAMPS"); color: "#E3B44F"; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.6 }
         Text
@@ -2968,7 +3044,7 @@ Rectangle
         {
             id: casFlick
             objectName: "casambiLamps"
-            x: 22; y: 198; width: parent.width - 44; height: parent.height - y - 44
+            x: 22; y: 294; width: parent.width - 44; height: parent.height - y - 44   // TRACK_APP_CASDELAY_R639: two rows more above
             clip: true
             contentHeight: casGrid.height
             boundsBehavior: Flickable.StopAtBounds
@@ -2995,6 +3071,8 @@ Rectangle
                         width: casGrid.cellW; height: 82; radius: 10
                         color: "#1E1E22"
                         opacity: dead ? 0.45 : 1
+                        border.width: lamp.picked === true ? 2 : 0            // TRACK_APP_CASDELAY_R639: picked for the test
+                        border.color: "#E3B44F"
                         Text
                         {
                             x: 12; y: 10; width: parent.width - 24 - (deadTag.visible ? deadTag.width + 6 : 0); elide: Text.ElideRight
@@ -3061,6 +3139,14 @@ Rectangle
                                 onCanceled: { lampTile.hand = -1; lampTile.sent = -1 }
                             }
                         }
+                        // TRACK_APP_CASDELAY_R639: PICK LAMPS - a tap on a lamp picks it for the test (no level change)
+                        MouseArea
+                        {
+                            objectName: "casambiPick:" + index
+                            anchors.fill: parent
+                            visible: casPanel.pickMode
+                            onClicked: if (trackEngine && lampTile.lamp.id !== undefined) trackEngine.casambiPick(lampTile.lamp.id)
+                        }
                     }
                 }
             }
@@ -3069,12 +3155,101 @@ Rectangle
         {
             objectName: "casambiEmpty"
             visible: casPanel.lamps.length === 0
-            x: 22; y: 210; width: parent.width - 44; wrapMode: Text.Wrap
+            x: 22; y: 306; width: parent.width - 44; wrapMode: Text.Wrap
             text: casPanel.cs === "connecting" ? qsTr("The lamps show here once TRACK is connected.")
                 : casPanel.cs === "connected" ? qsTr("Connected, but the network told of no lamps.")
                 : qsTr("No lamps to show - see CONNECTION above.")
             color: "#6E6E78"; font.pixelSize: 13
         }
+
+        // TRACK_APP_CASDELAY_R639: the running test (or its result), over the lamps
+        Rectangle
+        {
+            id: testPanel
+            objectName: "casambiTestPanel"
+            visible: casPanel.testOpen
+            x: 22; y: 294; width: parent.width - 44; height: parent.height - y - 44
+            radius: 12
+            color: "#17171B"
+            border.width: 2; border.color: "#E3B44F"
+            MouseArea { anchors.fill: parent }
+            readonly property string mode: casPanel.t.mode !== undefined ? casPanel.t.mode : ""
+            Text
+            {
+                objectName: "casambiTestText"
+                x: 20; y: 16; width: parent.width - 40 - testButtons.width
+                wrapMode: Text.Wrap
+                text: casPanel.t.text !== undefined ? casPanel.t.text : ""
+                color: setupRoot.cText; font.pixelSize: 15; font.bold: true
+            }
+            Row
+            {
+                id: testButtons
+                anchors.right: parent.right; anchors.rightMargin: 16; y: 12
+                spacing: 10
+                TrackTile
+                {
+                    objectName: "casambiTestUse"; width: 150; height: 38
+                    visible: !casPanel.t.running && casPanel.t.result >= 0
+                    label: qsTr("USE %1 ms").arg(casPanel.t.result)
+                    active: true; activeColor: "#E3B44F"
+                    onTapped: if (trackEngine) trackEngine.casambiTestUse()
+                }
+                TrackTile
+                {
+                    objectName: "casambiTestStop"; width: 110; height: 38
+                    label: casPanel.t.running ? qsTr("STOP") : qsTr("CLOSE")
+                    onTapped: casPanel.closeTest()
+                }
+            }
+            // TAP TEST: a big place to tap - pressed, not released, counts
+            Rectangle
+            {
+                objectName: "casambiTapArea"
+                visible: testPanel.mode === "tap"
+                x: 20; y: 70; width: parent.width - 40; height: parent.height - y - 20
+                radius: 12
+                color: tapArea.pressed ? "#3A3424" : "#22222A"
+                Text { anchors.centerIn: parent; text: qsTr("TAP HERE when the lamp goes UP"); color: "#E8D8A8"; font.bold: true; font.pixelSize: 24; font.letterSpacing: 2 }
+                MouseArea { id: tapArea; anchors.fill: parent; onPressed: if (trackEngine) trackEngine.casambiTap() }
+            }
+            // PREVIEW: the beat on the screen; the lamps should come up with it
+            Rectangle
+            {
+                objectName: "casambiPreviewDot"
+                visible: testPanel.mode === "preview"
+                width: 140; height: 140; radius: 70
+                anchors.centerIn: parent; anchors.verticalCenterOffset: 30
+                color: casPanel.t.dot === true ? "#E8D8A8" : "#26262C"
+            }
+            Text
+            {
+                visible: testPanel.mode === "preview"
+                anchors.horizontalCenter: parent.horizontalCenter; y: parent.height - 40
+                text: qsTr("SHOW DELAY %1 ms - lamp late: more; lamp early: less").arg(casPanel.delayMs)
+                color: "#A0A0AA"; font.pixelSize: 13
+            }
+            // MEASURE: per lamp
+            Column
+            {
+                visible: (casPanel.t.lamps || []).length > 0 && testPanel.mode !== "tap" && testPanel.mode !== "preview"
+                x: 20; y: 80; width: parent.width - 40
+                spacing: 6
+                Repeater
+                {
+                    model: casPanel.t.lamps || []
+                    Text
+                    {
+                        width: parent.width; elide: Text.ElideRight
+                        text: modelData.name + "   " + (modelData.median >= 0 ? qsTr("%1 ms  (%2-%3, %4 timed)").arg(modelData.median).arg(modelData.min).arg(modelData.max).arg(modelData.n)
+                                                                               : qsTr("no answer"))
+                              + (modelData.timeouts > 0 ? qsTr("  ·  %1 without answer").arg(modelData.timeouts) : "")
+                        color: "#C8C8D0"; font.pixelSize: 14
+                    }
+                }
+            }
+        }
+
         Text
         {
             objectName: "casambiLastRun"

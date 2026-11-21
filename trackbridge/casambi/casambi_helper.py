@@ -38,6 +38,11 @@ lysene"). With --page the helper connects, tells every lamp and stays until told
     in   scan                  tell every lamp again           in   quit           go (the lamps stay as they are)
     out  scene <id>|<name> ... scenes <n>                              the network's scenes (R637, after the lamps)
     in   scene <id> <0-255>    that scene at that relative level -> out  scene-set <id> <level> | scene-failed <id> <why>
+    R639 (SETUP > CASAMBI > DELAY TEST):
+    in   now <0-255> <id,id,...>         those lamps at once, one command after the other, no pacing (TRACK times it)
+    in   measure <gen> <count> <id,id,...>   per lamp: <count> level changes, each timed until the lamp reports it
+    out  measure <gen> <id> <i> <ms|timeout|offline> ... measure-done <gen>   (the lamp is put back where it stood)
+    in   measure-stop
 
 The status lines (connected / no-casambi-found / wrong-password / ...) are LAST TRACK's.
 """
@@ -328,6 +333,10 @@ class Page(Helper):
         super().__init__(cfg_path)
         self.pending: dict[int, int] = {}
         self.pend_scene: tuple[int, int] | None = None      # R637: the newest scene asked for
+        self.now_cmds: list[tuple[int, list[int]]] = []      # R639: test commands, sent at once
+        self.waiting = None                                  # R639: (id, level, future) - MEASURE waits for the lamp
+        self.measure_task = None
+        self.measure_stop = False
 
     def say(self, msg: str) -> None:
         super().say('page ' + msg if msg.startswith('unit ') is False and msg.startswith('units ') is False
@@ -361,9 +370,49 @@ class Page(Helper):
 
     def on_unit(self, u) -> None:
         try:
+            w = self.waiting                              # R639: MEASURE - the lamp's own word that it is there
+            if w is not None and u.deviceId == w[0] and not w[2].done():
+                d = u.state.dimmer if u.state is not None else None
+                if d is not None and abs(d - w[1]) <= 6:
+                    w[2].set_result(True)
             self.tell(u)
         except Exception:  # noqa: BLE001
             pass
+
+    async def run_measure(self, gen: int, count: int, ids: list[int]) -> None:
+        """R639: per lamp, count level changes; each timed from the command until the lamp reports the level"""
+        loop = asyncio.get_running_loop()
+        by_id = {u.deviceId: u for u in self.units}
+        try:
+            for dev_id in ids:
+                u = by_id.get(dev_id)
+                if u is None or not u.online:
+                    print('measure %d %d -1 offline' % (gen, dev_id), flush=True)
+                    continue
+                orig = u.state.dimmer if u.state is not None else None
+                hi = (orig is None) or orig < 128              # the first change goes the other way
+                for i in range(count):
+                    if self.measure_stop:
+                        break
+                    target = 204 if hi else 51
+                    hi = not hi
+                    fut = loop.create_future()
+                    self.waiting = (dev_id, target, fut)
+                    t0 = time.perf_counter()
+                    await self.send(u, target)
+                    try:
+                        await asyncio.wait_for(fut, 3.0)
+                        print('measure %d %d %d %d' % (gen, dev_id, i, int((time.perf_counter() - t0) * 1000)), flush=True)
+                    except asyncio.TimeoutError:
+                        print('measure %d %d %d timeout' % (gen, dev_id, i), flush=True)
+                    self.waiting = None
+                    await asyncio.sleep(0.3)
+                if orig is not None:
+                    await self.send(u, orig)
+                    await asyncio.sleep(SEND_GAP)
+        finally:
+            self.waiting = None
+            print('measure-done %d' % gen, flush=True)
 
     def take(self, cmd: str) -> bool:
         """False: quit"""
@@ -389,6 +438,16 @@ class Page(Helper):
                 self.tell_all()
             elif parts[0] == 'scene' and len(parts) == 3:        # R637
                 self.pend_scene = (int(parts[1]), max(0, min(255, int(parts[2]))))
+            elif parts[0] == 'now' and len(parts) == 3:          # R639
+                self.now_cmds.append((max(0, min(255, int(parts[1]))), [int(x) for x in parts[2].split(',') if x]))
+            elif parts[0] == 'measure' and len(parts) == 4:      # R639
+                if self.measure_task is not None and not self.measure_task.done():
+                    self.measure_task.cancel()                # a new one: the old one's lines carry its own number
+                self.measure_stop = False
+                self.measure_task = asyncio.ensure_future(
+                    self.run_measure(int(parts[1]), max(1, min(40, int(parts[2]))), [int(x) for x in parts[3].split(',') if x]))
+            elif parts[0] == 'measure-stop':
+                self.measure_stop = True
         except ValueError:
             pass
         return True
@@ -436,6 +495,13 @@ class Page(Helper):
                     except Exception:  # noqa: BLE001
                         pass
                     by_id = {u.deviceId: u for u in self.units}
+                # R639: a test's commands first, at once - TRACK keeps the time
+                while self.now_cmds:
+                    lvl, ids = self.now_cmds.pop(0)
+                    for dev_id in ids:
+                        u = by_id.get(dev_id)
+                        if u is not None:
+                            await self.send(u, lvl)
                 # the newest level per lamp, one lamp at a time; new commands are read between two lamps
                 while self.pending:
                     dev_id, lvl = next(iter(self.pending.items()))

@@ -645,6 +645,9 @@ class TrackEngine : public QObject
     Q_PROPERTY(QVariantMap casambiPage READ casambiPage NOTIFY casambiChanged)
     // TRACK_APP_ROOMLIGHT_R637: ROOM LIGHT - the Casambi scenes for the DJ (cached), the level, what it says
     Q_PROPERTY(QVariantMap casambiRoom READ casambiRoom NOTIFY casambiChanged)
+    // TRACK_APP_CASDELAY_R639: SHOW DELAY (how early a show programme's Casambi command leaves) and the delay test
+    Q_PROPERTY(int casambiShowDelay READ casambiShowDelay WRITE setCasambiShowDelay NOTIFY casambiChanged)
+    Q_PROPERTY(QVariantMap casambiTest READ casambiTest NOTIFY casambiTestChanged)
     Q_PROPERTY(int lastTrackCloseMin READ lastTrackCloseMin NOTIFY lastTrackChanged)
     Q_PROPERTY(QString lastTrackCloseAt READ lastTrackCloseAt NOTIFY lastTrackChanged)
     Q_PROPERTY(int lastTrackEnd READ lastTrackEndBeat NOTIFY lastTrackChanged)   // R479_LAST_WHITE_PROP: the music's end
@@ -901,6 +904,19 @@ public:
     Q_INVOKABLE void casambiScene(int id, const QString &name);
     Q_INVOKABLE qreal casambiRoomLevel() const;
     Q_INVOKABLE void setCasambiRoomLevel(qreal level);
+    /** TRACK_APP_CASDELAY_R639: casambiTest(): mode ("" / measure / tap / preview), running, dot, delay, picked,
+     *  result (ms or -1), resultMode, taps, text, lamps [{name, n, timeouts, median, min, max}] */
+    int casambiShowDelay() const;
+    void setCasambiShowDelay(int ms);
+    QVariantMap casambiTest() const;
+    Q_INVOKABLE void casambiPick(int id);
+    Q_INVOKABLE void casambiTestStart(const QString &mode);
+    Q_INVOKABLE void casambiTestStop();
+    Q_INVOKABLE void casambiTap();
+    Q_INVOKABLE void casambiTestUse();
+    /** the SHOW's way to Casambi: those lamps at that level (0-255) at atMs (the engine's clock) - the command
+     *  leaves SHOW DELAY early. Manual changes never come this way */
+    void casambiShowLevel(const QList<int> &ids, int level, qint64 atMs);
     /** TRACK_APP_HAZECLOSE_R626: TrackManager asks every 200 ms - the engine wants SHOW OFF (the warning's 30 min
      *  without an answer, LAST TRACK dark for 15 min). Taken once */
     bool r626TakeShowOff() { const bool w = m_r626WantOff; m_r626WantOff = false; return w; }
@@ -1588,6 +1604,7 @@ signals:
     void tableChanged();
     void lastTrackChanged();             // R458_LAST_TRACK
     void casambiChanged();               // TRACK_APP_CASAMBIPAGE_R632
+    void casambiTestChanged();           // TRACK_APP_CASDELAY_R639
     void hazeNagChanged();               // R467_HAZE_NAG
     void flashGroupsChanged();           // R469_GROUP_FLASH
     void syncChanged();                  // R470_SYNC
@@ -3820,6 +3837,25 @@ private:
     void casambiScenePending();
     void casambiSceneLine(const QString &line);
     void casambiNoteLater();
+    // TRACK_APP_CASDELAY_R639
+    QList<int> casambiPicked() const;
+    QString m_casTestMode;
+    QList<int> m_casTestIds;
+    QList<int> m_casTestTaps;
+    QList<qint64> m_casTestUps;
+    QMap<int, int> m_casTestBack;
+    QMap<int, QList<int>> m_casMeasure;
+    QMap<int, int> m_casMeasureLost;
+    int m_casTestResult = -1;
+    QString m_casTestResultMode;
+    QString m_casTestText;
+    bool m_casTestDot = false;
+    qint64 m_casTestT0 = 0;
+    int m_casTestK[4] = { 0, 0, 0, 0 };
+    QTimer *m_casTestTimer = nullptr;
+    void casambiTestTick();
+    void casambiMeasureLine(const QString &line);
+    int m_casMeasureGen = 0;
     /** LAST TRACK has (or is about to take) the Bluetooth connection: its helper runs, or it is armed with
      *  LAST TRACK LIGHTS ON and its helper not started yet */
     bool casambiLastBusy() const { return m_casProc != nullptr || (m_lastStage > 0 && m_casTried == false && casambiOn()); }
