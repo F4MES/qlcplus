@@ -4439,8 +4439,20 @@ QString TrackEngine::r535DropType(int from, int to) const
                                          // a half-time one; it already pulses the break). Phrase kicks a bar or more
                                          // apart, rolls of 2-3 and broken patterns all hit. (R536_SILENT_FADER above:
                                          // Tobias 11-16, a complete-silence stab break stabs from 75 %, not 80 %)
+#define R646_MID           9             // TRACK_APP_STABRIFF_R646: a stab in a stab break - its mids ...
+#define R646_HIGH          4             // ... its highs ...
+#define R646_SUM           14            // ... both together ...
+#define R646_LOUD          100           // ... and not with the 8 beats before louder than this (0-255)
 #define R619_GAPMAX        2             // ... the spacings that make a steady kick
 #define R619_SECOND        10            // ... a second kick in the same beat, half a beat away, at this low onset
+
+bool TrackEngine::r646MixQuietIn() const
+{
+    // TRACK_APP_STABRIFF_R646: as tick()'s mixQuietIn (R360_MIX_LOOP) - in a mix, the incoming deck still quiet
+    return m_mixing && m_incomingAt >= 0 && m_clock.elapsed() - m_incomingAt < 8000
+           && (m_incomingState == QStringLiteral("break") || m_incomingState == QStringLiteral("intro")
+               || m_incomingState == QStringLiteral("build") || m_incomingState == QStringLiteral("outro"));
+}
 
 bool TrackEngine::breakStabs() const
 {
@@ -4601,11 +4613,47 @@ void TrackEngine::r536Section(int secStart, int secEnd)
         m_r536Active = false;
         m_r536Map.clear();
     }
+    // TRACK_APP_STABRIFF_R646: in a stab break every stab, not only those after a silent beat - the gate above (2+
+    // hits in true silence) tells a stab break from a drum groove (Tipsy's breaks: a hit on every beat over a soft
+    // kick, no silence - none). Night 11-21/22, Positive x Latch: 29 of 70 riff notes hit in the first break, 24
+    // of 78 in the Latch riff break; with this 67 and 70. The quieter notes of a riff (mids 9+, highs 4+, both
+    // 14+) count too; a beat whose 8 beats before are loud (over 100) or with a kick does not
+    int more = 0;
+    if (m_r536Active)
+    {
+        for (int b = a; b < e; b++)
+        {
+            if (m_audKick.at(b - 1) >= 51)
+                continue;
+            int sum = 0, cnt = 0;
+            for (int p = qMax(a, b - 8); p < b; p++)
+            {
+                sum += m_audLevel.at(p - 1);
+                cnt++;
+            }
+            if ((cnt > 0 ? sum / cnt : m_audLevel.at(b - 1)) > R646_LOUD)
+                continue;
+            int bits = m_r536Map.value(b, 0);
+            const int was = bits;
+            for (int q = 0; q < 4; q++)
+            {
+                const int mid = onsetMid(b, q), high = onsetHigh(b, q);
+                if (mid >= R646_MID && high >= R646_HIGH && mid + high >= R646_SUM)
+                    bits |= 1 << q;
+            }
+            if (bits != was)
+            {
+                m_r536Map.insert(b, bits);
+                more += qPopulationCount(quint32(bits & ~was));
+            }
+        }
+    }
     m_r536Silent = m_r536Active && deadFrac >= R536_SILENT_FRAC;
     if ((m_r536Active || sungBreak) && m_testTrack == false)
         logSignal(QStringLiteral("sig:break-stabs:%1@%2:dead%3:vocal%4%5").arg(stabs).arg(secStart).arg(int(deadFrac * 100))
                   .arg(int(vocalFrac * 100))
-                  .arg(sungBreak ? QStringLiteral(":sung-off") : (m_r536Silent ? QStringLiteral(":silent") : QString())));
+                  .arg(sungBreak ? QStringLiteral(":sung-off") : (m_r536Silent ? QStringLiteral(":silent") : QString()))
+                  + (more > 0 ? QStringLiteral(":more%1").arg(more) : QString()));   // TRACK_APP_STABRIFF_R646
 }
 
 qreal TrackEngine::r536PartOut(const QString &group, int index) const
@@ -14239,13 +14287,15 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     const bool r536Want = m_r536Active && isBreak && breakStabs()
                        && m_faderReal >= (m_r536Silent ? R536_SILENT_FADER : R536_FADER) - 1e-9   // TRACK_APP_STABSILENT_R616
                        && m_r536Key.isEmpty() == false && eligible.contains(m_r536Key) && m_groupOff.contains(m_r536Key) == false
-                       && hold == false && isCalm == false && still == false && m_mixing == false && m_blackout == false;
+                       && hold == false && isCalm == false && still == false && (m_mixing == false || r646MixQuietIn())   // R646
+                       && m_blackout == false;
     // TRACK_APP_BREAKKICK_R618: the lone kicks of a break hit the strobes from 75 % - the same switch, guards and
     // strobe group as the break stabs; the strobes stand dark between the hits as they do between the stabs
     const bool r618Want = m_r618Kick.isEmpty() == false && isBreak && breakStabs()
                        && m_faderReal >= R618_FADER - 1e-9
                        && m_r536Key.isEmpty() == false && eligible.contains(m_r536Key) && m_groupOff.contains(m_r536Key) == false
-                       && hold == false && isCalm == false && still == false && m_mixing == false && m_blackout == false;
+                       && hold == false && isCalm == false && still == false && (m_mixing == false || r646MixQuietIn())   // R646
+                       && m_blackout == false;
     QSet<QString> castSet;
     if (m_barsAloneNow)
         castSet.insert(aloneBars);
@@ -21463,7 +21513,16 @@ void TrackEngine::nextRemember()
     m_nextFiled = true;
     // TRACK_APP_NEXTTASTE_R608: what was on stage is a little less likely - in this kind of section - from now on
     // and on the nights after (the look he stops at gives a little back, r608Beat)
-    r608Nudge(0.92, QStringLiteral("next"));
+    {
+        const qint64 nowMs = m_clock.elapsed();
+        const qint64 minMs = qint64(qMax(1000.0, 2.0 * (m_beatMs > 0.0 ? m_beatMs : 500.0)));
+        const bool stood = m_r646NextMs < 0 || nowMs - m_r646NextMs >= minMs;   // TRACK_APP_STABRIFF_R646
+        m_r646NextMs = nowMs;
+        if (stood)
+            r608Nudge(0.92, QStringLiteral("next"));
+        else
+            logSignal(QStringLiteral("sig:next-taste:skip"));
+    }
     m_r608Watch = true;
     m_r608LandAt = -1;
     // R483_NEXT_MEM (Tobias 10-20, "3"). Night 10-17/18: 263 NEXT, 122 of them in drops with the
@@ -39758,6 +39817,7 @@ void TrackEngine::r493RoofBeat(QSet<QString> &castSet, const QStringList &eligib
     m_r493RoofSec = secStart;
     m_r493RoofTitle = m_trackTitle;
     if (beat - secStart > 3 || m_barsAloneNow || hold || isCalm || still || silent || r493HisPicks()
+        || (breakStabs() && m_r536Active && m_faderReal >= (m_r536Silent ? R536_SILENT_FADER : R536_FADER) - 1e-9)   // R646
         || fader < R493_ROOF_FADER || r493HazeOn() == false
         || secEnd - secStart < R493_ROOF_KICKLESS || r493Kickless(secStart, R493_ROOF_KICKLESS, 2) == false)
         return;

@@ -2515,6 +2515,10 @@ private:
     QHash<int, int> m_r536Map;
     int m_r536For = -1;
     bool m_r536Active = false;
+    // TRACK_APP_STABRIFF_R646: NEXT teaches only once per look that stood (the time of the last NEXT); a mix
+    // with a quiet incoming deck keeps the break's stabs
+    qint64 m_r646NextMs = -1;
+    bool r646MixQuietIn() const;
     bool m_r536Silent = false;           // TRACK_APP_STABSILENT_R616: a DEAD-silent stab break (isolated hits in true silence - Latch x Positive)
     QHash<int, int> m_r618Kick;          // TRACK_APP_BREAKKICK_R618: a break's lone kicks, beat -> the kick's quarter bit
     bool m_r618On = false;               // ... the kick hits fire this beat (slider, switch, cast)
