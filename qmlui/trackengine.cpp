@@ -14219,6 +14219,7 @@ void TrackEngine::tick(const QString &state, int beat, int secStart, int secEnd,
     m_r536Key = r536StrobeKey();
     r597Beat(beat, bar, beatInBar, isDrop, isBuild, dropBar, hold || isCalm || still);   // TRACK_APP_MUSIC_R597
     r587StrobeCaps(true);                // TRACK_APP_STROBECAP_R587: every beat, written again (a new show file too)
+    r645WashWatchArm();                  // TRACK_APP_WASHWATCH_R645: the wash watch's timer (once)
     // TRACK_APP_DROPSTAB_R584 (Tobias 11-09, forslag 3: "skal gaa under knappen i settings som de andre stabs paa den
     // samme knap"): BREAK STABS' switch also gives the DROP its stabs - a quarter where the lows, the mids and the
     // highs all hit hard at once (an orchestra hit, a "hey", a full-band stab), not one the bar keeps repeating.
@@ -24139,6 +24140,331 @@ int TrackEngine::keyBiasOf(const QString &key)
     return -1;
 }
 
+
+/* =====================================================================
+ * TRACK_APP_WASHWATCH_R645 (Tobias 11-22: the wash heads pink / white / "sun" and deaf to their fader until
+ * TRACK was restarted; the night's log showed TRACK never sent white to them - none of its programmes on the
+ * Shark has the White, colour temperature, macro or auto channel - so something else did, and the log could
+ * not say what. "ja goer det" to the wash watch: only a log, nothing in the light changes).
+ *
+ * Every 2 s while the show is ON, for every group of moving heads with colour (not lasers, strobes or
+ * animation lasers):
+ *  1. FOREIGN FUNCTIONS: every running QLC+ function that writes these heads and was NOT started by TRACK
+ *     (FunctionParent::Track) or by a function TRACK started (a chaser's steps, a collection's members, a
+ *     sequence's scene). Origin: vc (a Virtual Console button / slider / cue list), child (a step of
+ *     something else's), other (the show's startup function, a test, the simple desk's cue). Only the top
+ *     one of a running chain is named. What it writes: dim, white, ct, macro, auto, colour, aim.
+ *       sig:wash-foreign:<origin>:<id>:<name>:<what>        sig:wash-foreign-gone:<id>:<seconds it ran>
+ *  2. THE OUTPUT ITSELF: each head's White, colour temperature, macro and auto programme channels as they
+ *     leave QLC+ (after the grand master). A value no TRACK programme running on that head explains (none of
+ *     them writes that channel above 0) - a VC slider, the simple desk, a foreign function - is logged with the
+ *     head's dimmer: on change, and again every 60 s while it stays.
+ *       sig:wash-dmx:<group>:<fixture id>=W<v>/CT<v>/M<v>/A<v>/D<v>;...     sig:wash-dmx-ok:<group>
+ * A function asked to stop and fading out is no one's any more and never named; its light counts as explained.
+ * Nothing is stopped or written: SHOW ON still resets the console once (resetConsole) as before.
+ * ===================================================================== */
+
+#define R645_EVERY_MS 2000
+#define R645_WHITE_MIN 25
+
+void TrackEngine::r645WashWatchArm()
+{
+    if (m_r645Timer != nullptr)
+        return;
+    m_r645Timer = new QTimer(this);
+    m_r645Timer->setInterval(R645_EVERY_MS);
+    connect(m_r645Timer, &QTimer::timeout, this, &TrackEngine::r645WashWatch);
+    m_r645Timer->start();
+}
+
+namespace {
+// the kinds of channel the watch tells apart
+enum R645Kind { R645Dim = 0, R645White, R645Ct, R645Macro, R645Auto, R645Colour, R645Aim, R645Other };
+
+int r645KindOf(const QLCChannel *ch)
+{
+    if (ch == nullptr)
+        return R645Other;
+    const QString n = ch->name().toLower();
+    if (n.contains(QLatin1String("temperature")) || n.contains(QLatin1String("cto")) || n.contains(QLatin1String("ctb"))
+        || n.contains(QLatin1String("ctc")))
+        return R645Ct;
+    if (n.contains(QLatin1String("auto")) || n.contains(QLatin1String("program")))
+        return R645Auto;
+    if (ch->group() == QLCChannel::Intensity)
+    {
+        if (ch->colour() == QLCChannel::NoColour)
+            return R645Dim;
+        if (ch->colour() == QLCChannel::White)
+            return R645White;
+        return R645Colour;
+    }
+    if (ch->group() == QLCChannel::Colour)
+        return R645Macro;
+    if (ch->group() == QLCChannel::Pan || ch->group() == QLCChannel::Tilt)
+        return R645Aim;
+    return R645Other;
+}
+
+const char *r645KindName(int k)
+{
+    static const char *names[] = { "dim", "white", "ct", "macro", "auto", "colour", "aim", "other" };
+    return (k >= 0 && k <= R645Other) ? names[k] : "other";
+}
+}
+
+void TrackEngine::r645WashWatch()
+{
+    if (m_doc == nullptr || m_showOnNow == false)
+    {
+        // the show is off: what was open is closed quietly, a new show starts clean
+        m_r645Foreign.clear();
+        m_r645ForeignSince.clear();
+        m_r645Dmx.clear();
+        m_r645DmxAt.clear();
+        m_r645DmxClean.clear();
+        return;
+    }
+    // the watched heads
+    QMap<quint32, QString> heads;        // fixture -> group
+    for (const QString &key : m_groupOrder)
+    {
+        const TrackGroup &g = m_groups.value(key);
+        if (g.heads == false || g.lasers || g.strobes || g.patternDevice || (g.rgb == false && g.colourValue.isEmpty()))
+            continue;
+        for (quint32 fx : g.fixtures)
+            heads.insert(fx, key);
+    }
+    if (heads.isEmpty())
+        return;
+
+    // running functions; TRACK's own and everything under them
+    QSet<quint32> running, fading;       // fading: asked to stop, fading out - whoever ran it let it go
+    QList<quint32> todo;
+    const QList<Function *> all = m_doc->functions();
+    for (Function *f : all)
+    {
+        if (f == nullptr || f->isRunning() == false)
+            continue;
+        if (f->stopped())
+        {
+            fading.insert(f->id());
+            continue;
+        }
+        running.insert(f->id());
+        if (f->startedByTrackEngine())
+            todo << f->id();
+    }
+    auto isContainer = [](const Function *f) {
+        return f != nullptr && (f->type() == Function::ChaserType || f->type() == Function::SequenceType
+                                || f->type() == Function::CollectionType || f->type() == Function::ShowType);
+    };
+    QSet<quint32> mine;
+    while (todo.isEmpty() == false)
+    {
+        const quint32 id = todo.takeLast();
+        if (mine.contains(id))
+            continue;
+        mine.insert(id);
+        Function *f = m_doc->function(id);
+        if (isContainer(f))
+            todo << f->components();
+    }
+
+    // what a function writes on the watched heads (kind bits), through its children
+    std::function<int(Function *, int)> touches = [&](Function *f, int depth) -> int {
+        if (f == nullptr || depth > 4)
+            return 0;
+        int bits = 0;
+        if (f->type() == Function::SceneType)
+        {
+            const Scene *s = qobject_cast<const Scene *>(f);
+            if (s != nullptr)
+                for (const SceneValue &sv : s->values())
+                {
+                    if (heads.contains(sv.fxi) == false)
+                        continue;
+                    Fixture *fx = m_doc->fixture(sv.fxi);
+                    const int k = fx != nullptr ? r645KindOf(fx->channel(sv.channel)) : R645Other;
+                    if (sv.value > 0 || k == R645Aim)
+                        bits |= 1 << k;
+                }
+        }
+        else if (f->type() == Function::EFXType)
+        {
+            const EFX *e = qobject_cast<const EFX *>(f);
+            if (e != nullptr)
+                for (EFXFixture *ef : e->fixtures())
+                    if (ef != nullptr && heads.contains(ef->head().fxi))
+                        bits |= 1 << R645Aim;
+        }
+        else if (f->type() == Function::RGBMatrixType)
+        {
+            const RGBMatrix *m = qobject_cast<const RGBMatrix *>(f);
+            FixtureGroup *grp = m != nullptr ? m_doc->fixtureGroup(m->fixtureGroup()) : nullptr;
+            if (grp != nullptr)
+                for (const GroupHead &gh : grp->headList())
+                    if (heads.contains(gh.fxi))
+                        bits |= (1 << R645Colour) | (1 << R645Dim);
+        }
+        else if (isContainer(f))
+        {
+            for (quint32 c : f->components())
+                bits |= touches(m_doc->function(c), depth + 1);
+        }
+        return bits;
+    };
+
+    // 1. the foreign functions - only the top of a running chain
+    QSet<quint32> under;
+    for (quint32 id : running)
+    {
+        if (mine.contains(id))
+            continue;
+        Function *f = m_doc->function(id);
+        if (isContainer(f))
+        {
+            QList<quint32> kids = f->components();
+            while (kids.isEmpty() == false)
+            {
+                const quint32 c = kids.takeLast();
+                if (under.contains(c))
+                    continue;
+                under.insert(c);
+                Function *cf = m_doc->function(c);
+                if (isContainer(cf))
+                    kids << cf->components();
+            }
+        }
+    }
+    const qint64 now = m_clock.elapsed();
+    QSet<quint32> seenNow;
+    for (quint32 id : running)
+    {
+        if (mine.contains(id) || under.contains(id))
+            continue;
+        Function *f = m_doc->function(id);
+        const int bits = touches(f, 0);
+        if (f == nullptr || bits == 0)
+            continue;
+        seenNow.insert(id);
+        QStringList what;
+        for (int k = R645Dim; k <= R645Other; k++)
+            if (bits & (1 << k))
+                what << QString::fromLatin1(r645KindName(k));
+        const QString origin = f->startedByConsole() ? QStringLiteral("vc")
+                               : (f->startedAsChild() ? QStringLiteral("child") : QStringLiteral("other"));
+        QString name = f->name();
+        name.replace(QLatin1Char(':'), QLatin1Char('.')).replace(QLatin1Char(','), QLatin1Char(';'))
+            .replace(QLatin1Char('\n'), QLatin1Char(' '));
+        const QString line = QStringLiteral("%1:%2:%3:%4").arg(origin).arg(id).arg(name).arg(what.join(QLatin1Char('+')));
+        if (m_r645Foreign.value(id) != line)
+        {
+            if (m_r645Foreign.contains(id) == false)
+                m_r645ForeignSince.insert(id, now);
+            m_r645Foreign.insert(id, line);
+            logSignal(QStringLiteral("sig:wash-foreign:") + line);
+        }
+    }
+    for (const quint32 id : m_r645Foreign.keys())
+    {
+        if (seenNow.contains(id))
+            continue;
+        logSignal(QStringLiteral("sig:wash-foreign-gone:%1:%2").arg(id).arg((now - m_r645ForeignSince.value(id, now)) / 1000));
+        m_r645Foreign.remove(id);
+        m_r645ForeignSince.remove(id);
+    }
+
+    // 2. the output: White / CT / macro / auto that no TRACK programme running on the head explains
+    QMap<quint32, int> explained;        // fixture -> kind bits TRACK's running (or fading) scenes write above 0
+    for (quint32 id : mine + fading)
+    {
+        Function *f = m_doc->function(id);
+        if (f == nullptr)
+            continue;
+        if (f->type() == Function::SceneType)
+        {
+            const Scene *s = qobject_cast<const Scene *>(f);
+            if (s != nullptr)
+                for (const SceneValue &sv : s->values())
+                    if (sv.value > 0 && heads.contains(sv.fxi))
+                    {
+                        Fixture *fx = m_doc->fixture(sv.fxi);
+                        explained[sv.fxi] |= 1 << (fx != nullptr ? r645KindOf(fx->channel(sv.channel)) : R645Other);
+                    }
+        }
+        else if (f->type() == Function::RGBMatrixType)
+        {
+            const RGBMatrix *m = qobject_cast<const RGBMatrix *>(f);
+            FixtureGroup *grp = m != nullptr ? m_doc->fixtureGroup(m->fixtureGroup()) : nullptr;
+            if (grp != nullptr)
+                for (const GroupHead &gh : grp->headList())
+                    explained[gh.fxi] |= (1 << R645White) | (1 << R645Colour) | (1 << R645Dim);
+        }
+    }
+    QMap<QString, QStringList> odd;      // group -> heads with something unexplained
+    QList<Universe *> ua = m_doc->inputOutputMap()->claimUniverses();
+    for (auto it = heads.constBegin(); it != heads.constEnd(); ++it)
+    {
+        Fixture *fx = m_doc->fixture(it.key());
+        if (fx == nullptr || int(fx->universe()) >= ua.count() || ua.at(int(fx->universe())) == nullptr)
+            continue;
+        const QByteArray *out = ua.at(int(fx->universe()))->postGMValues();
+        if (out == nullptr)
+            continue;
+        int val[R645Other + 1] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+        for (quint32 c = 0; c < fx->channels(); c++)
+        {
+            const int k = r645KindOf(fx->channel(c));
+            const int at = int(fx->address() + c);
+            if (k <= R645Auto && at < out->size())
+                val[k] = qMax(val[k], int(uchar(out->at(at))));
+        }
+        const int ex = explained.value(it.key(), 0);
+        const bool white = val[R645White] >= R645_WHITE_MIN && (ex & (1 << R645White)) == 0;
+        const bool ct = val[R645Ct] > 0 && (ex & (1 << R645Ct)) == 0;
+        const bool macro = val[R645Macro] > 0 && (ex & (1 << R645Macro)) == 0;
+        const bool autoP = val[R645Auto] > 0 && (ex & (1 << R645Auto)) == 0;
+        if (white || ct || macro || autoP)                 // also dark (the dimmer swings with the show)
+            odd[it.value()] << QStringLiteral("%1=W%2/CT%3/M%4/A%5/D%6").arg(it.key()).arg(val[R645White]).arg(val[R645Ct])
+                                   .arg(val[R645Macro]).arg(val[R645Auto]).arg(val[R645Dim]);
+    }
+    m_doc->inputOutputMap()->releaseUniverses(false);
+    QSet<QString> groups;
+    for (auto it = heads.constBegin(); it != heads.constEnd(); ++it)
+        groups.insert(it.value());
+    for (const QString &g : groups)
+    {
+        const QString now1 = odd.value(g).join(QLatin1Char(';'));
+        const QString was = m_r645Dmx.value(g);
+        if (now1.isEmpty())
+        {
+            // clean for 3 checks in a row (6 s) before it is ok: TRACK's own white (a landing, a white partner)
+            // explains a head for a moment and the foreign light is still there under it
+            if (was.isEmpty() == false && ++m_r645DmxClean[g] < 3)
+                continue;
+            if (was.isEmpty() == false)
+                logSignal(QStringLiteral("sig:wash-dmx-ok:") + g);
+            m_r645Dmx.remove(g);
+            m_r645DmxAt.remove(g);
+            m_r645DmxClean.remove(g);
+            continue;
+        }
+        m_r645DmxClean.remove(g);
+        // the same heads with the same kind of light: again only every 60 s (the values swing with the show)
+        QString shape = now1;
+        shape.remove(QRegularExpression(QStringLiteral("\\d+(?=[/;]|$)")));
+        QString wasShape = was;
+        wasShape.remove(QRegularExpression(QStringLiteral("\\d+(?=[/;]|$)")));
+        if (shape != wasShape || now - m_r645DmxAt.value(g, -60000) >= 60000)
+        {
+            logSignal(QStringLiteral("sig:wash-dmx:%1:%2").arg(g, now1));
+            m_r645DmxAt.insert(g, now);
+        }
+        m_r645Dmx.insert(g, now1);
+    }
+}
+
 void TrackEngine::resetConsole()
 {
     labShutdown(false);                  // R410_LAB: SHOW ON - the lab gives the rig back
@@ -28425,7 +28751,8 @@ QStringList TrackEngine::sendFilesOf(const QString &id) const
         // TRACK_APP_CASAMBINET_R638: the Casambi network as TRACK sees it, and the helper's own log
         if (tonight)
         {
-            for (const QString &name : { QStringLiteral("casambi-network.txt"), QStringLiteral("casambi.log") })
+            for (const QString &name : { QStringLiteral("casambi-network.txt"), QStringLiteral("casambi.log"),
+                                          QStringLiteral("casambi-debug.log") })
             {
                 if (QFileInfo::exists(docs.absoluteFilePath(name)))
                     out << docs.absoluteFilePath(name);

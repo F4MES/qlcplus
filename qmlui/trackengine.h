@@ -1232,6 +1232,16 @@ public:
     // values the universes had cut at the last beat, and when it was last logged
     void r587StrobeCap(const QString &group, bool force);
     void r587StrobeCaps(bool force);
+    // TRACK_APP_WASHWATCH_R645: every 2 s with the show ON - foreign functions and unexplained White/CT/macro/auto
+    // on the moving heads, logged (sig:wash-foreign / sig:wash-dmx); nothing is changed
+    void r645WashWatchArm();
+    void r645WashWatch();
+    QTimer *m_r645Timer = nullptr;
+    QMap<quint32, QString> m_r645Foreign;
+    QMap<quint32, qint64> m_r645ForeignSince;
+    QMap<QString, QString> m_r645Dmx;
+    QMap<QString, qint64> m_r645DmxAt;
+    QMap<QString, int> m_r645DmxClean;
     QHash<QString, int> m_r587Cap;
     int m_r587Hits = 0;
     qint64 m_r587LogMs = -100000;

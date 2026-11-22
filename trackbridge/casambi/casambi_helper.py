@@ -44,11 +44,26 @@ lysene"). With --page the helper connects, tells every lamp and stays until told
     out  measure <gen> <id> <i> <ms|timeout|offline> ... measure-done <gen>   (the lamp is put back where it stood)
     in   measure-stop
 
+TRACK_APP_CASSTORE_R645 (the night of 11-21/22: every connect from 01:29 to 05:10 failed with "PermissionError
+[WinError 5] Access is denied" on Documents/QLC+/casambi-store - LAST TRACK at 03:00, 04:08, 04:14 and 05:09 never
+reached the lamps; at 14:14 after a fresh Windows start it worked again). Before the first connect:
+ - an old casambi_helper.exe whose TRACK is gone (QLC+ closed or crashed under it) is closed:
+       out  stale-helper <pid> killed | stale-helper <pid> kill-failed | other-helper <pid> (TRACK <pid> running)
+ - the cache folder is tried (a file written in each folder, each file opened for writing). Locked: what holds it
+   (Windows' Restart Manager) is logged, and the next folder is used - casambi-store-b beside it, then
+   %LOCALAPPDATA%/TRACK/casambi-store (a copy of the cache when it can be read, otherwise a fresh one: the
+   network is fetched again with the password):
+       out  store-locked <folder> <file> <error> [by <exe>(<pid>) ...]    out  store <folder>
+ - a connect that still fails on a locked file moves to the next folder at once and tries again.
+ Errors are logged in full (300 characters, with the file) and with their traceback in casambi-debug.log.
+
 The status lines (connected / no-casambi-found / wrong-password / ...) are LAST TRACK's.
 """
 import asyncio
 import json
 import logging
+import os
+import shutil
 import sys
 import threading
 import time
@@ -75,6 +90,163 @@ def selftest() -> int:
     return 0
 
 
+# ---------------------------------------------------------------- TRACK_APP_CASSTORE_R645
+STORE_NAMES = ('casambi-store', 'casambi-store-b', 'local')   # local: %LOCALAPPDATA%/TRACK/casambi-store
+
+
+def store_path(base: Path, name: str) -> Path:
+    if name == 'local':
+        root = os.environ.get('LOCALAPPDATA') or os.environ.get('TEMP') or str(base)
+        return Path(root) / 'TRACK' / 'casambi-store'
+    return base / name
+
+
+def err_text(e: BaseException, n: int = 300) -> str:
+    return '%s %s' % (type(e).__name__, ' '.join(str(e).split())[:n])
+
+
+def is_lock_error(e: BaseException) -> bool:
+    return isinstance(e, PermissionError) or getattr(e, 'winerror', None) in (5, 32, 33)
+
+
+def probe_store(path: Path):
+    """(ok, the file or folder that failed, the error): a file written and removed in every folder, every file
+    opened for writing - what the cache does when it connects"""
+    if not path.exists():
+        try:
+            path.mkdir(parents=True)                       # the cache makes it again (it wants its own version file)
+        except OSError as e:
+            return False, path, e
+    try:
+        items = list(path.rglob('*'))[:400]
+    except OSError as e:
+        return False, path, e
+    for d in [path] + [q for q in items if q.is_dir()]:
+        t = d / ('.track-probe-%d' % os.getpid())
+        try:
+            t.write_bytes(b'1')
+            t.unlink()
+        except OSError as e:
+            return False, d, e
+    for q in items:
+        if q.is_file():
+            try:
+                with open(q, 'r+b'):
+                    pass
+            except OSError as e:
+                return False, q, e
+    return True, None, None
+
+
+def win_processes() -> dict:
+    """pid -> (exe, parent pid), Windows only (a ToolHelp snapshot)"""
+    if sys.platform != 'win32':
+        return {}
+    import ctypes
+    from ctypes import wintypes
+
+    class PE(ctypes.Structure):
+        _fields_ = [('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD), ('th32ProcessID', wintypes.DWORD),
+                    ('th32DefaultHeapID', ctypes.c_size_t), ('th32ModuleID', wintypes.DWORD),
+                    ('cntThreads', wintypes.DWORD), ('th32ParentProcessID', wintypes.DWORD),
+                    ('pcPriClassBase', ctypes.c_long), ('dwFlags', wintypes.DWORD), ('szExeFile', wintypes.WCHAR * 260)]
+    k = ctypes.WinDLL('kernel32', use_last_error=True)
+    k.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE)]
+    k.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE)]
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    snap = k.CreateToolhelp32Snapshot(0x2, 0)
+    if not snap or snap == ctypes.c_void_p(-1).value:
+        return {}
+    out = {}
+    try:
+        e = PE()
+        e.dwSize = ctypes.sizeof(PE)
+        ok = k.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            out[int(e.th32ProcessID)] = (e.szExeFile, int(e.th32ParentProcessID))
+            ok = k.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        k.CloseHandle(snap)
+    return out
+
+
+def win_terminate(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL('kernel32', use_last_error=True)
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    h = k.OpenProcess(0x0001, False, pid)          # PROCESS_TERMINATE
+    if not h:
+        return False
+    try:
+        return bool(k.TerminateProcess(h, 9))
+    finally:
+        k.CloseHandle(h)
+
+
+def win_lockers(path: Path) -> list:
+    """[(pid, name)] of the processes holding that file open (Windows' Restart Manager)"""
+    if sys.platform != 'win32' or not path.is_file():
+        return []
+    import ctypes
+    from ctypes import wintypes
+
+    class RM_UNIQUE_PROCESS(ctypes.Structure):
+        _fields_ = [('dwProcessId', wintypes.DWORD), ('ProcessStartTime', wintypes.FILETIME)]
+
+    class RM_PROCESS_INFO(ctypes.Structure):
+        _fields_ = [('Process', RM_UNIQUE_PROCESS), ('strAppName', wintypes.WCHAR * 256),
+                    ('strServiceShortName', wintypes.WCHAR * 64), ('ApplicationType', ctypes.c_int),
+                    ('AppStatus', wintypes.ULONG), ('TSSessionId', wintypes.DWORD), ('bRestartable', wintypes.BOOL)]
+    rm = ctypes.WinDLL('rstrtmgr')
+    session = wintypes.DWORD(0)
+    key = ctypes.create_unicode_buffer(64)
+    if rm.RmStartSession(ctypes.byref(session), 0, key) != 0:
+        return []
+    try:
+        names = (wintypes.LPCWSTR * 1)(str(path))
+        if rm.RmRegisterResources(session, 1, names, 0, None, 0, None) != 0:
+            return []
+        needed = wintypes.UINT(0)
+        count = wintypes.UINT(0)
+        reasons = wintypes.DWORD(0)
+        res = rm.RmGetList(session, ctypes.byref(needed), ctypes.byref(count), None, ctypes.byref(reasons))
+        if res not in (0, 234) or needed.value == 0:      # 234 = ERROR_MORE_DATA: there are some
+            return []
+        arr = (RM_PROCESS_INFO * needed.value)()
+        count = wintypes.UINT(needed.value)
+        if rm.RmGetList(session, ctypes.byref(needed), ctypes.byref(count), arr, ctypes.byref(reasons)) != 0:
+            return []
+        return [(int(arr[i].Process.dwProcessId), arr[i].strAppName) for i in range(count.value)]
+    finally:
+        rm.RmEndSession(session)
+
+
+def stale_helpers(procs: dict, me: int, parent: int):
+    """[(pid, kill, owner)] for every other casambi_helper.exe: a one-file exe is two processes (the boot loader and
+    Python under it) - the pair's owner is the boot loader's parent (TRACK). Owner gone = stale (kill)"""
+    out = []
+    seen = set()
+    for pid, (exe, pp) in sorted(procs.items()):
+        if exe.lower() != 'casambi_helper.exe' or pid in (me, parent) or pid in seen:
+            continue
+        top = pid
+        if pp in procs and procs[pp][0].lower() == 'casambi_helper.exe':
+            top = pp
+        if top in (me, parent):
+            continue
+        group = {top} | {p for p, (x, q) in procs.items() if q == top and x.lower() == 'casambi_helper.exe'}
+        seen |= group
+        owner = procs.get(top, ('', 0))[1]
+        out.append((top, owner not in procs, owner, sorted(group)))
+    return out
+
+
 class Helper:
     def __init__(self, cfg_path: Path):
         self.cfg_path = cfg_path
@@ -82,6 +254,8 @@ class Helper:
         self.network = str(cfg.get('network', 'PS'))
         self.password = str(cfg['password'])
         self.store = cfg_path.parent / 'casambi-store'
+        self.stores_tried: list[Path] = []                 # TRACK_APP_CASSTORE_R645
+        self.store_ready = False
         self.logf = (cfg_path.parent / 'casambi.log').open('a', encoding='utf-8')
         self.casa = None
         self.units = []
@@ -103,10 +277,74 @@ class Helper:
             loop.call_soon_threadsafe(self.cmds.put_nowait, line.strip())
         loop.call_soon_threadsafe(self.cmds.put_nowait, 'quit')
 
+    # ---------------------------------------------------------------- TRACK_APP_CASSTORE_R645
+    def clear_stale(self) -> None:
+        try:
+            procs = win_processes()
+            killed = 0
+            for top, stale, owner, group in stale_helpers(procs, os.getpid(), os.getppid()):
+                if not stale:
+                    self.say('other-helper %d (TRACK %d running)' % (top, owner))
+                    continue
+                ok = all([win_terminate(p) for p in sorted(group, reverse=True)])
+                killed += 1
+                self.say('stale-helper %d %s' % (top, 'killed' if ok else 'kill-failed'))
+            if killed:
+                time.sleep(1.0)                            # Windows lets go of its files and Bluetooth
+        except Exception as e:  # noqa: BLE001
+            logging.exception('clear_stale')
+            self.say('stale-check-failed %s' % err_text(e, 120))
+
+    def next_store(self, why: str = '') -> bool:
+        """the next cache folder that is not locked; False when none is left"""
+        base = self.cfg_path.parent
+        first = store_path(base, STORE_NAMES[0])
+        for name in STORE_NAMES:
+            path = store_path(base, name)
+            if path in self.stores_tried:
+                continue
+            self.stores_tried.append(path)
+            n = -1
+            if path != first and not path.exists():
+                n = 0
+                if first.exists():
+                    for f in first.rglob('*'):            # what can be read of the cache: no need to fetch it again
+                        try:
+                            t = path / f.relative_to(first)
+                            if f.is_dir():
+                                t.mkdir(parents=True, exist_ok=True)
+                            elif not f.name.startswith('.track-probe'):
+                                t.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copyfile(f, t)
+                                n += 1
+                        except OSError:
+                            pass
+            ok, bad, e = probe_store(path)
+            if not ok:
+                by = ''
+                try:
+                    lk = win_lockers(bad) if bad is not None else []
+                    names = win_processes() if lk else {}
+                    by = ''.join(' by %s(%d)' % (names.get(pid, (n, 0))[0] or n, pid) for pid, n in lk)
+                except Exception:  # noqa: BLE001
+                    logging.exception('win_lockers')
+                self.say('store-locked %s %s %s%s' % (name, bad, err_text(e, 160), by))
+                continue
+            if path != first:
+                self.say('store %s%s%s' % (name, (' (copied %d files)' % n) if n >= 0 else '', (' - ' + why) if why else ''))
+            self.store = path
+            return True
+        return False
+
     # ---------------------------------------------------------------- network
     async def connect(self) -> bool:
         from CasambiBt import Casambi, discover
         from CasambiBt.errors import AuthenticationError
+        if not self.store_ready:                           # TRACK_APP_CASSTORE_R645: once, before the first connect
+            self.store_ready = True
+            self.clear_stale()
+            if not self.next_store():
+                self.say('no-store every cache folder is locked')
         for attempt in range(1, CONNECT_TRIES + 1):
             try:
                 devices = await discover()
@@ -124,17 +362,27 @@ class Helper:
                 if dev.address in tried:
                     continue
                 tried.add(dev.address)
-                casa = Casambi(cachePath=self.store)
-                t0 = time.perf_counter()
-                try:
-                    await casa.connect(dev, self.password)
-                except AuthenticationError:
-                    self.say('wrong-password %s' % dev.address)
-                    await self.safe_disconnect(casa)
-                    continue
-                except Exception as e:  # noqa: BLE001
-                    self.say('connect-failed %s %s %s' % (dev.address, type(e).__name__, ' '.join(str(e).split())[:80]))
-                    await self.safe_disconnect(casa)
+                failed = False
+                for _store_try in range(len(STORE_NAMES)):   # TRACK_APP_CASSTORE_R645: a locked cache -> the next
+                    casa = Casambi(cachePath=self.store)
+                    t0 = time.perf_counter()
+                    try:
+                        await casa.connect(dev, self.password)
+                    except AuthenticationError:
+                        self.say('wrong-password %s' % dev.address)
+                        await self.safe_disconnect(casa)
+                        failed = True
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        logging.exception('connect-failed %s', dev.address)
+                        self.say('connect-failed %s %s' % (dev.address, err_text(e)))
+                        await self.safe_disconnect(casa)
+                        if is_lock_error(e) and self.next_store('the cache was locked'):
+                            continue
+                        failed = True
+                        break
+                    break
+                if failed:
                     continue
                 if casa.networkName.strip().lower() != self.network.strip().lower():
                     self.say('other-network %s' % casa.networkName)
