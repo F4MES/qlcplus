@@ -6716,7 +6716,7 @@ void TrackEngine::driveStrobe(const QSet<QString> &cast, int beat, qreal energy,
         run(slot, ids.at(r), 1.0, 0, true);
         lit = true;
     }
-    if (lit && m_strobeHeadsOnly == false)
+    if (lit && m_strobeHeadsOnly == false && hitBurstNow(beat) == false)   // TRACK_APP_HITFREE_R644: his hit is free
         m_strobeSpent++;
     // R498_R_STROBE_BUDGET (runde 498, R): a room rush takes the strobe bank as ONE burst of this
     // window's budget - not when it is spent, the beat is quiet, or a burst above holds the bank
