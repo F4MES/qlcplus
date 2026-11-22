@@ -2777,7 +2777,10 @@ private:
     int m_strobeWindow;       // first beat of the current 64-beat strobe budget window (-1: none)
     int m_strobeSpent;        // strobe beats used in that window
     QMap<QString, qreal> m_pulseDepth;     // groups pulsing right now, and how deep
-    QMap<QString, qint64> m_pulseStart;    // clock reading of their last pulse beat
+    QMap<QString, qint64> m_pulseStart;
+    // TRACK_APP_SAVEDCOLOURS_R647: the laser bars' hit spacing (their pump falls to ~1 % before the next hit)
+    mutable QHash<QString, qint64> m_r647LastHit;
+    mutable QHash<QString, qint64> m_r647Gap;    // clock reading of their last pulse beat
     QMap<QString, qint64> m_r506HoldStart; // R506_DECL_HOLDMAP: groups holding up through a beat with no hit
     QMap<QString, int> m_r506HoldBeat;     // ... and the last beat they held on
     QMap<QString, qreal> m_pulseStrength;  // how hard that beat hit, 0.5..1 - the kick's say
